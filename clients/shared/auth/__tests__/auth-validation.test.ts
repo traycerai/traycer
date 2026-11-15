@@ -38,6 +38,7 @@ interface MockFetchCall {
   readonly authorization: string | null;
   readonly body: string | null;
   readonly hasSignal: boolean;
+  readonly redirect?: RequestRedirect;
 }
 
 interface MockSpec {
@@ -68,6 +69,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
       authorization: headers.get("Authorization"),
       body: typeof init?.body === "string" ? init.body : null,
       hasSignal: init?.signal instanceof AbortSignal,
+      redirect: init?.redirect,
     });
     const spec = specs[index] ?? specs[specs.length - 1];
     index++;
@@ -302,6 +304,33 @@ describe("refreshOnceAbortable", () => {
       refreshToken: "stale-refresh",
     });
   });
+
+  it.each([301, 302, 307, 308])(
+    "treats refresh redirect %i as network-error without resending the bearer",
+    async (status) => {
+      installMockFetch([
+        { status, body: { location: "https://elsewhere.test" } },
+      ]);
+
+      const result = await refreshOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "stale-bearer",
+        refreshToken: "stale-refresh",
+        rotationCode: null,
+        clientKind: null,
+        signal: null,
+      });
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        url: REFRESH_ENDPOINT,
+        method: "POST",
+        authorization: "Bearer stale-bearer",
+        redirect: "manual",
+      });
+    },
+  );
 
   it("maps a 401 to rejected (dead refresh credential) in a single attempt", async () => {
     installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
