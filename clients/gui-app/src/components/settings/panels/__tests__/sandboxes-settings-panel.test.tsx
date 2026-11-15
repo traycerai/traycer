@@ -23,6 +23,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -128,6 +129,7 @@ const LISTED_CATALOGUE: SandboxCatalogue = {
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
+  fallbackBinding: null as FakeSandboxBinding | null,
   entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
   settingsItems: [] as readonly {
@@ -156,7 +158,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => mocks.binding,
+  useHostBinding: () => {
+    const authnBinding = requireTeamEnvironmentAuthnBinding();
+    const sandboxBinding = mocks.binding ?? mocks.fallbackBinding;
+    return {
+      ...authnBinding,
+      ...(sandboxBinding ?? {}),
+      // The panel caches its list under its `auth`'s identity, which the cases
+      // read back from the sandbox binding: the authn members go onto that
+      // object rather than into a new one on every call.
+      auth:
+        sandboxBinding === null
+          ? { ...authnBinding.auth }
+          : Object.assign(sandboxBinding.auth, authnBinding.auth),
+    };
+  },
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -539,6 +555,7 @@ function names(): string[] {
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
     mocks.binding = null;
+    mocks.fallbackBinding = createFakeSandboxBinding();
     mocks.entry = null;
     resetNegotiatedManifests();
     recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
@@ -755,42 +772,45 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toContain(shapeLine);
     });
 
-    it("shows a team's default form without repeating the environment", async () => {
-      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
-      renderPanel([]);
+    it.each(["editor", "admin"] as const)(
+      "shows a team's default form for %s without repeating the environment",
+      async (role) => {
+        viewTeamAs(role, { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+        renderPanel([]);
 
-      expect(
-        await screen.findByRole("heading", { name: "Defaults" }),
-      ).toBeTruthy();
-      expect(
-        await screen.findByTestId("sandboxes-defaults-idle-input"),
-      ).toHaveProperty("value", "45");
-      expect(
-        screen.getByTestId("sandboxes-defaults-form").textContent,
-      ).not.toContain("Acme");
-      expect(
-        screen.getByText(
-          "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
-        ),
-      ).toBeTruthy();
-      expect(
-        screen.queryByText("Each new sandbox starts with these"),
-      ).toBeNull();
-      expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
-      const shape = screen.getByRole("combobox", { name: "Shape" });
-      expect(shape.textContent).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-      fireEvent.click(shape);
-      expect(
-        screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
-      ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
-      expect(
-        screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
-      ).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-    });
+        expect(
+          await screen.findByRole("heading", { name: "Defaults" }),
+        ).toBeTruthy();
+        expect(
+          await screen.findByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "45");
+        expect(
+          screen.getByTestId("sandboxes-defaults-form").textContent,
+        ).not.toContain("Acme");
+        expect(
+          screen.getByText(
+            "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
+          ),
+        ).toBeTruthy();
+        expect(
+          screen.queryByText("Each new sandbox starts with these"),
+        ).toBeNull();
+        expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
+        const shape = screen.getByRole("combobox", { name: "Shape" });
+        expect(shape.textContent).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+        fireEvent.click(shape);
+        expect(
+          screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
+        ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
+        expect(
+          screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
+        ).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+      },
+    );
 
     it("gives a viewer the item read-only, naming who can change it", async () => {
       viewTeamAs("viewer", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
@@ -831,6 +851,9 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         screen.queryByRole("button", { name: "Save defaults" }),
       ).toBeNull();
+      expect(harness?.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
     });
 
     it("gives an editor the form on the item's values, saving it at the read revision", async () => {

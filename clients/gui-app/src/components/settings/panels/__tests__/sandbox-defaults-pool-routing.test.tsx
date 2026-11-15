@@ -10,7 +10,6 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   EnvironmentMembersResponseV12,
@@ -22,6 +21,7 @@ import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -31,6 +31,7 @@ import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-def
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -162,16 +163,8 @@ function mountViewer(
   return harness;
 }
 
-function everyRequestWentToThePool(
-  harness: TeamPageHarness,
-  method: string,
-): void {
-  expect(hostIdsOf(harness, method)).not.toHaveLength(0);
-  expect(new Set(hostIdsOf(harness, method))).toEqual(new Set([POOL_HOST_ID]));
-}
-
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
-  it("shows the item's values, read through the server pool", async () => {
+  it("shows the item's values from authn without asking a host", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -188,10 +181,20 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
-    everyRequestWentToThePool(harness, "environment.configuration.items");
+    expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+    const itemReads = harness.paramsOf("environment.configuration.items");
+    expect(itemReads.length).toBeGreaterThan(0);
+    for (const params of itemReads) {
+      expect(params).toEqual({ environmentId: "env-acme" });
+    }
+    expect(hostIdsOf(harness, "environment.configuration.items")).toHaveLength(
+      0,
+    );
   });
 
-  it("shows the editor roster read through the pool and the Members link", async () => {
+  it("shows the editor roster read from authn and the Members link", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -201,7 +204,15 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
       await screen.findByText("Ada, Bo can change defaults."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Members" })).toBeTruthy();
-    everyRequestWentToThePool(harness, "environment.members");
+    expect(
+      harness.cloudRequests.some(
+        (request) =>
+          request.method === "GET" &&
+          new URL(request.url).pathname ===
+            "/api/v3/environments/env-acme/members",
+      ),
+    ).toBe(true);
+    expect(hostIdsOf(harness, "environment.members")).toHaveLength(0);
   });
 
   it("shows roster loading until the members read answers", async () => {
@@ -210,9 +221,16 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     const response = new Promise<EnvironmentMembersResponseV12>((resolve) => {
       finish = resolve;
     });
+    let reads = 0;
     mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
-      () => response,
+      () => {
+        reads += 1;
+        // The first read is the environment list's join of the viewer's role,
+        // which the section waits for; the roster's own read is the next, and
+        // is the one held.
+        return reads === 1 ? MEMBERS_RESPONSE : response;
+      },
     );
     expect(await screen.findByText("Loading editors and admins…")).toBeTruthy();
     await act(async () => {

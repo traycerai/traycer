@@ -1,10 +1,10 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import { createContext, useContext } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -30,12 +30,12 @@ export interface PersonalPageContextValue {
   readonly client: HostClient<HostRpcRegistry> | null;
   /** This page's convergence notices and "needs you" rows. */
   readonly notices: readonly EnvironmentNotice[];
-  readonly review: readonly EnvironmentReviewEntry[];
+  readonly review: readonly ReviewHeldEntry[];
 }
 
 export const NO_OVERRIDES: readonly LocalOverride[] = [];
 export const NO_NOTICES: readonly EnvironmentNotice[] = [];
-export const NO_REVIEW: readonly EnvironmentReviewEntry[] = [];
+export const NO_REVIEW: readonly ReviewHeldEntry[] = [];
 
 export const PersonalPageContext =
   createContext<PersonalPageContextValue | null>(null);

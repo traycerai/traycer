@@ -1,7 +1,7 @@
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { access } from "node:fs/promises";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
-import { mintTeamComputerInstallTokenBySlugViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
+import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import {
   HostTransportFailureError,
@@ -564,17 +564,18 @@ async function attendedTeamInstallAfterSignIn(
   const slug = target.label;
   const auth = await resolveHostAuthOrNull(ctx, "preflight");
   if (auth === null) throw signedOutCliError();
-  const minted = await mintTeamComputerInstallTokenBySlugViaHttp(
+  // Minted for the environment the sign-in's own list resolved: the shared
+  // client refuses an answer for any other, and that id is what is staged.
+  const minted = await mintTeamComputerInstallTokenViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    slug,
+    target.environmentId,
   );
   ctx.runtime.logger.info("Team install token request settled", {
     environment: ctx.runtime.environment,
     outcome: minted.kind,
     code: minted.kind === "refused" ? minted.code : null,
   });
-  // Each failure is the sign-in read's own answer for the same cause.
   switch (minted.kind) {
     case "ok":
       return {
@@ -587,10 +588,10 @@ async function attendedTeamInstallAfterSignIn(
     case "unauthorized":
       throw storedCredentialRejectedCliError();
     case "refused":
-      if (minted.code === "environment_not_found")
+      if (minted.status >= 500 && minted.status < 600)
         throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message: NOT_A_TEAM_YOU_BELONG_TO,
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: AUTHN_UNREACHABLE_MESSAGE,
           details: null,
           exitCode: 1,
         });

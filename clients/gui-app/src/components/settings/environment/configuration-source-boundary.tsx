@@ -1,22 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
-import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  grantedTeamMemberRole,
-  type EnvironmentInvitation,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
+  mayChangeConfiguration,
+  personalReadOnlyOnTeamComputer,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
@@ -40,7 +30,7 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 
 /** The team is gone from the person's memberships: they were removed from it. */
 function noLongerInLine(teamName: string): string {
@@ -74,20 +64,14 @@ interface AnsweredQuestion {
 }
 
 /**
- * The team invited them instead, so its settings are an Accept away — as much
- * of them as the invited role is given.
- *
- * The role is RESOLVED rather than read literally. An invitation on the retired
- * view-only role is no longer offered, but a client can be newer than the
- * service that stops offering it, and the promise is the part that must not be
- * wrong: a seat that grants nothing must not be sold as one that can change
- * anything.
+ * The team invited them instead, so its settings are an Accept away. A
+ * viewer's invitation promises reading them and nothing more.
  */
 function invitedInsteadLine(invitation: EnvironmentInvitation): string {
   const lead = `You're invited to ${invitation.teamName}. Accept to see`;
-  return grantedTeamMemberRole(invitation.role) === null
-    ? `${lead} its settings.`
-    : `${lead} and change its settings.`;
+  return invitation.role === "admin" || invitation.role === "editor"
+    ? `${lead} and change its settings.`
+    : `${lead} its settings.`;
 }
 
 /**
@@ -125,33 +109,10 @@ export function ConfigurationSourceBoundary(props: {
 }): ReactNode {
   const { target } = props;
   const viewerId = useCloudChatViewerId();
-  const client = useHostClient();
-  const registered = useRegisteredHosts();
-  // This computer is a team's when the registry says so; the person reaches it
-  // as a member, never as its owner.
-  const teamComputerIds = useMemo(
-    () =>
-      new Set(
-        (registered.data?.hosts ?? [])
-          .filter((host) => host.owner?.kind === "team")
-          .map((host) => host.hostId),
-      ),
-    [registered.data],
-  );
-  const readTransportReadOnly = useCallback(() => {
-    const entry = client.getActiveHost();
-    if (entry === null) return false;
-    if (isRemoteHostDirectoryEntry(entry)) {
-      return entry.sandbox === null && entry.owner?.kind === "team";
-    }
-    return entry.kind === "local" && teamComputerIds.has(entry.hostId);
-  }, [client, teamComputerIds]);
-  const transportReadOnly = useSyncExternalStore(
-    subscribeAnyHostRowChanged,
-    readTransportReadOnly,
-    readTransportReadOnly,
-  );
-  const list = useEnvironmentListQuery(client, true);
+  // Until the registry answers, Personal stays read-only as on a team's
+  // computer.
+  const onTeamComputer = useWindowHostOwnership() !== "not-team";
+  const list = useEnvironmentListQuery(true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"
       ? entry.environmentId === target.environmentId &&
@@ -160,17 +121,21 @@ export function ConfigurationSourceBoundary(props: {
   );
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
+    const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
     return {
       kind: "pool",
-      configuration: descriptor.ownerKind === "user" ? "personal" : "team",
+      configuration,
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
       effectiveRole: configurationRoleOf(descriptor),
-      transportReadOnly,
+      transportReadOnly: personalReadOnlyOnTeamComputer(
+        configuration,
+        onTeamComputer,
+      ),
     };
-  }, [descriptor, transportReadOnly]);
-  useConfigurationRevision(client, descriptor?.environmentId ?? null);
+  }, [descriptor, onTeamComputer]);
+  useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
     listed:
@@ -229,7 +194,8 @@ export function ConfigurationSourceBoundary(props: {
       value={source}
     >
       {source.kind === "pool" &&
-      (source.effectiveRole === null || source.transportReadOnly) ? (
+      (!mayChangeConfiguration(source.effectiveRole) ||
+        source.transportReadOnly) ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
           {seeButNotChangeLine(descriptor.label)}
         </p>

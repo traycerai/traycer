@@ -17,8 +17,13 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentInvitation,
 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  HostListItem,
+  HostListResponse,
+} from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   remoteEntry,
   sandboxFacts,
@@ -29,6 +34,7 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
+import { TeamPlans } from "@/components/settings/environment/team-plans";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import {
@@ -55,6 +61,7 @@ import {
 import {
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   requireViewingHostClient,
   resetTeamPageHarness,
@@ -153,10 +160,17 @@ vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
   rememberSettingsTabSection: surface.remember,
 }));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => ({
+      ...actual.useHostBinding(),
+      auth: requireTeamCloudAuth(),
+    }),
+  };
+});
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -239,13 +253,12 @@ const INVITATION: EnvironmentInvitation = {
 };
 
 /**
- * Reads the other host, as a second window on the same account does, so that
- * host's entries exist and hold its answers. Unmounted, those entries stay in
- * cache with nothing observing them — the window closed.
+ * Warms the other host's invitations entry alongside the account's shared
+ * environment list, as a second window on the same account does.
  */
 function WarmOtherHost(): ReactNode {
   const client = requireViewingHostClient();
-  useEnvironmentListQuery(client, true);
+  useEnvironmentListQuery(true);
   useEnvironmentInvitationsQuery(client);
   return null;
 }
@@ -292,13 +305,15 @@ function Probe(): ReactNode {
   );
 }
 
-function ConfigurationPermissionProbe(): ReactNode {
+function ConfigurationPermissionProbe(props: {
+  readonly testId?: string;
+}): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   const canAdminister = useCanAdministerConfiguration();
   return (
     <p
-      data-testid="configuration-permission-probe"
+      data-testid={props.testId ?? "configuration-permission-probe"}
       data-effective-role={
         source.kind === "pool" ? (source.effectiveRole ?? "none") : "host"
       }
@@ -309,6 +324,82 @@ function ConfigurationPermissionProbe(): ReactNode {
       data-can-administer={String(canAdminister)}
     />
   );
+}
+
+const LOCAL_TEAM_HOST_REGISTRY_ROW: HostListItem = {
+  hostId: mockLocalHostEntry.hostId,
+  displayName: "This computer",
+  platform: "darwin",
+  kind: "machine",
+  publicKey: "test-public-key",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  status: {
+    connectivity: "connectable",
+    viewerReachability: "ok",
+    clientCloud: "ok",
+    updateState: "current",
+    appVersion: "1.1.10",
+    lastSeenAt: "2026-01-01T00:00:00.000Z",
+  },
+  updatePolicy: "manual",
+  owner: { kind: "team", id: "team-a", name: "Acme" },
+};
+
+function mountOwnershipConsumers(
+  registeredHosts: () => Promise<HostListResponse | null>,
+): void {
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => ({ environments: [PERSONAL, team("admin")] }),
+    "environment.plans.list": () => ({ plans: [] }),
+  });
+  harness.auth.fetchRegisteredHosts = registeredHosts;
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+  render(
+    <>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
+        <ConfigurationPermissionProbe testId="personal-ownership-probe" />
+        <TeamPlans providerId="claude-code" adminNames={[]} />
+      </ConfigurationSourceBoundary>
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-a" }}
+        section={null}
+      >
+        <ConfigurationPermissionProbe testId="team-ownership-probe" />
+      </ConfigurationSourceBoundary>
+    </>,
+    { wrapper: harness.Wrapper },
+  );
+}
+
+async function expectOwnershipConsumers(options: {
+  readonly personalEditable: boolean;
+  readonly planLinkEnabled: boolean;
+}): Promise<void> {
+  const personal = await screen.findByTestId("personal-ownership-probe");
+  const teamPage = await screen.findByTestId("team-ownership-probe");
+
+  expect(personal.getAttribute("data-can-edit")).toBe(
+    String(options.personalEditable),
+  );
+  expect(teamPage.getAttribute("data-can-edit")).toBe("true");
+  if (options.planLinkEnabled) {
+    expect(
+      await screen.findByRole("button", { name: "Link a plan" }),
+    ).toBeTruthy();
+  } else {
+    expect(screen.queryByRole("button", { name: "Link a plan" })).toBeNull();
+  }
+  const readOnlyLine = screen.queryByText(
+    "You can see Personal's settings but not change them.",
+  );
+  if (options.personalEditable) {
+    expect(readOnlyLine).toBeNull();
+  } else {
+    expect(readOnlyLine).toBeTruthy();
+  }
 }
 
 function mountConfigurationPermissionBoundary(options: {
@@ -607,16 +698,9 @@ describe("a team the environment list no longer carries", () => {
     });
   });
 
-  // Two entries of ONE slot. A build with no server pool gives each host its
-  // own RPC entry for the same account, so the slot never changes when the
-  // client does — and a question certified while one entry served must not
-  // survive the move to the other, whose cached list predates the removal.
-  //
-  // The clock is held so both hosts' membership answers carry the same
-  // `listedAt`: that equality is what isolates the entry identity as the only
-  // thing standing between the old answer and the new entry's stale data. It
-  // is a condition of this case, not a claim that every host switch fails.
-  it("cannot reuse one entry's answer for another entry of the same slot", async () => {
+  // The environment directory is app-scoped, so a second window sharing the
+  // signed-in account observes the same answer instead of a host-keyed copy.
+  it("keeps the account membership answer when the serving host changes", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -624,117 +708,93 @@ describe("a team the environment list no longer carries", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
-    const frozen = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
-    try {
-      const listed: { current: readonly EnvironmentDescriptorV11[] } = {
-        current: [PERSONAL, team("editor")],
-      };
-      const invited = { current: false };
-      const harness = mountTeamPage(poolSource("editor"), {
-        "environment.list": () => ({ environments: [...listed.current] }),
-        "environment.invitations.list": () => ({
-          invitations: invited.current ? [INVITATION] : [],
-        }),
-      });
-      // A held clock makes `timeUntilStale` zero, so without a `staleTime` the
-      // harness refetches forever and nothing ever settles. The clock is held
-      // for the membership timestamps, so the staleness has to be restored by
-      // hand.
-      harness.queryClient.setDefaultOptions({
-        queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
-      });
-      const remote = requireViewingHostClient();
-      negotiateMethodsOn(remote.getActiveHostId() ?? "", {
-        "environment.invitations.list": V10,
-        "environment.invitations.accept": V10,
-      });
-      const tree = (warm: boolean): ReactNode => (
-        <HeldValueHostRuntime>
-          {warm ? <WarmOtherHost /> : null}
-          <PersonalPageFrame section="secrets">
-            <Probe />
-          </PersonalPageFrame>
-        </HeldValueHostRuntime>
-      );
-      const view = render(tree(true), { wrapper: harness.Wrapper });
-      await screen.findByTestId("probe");
-      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    const listed: { current: readonly EnvironmentDescriptorV11[] } = {
+      current: [PERSONAL, team("editor")],
+    };
+    const invited = { current: false };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [...listed.current] }),
+      "environment.invitations.list": () => ({
+        invitations: invited.current ? [INVITATION] : [],
+      }),
+    });
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
+    });
+    const remote = requireViewingHostClient();
+    negotiateMethodsOn(remote.getActiveHostId() ?? "", {
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    const tree = (warm: boolean): ReactNode => (
+      <HeldValueHostRuntime>
+        {warm ? <WarmOtherHost /> : null}
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>
+    );
+    const view = render(tree(true), { wrapper: harness.Wrapper });
+    await screen.findByTestId("probe");
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
 
-      // The other window closes. Its entries stay in cache, unobserved, with
-      // the invitations list from before the reinvitation below — which is what
-      // makes this host's answer the only one anything is observing, and so the
-      // one a route-scoped identity would credit to the other host's entry.
-      act(() => {
-        view.rerender(tree(false));
-      });
-      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    // Both windows are using the same account-scoped membership query.
+    act(() => {
+      view.rerender(tree(false));
+    });
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
 
-      // Removed and invited back. THIS host's entry answers, so the team stays
-      // and Review is offered — the answer is real, for this entry.
-      listed.current = [PERSONAL];
-      invited.current = true;
-      await act(() =>
-        harness.queryClient.invalidateQueries({
-          predicate: (query) => query.queryKey.includes("environment.list"),
-        }),
-      );
-      expect(
-        await screen.findByRole("button", { name: "Review" }),
-      ).toBeTruthy();
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
+    // Removed and invited back. The account directory answers, so the team
+    // stays and Review is offered from the signed-in viewer's membership.
+    listed.current = [PERSONAL];
+    invited.current = true;
+    await act(() =>
+      harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "Review" })).toBeTruthy();
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
 
-      // The other host's membership answer says the same thing, in the same
-      // millisecond, so `listedAt` does not move. Its invitations entry still
-      // holds the list from before the reinvitation.
-      const otherList = harness.queryClient
-        .getQueryCache()
-        .getAll()
-        .find(
-          (query) =>
-            query.queryKey.includes("environment.list") &&
-            query.queryKey.includes(remote.getActiveHostId()),
-        );
-      expect(otherList).toBeDefined();
-      if (otherList !== undefined) {
-        act(() => {
-          harness.queryClient.setQueryData(otherList.queryKey, {
-            environments: [PERSONAL],
-          });
-        });
-      }
-
-      act(() => {
-        teamHostBoundary.client = remote;
-        view.rerender(tree(false));
-      });
-
-      // Nothing has answered on the entry now being read, so no removal may be
-      // claimed off it — the answer held is about the entry this page has just
-      // stopped reading.
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
-      expect(hoisted.toasts).toEqual([]);
-
-      // And the right outcome once the new entry answers its own question: the
-      // person is invited back, so Review is what this page offers on the host
-      // now serving it.
-      expect(
-        await screen.findByRole("button", { name: "Review" }),
-      ).toBeTruthy();
-      expect(hoisted.toasts).toEqual([]);
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
-    } finally {
-      clock.mockRestore();
+    const membershipQueries = harness.queryClient
+      .getQueryCache()
+      .getAll()
+      .filter((query) => query.queryKey.includes("environment.list"));
+    // The list's key carries the account's teams, so the removal above reads it
+    // again under another key and leaves the first entry cached with no
+    // observer (`gcTime` here is infinite): one answer is observed, and no
+    // entry's key names either host.
+    expect(
+      membershipQueries.filter((query) => query.getObserversCount() > 0),
+    ).toHaveLength(1);
+    for (const query of membershipQueries) {
+      expect(query.queryKey).not.toContain(remote.getActiveHostId());
+      expect(query.queryKey).not.toContain(mockLocalHostEntry.hostId);
     }
+
+    act(() => {
+      teamHostBoundary.client = remote;
+      view.rerender(tree(false));
+    });
+
+    // The host changed, but the account's membership answer remains current.
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+    expect(hoisted.toasts).toEqual([]);
+
+    // The invitation read follows the serving host while membership remains
+    // shared by the account.
+    expect(await screen.findByRole("button", { name: "Review" })).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
   });
 
   it("claims no removal on a read that failed, and asks again no more than once", async () => {
@@ -1259,6 +1319,19 @@ describe("a team the environment list no longer carries", () => {
     expect(screen.queryByText(/and change its settings/)).toBeNull();
   });
 
+  it("promises an admin's invitation changing the settings", async () => {
+    mountBoundary({
+      environments: () => [PERSONAL],
+      invitations: [{ ...INVITATION, role: "admin" }],
+    });
+
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("keeps the failed read's own line and Retry, which an answer has not refuted", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
@@ -1399,28 +1472,24 @@ describe("the viewer's standing line", () => {
   });
 });
 
-describe("transport-scoped configuration access", () => {
-  async function expectReadOnlyAdmin(): Promise<void> {
+describe("configuration access after the team-computer lift", () => {
+  async function expectEditableAdmin(): Promise<void> {
     const probe = await screen.findByTestId("configuration-permission-probe");
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
-    expect(probe.getAttribute("data-can-edit")).toBe("false");
-    expect(probe.getAttribute("data-can-administer")).toBe("false");
-    expect(
-      await screen.findByText(
-        "You can see Acme's settings but not change them.",
-      ),
-    ).toBeTruthy();
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
+    expect(screen.queryByText(/but not change them/)).toBeNull();
   }
 
-  it("makes a team admin read-only on a team-owned physical remote host", async () => {
+  it("keeps a team admin editable on a team-owned physical remote host", async () => {
     mountConfigurationPermissionBoundary({
       target: { kind: "team", environmentId: "env-a" },
       environments: [PERSONAL, team("admin")],
       activeHost: TEAM_OWNED_PHYSICAL_HOST,
     });
 
-    await expectReadOnlyAdmin();
+    await expectEditableAdmin();
   });
 
   it("keeps Personal's owner editable on the user's physical remote host", async () => {
@@ -1444,10 +1513,50 @@ describe("transport-scoped configuration access", () => {
       activeHost: TEAM_OWNED_SANDBOX_HOST,
     });
 
-    const probe = await screen.findByTestId("configuration-permission-probe");
-    expect(probe.getAttribute("data-effective-role")).toBe("admin");
-    expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(probe.getAttribute("data-can-administer")).toBe("true");
-    expect(screen.queryByText(/but not change them/)).toBeNull();
+    await expectEditableAdmin();
+  });
+});
+
+describe("configuration access while this computer's owner is being read", () => {
+  it("keeps Personal read-only and the plan link closed while the registry is pending", async () => {
+    mountOwnershipConsumers(
+      () => new Promise<HostListResponse | null>(() => undefined),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
+  });
+
+  it("keeps Personal read-only and the plan link closed after a cold registry failure", async () => {
+    mountOwnershipConsumers(() =>
+      Promise.reject(new Error("registry unavailable")),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
+  });
+
+  it("opens Personal for its owner and offers the plan link once the registry says this is Personal", async () => {
+    mountOwnershipConsumers(() => Promise.resolve({ hosts: [] }));
+
+    await expectOwnershipConsumers({
+      personalEditable: true,
+      planLinkEnabled: true,
+    });
+  });
+
+  it("keeps Personal read-only on a team-owned computer while team settings follow the role", async () => {
+    mountOwnershipConsumers(() =>
+      Promise.resolve({ hosts: [LOCAL_TEAM_HOST_REGISTRY_ROW] }),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
   });
 });

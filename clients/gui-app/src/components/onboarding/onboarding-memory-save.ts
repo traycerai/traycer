@@ -102,8 +102,11 @@ export interface MemorySaveIo {
   readonly read: () => Promise<ConfigAgentMemoriesResponse | null>;
   /** `environment.status`; `null` when it fails. */
   readonly lookUp: () => Promise<UploadStatus | null>;
-  /** `config.agentMemories.set` turning it on; `null` when it fails. */
-  readonly set: () => Promise<ConfigAgentMemoriesSetResponse | null>;
+  /**
+   * `config.agentMemories.set` turning it on; `null` when it fails, and
+   * `"unsent"` when it was abandoned before it was sent.
+   */
+  readonly set: () => Promise<ConfigAgentMemoriesSetResponse | null | "unsent">;
   /** `providers.setNativeMemory` for one row; whether it landed. */
   readonly writeProvider: (row: OnboardingMemoryRow) => Promise<boolean>;
   /** The evidence as last recorded, for the save's host. */
@@ -119,13 +122,16 @@ export interface MemorySaveIo {
  * - `moved`: the act's host changed, and the save sent nothing more.
  * - `undiscovered`: the host had not yet said which providers it can switch,
  *   and the save sent nothing.
+ * - `unsent`: the Traycer memories write was abandoned before it was sent, and
+ *   the save sent nothing more: the act is as it was before the press.
  */
 export type MemorySaveResult =
   | "done"
   | "short"
   | "unreached"
   | "moved"
-  | "undiscovered";
+  | "undiscovered"
+  | "unsent";
 
 /**
  * The provider switches a save writes: those that differ from what the host
@@ -173,7 +179,10 @@ export type MemorySaveStep =
   | { readonly kind: "done" }
   | {
       readonly kind: "stop";
-      readonly result: Exclude<MemorySaveResult, "done" | "undiscovered">;
+      readonly result: Exclude<
+        MemorySaveResult,
+        "done" | "undiscovered" | "unsent"
+      >;
     };
 
 const SHORT: MemorySaveStep = { kind: "stop", result: "short" };
@@ -252,14 +261,16 @@ async function continueSave(
   });
   if (step.kind === "done") return "done";
   if (step.kind === "stop") return step.result;
-  return continueSave(io, rows, await takeStep(io, step, progress));
+  const taken = await takeStep(io, step, progress);
+  if (taken === "unsent") return "unsent";
+  return continueSave(io, rows, taken);
 }
 
 async function takeStep(
   io: MemorySaveIo,
   step: Exclude<MemorySaveStep, { kind: "done" } | { kind: "stop" }>,
   progress: MemorySaveProgress,
-): Promise<MemorySaveProgress> {
+): Promise<MemorySaveProgress | "unsent"> {
   if (step.kind === "read")
     return { ...progress, read: (await io.read()) ?? "failed" };
   if (step.kind === "look-up") {
@@ -276,10 +287,14 @@ async function takeStep(
   }
   if (step.kind === "set") {
     const answer = await io.set();
+    // Nothing went out: nothing is filed, and the save ends here.
+    if (answer === "unsent") return "unsent";
     if (answer === null) file(io, step.environmentId, { kind: "failed" });
     // Filed against the configuration the write was addressed to, which the
-    // host names: it may have been rebound since the read.
-    else
+    // host names: it may have been rebound since the read. A write saved on a
+    // computer bound to none since the read has nothing to file against, and
+    // the next read finds the host serves none.
+    else if (answer.state !== "local_only")
       file(
         io,
         answer.environmentId,

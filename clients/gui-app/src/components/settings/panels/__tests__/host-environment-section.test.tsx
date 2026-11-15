@@ -27,6 +27,7 @@ import type {
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
@@ -44,6 +45,11 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const PERSONAL: EnvironmentDescriptor = {
   environmentId: "env-personal",
@@ -89,6 +95,8 @@ const mocks = vi.hoisted(() => ({
           environmentId: string,
         ) => Promise<TeamComputerReleaseResult>
       >(),
+    listEnvironments: vi.fn<AuthService["listEnvironments"]>(),
+    environmentCloud: vi.fn<AuthService["environmentCloud"]>(),
   },
   refreshDirectory: vi.fn<() => Promise<unknown>>(),
 }));
@@ -196,6 +204,13 @@ function renderSection(
     }),
     ...options.handlers,
   };
+  const teamPage = mountTeamPage(poolSource("editor"), handlers);
+  mocks.auth.listEnvironments.mockImplementation(() =>
+    teamPage.auth.listEnvironments(),
+  );
+  mocks.auth.environmentCloud.mockImplementation(() =>
+    teamPage.auth.environmentCloud(),
+  );
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -272,6 +287,8 @@ beforeEach(() => {
   mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(PERSON_OWNER));
   mocks.auth.releaseTeamComputer.mockReset();
   mocks.auth.releaseTeamComputer.mockResolvedValue({ kind: "ok" });
+  mocks.auth.listEnvironments.mockReset();
+  mocks.auth.environmentCloud.mockReset();
   noteHostMembershipChanged.mockReset();
   mocks.refreshDirectory.mockReset();
   mocks.refreshDirectory.mockResolvedValue(undefined);
@@ -304,6 +321,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   resetNegotiatedManifests();
   useAuthStore.setState({
     status: "signed-out",

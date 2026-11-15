@@ -44,6 +44,8 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
+import { useAuthStore } from "@/stores/auth/auth-store";
+
 import { StoragePolicySection } from "@/components/settings/panels/storage-policy-section";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import {
@@ -123,6 +125,11 @@ function renderSection(ui: ReactNode): void {
       host.put === null
         ? Promise.resolve({ outcome: "saved", revision: 1 })
         : host.put(),
+  });
+  useAuthStore.setState({
+    shareableTeams: [
+      { teamId: "team-1", slug: "handle-acme", avatarUrl: null },
+    ],
   });
   render(
     <>
@@ -459,25 +466,25 @@ describe("<StoragePolicySection />", () => {
     },
   );
 
-  it("renders nothing on a host that does not advertise the item write", async () => {
+  it("keeps saving the policy when the host does not advertise item writes", async () => {
     renderSection(PERSONAL_SECTION);
-    await chatsSwitch();
+    await settled();
 
-    // The same host, renegotiated without the write: the section goes, so its
-    // absence is the gate's answer and not a read still in flight.
     act(() => {
-      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
-        "environment.list",
-        "environment.configuration.items",
-      ]);
+      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, []);
     });
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
-      expect(within(document.body).queryByTestId("storage-policy")).toBeNull();
+      expectPut(
+        PERSONAL_ENV,
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        null,
+      );
     });
   });
 
-  it("disables every control after a retired viewer role is decoded, even with a loaded policy", async () => {
+  it("gives a Viewer disabled controls and sends no write, even with a loaded policy", async () => {
     host.teamRole = "viewer";
     host.teamItems = [
       storageItem({ chats: false, idleTaskDays: 14, archivedChatHours: 24 }, 3),
@@ -497,31 +504,38 @@ describe("<StoragePolicySection />", () => {
     expect(harness?.paramsOf(PUT)).toEqual([]);
   });
 
-  it("reads and writes the picked team's environment, not Personal's", async () => {
-    host.items = [
-      storageItem(
-        { chats: false, idleTaskDays: null, archivedChatHours: 720 },
-        9,
-      ),
-    ];
-    host.teamItems = [
-      storageItem({ chats: true, idleTaskDays: 7, archivedChatHours: null }, 2),
-    ];
-    const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
-    renderSection(<StoragePolicySection pick={pick} />);
-    await settled();
-    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+  it.each(["admin", "editor"] as const)(
+    "reads and writes the picked team's environment for a team %s, not Personal's",
+    async (role) => {
+      host.teamRole = role;
+      host.items = [
+        storageItem(
+          { chats: false, idleTaskDays: null, archivedChatHours: 720 },
+          9,
+        ),
+      ];
+      host.teamItems = [
+        storageItem(
+          { chats: true, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        ),
+      ];
+      const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
+      renderSection(<StoragePolicySection pick={pick} />);
+      await settled();
+      expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
 
-    await userEvent.click(await chatsSwitch());
+      await userEvent.click(await chatsSwitch());
 
-    await waitFor(() => {
-      expectPut(
-        TEAM_ENV,
-        { chats: false, idleTaskDays: 7, archivedChatHours: null },
-        2,
-      );
-    });
-  });
+      await waitFor(() => {
+        expectPut(
+          TEAM_ENV,
+          { chats: false, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        );
+      });
+    },
+  );
 });
 
 describe("<StorageSettingsPanel />", () => {

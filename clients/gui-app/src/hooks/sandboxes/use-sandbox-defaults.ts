@@ -1,21 +1,24 @@
 import { useCallback, useMemo } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQueries,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { z } from "zod";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  EnvironmentDescriptorV11,
-  GrantedEnvironmentRole,
-} from "@traycer/protocol/host/environment/contracts";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  configurationRoleOf,
+  type ConfigurationRole,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
-  useHostQueriesWithResponseMap,
-  type HostRequestSpec,
-} from "@/hooks/host/use-host-queries";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+  environmentCloudQueryKey,
+  beginEnvironmentCloudOperation,
+  useEnvironmentCloud,
+} from "@/hooks/environment/use-environment-cloud";
 import type { SandboxConfigurationDefaults } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   authorizesCloudCapability,
@@ -68,31 +71,23 @@ export type SandboxDefaultsRead =
 
 /**
  * Each configuration's sandbox defaults, by environment id, from its
- * `sandbox_defaults` item. The read goes to the surface's own host, which
- * forwards it on the viewer's session; the server pool does not serve it. One
- * read per environment, shared by the defaults card and the composer's New
- * rows; a save's reread (`useConfigurationItemMutations`) refreshes both.
+ * `sandbox_defaults` item, read by the app itself from authn on the
+ * viewer's sign-in. One read per environment, shared by the defaults card and
+ * the composer's New rows; a save's reread (`useConfigurationItemMutations`)
+ * refreshes both.
  */
 export function useSandboxDefaults(
   environmentIds: readonly string[],
 ): ReadonlyMap<string, SandboxDefaultsRead> {
-  const client = useHostClient();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  const cloud = useEnvironmentCloud();
   const idsKey = environmentIds.join("\n");
   const ids = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
     [idsKey],
-  );
-  const requests = useMemo(
-    (): ReadonlyArray<HostRequestSpec<HostRpcRegistry, typeof METHOD>> =>
-      ids.map((environmentId) => ({
-        method: METHOD,
-        params: { environmentId },
-      })),
-    [ids],
   );
   const combine = useCallback(
     (
@@ -124,18 +119,29 @@ export function useSandboxDefaults(
       ),
     [ids],
   );
-  return useHostQueriesWithResponseMap<
-    HostRpcRegistry,
-    typeof METHOD,
-    ConfigurationSandboxDefaults,
-    ReadonlyMap<string, SandboxDefaultsRead>
-  >({
-    client,
-    requests,
-    cacheKeyIdentity: viewerId,
-    options: { enabled: viewerId.length > 0 && authorized },
-    preflight: cloudVerdictPreflight(METHOD),
-    mapResponse: ({ response }) => sandboxDefaultsOf(response.items),
+  return useQueries({
+    queries: ids.map((environmentId) =>
+      // `cloud` is the sign-in of the viewer the key already names; adding it
+      // would refetch on its identity alone.
+      // eslint-disable-next-line @tanstack/query/exhaustive-deps
+      queryOptions<ConfigurationSandboxDefaults, HostRpcError>({
+        queryKey: environmentCloudQueryKey(
+          METHOD,
+          { environmentId },
+          viewerId,
+          [],
+        ),
+        queryFn: async (): Promise<ConfigurationSandboxDefaults> =>
+          sandboxDefaultsOf(
+            (
+              await beginEnvironmentCloudOperation(cloud)(METHOD, {
+                environmentId,
+              })
+            ).items,
+          ),
+        enabled: cloud !== null && viewerId.length > 0 && authorized,
+      }),
+    ),
     combine,
   });
 }
@@ -143,8 +149,8 @@ export function useSandboxDefaults(
 /** A configuration's environment as the account's list names it, with the reader's role. */
 export interface SandboxDefaultsEnvironment {
   readonly environmentId: string;
-  /** `null` for a role that authorizes nothing. */
-  readonly role: GrantedEnvironmentRole | null;
+  /** `configurationRoleOf`'s answer; read through `mayChangeConfiguration`. */
+  readonly role: ConfigurationRole | null;
 }
 
 /**
@@ -155,18 +161,20 @@ export interface SandboxDefaultsEnvironment {
 export function useSandboxDefaultsEnvironments(
   enabled: boolean,
 ): ReadonlyMap<string, SandboxDefaultsEnvironment> {
-  const list = useEnvironmentListQuery(useHostClient(), enabled);
+  const list = useEnvironmentListQuery(enabled);
   return useMemo(
     () =>
       new Map(
         (list.data?.environments ?? []).map(
-          (descriptor: EnvironmentDescriptorV11) => [
-            descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
-            {
-              environmentId: descriptor.environmentId,
-              role: configurationRoleOf(descriptor),
-            },
-          ],
+          (descriptor: EnvironmentDescriptorV11) => {
+            return [
+              descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
+              {
+                environmentId: descriptor.environmentId,
+                role: configurationRoleOf(descriptor),
+              },
+            ];
+          },
         ),
       ),
     [list.data],

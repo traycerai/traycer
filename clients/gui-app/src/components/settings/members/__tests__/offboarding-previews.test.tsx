@@ -9,13 +9,11 @@ import type {
 
 afterEach(cleanup);
 
+const WORK = { activeTurns: 1, terminals: 0, hostName: "This Mac" };
+
 const PREVIEW: RemovePreviewModel = {
-  activeTurns: 1,
-  terminals: 0,
-  hostName: "This Mac",
-  sharedSignIns: ["github"],
-  paidSandboxes: [{ name: "build-box", startedBy: "Priya" }],
-  linkedPlan: "Claude Max",
+  sandboxesToRekey: 1,
+  workNow: WORK,
 };
 
 function renderRemove(preview: RemovePreviewModel): string {
@@ -46,51 +44,50 @@ function rowValue(label: string): string {
 }
 
 describe("RemovePreviewDialog", () => {
-  it("names the activity, the two consequences, the plan and what cannot be recalled", () => {
-    const text = renderRemove(PREVIEW);
-    expect(text).toContain("1 turn and 0 terminals on This Mac");
-    expect(text).toContain("Shared sign-ins");
-    expect(text).toContain("replacement sign-in");
-    expect(text).toContain("build-box pauses for everyone");
-    expect(text).toContain("Claude Max");
-    expect(text).toContain("Can't be recalled");
+  it("lists only the three consequences the removal changes", () => {
+    renderRemove(PREVIEW);
+    const table = screen.getByTestId("members-remove-preview-table");
+    expect(
+      Array.from(table.querySelectorAll("th"), (cell) => cell.textContent),
+    ).toEqual(["Priya's work now", "Shared sign-ins", "Can't be recalled"]);
   });
 
-  it("says None. in the shared sign-ins and linked plan rows when there are none", () => {
-    renderRemove({ ...PREVIEW, sharedSignIns: [], linkedPlan: null });
+  it("says None. in shared sign-ins when the team has no sandbox", () => {
+    renderRemove({ ...PREVIEW, sandboxesToRekey: 0 });
     expect(rowValue("Shared sign-ins")).toBe("None.");
-    expect(rowValue("Linked plan")).toBe("None.");
   });
 
-  it("states the work, the timing rule, the sign-in replacement, the plan and what cannot be recalled", () => {
-    const text = renderRemove({ ...PREVIEW, terminals: 2 });
+  it("states that work continues, shared sign-ins are replaced and copied files cannot be recalled", () => {
+    const text = renderRemove({
+      ...PREVIEW,
+      workNow: { ...WORK, terminals: 2 },
+    });
     expect(rowValue("Priya's work now")).toBe(
-      "1 turn and 2 terminals on This Mac. Priya's access is revoked now; each finishes its current step and starts no new one. If a host does not answer in time, stopping shows as pending until it does.",
+      "1 turn and 2 terminals on This Mac. Their connections close. Work they started keeps running for Acme under their name.",
     );
     expect(rowValue("Shared sign-ins")).toBe(
-      "Acme's sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm. Other members' agents there pause while it lands.",
+      "Acme's sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm.",
     );
-    expect(rowValue("Linked plan")).toBe("Claude Max");
     expect(rowValue("Can't be recalled")).toBe(
       'Files Priya already copied off a host and work already done upstream with Acme\'s services. What Priya started stays, labelled "started by a former member".',
     );
-    expect(text).toContain("Removal shows as pending until it commits.");
+    expect(text).not.toContain("Removal shows as pending until it commits.");
   });
 
   it("leaves the host out of the work row when the window cannot label it", () => {
-    renderRemove({ ...PREVIEW, hostName: null });
-    expect(rowValue("Priya's work now")).toMatch(
-      /^1 turn and 0 terminals\. Priya's access is revoked now;/,
+    renderRemove({ ...PREVIEW, workNow: { ...WORK, hostName: null } });
+    expect(rowValue("Priya's work now")).toBe(
+      "1 turn and 0 terminals. Their connections close. Work they started keeps running for Acme under their name.",
     );
   });
 
-  it("gives work the host cannot count no count, and None. when both are zero", () => {
-    renderRemove({ ...PREVIEW, activeTurns: null, terminals: null });
+  it("says work continues when no computer counts it, and None. when both counts are zero", () => {
+    renderRemove({ ...PREVIEW, workNow: null });
     expect(rowValue("Priya's work now")).toBe(
-      "Priya's access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.",
+      "Their connections close. Work they started keeps running for Acme under their name.",
     );
     cleanup();
-    renderRemove({ ...PREVIEW, activeTurns: 0, terminals: 0 });
+    renderRemove({ ...PREVIEW, workNow: { ...WORK, activeTurns: 0 } });
     expect(rowValue("Priya's work now")).toBe("None.");
   });
 
@@ -101,7 +98,7 @@ describe("RemovePreviewDialog", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Priya loses Acme's settings, hosts and connected services. Here is what the removal stops, for Priya and for everyone else.",
+        "Priya loses Acme's settings, hosts and connected services.",
       ),
     ).toBeTruthy();
     expect(screen.getByTestId("members-remove-confirm").textContent).toBe(
@@ -145,36 +142,8 @@ describe("DemotionPreviewDialog", () => {
   function renderDemotion(options: {
     readonly currentRole: TeamRole;
     readonly nextRole: TeamRole;
-    readonly planLabel: string;
-  }): string {
-    render(
-      <DemotionPreviewDialog
-        open
-        memberName="Priya"
-        teamName="Acme"
-        currentRole={options.currentRole}
-        nextRole={options.nextRole}
-        preview={{
-          status: "ready",
-          preview: {
-            planLabel: options.planLabel,
-            turnsOnPlan: 2,
-            whatKeepsWorking: "Sandboxes keep running.",
-          },
-        }}
-        busy={false}
-        blockedReason={null}
-        onOpenChange={() => undefined}
-        onRetry={() => undefined}
-        onConfirm={() => undefined}
-      />,
-    );
-    return screen.getByTestId("members-demotion-preview").textContent;
-  }
-
-  function renderFailedCheck(options: {
-    readonly currentRole: TeamRole;
-    readonly nextRole: TeamRole;
+    readonly busy: boolean;
+    readonly blockedReason: string | null;
   }): void {
     render(
       <DemotionPreviewDialog
@@ -183,144 +152,101 @@ describe("DemotionPreviewDialog", () => {
         teamName="Acme"
         currentRole={options.currentRole}
         nextRole={options.nextRole}
-        preview={{ status: "failed" }}
-        busy={false}
-        blockedReason={null}
+        busy={options.busy}
+        blockedReason={options.blockedReason}
         onOpenChange={() => undefined}
-        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );
   }
 
-  // The plan check says what a demotion interrupts. The demotion itself is a
-  // change of role, so a check that cannot be read does not take the change
-  // away: the ruled sentence about what the person loses needs no read, and
-  // the admin can still make it. Both kinds, because a failed read is no more
-  // informative about one than the other.
-  it("still lets an admin go to editor when the plan check cannot be read", () => {
-    renderFailedCheck({ currentRole: "admin", nextRole: "editor" });
-    expect(
-      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
-    );
-    // The line says what failed and claims nothing about the button, which is
-    // on.
-    expect(
-      screen.getByTestId("members-demotion-preview-failed").textContent,
-    ).toBe("Couldn't load what changing Priya's role interrupts.");
-  });
-
-  // What the role loses is the dialog's own description, so a screen reader is
-  // read the question AND the thing it is about. Most demotions unlink no plan
-  // and so have no plan lead to describe them; without this they would be
-  // announced as the question alone.
-  it("describes the dialog with what the role loses, plan or no plan", () => {
-    renderFailedCheck({ currentRole: "admin", nextRole: "editor" });
+  it("describes the dialog with what the role loses", () => {
+    renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      busy: false,
+      blockedReason: null,
+    });
 
     const dialog = screen.getByTestId("members-demotion-preview");
     const describedBy = dialog.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
     expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
   });
 
-  // Everything the announcement has to carry, where there IS a plan to
-  // unlink. Radix announces the description and nothing else beside the title,
-  // so a consequence left outside it is one a screen reader never reaches —
-  // and the plan sentence is the consequence that reaches outside the team.
-  it("describes the dialog with the plan warning too, where a plan is unlinked", () => {
+  it("asks the question and enables the named role change immediately", () => {
     renderDemotion({
       currentRole: "admin",
       nextRole: "editor",
-      planLabel: "Claude Max",
+      busy: false,
+      blockedReason: null,
     });
 
-    const dialog = screen.getByTestId("members-demotion-preview");
-    const described = document.getElementById(
-      dialog.getAttribute("aria-describedby") ?? "",
-    );
-    expect(described?.textContent).toContain(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
-    );
-    expect(described?.textContent).toContain(
-      "Acme's agents stop using this plan.",
-    );
-  });
-
-  // `loading` reaches this dialog only as a Retry already in flight: its caller
-  // does not open it before the first answer. So the state is read as that —
-  // the failure that prompted the Retry still named, the button that started it
-  // still there and quiet, and the confirm off until the read lands.
-  it("keeps the confirm and the Retry off while a retry is in flight", () => {
-    render(
-      <DemotionPreviewDialog
-        open
-        memberName="Priya"
-        teamName="Acme"
-        currentRole="admin"
-        nextRole="editor"
-        preview={{ status: "loading" }}
-        busy={false}
-        blockedReason={null}
-        onOpenChange={() => undefined}
-        onRetry={() => undefined}
-        onConfirm={() => undefined}
-      />,
-    );
-    expect(
-      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByTestId("members-demotion-preview-failed").textContent,
-    ).toContain("Couldn't load what changing Priya's role interrupts");
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Retry" }).disabled,
-    ).toBe(true);
-    expect(screen.getByTestId("members-demotion-retry-busy")).toBeTruthy();
-  });
-
-  it("asks the question, says what is lost and names the role on the button", () => {
-    const text = renderDemotion({
-      currentRole: "admin",
-      nextRole: "editor",
-      planLabel: "Claude Max",
-    });
     expect(
       screen.getByText("Change Priya's role in Acme to editor?"),
     ).toBeTruthy();
-    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
-    );
-    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
-      "Change to editor",
-    );
-    expect(text).not.toContain("Change role · ");
-    expect(text).not.toContain("within a minute");
-    expect(text).not.toContain("next turn");
+    const confirm = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Change to editor",
+    });
+    expect(confirm.disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
   });
 
-  it("shows the plan rows only for a demotion that unlinks a plan", () => {
-    const withPlan = renderDemotion({
-      currentRole: "admin",
-      nextRole: "editor",
-      planLabel: "Claude Max",
+  it("asks the Viewer question with what the editor loses and enables Change to viewer", () => {
+    renderDemotion({
+      currentRole: "editor",
+      nextRole: "viewer",
+      busy: false,
+      blockedReason: null,
     });
-    expect(withPlan).toContain("2 turns on Claude Code");
-    expect(withPlan).toContain("Sandboxes keep running.");
-    expect(screen.getByTestId("members-demotion-preview-table")).toBeTruthy();
-    cleanup();
 
-    const withoutPlan = renderDemotion({
+    expect(
+      screen.getByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Change to viewer",
+      }).disabled,
+    ).toBe(false);
+  });
+
+  it("keeps the confirm off and shows progress while the change is in flight", () => {
+    renderDemotion({
       currentRole: "admin",
       nextRole: "editor",
-      planLabel: "",
+      busy: true,
+      blockedReason: null,
     });
-    expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
-    expect(withoutPlan).not.toContain("Agents on it now");
-    expect(withoutPlan).not.toContain("stop using this plan");
+
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Change to editor",
+      }).disabled,
+    ).toBe(true);
+    expect(screen.getByTestId("members-demotion-confirm-busy")).toBeTruthy();
+  });
+
+  it("shows a refusal and disables the role change", () => {
+    renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      busy: false,
+      blockedReason: "Promote another admin first.",
+    });
+
+    expect(screen.getByTestId("members-demotion-refusal").textContent).toBe(
+      "Promote another admin first.",
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Change to editor",
+      }).disabled,
+    ).toBe(true);
   });
 });

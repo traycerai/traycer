@@ -4,17 +4,10 @@
  * can pass the wire through unchanged.
  */
 
-/**
- * A role a team member HOLDS. The view-only role is retired, so a wire value
- * that still decodes to it is no seat authority at all: resolve one with
- * `grantedTeamMemberRole` and carry the `null` rather than naming a role.
- */
-export type TeamRole = "admin" | "editor";
+export type TeamRole = "admin" | "editor" | "viewer";
 
 /** `null` is an accepted member on a host that has not yet filled inviteState. */
 export type MemberInviteState = "accepted" | "pending" | null;
-
-export type MemberRemovalState = "none" | "pending";
 
 /**
  * `failed` is this client's own: the request got no answer (it was refused
@@ -34,8 +27,7 @@ export type MembersSetRoleOutcome =
   | { readonly outcome: "failed" };
 
 export type MembersRemoveOutcome =
-  | { readonly outcome: "revoked" }
-  | { readonly outcome: "pending"; readonly receiptId: string }
+  | { readonly outcome: "removed" }
   | { readonly outcome: "last_admin" }
   | { readonly outcome: "forbidden" }
   | { readonly outcome: "plan_required" }
@@ -50,52 +42,38 @@ export interface MembersListMember {
   readonly userId: string;
   readonly displayName: string | null;
   readonly email: string | null;
-  /** `null` for a row holding no seat authority - see {@link TeamRole}. */
-  readonly effectiveRole: TeamRole | null;
+  readonly effectiveRole: TeamRole;
   readonly linkedPlan: boolean;
   readonly inviteState: MemberInviteState;
   readonly invitedAddress: string | null;
-  readonly removalState: MemberRemovalState;
 }
 
-export interface PaidSandboxPreview {
-  readonly name: string;
-  readonly startedBy: string;
-}
-
-/** The member named by a row and its dialogs, not by a preview. */
-export interface RemovePreviewModel {
-  readonly activeTurns: number | null;
-  readonly terminals: number | null;
+/** A member's running work, as a team computer counted it. */
+export interface MemberWorkNow {
+  readonly activeTurns: number;
+  readonly terminals: number;
   readonly hostName: string | null;
-  readonly sharedSignIns: readonly string[];
-  readonly paidSandboxes: readonly PaidSandboxPreview[];
-  readonly linkedPlan: string | null;
-}
-
-/** `turnsOnPlan` null: the serving host cannot see the member's turns. */
-export interface PlanUnlinkPreviewModel {
-  readonly planLabel: string;
-  readonly turnsOnPlan: number | null;
-  readonly whatKeepsWorking: string;
 }
 
 /**
- * A dialog's preview: still being read, read, or refused. What `loading` means
- * depends on when its dialog opens. The remove confirm opens before its read,
- * so there it is a first load; the demotion confirm opens only once the read
- * has answered, so there it is only ever a Retry already in flight.
+ * What the removal confirm shows. The member is named by the row and the
+ * dialog, not by a preview.
  */
+export interface RemovePreviewModel {
+  /** authn's: the team's sandboxes that get a replacement sign-in. */
+  readonly sandboxesToRekey: number;
+  /** Null until a team computer has counted it, and when none can. */
+  readonly workNow: MemberWorkNow | null;
+}
+
+/** The removal confirm's read: still being read, read, or refused. */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
   | { readonly status: "failed" };
 
-/**
- * The members read: a failed read, or a host that does not serve it
- * (`unsupported`), is never shown as an empty team.
- */
-export type MembersReadState = "loading" | "failed" | "unsupported" | "ready";
+/** The members read: a failed read is never shown as an empty team. */
+export type MembersReadState = "loading" | "failed" | "ready";
 
 /**
  * The drawer subject. Members rows use kind `member` and key = userId;
@@ -113,19 +91,6 @@ export interface MembersDetailsSubject {
   readonly roleLabel: string | null;
 }
 
-/**
- * A role change picked in a row whose check has not answered yet. Its confirm
- * is deferred until the answer lands, so for that while the row is the only
- * place the pick exists: `running` names the role being checked, since the
- * select still shows the one the member holds, and `cancelLabel` names what
- * the control beside it drops.
- */
-export interface PendingRoleCheck {
-  readonly userId: string;
-  readonly running: string;
-  readonly cancelLabel: string;
-}
-
 export function isTeamRole(value: string): value is TeamRole {
-  return value === "admin" || value === "editor";
+  return value === "admin" || value === "editor" || value === "viewer";
 }
