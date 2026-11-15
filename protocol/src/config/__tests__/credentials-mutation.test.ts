@@ -2,13 +2,11 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +25,7 @@ import {
 } from "../credentials-mutation";
 import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
+import { createCaseWorkDir, endCaseWorkDir } from "./credentials-run-root";
 
 // Reload shared-worker modules so the lock path binds this file’s fs/promises mock.
 vi.hoisted(() => {
@@ -190,7 +189,7 @@ describe("credentials mutation store", () => {
   });
 
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "traycer-cred-mut-test-"));
+    workDir = createCaseWorkDir("traycer-cred-mut-test-");
     credentialsPath = join(workDir, "credentials");
     metaPath = join(workDir, "credentials.meta.json");
     // The lock lives in its own subdir so the commit-failure tests can freeze
@@ -208,8 +207,7 @@ describe("credentials mutation store", () => {
     timerSpies.length = 0;
     for (const store of stores) store.dispose();
     stores.length = 0;
-    chmodSync(workDir, 0o700);
-    rmSync(workDir, { recursive: true, force: true });
+    endCaseWorkDir(workDir);
   });
 
   async function seedSignedIn(store: CredentialsMutationStore): Promise<void> {
