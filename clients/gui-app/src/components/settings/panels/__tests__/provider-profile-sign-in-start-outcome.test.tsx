@@ -74,6 +74,13 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
 }));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
 // A spy, so a test can see which link a button sent the user to.
 const links = vi.hoisted(() => ({
   openLink: vi.fn<(url: string, kind: string, event: unknown) => unknown>(),
