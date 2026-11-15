@@ -34,56 +34,65 @@ const accountCloud = vi.hoisted(() => ({
     | ((response: { readonly status: number; readonly text: string }) => void)
     | null,
   originSignInActive: true,
+  signInId: "account-a",
   bearerToken: "test-bearer",
 }));
 
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
-  useEnvironmentCloud: () => () => ({
-    authnBaseUrl: "https://authn.example/",
-    bearer: {
-      kind: "cloud",
-      getBearerToken: () => accountCloud.bearerToken,
-    },
-    transport: async (request: EnvironmentTransportRequest) => {
-      accountCloud.requests.push(request);
-      if (request.method === "PUT" && accountCloud.deferPut) {
-        accountCloud.deferPut = false;
-        return new Promise<{ status: number; text: string }>((resolve) => {
-          accountCloud.pendingPutResolve = resolve;
-        });
-      }
-      if (request.method === "PUT" && accountCloud.putFailureStatus !== null) {
-        return {
-          status: accountCloud.putFailureStatus,
-          text:
-            accountCloud.putFailureStatus === 503
-              ? JSON.stringify({ detail: "private account failure" })
-              : JSON.stringify({ statusCode: 400, error: "Bad Request" }),
+  useEnvironmentCloud: () => () => {
+    const pressedSignIn = accountCloud.signInId;
+    return {
+      authnBaseUrl: "https://authn.example/",
+      bearer: {
+        kind: "cloud",
+        getBearerToken: () => accountCloud.bearerToken,
+      },
+      transport: async (request: EnvironmentTransportRequest) => {
+        accountCloud.requests.push(request);
+        if (request.method === "PUT" && accountCloud.deferPut) {
+          accountCloud.deferPut = false;
+          return new Promise<{ status: number; text: string }>((resolve) => {
+            accountCloud.pendingPutResolve = resolve;
+          });
+        }
+        if (
+          request.method === "PUT" &&
+          accountCloud.putFailureStatus !== null
+        ) {
+          return {
+            status: accountCloud.putFailureStatus,
+            text:
+              accountCloud.putFailureStatus === 503
+                ? JSON.stringify({ detail: "private account failure" })
+                : JSON.stringify({ statusCode: 400, error: "Bad Request" }),
+          };
+        }
+        const matrix = {
+          needs_action: { renderer: true },
+          failure: { renderer: true },
+          done: { renderer: true },
+          info: { renderer: false },
         };
-      }
-      const matrix = {
-        needs_action: { renderer: true },
-        failure: { renderer: true },
-        done: { renderer: true },
-        info: { renderer: false },
-      };
-      const hooks =
-        request.method === "PUT" &&
-        typeof request.body === "object" &&
-        request.body !== null &&
-        "hooks" in request.body
-          ? request.body.hooks
-          : [];
-      return {
-        status: 200,
-        text: JSON.stringify({
-          settings: { matrix, hooks },
-          revision: request.method === "GET" ? 17 : 18,
-        }),
-      };
-    },
-    onOriginSignIn: () => accountCloud.originSignInActive,
-  }),
+        const hooks =
+          request.method === "PUT" &&
+          typeof request.body === "object" &&
+          request.body !== null &&
+          "hooks" in request.body
+            ? request.body.hooks
+            : [];
+        return {
+          status: 200,
+          text: JSON.stringify({
+            settings: { matrix, hooks },
+            revision: request.method === "GET" ? 17 : 18,
+          }),
+        };
+      },
+      onOriginSignIn: () =>
+        accountCloud.originSignInActive &&
+        accountCloud.signInId === pressedSignIn,
+    };
+  },
 }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
@@ -147,6 +156,7 @@ afterEach(() => {
   accountCloud.deferPut = false;
   accountCloud.pendingPutResolve = null;
   accountCloud.originSignInActive = true;
+  accountCloud.signInId = "account-a";
   accountCloud.bearerToken = "test-bearer";
   useAuthStore.setState({ status: "signed-out" });
 });
@@ -672,6 +682,49 @@ describe("computer hook saves and the host's answered account part", () => {
     );
     expect(accountCloud.requests).toEqual([]);
     expect(directoryList).toHaveBeenCalledTimes(initialListCalls);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
+  });
+
+  it("skips the host answer's account contribution when the account switches from A to B before the response", async () => {
+    const { client, saves, resolvePendingHostSave } = makeHostClient(
+      [hostAnsweredHttpHook],
+      { initialHooks: [commandHooks[0]], deferFirstSave: true },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    useAuthStore.setState({ status: "signed-in" });
+    const wrapper = (props: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeTestProvider>{props.children}</HostRuntimeTestProvider>
+      </QueryClientProvider>
+    );
+    render(<ComputerNotificationsSettingsPanel client={client} />, {
+      wrapper,
+    });
+
+    await screen.findByTestId("notification-hook-row-convert-this-hook");
+    await convertCommandHookToHttp();
+    await waitFor(() => expect(saves).toHaveLength(1));
+
+    accountCloud.signInId = "account-b";
+    accountCloud.bearerToken = "account-b-token";
+    resolvePendingHostSave();
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog"))
+          .getByRole("button", {
+            name: "Save hook",
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    expect(accountCloud.requests).toEqual([]);
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
   });
