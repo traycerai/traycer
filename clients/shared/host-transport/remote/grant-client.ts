@@ -316,6 +316,7 @@ async function mintAttachGrantWithSignal(
             ? { role: "client", purpose: "local" }
             : { role: "client" },
         ),
+        redirect: "manual",
         signal,
       }),
       signal,
