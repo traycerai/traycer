@@ -1,5 +1,5 @@
 import { createElement, lazy } from "react";
-import { TracyTabIcon } from "@/components/bots/tracy-tab-icon";
+import { TracyTabIcon } from "@/components/bots/tracy-entry-picture";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { isTracyPath, tracyPathname, tracyRoute } from "@/lib/routes";
 import type { TabKindModule, TabRef } from "@/stores/tabs/types";

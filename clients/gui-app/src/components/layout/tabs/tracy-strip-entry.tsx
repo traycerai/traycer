@@ -37,11 +37,12 @@ const COUNT_SEAT_CLASS = {
 } as const;
 
 /**
- * The entry's picture, in every strip placement, wearing the bot's unread count
- * off its top-right corner (the rail tile passes none: its row draws the count)
- * and the muted mark on its bottom-right while the person set the channel to
- * Nothing; the bare picture at zero, and where the host does not count.
- * `ground` is what the entry stands on: the strip's, or the phone drawer's.
+ * The entry's picture, in every strip placement. It wears the bot's unread
+ * count off its top-right corner; the rail tile passes none, because its row
+ * draws the count. It wears the muted mark on its bottom-right while the
+ * person has set the channel to Nothing. At zero, and where the host does not
+ * count, it is the bare picture. `ground` is what the entry stands on: the
+ * strip's, or the phone drawer's.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
