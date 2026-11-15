@@ -1,5 +1,8 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  ACCESS_HOST_ID,
+  ACCESS_HOST_NAME,
+} from "./access-host-directory-entry";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
@@ -33,35 +36,13 @@ import type { EnvironmentMessengerWrapper } from "@/lib/environment/__tests__/en
  * Writes are recorded in `requests`, in the order the host received them.
  */
 
-export const ACCESS_HOST_ID = "host-a";
-export const ACCESS_HOST_NAME = "dev-box";
-
-const LOCAL_ACCESS_HOST_DIRECTORY_ENTRY: HostDirectoryEntry = {
-  hostId: ACCESS_HOST_ID,
-  label: ACCESS_HOST_NAME,
-  kind: "local",
-  websocketUrl: "ws://127.0.0.1:0",
-  version: "1.5.0",
-  transportDialability: "dialable",
-};
-
-let accessHostDirectoryEntry = LOCAL_ACCESS_HOST_DIRECTORY_ENTRY;
-
-export function setAccessHostDirectoryEntry(entry: HostDirectoryEntry): void {
-  accessHostDirectoryEntry = entry;
-}
-
-export function resetAccessHostDirectoryEntry(): void {
-  accessHostDirectoryEntry = LOCAL_ACCESS_HOST_DIRECTORY_ENTRY;
-}
-
-export function accessHostDirectoryEntryFor(
-  hostId: string | null,
-): HostDirectoryEntry | null {
-  return hostId !== null && accessHostDirectoryEntry.hostId === hostId
-    ? accessHostDirectoryEntry
-    : null;
-}
+export {
+  ACCESS_HOST_ID,
+  ACCESS_HOST_NAME,
+  accessHostDirectoryEntryFor,
+  resetAccessHostDirectoryEntry,
+  setAccessHostDirectoryEntry,
+} from "./access-host-directory-entry";
 
 /** The methods a current host advertises in its handshake. */
 export const ACCESS_METHODS: readonly string[] = [

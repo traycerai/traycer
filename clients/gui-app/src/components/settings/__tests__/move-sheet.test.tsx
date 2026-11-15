@@ -122,10 +122,6 @@ function planWith(
     hostVersion: "1.5.0",
     disclosureVersion: 1,
     rows: {
-      // Both groups the key-shaped plane filled are retired and empty on
-      // every plan; the released schema still declares them.
-      looksLikeAKey: [],
-      sameNameInPersonal: [],
       moves: [],
       staysOnThisComputer: [],
       alreadyInPersonal: [],
@@ -152,6 +148,10 @@ const FIRST_PLAN = plan("hash-1", {
 interface Harness {
   readonly plans: EnvironmentMovePlanRequestV20[];
   readonly stages: EnvironmentMoveStageRequest[];
+  readonly stageEvidence: {
+    readonly planHash: string;
+    readonly planRevision: number;
+  }[];
   readonly starts: EnvironmentMoveStartRequest[];
   readonly authn: FakeEnvironmentCloud;
 }
@@ -197,6 +197,7 @@ function mountWithRunning(
 ): Harness {
   const plans: EnvironmentMovePlanRequestV20[] = [];
   const stages: EnvironmentMoveStageRequest[] = [];
+  const stageEvidence: { planHash: string; planRevision: number }[] = [];
   const starts: EnvironmentMoveStartRequest[] = [];
   let planReads = 0;
   let latestPlan: EnvironmentMovePlanResponseV20 | null = null;
@@ -220,20 +221,25 @@ function mountWithRunning(
         if (options.stageError !== undefined) throw options.stageError;
         if (latestPlan === null)
           throw new Error("The plan must be read before staging.");
+        const evidence = {
+          attemptId: ATTEMPT_ID,
+          planHash: latestPlan.planHash,
+          planRevision: latestPlan.planRevision,
+          hostVersion: latestPlan.hostVersion,
+          itemCount: latestPlan.rows.moves.length,
+          keyChoices: request.keyChoices,
+          sourceHostId: HOST_ID,
+          sharingGeneration: 1,
+          targetKind: "personal",
+          environmentId: ENVIRONMENT_ID,
+          disclosureVersion: latestPlan.disclosureVersion,
+        } satisfies EnvironmentMoveStageResponse["evidence"];
+        stageEvidence.push({
+          planHash: evidence.planHash,
+          planRevision: evidence.planRevision,
+        });
         return {
-          evidence: {
-            attemptId: ATTEMPT_ID,
-            planHash: latestPlan.planHash,
-            planRevision: latestPlan.planRevision,
-            hostVersion: latestPlan.hostVersion,
-            itemCount: latestPlan.rows.moves.length,
-            keyChoices: request.keyChoices,
-            sourceHostId: HOST_ID,
-            sharingGeneration: 1,
-            targetKind: "personal",
-            environmentId: ENVIRONMENT_ID,
-            disclosureVersion: latestPlan.disclosureVersion,
-          },
+          evidence,
           authorization: { manifestHash: MANIFEST_HASH },
         } satisfies EnvironmentMoveStageResponse;
       },
@@ -298,7 +304,7 @@ function mountWithRunning(
       .getState()
       .openSheet({ hostId: HOST_ID, hostName: "Old laptop" });
   });
-  return { plans, stages, starts, authn };
+  return { plans, stages, stageEvidence, starts, authn };
 }
 
 async function settle(): Promise<void> {
@@ -524,12 +530,15 @@ describe("<MoveSheet />", () => {
     expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
     expect(screen.queryByTestId("move-sheet-staysOnThisComputer")).toBeNull();
     expect(screen.getByTestId("move-sheet-alreadyInPersonal")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
     const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
     expect(harness.plans).toEqual([{ target, personal: null }]);
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
     expect(harness.stages).toEqual([
       { target, keyChoices: [], personal: null },
+    ]);
+    expect(harness.stageEvidence).toEqual([
+      { planHash: "hash-n", planRevision: 1 },
     ]);
     expect(harness.starts).toEqual([
       {
@@ -537,6 +546,13 @@ describe("<MoveSheet />", () => {
         planHash: "hash-n",
         acceptanceId: ACCEPTANCE_ID,
       },
+    ]);
+    expect(
+      harness.authn.requests
+        .filter((request) => request.url.endsWith("/move-acceptances"))
+        .map(({ body }) => body),
+    ).toEqual([
+      expect.objectContaining({ planHash: "hash-n", planRevision: 1 }),
     ]);
   });
 
@@ -727,13 +743,16 @@ describe("<MoveSheet />", () => {
     });
     await settle();
 
+    const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
+    expect(harness.plans).toEqual([{ target, personal: null }]);
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
     await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
 
-    const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
-    expect(harness.plans).toEqual([{ target, personal: null }]);
     expect(harness.stages).toEqual([
       { target, keyChoices: [], personal: null },
+    ]);
+    expect(harness.stageEvidence).toEqual([
+      { planHash: "hash-1", planRevision: 1 },
     ]);
     expect(harness.starts).toEqual([
       {
@@ -755,7 +774,7 @@ describe("<MoveSheet />", () => {
           planHash: "hash-1",
           planRevision: 1,
           hostVersion: "1.5.0",
-          itemCount: 1,
+          itemCount: 2,
           keyChoices: [],
           sourceHostId: HOST_ID,
           sharingGeneration: 1,
@@ -939,6 +958,11 @@ describe("<MoveSheet />", () => {
       "This list changed. Read it again.",
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
+        name: "Show all 1",
+      }),
+    );
     expect(await screen.findByText("EDITOR updated")).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
@@ -1035,9 +1059,9 @@ describe("<MoveSheet />", () => {
 
     const moves = screen.getByTestId("move-sheet-moves");
     fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(within(moves).getByTestId("move-sheet-moves-row").textContent).toBe(
-      "ANTHROPIC_BASE_URL (Claude Code)",
-    );
+    expect(
+      within(moves).getByText("ANTHROPIC_BASE_URL (Claude Code)"),
+    ).toBeTruthy();
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
       "1 Claude Code env setting",
     );

@@ -35,6 +35,7 @@ import type {
 } from "@traycer/protocol/host/environment/move-contracts";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   fakeEnvironmentCloud,
   type FakeEnvironmentCloud,
@@ -78,6 +79,22 @@ vi.mock("@/lib/host", async (importOriginal) => {
       if (binding?.hostClient === undefined)
         throw new Error("Host client is unavailable");
       return binding.hostClient;
+    },
+  };
+});
+
+// The computer being claimed is asked through the card's own fake host, by the
+// binding's id-pinned requester as the hook resolves it, with no runtime
+// provider (the hook's own `useHostClient()` needs one).
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const { resolveNamedHostClient } =
+    await import("@/lib/host/binding-host-client");
+  return {
+    useHostClientForHostId: (hostId: string | null) => {
+      const hostClient = hostBindingMock.current?.hostClient;
+      return hostId === null || hostClient === undefined
+        ? null
+        : resolveNamedHostClient({ hostClient }, hostId);
     },
   };
 });
@@ -176,8 +193,6 @@ const GIVE_PLAN: EnvironmentMovePlanResponseV20 = {
     staysOnThisComputer: [],
     alreadyInPersonal: [],
     differsMasked: [],
-    looksLikeAKey: [],
-    sameNameInPersonal: [],
   },
   guideDiffers: false,
   personalHoldsSecrets: false,
@@ -669,17 +684,31 @@ describe("<HostOverviewSettingsCard />", () => {
 
   it("keeps the running-chat count unknown when the computer does not serve the method", async () => {
     const calls = giveCalls();
-    await openAdminGiveDialog(
-      giveHandlers(
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      ...giveHandlers(
         calls,
         () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
         null,
       ),
-      false,
-    );
+      "environment.previewLocalFacts": (request) => {
+        calls.localFacts.push(
+          environmentPreviewLocalFactsRequestSchema.parse(request),
+        );
+        throw new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "unknown method",
+          requestId: "local-facts-unsupported",
+          method: "environment.previewLocalFacts",
+          fatalDetails: null,
+        });
+      },
+    };
+    await openAdminGiveDialog(handlers, true);
 
     expect(await screen.findByText("Running chats will stop.")).toBeTruthy();
-    expect(calls.localFacts).toEqual([]);
+    expect(calls.localFacts).toEqual([
+      { environmentId: "personal", subject: { kind: "computer" } },
+    ]);
   });
 
   it("gives a computer through the team plan, acceptance and status read", async () => {
@@ -728,9 +757,17 @@ describe("<HostOverviewSettingsCard />", () => {
     } as const;
     expect(calls.plans[0]).toEqual({ target, personal: null });
     expect(calls.stages).toEqual([{ target, keyChoices: [], personal: null }]);
-    expect(
-      authnFixture.requests.map(({ method, url, body }) => [method, url, body]),
-    ).toEqual([
+    // The card's own team list reads the team's hosts and members from authn;
+    // the one write it sends is the acceptance.
+    const [reads, writes] = [
+      authnFixture.requests.filter(({ method }) => method === "GET"),
+      authnFixture.requests.filter(({ method }) => method !== "GET"),
+    ];
+    expect(reads.map(({ url }) => new URL(url).pathname).sort()).toEqual([
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/hosts`,
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/members`,
+    ]);
+    expect(writes.map(({ method, url, body }) => [method, url, body])).toEqual([
       [
         "POST",
         `https://authn.test/api/v3/hosts/${GIVE_HOST_ID}/move-acceptances`,
@@ -889,6 +926,8 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(
       screen.queryByRole("option", { name: /Use this computer for the team/ }),
     ).toBeNull();
+    // An open select hides the rest of the page from the accessibility tree.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
     fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(directoryReadCount).toBe(2));
   });
