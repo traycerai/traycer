@@ -681,6 +681,36 @@ describe("<BotChannelSidebar /> read-cursor bold", () => {
     ).toBeNull();
   });
 
+  it("keeps a channel's bold name when it is the one in view, with the selected highlight and no count", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": OLD_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-release", null);
+
+    const selected = row("bot-release");
+    expect(selected.getAttribute("aria-current")).toBe("page");
+    expect(selected.getAttribute("data-unread")).toBe("true");
+    expect(selected.className).toContain("font-semibold");
+    expect(selected.className).toContain("bg-accent");
+    expect(
+      within(selected).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("does not bold the channel in view once its cursor has caught up", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": NEW_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-release", null);
+
+    const selected = row("bot-release");
+    expect(selected.getAttribute("aria-current")).toBe("page");
+    expect(selected.getAttribute("data-unread")).toBe("false");
+    expect(selected.className).not.toContain("font-semibold");
+  });
+
   it("does not bold a channel at Nothing, though a new row has landed", () => {
     mocks.state.readCursor = {
       cursors: {},

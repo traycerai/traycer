@@ -728,7 +728,7 @@ function ChannelRow(props: {
         active
           ? "bg-accent text-accent-foreground"
           : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
-        bold && !active && "font-semibold text-foreground",
+        bold && "font-semibold text-foreground",
       )}
     >
       <LiveBotAvatar botId={bot.botId} hostId={hostId} size="sm" />

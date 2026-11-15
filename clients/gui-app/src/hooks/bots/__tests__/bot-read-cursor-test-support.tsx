@@ -33,6 +33,14 @@ export interface ReadCursorHostFixture {
   readonly advances: BotReadCursorAdvanceRequest[];
   readonly advanceAnswers: Map<string, BotReadPosition>;
   readonly heldRead: { promise: Promise<BotReadCursorReadResponse> | null };
+  /** The client the requester was issued from: a case switches its identity. */
+  readonly spine: HostClient<HostRpcRegistry>;
+  /** The signed-in user each advance reached the host under, in order. */
+  readonly advanceUsers: Array<string | null>;
+  /** While `promise` is set, an advance reaches the host and waits on it. */
+  readonly heldAdvance: { promise: Promise<void> | null };
+  /** While true, an advance reaches the host and is refused. */
+  readonly refuseAdvances: { value: boolean };
 }
 
 export function createReadCursorHostFixture(initial: {
@@ -43,6 +51,9 @@ export function createReadCursorHostFixture(initial: {
   const latest: Record<string, BotReadPosition> = { ...initial.latest };
   const heldRead: ReadCursorHostFixture["heldRead"] = { promise: null };
   const reads = { count: 0 };
+  const advanceUsers: Array<string | null> = [];
+  const heldAdvance: ReadCursorHostFixture["heldAdvance"] = { promise: null };
+  const refuseAdvances = { value: false };
   const advances: BotReadCursorAdvanceRequest[] = [];
   const advanceAnswers = new Map<string, BotReadPosition>();
   const queryClient = new QueryClient({
@@ -65,8 +76,11 @@ export function createReadCursorHostFixture(initial: {
           if (heldRead.promise !== null) return heldRead.promise;
           return { cursors: { ...cursors }, latest: { ...latest } };
         },
-        "bot.readCursor.advance": (params) => {
+        "bot.readCursor.advance": async (params) => {
           advances.push(params);
+          advanceUsers.push(spine.getRequestContextUserId());
+          if (heldAdvance.promise !== null) await heldAdvance.promise;
+          if (refuseAdvances.value) throw new Error("the host refused");
           const position = { messageId: params.messageId, seq: params.seq };
           const answer = advanceAnswers.get(params.conversationId) ?? position;
           const held = Object.hasOwn(cursors, params.conversationId)
@@ -98,5 +112,9 @@ export function createReadCursorHostFixture(initial: {
     advances,
     advanceAnswers,
     heldRead,
+    spine,
+    advanceUsers,
+    heldAdvance,
+    refuseAdvances,
   };
 }
