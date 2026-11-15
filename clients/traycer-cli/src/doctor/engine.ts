@@ -49,12 +49,6 @@ import {
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
-import {
-  hostDoorRefusalKind,
-  OLDER_HOST_MESSAGE,
-} from "../internal/host-door-words";
-import { isRefusalAfterRejectedSignIn } from "../internal/sign-in-rejection";
-import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
@@ -1720,24 +1714,6 @@ async function probeHostRpc(
     // Classified by the refusal that ended a retry episode, if one did.
     const err = finalRefusalOf(caught);
     if (err instanceof HostRpcError) {
-      // A reasonless refusal of the host-only token is an older host, never a
-      // login.
-      const doorRefusal = hostRefusalOf(err);
-      if (
-        doorRefusal !== null &&
-        hostDoorRefusalKind(doorRefusal, isRefusalAfterRejectedSignIn(err)) ===
-          "older-host"
-      ) {
-        return {
-          code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
-          severity: "error",
-          title: "Host rejected the stored credentials",
-          message: OLDER_HOST_MESSAGE,
-          fixAction: null,
-          terminalCommand: "traycer host update",
-          details: { websocketUrl, rpcCode: err.code },
-        };
-      }
       if (err.code === "UNAUTHORIZED") {
         return {
           code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
