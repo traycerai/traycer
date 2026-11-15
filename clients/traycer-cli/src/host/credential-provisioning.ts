@@ -296,6 +296,22 @@ export async function provisionInstalledHostCredential(
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
+  // A recovery still in flight is waited for only as long as the bound has
+  // left, never past it. A CANCELABLE deadline, not `sleep()`: an uncleared
+  // `setTimeout` keeps the Node event loop alive, and the CLI exits by
+  // draining it rather than calling `process.exit`, so a plain race would
+  // hold `host install` open for the whole remaining budget every time the
+  // recovery won.
+  const waitForInFlightRevalidation = async (): Promise<void> => {
+    if (inFlightRevalidation === null) return;
+    const pending: Promise<RevalidateOutcome> = inFlightRevalidation;
+    const bound = cancelableDelay(remaining());
+    try {
+      await Promise.race([pending.catch(() => undefined), bound.promise]);
+    } finally {
+      bound.cancel();
+    }
+  };
 
   try {
     await refreshEndpoint();
@@ -514,6 +530,15 @@ export async function provisionInstalledHostCredential(
       }
       return { kind: "unreachable" };
     };
+    // How the probe ended is read only once a recovery still in flight has
+    // answered, or the bound has passed: a sign-in refused inside the bound
+    // is then reported as refused, not as an authorization that did not
+    // complete. A refusal landing after the bound is still not seen.
+    const settleAfterRecovery =
+      async (): Promise<HostCredentialProvisionOutcome> => {
+        await waitForInFlightRevalidation();
+        return settledOutcome();
+      };
     // True when NOTHING observed this run accounts for how it ended - no
     // dead sign-in, no mint history, no capability gap. Deliberately does
     // not consult `hostAnswered`: this asks "is the outcome unexplained?",
@@ -524,6 +549,8 @@ export async function provisionInstalledHostCredential(
     // this probe can report.
     const nothingExplainsTheClose = (): boolean =>
       !credentialRejected &&
+      !tokens.signInRejected() &&
+      mintRefusal === null &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&
@@ -535,7 +562,7 @@ export async function provisionInstalledHostCredential(
       if (remainingMs <= 0) {
         break;
       }
-      if (mintRefusal !== null) return settledOutcome();
+      if (mintRefusal !== null) return await settleAfterRecovery();
       const { observation, session } = await observeNextAck(
         activeClient,
         (resolver) => {
@@ -550,7 +577,7 @@ export async function provisionInstalledHostCredential(
       wakeOnMintRefusal = null;
       switch (observation.kind) {
         case "token-refused":
-          return settledOutcome();
+          return await settleAfterRecovery();
         case "state": {
           // This ack carried a state, so any silent-open streak was a race
           // with the grace timer, not a capability gap - start it over.
@@ -635,19 +662,19 @@ export async function provisionInstalledHostCredential(
             // guarded, so a second lap must not slip past this branch while
             // the first is still settling.
             mintUnauthorizedConfirmed = true;
-            const confirm = revalidator.revalidateCurrentContext();
+            // Recorded on the rotation itself, so an answer that lands after
+            // this lap stopped waiting still reaches the outcome read at the
+            // exit, inside the bound.
+            const confirm = revalidator
+              .revalidateCurrentContext()
+              .then((outcome) => {
+                if (outcome === "rejected") credentialRejected = true;
+                return outcome;
+              });
             inFlightRevalidation = confirm;
             const confirmBound = cancelableDelay(remaining());
             try {
-              const outcome = await Promise.race([
-                confirm,
-                confirmBound.promise.then(
-                  (): RevalidateOutcome => "network-error",
-                ),
-              ]);
-              if (outcome === "rejected") {
-                credentialRejected = true;
-              }
+              await Promise.race([confirm, confirmBound.promise]);
             } finally {
               confirmBound.cancel();
             }
@@ -703,6 +730,7 @@ export async function provisionInstalledHostCredential(
             // otherwise-unexplained probe, so keying off the returned kind
             // would swallow this close the moment a reconnect revalidation
             // had fired. Its code stays in the structured diagnostic above.
+            await waitForInFlightRevalidation();
             if (nothingExplainsTheClose()) {
               return {
                 kind: "error",
@@ -712,10 +740,10 @@ export async function provisionInstalledHostCredential(
             }
             return settledOutcome();
           }
-          return settledOutcome();
+          return await settleAfterRecovery();
         }
         case "timeout":
-          return settledOutcome();
+          return await settleAfterRecovery();
       }
       // Both exits here are the same idea: the answer is a constant for this
       // client, so the remaining laps would spend the budget re-measuring it.
@@ -735,7 +763,7 @@ export async function provisionInstalledHostCredential(
       await sleep(Math.min(verifyBackoffMs, remaining()));
       verifyBackoffMs = Math.min(verifyBackoffMs * 2, VERIFY_BACKOFF_MAX_MS);
     }
-    return settledOutcome();
+    return await settleAfterRecovery();
   } catch (err) {
     const error = errorFromUnknown(err);
     options.logger.warn("Host credential provisioning failed unexpectedly", {
@@ -751,31 +779,12 @@ export async function provisionInstalledHostCredential(
     if (poll !== null) {
       clearInterval(poll);
     }
-    if (inFlightRevalidation !== null) {
-      // Annotated for the same reason as `pendingMint`: assigned only inside
-      // a callback, so TS's linear flow narrows this branch to `never`.
-      const pendingRevalidation: Promise<RevalidateOutcome> =
-        inFlightRevalidation;
-      // A revalidation only ever STARTS with budget left, so the remainder is
-      // the most a started rotation gets to land cleanly (a landed rotation
-      // leaves the credentials file consistent; an interrupted one leaves its
-      // spent-base marker armed for the next process to resolve). Whatever is
-      // still pending when the bound fires is cancelled just below.
-      // A CANCELABLE deadline, not `sleep()`: an uncleared `setTimeout` keeps
-      // the Node event loop alive, and the CLI exits by draining it rather
-      // than calling `process.exit`. A plain race would therefore hold
-      // `host install` open for the whole remaining budget every time the
-      // revalidation won - the exact hang this block exists to prevent.
-      const deadline = cancelableDelay(remaining());
-      try {
-        await Promise.race([
-          pendingRevalidation.catch(() => undefined),
-          deadline.promise,
-        ]);
-      } finally {
-        deadline.cancel();
-      }
-    }
+    // A revalidation only ever STARTS with budget left, so the remainder is
+    // the most a started rotation gets to land cleanly (a landed rotation
+    // leaves the credentials file consistent; an interrupted one leaves its
+    // spent-base marker armed for the next process to resolve). Whatever is
+    // still pending when the bound fires is cancelled just below.
+    await waitForInFlightRevalidation();
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
     }
