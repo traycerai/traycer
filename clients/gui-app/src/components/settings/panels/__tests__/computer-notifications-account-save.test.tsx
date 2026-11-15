@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -21,6 +21,9 @@ import type {
 import type { NotificationHooksSaveResponseV40 } from "@traycer/protocol/host/notifications/host-notifications";
 import { ComputerNotificationsSettingsPanel } from "@/components/settings/panels/computer-notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const accountCloud = vi.hoisted(() => ({
@@ -30,12 +33,17 @@ const accountCloud = vi.hoisted(() => ({
   pendingPutResolve: null as
     | ((response: { readonly status: number; readonly text: string }) => void)
     | null,
+  originSignInActive: true,
+  bearerToken: "test-bearer",
 }));
 
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => () => ({
     authnBaseUrl: "https://authn.example/",
-    bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+    bearer: {
+      kind: "cloud",
+      getBearerToken: () => accountCloud.bearerToken,
+    },
     transport: async (request: EnvironmentTransportRequest) => {
       accountCloud.requests.push(request);
       if (request.method === "PUT" && accountCloud.deferPut) {
@@ -74,7 +82,7 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
         }),
       };
     },
-    onOriginSignIn: () => true,
+    onOriginSignIn: () => accountCloud.originSignInActive,
   }),
 }));
 
@@ -138,6 +146,8 @@ afterEach(() => {
   accountCloud.putFailureStatus = null;
   accountCloud.deferPut = false;
   accountCloud.pendingPutResolve = null;
+  accountCloud.originSignInActive = true;
+  accountCloud.bearerToken = "test-bearer";
   useAuthStore.setState({ status: "signed-out" });
 });
 
@@ -151,10 +161,12 @@ function makeHostClient(
   readonly client: HostClient<HostRpcRegistry>;
   readonly saves: HostHooksSaveRequest[];
   readonly getStatus: () => HostHooksStatus;
+  readonly resolvePendingHostSave: () => void;
   readonly rejectPendingHostSave: () => void;
 } {
   const saves: HostHooksSaveRequest[] = [];
   let rejectPendingHostSave: ((reason: Error) => void) | null = null;
+  let resolvePendingHostSave: (() => void) | null = null;
   let deferNextSave = options.deferFirstSave === true;
   let status: HostHooksStatus = {
     configPath: "/home/test/.traycer/notification-hooks.json",
@@ -187,7 +199,8 @@ function makeHostClient(
           saves.push(request);
           if (deferNextSave) {
             deferNextSave = false;
-            await new Promise<never>((_resolve, reject) => {
+            await new Promise<void>((resolve, reject) => {
+              resolvePendingHostSave = resolve;
               rejectPendingHostSave = reject;
             });
           }
@@ -219,6 +232,13 @@ function makeHostClient(
     client: spine.createRequester(mockLocalHostEntry),
     saves,
     getStatus: () => status,
+    resolvePendingHostSave: () => {
+      if (resolvePendingHostSave === null)
+        throw new Error("No deferred host save is pending.");
+      const resolve = resolvePendingHostSave;
+      resolvePendingHostSave = null;
+      resolve();
+    },
     rejectPendingHostSave: () => {
       if (rejectPendingHostSave === null)
         throw new Error("No deferred host save is pending.");
@@ -241,6 +261,17 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
       </QueryClientProvider>
     ),
   });
+}
+
+function HostBindingCapture(props: {
+  readonly onBinding: (
+    binding: HostRuntimeBinding<HostRpcRegistry> | null,
+  ) => void;
+}) {
+  const binding = useHostBinding();
+  const { onBinding } = props;
+  useEffect(() => onBinding(binding), [binding, onBinding]);
+  return null;
 }
 
 async function openCommandHookEditor(hookId: string): Promise<HTMLElement> {
@@ -588,6 +619,101 @@ describe("computer hook saves and the host's answered account part", () => {
     expect(accountCloud.requests).toEqual([]);
   });
 
+  it("skips the host answer's account contribution when its sign-in ends before the response", async () => {
+    const { client, saves, resolvePendingHostSave } = makeHostClient(
+      [hostAnsweredHttpHook],
+      { initialHooks: [commandHooks[0]], deferFirstSave: true },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    useAuthStore.setState({ status: "signed-in" });
+    const capturedBindings: HostRuntimeBinding<HostRpcRegistry>[] = [];
+    const onBinding = (
+      binding: HostRuntimeBinding<HostRpcRegistry> | null,
+    ): void => {
+      if (binding !== null) capturedBindings.push(binding);
+    };
+    const wrapper = (props: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeTestProvider>{props.children}</HostRuntimeTestProvider>
+      </QueryClientProvider>
+    );
+    render(
+      <>
+        <HostBindingCapture onBinding={onBinding} />
+        <ComputerNotificationsSettingsPanel client={client} />
+      </>,
+      { wrapper },
+    );
+
+    await screen.findByTestId("notification-hook-row-convert-this-hook");
+    await convertCommandHookToHttp();
+    await waitFor(() => expect(saves).toHaveLength(1));
+    await waitFor(() => expect(capturedBindings.length).toBeGreaterThan(0));
+    const capturedBinding = capturedBindings[0];
+    const directoryList = vi.spyOn(capturedBinding.directory, "list");
+    const initialListCalls = directoryList.mock.calls.length;
+
+    accountCloud.originSignInActive = false;
+    resolvePendingHostSave();
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog"))
+          .getByRole("button", {
+            name: "Save hook",
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    expect(accountCloud.requests).toEqual([]);
+    expect(directoryList).toHaveBeenCalledTimes(initialListCalls);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a failed Delete in its confirmation and not in a new Delete opening", async () => {
+    const { client } = makeHostClient([hostAnsweredHttpHook], {
+      initialHooks: commandHooks,
+    });
+    accountCloud.putFailureStatus = 503;
+    renderComputerTab(client);
+
+    const firstRow = await screen.findByTestId(
+      "notification-hook-row-convert-this-hook",
+    );
+    fireEvent.click(within(firstRow).getByRole("button", { name: "Delete" }));
+    const firstDialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(firstDialog).queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(firstDialog).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(
+      (await within(firstDialog).findByRole("alert")).textContent,
+    ).toContain(
+      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
+    );
+    fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    const remainingRow = await screen.findByTestId(
+      "notification-hook-row-keep-local-hook",
+    );
+    fireEvent.click(
+      within(remainingRow).getByRole("button", { name: "Delete" }),
+    );
+    const secondDialog = await screen.findByTestId(
+      "confirm-destructive-dialog",
+    );
+    expect(within(secondDialog).queryByRole("alert")).toBeNull();
+  });
+
   it("keeps Delete locked while its account save is pending and retries its opening after failure settles", async () => {
     const { client, saves } = makeHostClient([], {
       initialHooks: [commandHooks[0]],
@@ -600,6 +726,7 @@ describe("computer hook saves and the host's answered account part", () => {
     );
     fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(accountCloud.pendingPutResolve).not.toBeNull());

@@ -326,7 +326,8 @@ describe("refreshConnectedAccountSettings", () => {
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
-    expect(session.closeCalls).toBe(1);
+    expect(session.closeCalls).toBe(0);
+    expect(session.isClosed()).toBe(false);
     expect(requestedHosts).toEqual([]);
     expect(requestIds).toEqual([]);
   });

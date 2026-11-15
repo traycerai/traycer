@@ -914,7 +914,8 @@ describe("<SettingsSidebar /> scope groups", () => {
         id === "machine-setup" ||
         id === "agent-definitions" ||
         id === "browser-agent-access" ||
-        id === "members"
+        id === "members" ||
+        id === "notification-hooks"
       ) {
         continue;
       }
@@ -936,13 +937,7 @@ describe("<SettingsSidebar /> scope groups", () => {
         Node.DOCUMENT_POSITION_FOLLOWING) !==
       0;
 
-    for (const id of [
-      "providers",
-      "secrets",
-      "devices",
-      "notifications",
-      "notification-hooks",
-    ]) {
+    for (const id of ["providers", "secrets", "devices", "notifications"]) {
       expect(
         follows(screen.getByTestId(`settings-sidebar-item-${id}`), picker),
         id,
@@ -1023,7 +1018,6 @@ describe("<SettingsSidebar /> scope groups", () => {
       "shell",
       "agents",
       "secrets",
-      "notification-hooks",
       "devices",
       "usage",
       "credits",
@@ -1144,6 +1138,10 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+    expect(environmentRows()).toEqual([
+      ...PERSONAL_ROWS,
+      "Members",
+      "Notification hooks",
+    ]);
   });
 });
