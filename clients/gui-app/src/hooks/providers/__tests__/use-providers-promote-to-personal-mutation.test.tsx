@@ -749,8 +749,10 @@ describe("useProvidersPromoteToPersonal", () => {
       ]);
     const originalKeys = hostKeys(WINDOW_HOST_ID);
     const nextKeys = hostKeys(nextHostId);
-    for (const key of [...originalKeys, ...nextKeys])
+    for (const key of [...originalKeys, ...nextKeys]) {
+      result.host.queryClient.setQueryDefaults(key, { gcTime: Infinity });
       result.host.queryClient.setQueryData(key, {});
+    }
     let pending: Promise<PromoteToEnvironmentOutcome> | undefined;
     await act(async () => {
       pending = result.rendered.result.current.mutateAsync(result.input);
