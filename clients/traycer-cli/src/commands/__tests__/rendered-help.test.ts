@@ -361,6 +361,16 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "host claim",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [],
+  },
+  {
     path: "host pin",
     options: [],
     args: [],
