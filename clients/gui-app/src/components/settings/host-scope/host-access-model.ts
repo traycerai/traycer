@@ -1,8 +1,10 @@
-import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
+import type {
+  ReviewHeldEntry,
+  UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentNotice,
   EnvironmentStatusResponse,
-  EnvironmentWriteOutcome,
   LocalOverride,
   LocalOverrideTarget,
   RemoteAccessState,
@@ -270,7 +272,7 @@ export function keepLocalText(hostName: string): string {
  * `kept` is the Keep action's Undo: the value stays on this host either way.
  */
 export function undoRefusalText(
-  outcome: EnvironmentWriteOutcome,
+  outcome: UndoOutcome,
   label: string,
   kept: { readonly hostName: string } | null,
 ): string | null {
@@ -281,10 +283,6 @@ export function undoRefusalText(
   switch (outcome.outcome) {
     case "saved":
       return null;
-    case "pending":
-      return kept === null
-        ? "Undo applies when this host reconnects."
-        : `Kept on ${kept.hostName}. The change everywhere is undone when this host reconnects.`;
     case "stale":
       return `${prefix}: ${label} was changed again since.`;
     case "needs_grant":
