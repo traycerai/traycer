@@ -6239,12 +6239,15 @@ export class AuthService {
    * One operation's calls to authn's environment routes
    * (`@traycer-clients/shared/environment`), on this session's verified
    * bearer: the one `cloudBearer()` answers, asked at each call. The
-   * operation is bound to the sign-in current now, the person and the
-   * identity generation: after a sign-out or a sign-in, as anyone, it sends
-   * nothing more. A same-user refresh keeps it.
+   * operation is bound to `originUserId`, the person the screen that asked
+   * was showing, and to the identity generation current now: after a
+   * sign-out or a sign-in, as anyone, it sends nothing more. A same-user
+   * refresh keeps it. The person is the caller's, not the live one: a write
+   * begins inside Query's `mutationFn`, after Query has awaited, and a switch
+   * in that wait must not make the write the next account's.
    */
-  environmentCloud(): EnvironmentCloud {
-    const userId = this.currentProfile?.userId ?? null;
+  environmentCloud(originUserId: string | null): EnvironmentCloud {
+    const userId = originUserId;
     const generation = this.identityGeneration;
     return {
       authnBaseUrl: this.runnerHost.authnBaseUrl,

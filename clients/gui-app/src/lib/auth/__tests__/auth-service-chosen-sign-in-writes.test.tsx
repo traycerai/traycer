@@ -18,6 +18,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { AuthService, type ChosenSignIn } from "@/lib/auth/auth-service";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -25,6 +26,7 @@ const AUTHN = "http://localhost:5005";
 const VALIDATION_URL = `${AUTHN}/api/v3/user/negotiated`;
 const MINT_URL = `${AUTHN}/api/v3/hosts/team-install-tokens`;
 const ACCEPT_URL = `${AUTHN}/api/v3/environments/me/invitations/accept`;
+const ENVIRONMENT_ROUTES = `${AUTHN}/api/v3/environments/`;
 
 const bound = vi.hoisted(
   (): {
@@ -42,6 +44,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 import { useTeamComputerInstallTokenMutation } from "@/hooks/host/use-team-computer-install-token-mutation";
 import { useEnvironmentInvitationAcceptMutation } from "@/hooks/environment/use-environment-invitations";
+import { useEnvironmentCloudMutation } from "@/hooks/environment/use-environment-cloud";
 
 function installFetch(
   handler: (url: string, init: RequestInit | undefined) => Promise<Response>,
@@ -134,7 +137,7 @@ interface SignedIn {
   readonly service: AuthService;
   readonly queryClient: QueryClient;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
-  /** The bearer of every write to `writeUrl`, in the order sent. */
+  /** The bearer of every request `isWrite` names, in the order sent. */
   readonly writes: string[];
   /** Ends the held wait between the press and `mutationFn`. */
   readonly releasePress: () => void;
@@ -142,7 +145,7 @@ interface SignedIn {
 
 /** Account A signed in on a real AuthService; every press is held in Query. */
 async function signInA(
-  writeUrl: string,
+  isWrite: (url: string) => boolean,
   answer: () => Response,
 ): Promise<SignedIn> {
   const writes: string[] = [];
@@ -151,7 +154,7 @@ async function signInA(
       return Promise.resolve(
         profileFor(bearerOf(init) === "Bearer token-b" ? "user-b" : "user-a"),
       );
-    if (url === writeUrl) {
+    if (isWrite(url)) {
       writes.push(bearerOf(init));
       return Promise.resolve(answer());
     }
@@ -261,9 +264,31 @@ function pressAccept(session: SignedIn) {
   return hook;
 }
 
+function pressMemberRemoval(session: SignedIn) {
+  const hook = renderHook(
+    () =>
+      useEnvironmentCloudMutation({
+        method: "environment.members.remove",
+        mutationKey: environmentMutationKeys.membersRemove(),
+        errorMessage: null,
+        invalidateMethods: [],
+      }),
+    { wrapper: session.wrapper },
+  );
+  act(() =>
+    hook.result.current.mutate({ environmentId: "env-a", userId: "user-c" }),
+  );
+  return hook;
+}
+
+/** Any answer: the case is about which bearer a request carries, if any. */
+function refusedAnswer(): Response {
+  return new Response(null, { status: 500 });
+}
+
 describe("an install-token mint pressed before a sign-in change", () => {
   it("is not sent as the account switched to before Query calls it", async () => {
-    const session = await signInA(MINT_URL, mintAnswer);
+    const session = await signInA((url) => url === MINT_URL, mintAnswer);
     pressMint(session);
 
     await switchToB(session);
@@ -283,7 +308,7 @@ describe("an install-token mint pressed before a sign-in change", () => {
   });
 
   it("is sent across the same account's token refresh, with the refreshed token", async () => {
-    const session = await signInA(MINT_URL, mintAnswer);
+    const session = await signInA((url) => url === MINT_URL, mintAnswer);
     const hook = pressMint(session);
 
     await refreshA(session);
@@ -296,7 +321,7 @@ describe("an install-token mint pressed before a sign-in change", () => {
 
 describe("an invitation accept pressed before a sign-in change", () => {
   it("is not sent as the account switched to before Query calls it", async () => {
-    const session = await signInA(ACCEPT_URL, acceptAnswer);
+    const session = await signInA((url) => url === ACCEPT_URL, acceptAnswer);
     const hook = pressAccept(session);
 
     await switchToB(session);
@@ -310,13 +335,40 @@ describe("an invitation accept pressed before a sign-in change", () => {
   });
 
   it("is sent across the same account's token refresh, with the refreshed token", async () => {
-    const session = await signInA(ACCEPT_URL, acceptAnswer);
+    const session = await signInA((url) => url === ACCEPT_URL, acceptAnswer);
     const hook = pressAccept(session);
 
     await refreshA(session);
     session.releasePress();
 
     await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
+    expect(session.writes).toEqual(["Bearer token-a2"]);
+  });
+});
+
+describe("a team settings write pressed before a sign-in change", () => {
+  const isEnvironmentRoute = (url: string) =>
+    url.startsWith(ENVIRONMENT_ROUTES);
+
+  it("is not sent as the account switched to before Query calls it", async () => {
+    const session = await signInA(isEnvironmentRoute, refusedAnswer);
+    const hook = pressMemberRemoval(session);
+
+    await switchToB(session);
+    session.releasePress();
+
+    await waitFor(() => expect(hook.result.current.isError).toBe(true));
+    expect(session.writes).toEqual([]);
+  });
+
+  it("is sent across the same account's token refresh, with the refreshed token", async () => {
+    const session = await signInA(isEnvironmentRoute, refusedAnswer);
+    const hook = pressMemberRemoval(session);
+
+    await refreshA(session);
+    session.releasePress();
+
+    await waitFor(() => expect(hook.result.current.isError).toBe(true));
     expect(session.writes).toEqual(["Bearer token-a2"]);
   });
 });

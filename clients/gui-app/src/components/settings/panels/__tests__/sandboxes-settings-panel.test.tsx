@@ -169,7 +169,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
             auth: {
               ...mocks.binding.auth,
               listEnvironments: () => requireTeamCloudAuth().listEnvironments(),
-              environmentCloud: () => requireTeamCloudAuth().environmentCloud(),
+              environmentCloud: (originUserId: string | null) =>
+                requireTeamCloudAuth().environmentCloud(originUserId),
             },
           };
     },

@@ -4286,7 +4286,11 @@ describe("AuthService", () => {
       const sent = installEnvironmentFetch(() => Promise.resolve());
 
       await expect(
-        putConfigurationMcpServer(service.environmentCloud(), SAVE, 3),
+        putConfigurationMcpServer(
+          service.environmentCloud(service.chosenSignIn().userId),
+          SAVE,
+          3,
+        ),
       ).resolves.toEqual({
         outcome: "refused",
         reason: "item_refused",
@@ -4309,7 +4313,7 @@ describe("AuthService", () => {
 
     it("never sends a save's write once another person's session replaces it", async () => {
       const { service } = await signedIn();
-      const cloud = service.environmentCloud();
+      const cloud = service.environmentCloud(service.chosenSignIn().userId);
       const sent = installEnvironmentFetch(() => {
         service.applyExternalSession(
           externalSessionForUser("user-2", "account-b-token"),
@@ -4327,7 +4331,7 @@ describe("AuthService", () => {
 
     it("never sends a save's write once the same person signs in again", async () => {
       const { service, host } = await signedIn();
-      const cloud = service.environmentCloud();
+      const cloud = service.environmentCloud(service.chosenSignIn().userId);
       const sent = installEnvironmentFetch(() =>
         deviceSignIn(service, host, "account-a-token-2"),
       );

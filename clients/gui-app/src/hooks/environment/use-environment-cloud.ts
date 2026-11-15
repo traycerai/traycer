@@ -71,13 +71,19 @@ export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
 
 /**
  * Makes the app's own client for authn's environment routes, one per
- * operation, bound to the sign-in it begins on; null with no session service.
+ * operation, bound to the person this render shows and the sign-in it begins
+ * on; null with no session service. An operation begun after a switch, a
+ * write pressed before it included, sends nothing.
  */
 export function useEnvironmentCloud(): EnvironmentCloudSource | null {
   const auth = useHostBinding()?.auth ?? null;
+  const viewerId = useCloudChatViewerId();
   return useMemo(
-    () => (auth === null ? null : () => auth.environmentCloud()),
-    [auth],
+    () =>
+      auth === null
+        ? null
+        : () => auth.environmentCloud(viewerId === "" ? null : viewerId),
+    [auth, viewerId],
   );
 }
 
