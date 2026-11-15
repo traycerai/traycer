@@ -4,6 +4,7 @@ import {
   ownDoorCover,
   type DoorStateCoverVariant,
 } from "@/lib/host/window-narration";
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
@@ -14,6 +15,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
  */
 export function useTileDoorCover(hostId: string): DoorStateCoverVariant | null {
   const doorState = useHostDoorState(hostId);
+  const claim = useHostClaim(hostId, doorState);
   const windowHostId = useSelectionAuthorityStore(
     (state) => state.effectiveHostId ?? state.targetHostId,
   );
@@ -21,5 +23,5 @@ export function useTileDoorCover(hostId: string): DoorStateCoverVariant | null {
     isServingLease(findLease(state.leases, hostId)),
   );
   if (hostId === windowHostId) return null;
-  return ownDoorCover(doorState, serving);
+  return ownDoorCover(doorState, serving, claim);
 }
