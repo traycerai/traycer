@@ -95,6 +95,9 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
   "providers.link",
   "providers.linkComplete",
+  "environment.agentDefinitions.put",
+  "environment.agentDefinitions.delete",
+  "environment.setup.put",
   "environment.secrets.create",
   "environment.secrets.verify",
   "environment.secrets.replaceValue",
