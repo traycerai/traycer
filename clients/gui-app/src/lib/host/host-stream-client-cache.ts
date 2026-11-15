@@ -107,6 +107,9 @@ const KEY_SEPARATOR = "\u0000";
  */
 const TEARDOWN_REASON = "transient-host-client-teardown";
 
+/** The reason a client is closed with when its computer's owner changes. */
+const OWNER_CHANGED_REASON = "host-owner-changed";
+
 /**
  * Everything that decides whether two consumers may hold the SAME stream
  * client. The rule this is derived from, which is stronger than "what feels
@@ -180,6 +183,7 @@ export interface HostStreamClientLease {
 }
 
 interface CacheEntry {
+  readonly hostId: string;
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   refCount: number;
 }
@@ -225,7 +229,7 @@ export function acquireHostStreamClient(
     if (client === null) {
       return null;
     }
-    entry = { client, refCount: 0 };
+    entry = { hostId: identity.hostId, client, refCount: 0 };
     entriesByKey.set(key, entry);
   }
   // Captured, never re-looked-up by key. A late `release` from a holder of an
@@ -258,6 +262,20 @@ export function acquireHostStreamClient(
       captured.client.close(TEARDOWN_REASON);
     },
   };
+}
+
+/**
+ * Closes every live client for `hostId`, held and pinned ones included: the
+ * computer's owner changed, an authorization boundary for it alone, so no
+ * holder is waited for. Each entry leaves the cache before its client closes,
+ * so a holder's `onClosed` rebuild takes a clean miss and builds afresh.
+ */
+export function retireHostStreamClientsForHost(hostId: string): void {
+  for (const [key, entry] of [...entriesByKey]) {
+    if (entry.hostId !== hostId) continue;
+    entriesByKey.delete(key);
+    entry.client.close(OWNER_CHANGED_REASON);
+  }
 }
 
 /** Test-only: live references held for `identity`. */

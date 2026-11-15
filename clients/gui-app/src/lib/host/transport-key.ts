@@ -80,8 +80,9 @@ export function hostTransportKeyFor(
     entry.kind,
     entry.version ?? "",
     entry.websocketUrl,
-    // Whose computer it is: a stream opened for one owner never serves
-    // another. Kind and id only, so a rename keeps the stream.
+    // Whose computer it is, kind and id only (a rename is the same owner): a
+    // change rebuilds this surface's transport. Held and pinned clients are
+    // closed by `host-owner-change.ts`.
     isRemoteHostDirectoryEntry(entry) && entry.owner !== null
       ? `${entry.owner.kind}:${entry.owner.id}`
       : "",

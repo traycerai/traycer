@@ -785,6 +785,28 @@ export function retireAllRemoteSessions(): void {
 }
 
 /**
+ * The same force-close as {@link retireAllRemoteSessions}, for ONE computer:
+ * every cached session for `hostId`, held ones included. Called when that
+ * computer's owner changes, an authorization boundary for it alone, so a
+ * holder is not waited for. Each entry leaves the map before it closes, so an
+ * `onClosed` listener that re-acquires takes a clean miss.
+ */
+export function retireRemoteSessionsForHost(hostId: string): void {
+  for (const [key, entry] of [...entriesByKey]) {
+    if (entry.identity.hostId !== hostId) continue;
+    entry.superseded = true;
+    if (entry.lingerTimer !== null) {
+      clearTimeout(entry.lingerTimer);
+      entry.lingerTimer = null;
+    }
+    entriesByKey.delete(key);
+    entry.disposeReadinessWiring();
+    entry.session.close();
+    notifyReadinessChanged();
+  }
+}
+
+/**
  * Wakes every session a consumer currently HOLDS - see
  * {@link IRemoteSession.wake}. The single seam for runtime-resume coverage, and
  * deliberately not per-consumer.

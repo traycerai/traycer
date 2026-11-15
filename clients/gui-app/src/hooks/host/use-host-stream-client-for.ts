@@ -64,6 +64,7 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
+import { noteRemoteHostOpened } from "@/lib/host/host-owner-change";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   hostTransportKey,
@@ -337,6 +338,7 @@ export function buildHostStreamClient(params: {
       return null;
     }
 
+    noteRemoteHostOpened(params.target);
     const remoteTransport = createRemoteHostTransport<
       HostRpcRegistry,
       HostStreamRpcRegistry
