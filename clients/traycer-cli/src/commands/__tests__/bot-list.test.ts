@@ -361,17 +361,14 @@ describe("bot list", () => {
 
     const result = await runList();
 
-    expect(
-      result.data.environments.map(({ environmentId, label }) => [
-        environmentId,
-        label,
-      ]),
-    ).toEqual([
-      ["env-personal", "Personal"],
-      ["env-b", "acme"],
-      ["env-z", "acme"],
-      ["env-a", "beta"],
-    ]);
+    expect(result.data).toMatchObject({
+      environments: [
+        { environmentId: "env-personal", label: "Personal" },
+        { environmentId: "env-b", label: "acme" },
+        { environmentId: "env-z", label: "acme" },
+        { environmentId: "env-a", label: "beta" },
+      ],
+    });
   });
 
   it("returns environments after one sign-in refresh when the refreshed bearer is valid", async () => {
