@@ -74,10 +74,15 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { createProfileRecordAuthFixture } from "@/components/providers/__tests__/profile-record-auth-fixture";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import {
@@ -102,6 +107,8 @@ const WAITING = "Waiting for Traycer. Your sign-in is complete.";
 const UNREADABLE = "Couldn't load provider state.";
 const SIGNED_IN = `Signed in as ${PROFILE_LABEL}`;
 const ALREADY_SIGNED_IN = `Already signed in as ${PROFILE_LABEL}`;
+const PROFILE_RECORD_URL =
+  "http://localhost:5005/api/v3/environments/environment-profile-fixture/profile-records/minted-1/name";
 const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
   HOST_ID,
   "providers.list",
@@ -131,11 +138,15 @@ interface AddFlowHarness {
   readonly listCalls: () => number;
   readonly releaseListRefresh: () => void;
   readonly releaseRecolor: () => void;
-  readonly signInFetch: SignInRequestFetchHarness;
+  readonly signInFetch: SignInRequestFetchHarness | null;
+  readonly updateProfileName: (profileId: string, name: string) => void;
 }
 
 let settleHeldRecolor: () => void = () => undefined;
 let activeSignInFetch: SignInRequestFetchHarness | null = null;
+const profileNameTransport = {
+  onAccepted: (_name: string): void => undefined,
+};
 
 const ADD_FLOW_DEFAULTS = {
   echoedProfiles: undefined,
@@ -148,6 +159,8 @@ const ADD_FLOW_DEFAULTS = {
   failRecolor: false,
   freshlyLinkedProfile: false,
   awaitAnswers: [],
+  authService: null,
+  recordEnvironment: false,
 } satisfies {
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
   readonly listFailuresAfterAwait: number;
@@ -161,6 +174,8 @@ const ADD_FLOW_DEFAULTS = {
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
   readonly awaitAnswers: readonly AwaitResponse[];
+  readonly authService: AuthService | null;
+  readonly recordEnvironment: boolean;
 };
 
 afterEach(() => {
@@ -171,9 +186,12 @@ afterEach(() => {
   activeSignInFetch = null;
   authServiceForTest?.dispose();
   authServiceForTest = null;
+  useAuthStore.getState().setSignedOut();
+  vi.unstubAllGlobals();
   useProviderProfileAddFlowStore.getState().close();
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
   clientMock.current = null;
+  profileNameTransport.onAccepted = () => undefined;
   resetNegotiatedManifests();
 });
 
@@ -214,6 +232,44 @@ function sameEmailRenameProfiles(): {
       accentColor: PROVIDER_PROFILE_ACCENT_COLORS[1],
     },
   };
+}
+
+async function createAddProfileNameAuthFixture(denied: boolean) {
+  return createProfileRecordAuthFixture((request) => {
+    if (request.url !== PROFILE_RECORD_URL) {
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }
+    if (denied) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            statusCode: 403,
+            error: "private response detail",
+            code: "environment_action_forbidden",
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    }
+    profileNameTransport.onAccepted("Personal");
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          profileId: MINTED_PROFILE_ID,
+          harnessId: "claude",
+          recordRevision: "18",
+          name: "Personal",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+  });
 }
 
 function projectedWorkProfile(): ProviderProfile {
@@ -344,6 +400,8 @@ function renderAddFlow(input: {
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
   readonly awaitAnswers: readonly AwaitResponse[];
+  readonly authService: AuthService | null;
+  readonly recordEnvironment: boolean;
 }): AddFlowHarness {
   const calls: RecordedCall[] = [];
   const created = vi.fn<(profileId: string) => void>();
@@ -429,16 +487,47 @@ function renderAddFlow(input: {
         calls.push({ method: "providers.cancelLogin", params });
         return { cancelled: true };
       },
+      "environment.status": () =>
+        environmentStatusFixture({ principal: { kind: "personal" } }),
+      "environment.host.read": () => ({
+        hostId: HOST_ID,
+        environment: {
+          environmentId: "environment-profile-fixture",
+          ownerKind: "user",
+          ownerId: "test-owner",
+          roomId: "test-room",
+          label: "Personal",
+        },
+        explicit: false,
+        enrolledByUserId: null,
+        canUnbind: false,
+        sharingGeneration: null,
+      }),
     },
   });
   clientMock.current = client;
-  const signInFetch = installSignInRequestFetchHarness();
-  activeSignInFetch = signInFetch;
-  authServiceForTest = signInRequestAuthService(signInFetch.client);
-  if (input.ownership) {
+  let signInFetch: SignInRequestFetchHarness | null = null;
+  if (input.authService === null) {
+    signInFetch = installSignInRequestFetchHarness();
+    activeSignInFetch = signInFetch;
+    authServiceForTest = signInRequestAuthService(signInFetch.client);
+  } else {
+    authServiceForTest = input.authService;
+  }
+  if (input.ownership || input.recordEnvironment) {
     recordNegotiatedHostManifest(HOST_ID, {
-      "providers.startLogin": { major: 1, minor: 4 },
-      "providers.cancelLogin": { major: 1, minor: 2 },
+      ...(input.ownership
+        ? {
+            "providers.startLogin": { major: 1, minor: 4 },
+            "providers.cancelLogin": { major: 1, minor: 2 },
+          }
+        : {}),
+      ...(input.recordEnvironment
+        ? {
+            "environment.status": { major: 1, minor: 2 },
+            "environment.host.read": { major: 1, minor: 1 },
+          }
+        : {}),
     });
   }
   settleHeldRecolor = () => {
@@ -490,7 +579,19 @@ function renderAddFlow(input: {
       release(setEnabledEcho());
     },
     signInFetch,
+    updateProfileName: (profileId, name) => {
+      profilesAfter = profilesAfter.map((profile) =>
+        profile.profileId === profileId ? { ...profile, label: name } : profile,
+      );
+    },
   };
+}
+
+function signInFetchFor(harness: AddFlowHarness): SignInRequestFetchHarness {
+  if (harness.signInFetch === null) {
+    throw new Error("sign-in request fetch harness was not installed");
+  }
+  return harness.signInFetch;
 }
 
 function methodCount(
@@ -812,6 +913,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("says signed in when the profile color save fails after naming", async () => {
     const { existing, created } = sameEmailRenameProfiles();
+    const auth = await createAddProfileNameAuthFixture(false);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -821,7 +923,11 @@ describe("Add a profile around one sign-in", () => {
       echoedProfiles: [existing, created],
       seedCache: true,
       failRecolor: true,
+      authService: auth.service,
+      recordEnvironment: true,
     });
+    profileNameTransport.onAccepted = (name) =>
+      harness.updateProfileName(MINTED_PROFILE_ID, name);
     await pressAccount(true);
     expect(
       await screen.findByText(
@@ -849,8 +955,20 @@ describe("Add a profile around one sign-in", () => {
       ),
     ).toBeNull();
     expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
-      2,
+      1,
     );
+    expect(
+      harness.calls
+        .filter((call) => call.method === "providers.setEnabled")
+        .map((call) => setEnabledActionDetails(call.params)),
+    ).toEqual([{ label: null, accentColor: pickedColor }]);
+    expect(auth.requests).toEqual([
+      {
+        url: PROFILE_RECORD_URL,
+        method: "POST",
+        body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
+      },
+    ]);
     expect(harness.created).not.toHaveBeenCalled();
   });
 
@@ -895,8 +1013,9 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.created).not.toHaveBeenCalled();
   });
 
-  it("renames a same-email distinct profile with exactly two providers.list reads", async () => {
+  it("names a same-email signed-in profile through the app with exactly two providers.list reads", async () => {
     const { existing, created } = sameEmailRenameProfiles();
+    const auth = await createAddProfileNameAuthFixture(false);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -905,7 +1024,11 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
       echoedProfiles: [existing, created],
       seedCache: true,
+      authService: auth.service,
+      recordEnvironment: true,
     });
+    profileNameTransport.onAccepted = (name) =>
+      harness.updateProfileName(MINTED_PROFILE_ID, name);
     await pressAccount(true);
     expect(
       await screen.findByText(
@@ -916,17 +1039,11 @@ describe("Add a profile around one sign-in", () => {
       target: { value: "Personal" },
     });
     expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
-      0,
-    );
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => {
       expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
-        1,
-      );
     });
     expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
       1,
@@ -934,18 +1051,33 @@ describe("Add a profile around one sign-in", () => {
     expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
       1,
     );
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      0,
+    );
+    expect(auth.requests).toEqual([
+      {
+        url: PROFILE_RECORD_URL,
+        method: "POST",
+        body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
+      },
+    ]);
+    expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
+      listBody(true, [existing, { ...created, label: "Personal" }]),
+    );
     expect(
-      harness.calls
-        .filter((call) => call.method === "providers.setEnabled")
-        .map((call) => renamedLabel(call.params)),
-    ).toEqual(["Personal"]);
+      methodCount(harness.messenger.calls, "environment.status"),
+    ).toBeGreaterThan(0);
+    expect(
+      methodCount(harness.messenger.calls, "environment.host.read"),
+    ).toBeGreaterThan(0);
     expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(
       0,
     );
   });
 
-  it("renames and recolors a same-email distinct profile with exactly three providers.list reads", async () => {
+  it("names and recolors a same-email signed-in profile with exactly three providers.list reads", async () => {
     const { existing, created } = sameEmailRenameProfiles();
+    const auth = await createAddProfileNameAuthFixture(false);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -954,7 +1086,11 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
       echoedProfiles: [existing, created],
       seedCache: true,
+      authService: auth.service,
+      recordEnvironment: true,
     });
+    profileNameTransport.onAccepted = (name) =>
+      harness.updateProfileName(MINTED_PROFILE_ID, name);
     await pressAccount(true);
     expect(
       await screen.findByText(
@@ -977,7 +1113,7 @@ describe("Add a profile around one sign-in", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => {
-      expect(methodCount(harness.calls, "providers.setEnabled")).toBe(2);
+      expect(methodCount(harness.calls, "providers.setEnabled")).toBe(1);
       expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
     });
     expect(harness.listsAfterAwait()).toBe(2);
@@ -987,9 +1123,13 @@ describe("Add a profile around one sign-in", () => {
     );
     expect(
       setEnabledCalls.map((call) => setEnabledActionDetails(call.params)),
-    ).toEqual([
-      { label: "Personal", accentColor: null },
-      { label: null, accentColor: pickedColor },
+    ).toEqual([{ label: null, accentColor: pickedColor }]);
+    expect(auth.requests).toEqual([
+      {
+        url: PROFILE_RECORD_URL,
+        method: "POST",
+        body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
+      },
     ]);
 
     harness.releaseRecolor();
@@ -1011,30 +1151,128 @@ describe("Add a profile around one sign-in", () => {
     );
   });
 
+  it("keeps a legacy authenticated profile name on the computer rename path", async () => {
+    const { existing, created } = sameEmailRenameProfiles();
+    const auth = await createAddProfileNameAuthFixture(true);
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [existing],
+      profilesAfter: [existing, created],
+      outcome: null,
+      echoedProfiles: [existing, created],
+      freshlyLinkedProfile: true,
+      seedCache: true,
+      authService: auth.service,
+    });
+    await pressAccount(true);
+    expect(
+      await screen.findByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Personal" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => {
+      expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+        1,
+      );
+    });
+    expect(
+      harness.calls
+        .filter((call) => call.method === "providers.setEnabled")
+        .map((call) => renamedLabel(call.params)),
+    ).toEqual(["Personal"]);
+    expect(auth.requests).toEqual([]);
+    expect(methodCount(harness.messenger.calls, "environment.status")).toBe(0);
+    expect(methodCount(harness.messenger.calls, "environment.host.read")).toBe(
+      0,
+    );
+  });
+
+  it("shows the existing name refusal without exposing the response detail", async () => {
+    const { existing, created } = sameEmailRenameProfiles();
+    const auth = await createAddProfileNameAuthFixture(true);
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [existing],
+      profilesAfter: [existing, created],
+      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
+      echoedProfiles: [existing, created],
+      seedCache: true,
+      authService: auth.service,
+      recordEnvironment: true,
+    });
+    await pressAccount(true);
+    expect(
+      await screen.findByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Personal" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(
+      await screen.findByText("Couldn't save the name. Try again."),
+    ).toBeTruthy();
+    expect(screen.queryByText("private response detail")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Profile name" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeTruthy();
+    expect(harness.created).not.toHaveBeenCalled();
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      0,
+    );
+    expect(auth.requests).toEqual([
+      {
+        url: PROFILE_RECORD_URL,
+        method: "POST",
+        body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
+      },
+    ]);
+    await waitFor(() => {
+      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+    });
+  });
+
   it("waits, with Done, when the signed-in id is still absent after one re-read", async () => {
+    const auth = await createAddProfileNameAuthFixture(true);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
       profilesBefore: [],
       profilesAfter: [],
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
+      authService: auth.service,
     });
     await pressAccount(true);
     expect(await screen.findByText(WAITING)).toBeTruthy();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
     expect(harness.created).not.toHaveBeenCalled();
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      0,
+    );
+    expect(auth.requests).toEqual([]);
   });
 
   it("offers Use for an account that already has a profile, without recoloring it", async () => {
     const row = workProfile();
+    const auth = await createAddProfileNameAuthFixture(true);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
       profilesBefore: [row],
       profilesAfter: [row],
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
+      authService: auth.service,
     });
     await pressAccount(true);
     expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
@@ -1051,6 +1289,7 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.listsAfterAwait()).toBe(1);
     expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+    expect(auth.requests).toEqual([]);
   });
 
   it("starts another sign-in at once from an account that already has a profile", async () => {
@@ -1178,7 +1417,8 @@ describe("Add a profile around one sign-in", () => {
     );
   });
 
-  it("names an already-signed-in profile from the answer's own rows when the re-read does not", async () => {
+  it("does not offer naming for an already-signed-in profile from the answer's own rows", async () => {
+    const auth = await createAddProfileNameAuthFixture(true);
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1186,12 +1426,15 @@ describe("Add a profile around one sign-in", () => {
       profilesAfter: [],
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
       echoedProfiles: [workProfile()],
+      authService: auth.service,
     });
     await pressAccount(true);
     expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
     expect(harness.listsAfterAwait()).toBe(1);
     expect(harness.created).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
       listBody(true, []),
     );
@@ -1418,6 +1661,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("keeps unknown envelope and projection fields through the await overlay before its refresh settles", async () => {
     const projected = projectedWorkProfile();
+    const auth = await createAddProfileNameAuthFixture(true);
     const removedProfiles = [
       {
         providerId: "claude-code",
@@ -1440,9 +1684,13 @@ describe("Add a profile around one sign-in", () => {
       seedCache: true,
       cacheSeed,
       holdListRefresh: true,
+      authService: auth.service,
     });
     await pressAccount(true);
     await waitFor(() => expect(harness.listsAfterAwait()).toBe(1));
+    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
+    expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+    expect(auth.requests).toEqual([]);
     expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
     expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
       1,
@@ -1488,7 +1736,7 @@ describe("Add a profile around one sign-in", () => {
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expectNoSuccessSentence();
     expect(harness.created).not.toHaveBeenCalled();
-    expect(harness.signInFetch.fetchMock).not.toHaveBeenCalled();
+    expect(signInFetchFor(harness).fetchMock).not.toHaveBeenCalled();
     const awaitRequests = harness.messenger.calls
       .filter((call) => call.method === "providers.awaitLogin")
       .map((call) => call.params);
@@ -1508,7 +1756,7 @@ describe("Add a profile around one sign-in", () => {
         nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
       ],
     });
-    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    signInFetchFor(harness).enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
     await pressAccount(true);
 
     expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
@@ -1519,7 +1767,7 @@ describe("Add a profile around one sign-in", () => {
     expect(awaitRequests[1]).toMatchObject({
       recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
     });
-    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+    expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -1541,7 +1789,7 @@ describe("Add a profile around one sign-in", () => {
         outcome: null,
         awaitAnswers: [asksToRecordSignIn()],
       });
-      harness.signInFetch.enqueue(reply);
+      signInFetchFor(harness).enqueue(reply);
       await pressAccount(true);
 
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
@@ -1550,7 +1798,7 @@ describe("Add a profile around one sign-in", () => {
           (call) => call.method === "providers.awaitLogin",
         ),
       ).toHaveLength(1);
-      expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+      expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
       expect(harness.created).not.toHaveBeenCalled();
     },
   );
@@ -1567,7 +1815,9 @@ describe("Add a profile around one sign-in", () => {
         nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
       ],
     });
-    harness.signInFetch.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    signInFetchFor(harness).enqueue(
+      MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+    );
     await pressAccount(true);
 
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
@@ -1578,7 +1828,7 @@ describe("Add a profile around one sign-in", () => {
         (call) => call.method === "providers.awaitLogin",
       ),
     ).toHaveLength(1);
-    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+    expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not record twice when the computer asks again for the recorded id", async () => {
@@ -1590,7 +1840,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: null,
       awaitAnswers: [asksToRecordSignIn(), asksToRecordSignIn()],
     });
-    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    signInFetchFor(harness).enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
     await pressAccount(true);
 
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
@@ -1599,7 +1849,7 @@ describe("Add a profile around one sign-in", () => {
         (call) => call.method === "providers.awaitLogin",
       ),
     ).toHaveLength(2);
-    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+    expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, "absent"] as const)(

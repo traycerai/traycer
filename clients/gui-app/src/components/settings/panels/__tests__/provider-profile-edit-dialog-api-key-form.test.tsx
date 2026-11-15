@@ -43,6 +43,13 @@ vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
     error: null,
   }),
 }));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
 vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
   useRecolorProviderProfile: () => ({
     mutate: vi.fn(),
