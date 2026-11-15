@@ -4,14 +4,30 @@ const clientMock = vi.hoisted(
 const toastFallbacks = vi.hoisted((): { readonly values: string[] } => ({
   values: [],
 }));
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
   const actual =
@@ -106,6 +122,7 @@ import {
 import {
   afterAll,
   afterEach,
+  beforeEach,
   describe,
   expect,
   it,
@@ -120,6 +137,8 @@ import { ProviderProfileAddFlowHost } from "@/components/providers/provider-prof
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
 import { SwitchAccountMoveDialog } from "@/components/providers/switch-account-move-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -187,10 +206,16 @@ interface MoveDialogHarness {
 
 afterEach(() => {
   cleanup();
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   useProviderProfileAddFlowStore.getState().close();
   clientMock.current = null;
   toastFallbacks.values.length = 0;
   resetNegotiatedManifests();
+});
+
+beforeEach(() => {
+  authServiceForTest = unavailableSignInRequestAuthService();
 });
 
 function account(profileId: string, label: string): ProviderProfile {
