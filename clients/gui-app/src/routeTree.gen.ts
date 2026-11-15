@@ -47,6 +47,7 @@ import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-ph
 import { Route as SettingsMachineSetupRouteImport } from "./routes/settings.machine-setup";
 import { Route as SettingsMcpServersRouteImport } from "./routes/settings.mcp-servers";
 import { Route as SettingsMembersRouteImport } from "./routes/settings.members";
+import { Route as SettingsNotificationHooksRouteImport } from "./routes/settings.notification-hooks";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
 import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
@@ -255,6 +256,12 @@ const SettingsMembersRoute = SettingsMembersRouteImport.update({
   path: "/members",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsNotificationHooksRoute =
+  SettingsNotificationHooksRouteImport.update({
+    id: "/notification-hooks",
+    path: "/notification-hooks",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: "/notifications",
   path: "/notifications",
@@ -357,6 +364,7 @@ export interface FileRoutesByFullPath {
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/members": typeof SettingsMembersRoute;
+  "/settings/notification-hooks": typeof SettingsNotificationHooksRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
@@ -408,6 +416,7 @@ export interface FileRoutesByTo {
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/members": typeof SettingsMembersRoute;
+  "/settings/notification-hooks": typeof SettingsNotificationHooksRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
@@ -462,6 +471,7 @@ export interface FileRoutesById {
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/members": typeof SettingsMembersRoute;
+  "/settings/notification-hooks": typeof SettingsNotificationHooksRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
@@ -517,6 +527,7 @@ export interface FileRouteTypes {
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
     | "/settings/members"
+    | "/settings/notification-hooks"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
@@ -568,6 +579,7 @@ export interface FileRouteTypes {
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
     | "/settings/members"
+    | "/settings/notification-hooks"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
@@ -621,6 +633,7 @@ export interface FileRouteTypes {
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
     | "/settings/members"
+    | "/settings/notification-hooks"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
@@ -921,6 +934,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsMembersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/notification-hooks": {
+      id: "/settings/notification-hooks";
+      path: "/notification-hooks";
+      fullPath: "/settings/notification-hooks";
+      preLoaderRoute: typeof SettingsNotificationHooksRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/notifications": {
       id: "/settings/notifications";
       path: "/notifications";
@@ -1053,6 +1073,7 @@ interface SettingsRouteChildren {
   SettingsMachineSetupRoute: typeof SettingsMachineSetupRoute;
   SettingsMcpServersRoute: typeof SettingsMcpServersRoute;
   SettingsMembersRoute: typeof SettingsMembersRoute;
+  SettingsNotificationHooksRoute: typeof SettingsNotificationHooksRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
   SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
@@ -1094,6 +1115,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsMachineSetupRoute: SettingsMachineSetupRoute,
   SettingsMcpServersRoute: SettingsMcpServersRoute,
   SettingsMembersRoute: SettingsMembersRoute,
+  SettingsNotificationHooksRoute: SettingsNotificationHooksRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
   SettingsPermissionsRoute: SettingsPermissionsRoute,

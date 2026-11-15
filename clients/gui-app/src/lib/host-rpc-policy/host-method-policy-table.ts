@@ -649,6 +649,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.accountSettings.refresh": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.

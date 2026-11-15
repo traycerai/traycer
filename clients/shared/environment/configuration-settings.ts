@@ -1,3 +1,5 @@
+import { notificationHookRefusalSchema } from "./account-notification-schemas";
+import { NotificationHookRefusalError } from "./notification-hook-refusal";
 /**
  * `environment.configuration.items*`, `.revision`, `.mcpServers.*`,
  * `.policy.put`, `environment.history` and `environment.plans.*` as the app's
@@ -120,6 +122,14 @@ async function itemWriteOutcome(
   answer: EnvironmentAnswer,
 ): Promise<EnvironmentConfigurationItemWriteResponse> {
   if (answer.status === 403) return { outcome: "forbidden" };
+  if (answer.status === 400) {
+    const refusal = notificationHookRefusalSchema.safeParse(answer.body);
+    if (refusal.success)
+      throw new NotificationHookRefusalError(
+        refusal.data.code,
+        refusal.data.index,
+      );
+  }
   if (answer.status === 409) {
     const conflict = authnItemConflictSchema.safeParse(answer.body);
     if (conflict.success) {

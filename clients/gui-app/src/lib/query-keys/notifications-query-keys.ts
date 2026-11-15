@@ -4,6 +4,8 @@ import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifica
 const INDICATOR_METHOD = "host.notifications.indicatorState";
 
 export const notificationsQueryKeys = {
+  accountSettings: (viewerId: string) =>
+    ["account-notification-settings", viewerId] as const,
   indicatorScope: (hostId: string | null) =>
     hostQueryKeys.methodScope(hostId, INDICATOR_METHOD),
   indicatorIdentity: (userId: string) =>
