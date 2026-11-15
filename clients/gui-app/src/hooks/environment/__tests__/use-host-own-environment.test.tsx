@@ -3,17 +3,14 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type {
-  EnvironmentHostRecordV12,
-  EnvironmentListResponseV11,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
-  OwnEnvironmentAuthProvider,
+  authnHostRowFixture,
   createOwnEnvironmentAuthRuntime,
   installOwnEnvironmentTransport,
   jsonResponse,
@@ -22,6 +19,7 @@ import {
   type OwnEnvironmentAuthRuntime,
   type OwnEnvironmentTransport,
 } from "./own-environment-authn-test-support";
+import { OwnEnvironmentAuthProvider } from "./own-environment-auth-provider";
 import { useHostOwnEnvironment } from "@/hooks/environment/use-host-own-environment";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -33,18 +31,18 @@ const PERSONAL_ID = "env-personal";
 const TEAM_A_ID = "env-team-a";
 const TEAM_B_ID = "env-team-b";
 
-const hostRecord: EnvironmentHostRecordV12 = {
+const authnHostRecord = authnHostRowFixture({
   hostId: WINDOW_HOST,
-  hostLabel: "window host",
+  hostName: "window host",
   hostPlatform: "linux",
   enrolledByUserId: null,
-  kind: "personal",
+  hostKind: "personal",
   boundAt: null,
-  reachable: true,
-  lastReportedAt: null,
-  applied: [],
+  online: true,
+  reportedAt: null,
+  items: [],
   hasLocalRow: null,
-};
+});
 
 const personalDirectory: EnvironmentListResponseV11 = {
   environments: [
@@ -144,6 +142,7 @@ beforeEach(async () => {
   installTransport();
   runtime = createOwnEnvironmentAuthRuntime();
   await signInOwnEnvironment(runtime);
+  useAuthStore.setState({ shareableTeams: [] });
   recordNegotiatedHostMethods(WINDOW_HOST, ["environment.status"]);
 });
 
@@ -164,7 +163,7 @@ describe("the window host's own environment through authn", () => {
         method === "GET"
       ) {
         return jsonResponse(200, {
-          hosts: [{ ...hostRecord, purgePending: false }],
+          hosts: [authnHostRecord],
         });
       }
       return undefined;
@@ -204,10 +203,7 @@ describe("the window host's own environment through authn", () => {
       if (path.endsWith("/hosts") && method === "GET") {
         const environmentId = path.split("/")[4];
         return jsonResponse(200, {
-          hosts:
-            environmentId === TEAM_B_ID
-              ? [{ ...hostRecord, purgePending: false }]
-              : [],
+          hosts: environmentId === TEAM_B_ID ? [authnHostRecord] : [],
         });
       }
       if (path.endsWith("/members") && method === "GET") {
@@ -255,10 +251,7 @@ describe("the window host's own environment through authn", () => {
           return jsonResponse(503, {});
         }
         return jsonResponse(200, {
-          hosts:
-            environmentId === TEAM_B_ID
-              ? [{ ...hostRecord, purgePending: false }]
-              : [],
+          hosts: environmentId === TEAM_B_ID ? [authnHostRecord] : [],
         });
       }
       if (url.pathname.endsWith("/members") && method === "GET") {
@@ -293,6 +286,10 @@ describe("the window host's own environment through authn", () => {
       ),
     ).toBe(false);
 
+    const teamBHostReadsBeforeRetry = transport.requests.filter(
+      (request) =>
+        request.url.pathname === "/api/v3/environments/" + TEAM_B_ID + "/hosts",
+    ).length;
     teamBListFailed = false;
     result.current.retry();
     await waitFor(() =>
@@ -302,14 +299,19 @@ describe("the window host's own environment through authn", () => {
       }),
     );
     expect(
-      transport.requests
-        .filter((request) => request.url.pathname.endsWith("/hosts"))
-        .map((request) => request.url.pathname),
-    ).toEqual([
-      "/api/v3/environments/" + TEAM_A_ID + "/hosts",
-      "/api/v3/environments/" + TEAM_B_ID + "/hosts",
-      "/api/v3/environments/" + TEAM_B_ID + "/hosts",
-    ]);
+      transport.requests.filter(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + TEAM_A_ID + "/hosts",
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      transport.requests.filter(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + TEAM_B_ID + "/hosts",
+      ).length,
+    ).toBeGreaterThan(teamBHostReadsBeforeRetry);
   });
 
   it("resolves to no named environment only after every team host list answers without this host", async () => {

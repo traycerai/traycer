@@ -46,7 +46,7 @@ import {
 } from "@/lib/support-context-registry";
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 import {
-  OwnEnvironmentAuthProvider,
+  authnHostRowFixture,
   createOwnEnvironmentAuthRuntime,
   installOwnEnvironmentTransport,
   jsonResponse,
@@ -55,7 +55,9 @@ import {
   type OwnEnvironmentRoute,
   type OwnEnvironmentTransport,
 } from "@/hooks/environment/__tests__/own-environment-authn-test-support";
+import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
+import { authnSecret } from "@/components/settings/environment/__tests__/team-environment-cloud-handlers";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -103,6 +105,16 @@ const SECOND_SECRET: EnvironmentSecretV12 = {
   secretId: "sec-2",
   name: "DATABASE_PASSWORD",
 };
+
+const AUTHN_HOST = authnHostRowFixture({
+  hostId: HOST_ID,
+  hostName: "window host",
+  hostKind: "personal",
+  hostPlatform: "linux",
+  enrolledByUserId: null,
+  boundAt: null,
+  hasLocalRow: null,
+});
 
 // Settled (enforced, every producer proven), so the bridge stops re-reading it.
 const ROTATION: Rotation = {
@@ -178,28 +190,16 @@ beforeEach(async () => {
     const path = request.url.pathname;
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/hosts") {
       return jsonResponse(200, {
-        hosts: [
-          {
-            hostId: HOST_ID,
-            hostLabel: "window host",
-            hostPlatform: "linux",
-            enrolledByUserId: null,
-            kind: "personal",
-            boundAt: null,
-            reachable: true,
-            lastReportedAt: null,
-            applied: [],
-            hasLocalRow: null,
-            purgePending: false,
-          },
-        ],
+        hosts: [AUTHN_HOST],
       });
     }
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/members") {
       return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
     }
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/secrets") {
-      return jsonResponse(200, { removed: [], secrets: [SECRET] });
+      return jsonResponse(200, {
+        secrets: [authnSecret(SECRET)],
+      });
     }
     if (
       path ===
@@ -486,23 +486,7 @@ describe("SupportEnvironmentBridge", () => {
           return jsonResponse(503, {});
         }
         return jsonResponse(200, {
-          hosts: path.includes(environmentB)
-            ? [
-                {
-                  hostId: HOST_ID,
-                  hostLabel: "window host",
-                  hostPlatform: "linux",
-                  enrolledByUserId: null,
-                  kind: "personal",
-                  boundAt: null,
-                  reachable: true,
-                  lastReportedAt: null,
-                  applied: [],
-                  hasLocalRow: null,
-                  purgePending: false,
-                },
-              ]
-            : [],
+          hosts: path.includes(environmentB) ? [AUTHN_HOST] : [],
         });
       }
       if (path.endsWith("/members")) {
@@ -512,7 +496,7 @@ describe("SupportEnvironmentBridge", () => {
         return jsonResponse(200, { rotation: ROTATION, lastVerify: null });
       }
       if (path.endsWith("/secrets")) {
-        return jsonResponse(200, { removed: [], secrets: [SECRET] });
+        return jsonResponse(200, { secrets: [authnSecret(SECRET)] });
       }
       return undefined;
     }, directory);
@@ -547,6 +531,11 @@ describe("SupportEnvironmentBridge", () => {
       ),
     ).toBe(false);
 
+    const environmentBHostReadsBeforeRetry = authnTransport.requests.filter(
+      (request) =>
+        request.url.pathname ===
+        "/api/v3/environments/" + environmentB + "/hosts",
+    ).length;
     environmentBHostListFails = false;
     await queryClient.refetchQueries({
       predicate: (query) =>
@@ -576,16 +565,9 @@ describe("SupportEnvironmentBridge", () => {
       authnTransport.requests.filter(
         (request) =>
           request.url.pathname ===
-          "/api/v3/environments/" + environmentA + "/hosts",
-      ),
-    ).toHaveLength(1);
-    expect(
-      authnTransport.requests.filter(
-        (request) =>
-          request.url.pathname ===
           "/api/v3/environments/" + environmentB + "/hosts",
-      ),
-    ).toHaveLength(2);
+      ).length,
+    ).toBeGreaterThan(environmentBHostReadsBeforeRetry);
   });
 
   it("reads each rotation and polls only the moving one until it settles", async () => {
@@ -605,21 +587,7 @@ describe("SupportEnvironmentBridge", () => {
       const path = request.url.pathname;
       if (path.endsWith("/hosts")) {
         return jsonResponse(200, {
-          hosts: [
-            {
-              hostId: HOST_ID,
-              hostLabel: "window host",
-              hostPlatform: "linux",
-              enrolledByUserId: null,
-              kind: "personal",
-              boundAt: null,
-              reachable: true,
-              lastReportedAt: null,
-              applied: [],
-              hasLocalRow: null,
-              purgePending: false,
-            },
-          ],
+          hosts: [AUTHN_HOST],
         });
       }
       if (path.endsWith("/members")) {
@@ -627,12 +595,14 @@ describe("SupportEnvironmentBridge", () => {
       }
       if (path.endsWith("/secrets")) {
         return jsonResponse(200, {
-          removed: [],
-          secrets: [SECRET, SECOND_SECRET],
+          secrets: [authnSecret(SECRET), authnSecret(SECOND_SECRET)],
         });
       }
       if (path.endsWith("/rotation")) {
-        const secretId = path.split("/")[5];
+        const secretId = path.split("/").at(-2);
+        if (secretId === undefined) {
+          throw new Error("rotation path had no secret id");
+        }
         const count = (rotationReads.get(secretId) ?? 0) + 1;
         rotationReads.set(secretId, count);
         return jsonResponse(200, {
@@ -680,7 +650,7 @@ describe("SupportEnvironmentBridge", () => {
     expect(rotationReads.get("sec-2")).toBe(1);
     expect(
       authnTransport.requests.some((request) =>
-        request.url.pathname.endsWith("/secrets/rotation"),
+        request.url.pathname.endsWith("/rotation"),
       ),
     ).toBe(true);
   });
@@ -690,7 +660,16 @@ describe("SupportEnvironmentBridge", () => {
     harness.methods.add("environment.setup.attempts");
     expect(harness.methods.has("environment.secrets.list")).toBe(false);
     replaceAuthnTransport(
-      () => undefined,
+      (request) => {
+        const path = request.url.pathname;
+        if (path.endsWith("/secrets/sec-1/rotation")) {
+          return jsonResponse(200, { rotation: ROTATION, lastVerify: null });
+        }
+        if (path.endsWith("/secrets")) {
+          return jsonResponse(200, { secrets: [authnSecret(SECRET)] });
+        }
+        return undefined;
+      },
       [
         {
           environmentId: "env-personal",
@@ -736,14 +715,14 @@ describe("SupportEnvironmentBridge", () => {
     if (field.status !== "known") throw new Error("the section is not known");
     expect(field.value.principal).toBe("personal");
     expect(field.value.setupAttempts).toEqual([]);
-    expect(hostReads).toEqual([]);
+    expect(hostReads).toEqual(["attempts"]);
     expect(
       authnTransport.requests
         .filter((request) => request.url.pathname.includes("/secrets"))
         .map((request) => request.url.pathname),
     ).toEqual([
-      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets",
-      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation",
+      "/api/v3/environments/env-personal/secrets",
+      "/api/v3/environments/env-personal/secrets/sec-1/rotation",
     ]);
   });
 

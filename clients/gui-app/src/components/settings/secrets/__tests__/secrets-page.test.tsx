@@ -43,6 +43,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
@@ -53,6 +54,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import { reachableHost } from "@/components/settings/environment/__tests__/mcp-skills-test-support";
 import {
   mountTeamPage,
   personalPoolSource,
@@ -62,6 +64,7 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   SECRET_REVOKED_LABEL,
@@ -71,6 +74,7 @@ import { dataHandlingNoticeText } from "@/components/settings/members/data-handl
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_CREATE_FIELDS,
@@ -168,7 +172,13 @@ function mountSecretsHost(
   const reads = { list: 0 };
   const verifyRequests: EnvironmentSecretsVerifyRequest[] = [];
   const createRequests: EnvironmentSecretsCreateRequest[] = [];
+  if (source.kind === "host") {
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
+      "environment.status",
+    ]);
+  }
   const harness = mountTeamPage(source, {
+    "environment.status": () => environmentStatusFixture({ principal: null }),
     "environment.list": () => {
       if (state.environmentsError !== null) throw state.environmentsError;
       return {
@@ -187,6 +197,16 @@ function mountSecretsHost(
         ],
       };
     },
+    "environment.host.list": () => ({
+      hosts: [
+        {
+          ...reachableHost,
+          hostId: HOST_ID,
+          hostLabel: "dev-box",
+          enrolledByUserId: "user-me",
+        },
+      ],
+    }),
     "environment.secrets.versions": () => ({
       versions: [...state.versions],
       removal: null,

@@ -1,6 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -8,10 +7,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { HostRuntimeContext } from "@/lib/host/runtime";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { AuthnSecretRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 
 export const AUTHN_BASE = "https://authn.test.invalid";
 export const DIRECTORY_URL = "https://server.test.invalid/api/environments";
@@ -55,6 +54,7 @@ const PROFILE = {
 export interface OwnEnvironmentTransportRequest {
   readonly url: URL;
   readonly method: string;
+  readonly headers: Headers;
   readonly body: BodyInit | null;
   readonly signal: AbortSignal | undefined;
 }
@@ -75,9 +75,24 @@ export function installOwnEnvironmentTransport(
   const originalFetch = globalThis.fetch;
   const requests: OwnEnvironmentTransportRequest[] = [];
   const mockedFetch: typeof fetch = (input, init) => {
+    let url: URL;
+    if (input instanceof Request) {
+      url = new URL(input.url);
+    } else if (input instanceof URL) {
+      url = input;
+    } else {
+      url = new URL(input);
+    }
+    const headers = new Headers(
+      input instanceof Request ? input.headers : undefined,
+    );
+    new Headers(init?.headers).forEach((value, name) => {
+      headers.set(name, value);
+    });
     const request: OwnEnvironmentTransportRequest = {
-      url: new URL(String(input)),
+      url,
       method: init?.method ?? "GET",
+      headers,
       body: init?.body ?? null,
       signal: init?.signal ?? undefined,
     };
@@ -112,6 +127,56 @@ export function jsonResponse(status: number, body: unknown): Response {
       "x-traycer-user-record-version": "2.0",
     },
   });
+}
+
+export function authnSecretRowFixture(
+  overrides: Partial<AuthnSecretRow>,
+): AuthnSecretRow {
+  return {
+    id: "secret-fixture",
+    name: "EXAMPLE_KEY",
+    kind: "api_key",
+    protocol: "https",
+    hosts: ["api.example.test"],
+    currentVersionId: "version-fixture",
+    updatedAt: 1,
+    variables: [],
+    ...overrides,
+  };
+}
+
+export interface AuthnHostRowFixture {
+  readonly hostId: string;
+  readonly hostName: string | null;
+  readonly hostKind: "personal" | "sandbox";
+  readonly reportedAt: number | null;
+  readonly online: boolean;
+  readonly purgePending: boolean;
+  readonly items: ReadonlyArray<{
+    readonly kind: string;
+    readonly key: string;
+    readonly status: "applied" | "pending" | "failed" | "unsupported";
+    readonly code: string;
+  }>;
+  readonly hasLocalRow?: boolean | null;
+  readonly enrolledByUserId?: string | null;
+  readonly boundAt?: number | null;
+  readonly hostPlatform?: string | null;
+}
+
+export function authnHostRowFixture(
+  overrides: Partial<AuthnHostRowFixture>,
+): AuthnHostRowFixture {
+  return {
+    hostId: "host-fixture",
+    hostName: "Example host",
+    hostKind: "personal",
+    reportedAt: null,
+    online: true,
+    purgePending: false,
+    items: [],
+    ...overrides,
+  };
 }
 
 export interface OwnEnvironmentAuthRuntime {
@@ -210,15 +275,4 @@ export async function signInOwnEnvironmentAs(
     contextMetadata: { userId, username: "test-user" },
     shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
   });
-}
-
-export function OwnEnvironmentAuthProvider(props: {
-  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <HostRuntimeContext.Provider value={props.binding}>
-      {props.children}
-    </HostRuntimeContext.Provider>
-  );
 }

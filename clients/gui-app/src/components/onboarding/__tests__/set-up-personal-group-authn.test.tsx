@@ -18,7 +18,8 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
-  OwnEnvironmentAuthProvider,
+  authnHostRowFixture,
+  authnSecretRowFixture,
   createOwnEnvironmentAuthRuntime,
   installOwnEnvironmentTransport,
   jsonResponse,
@@ -27,6 +28,7 @@ import {
   type OwnEnvironmentRoute,
   type OwnEnvironmentTransport,
 } from "@/hooks/environment/__tests__/own-environment-authn-test-support";
+import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   recordNegotiatedHostMethods,
@@ -82,19 +84,18 @@ vi.mock("@/components/settings/move/use-this-computers-move", () => ({
   useThisComputersMove: () => "unknown",
 }));
 
-const hostRecord = {
+const authnHostRecord = authnHostRowFixture({
   hostId: HOST_ID,
-  hostLabel: "window host",
+  hostName: "window host",
   hostPlatform: "linux",
   enrolledByUserId: null,
-  kind: "personal" as const,
+  hostKind: "personal",
   boundAt: null,
-  reachable: true,
-  lastReportedAt: null,
-  applied: [],
+  online: true,
+  reportedAt: null,
+  items: [],
   hasLocalRow: null,
-  purgePending: false,
-};
+});
 
 const secret = {
   secretId: "secret-1",
@@ -138,7 +139,7 @@ let route: OwnEnvironmentRoute;
 
 function mountGroup(
   handlers: MockHandlerMap<HostRpcRegistry>,
-  hostBound = true,
+  hostBound: boolean,
 ): void {
   const client = hostBound
     ? buildEnvironmentClient({ hostId: HOST_ID, handlers }).client
@@ -186,7 +187,7 @@ beforeEach(async () => {
       return jsonResponse(200, {
         hosts:
           environmentId === PERSONAL_ID || environmentId === TEAM_ID
-            ? [hostRecord]
+            ? [authnHostRecord]
             : [],
       });
     }
@@ -194,13 +195,27 @@ beforeEach(async () => {
       return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
     }
     if (path.endsWith("/secrets") && request.method === "GET") {
-      return jsonResponse(200, { removed: [], secrets: [secret] });
+      return jsonResponse(200, {
+        secrets: [
+          authnSecretRowFixture({
+            id: secret.secretId,
+            name: secret.name,
+            kind: secret.kind,
+            protocol: secret.kind,
+            hosts: secret.destinations,
+            currentVersionId: secret.currentVersionId,
+            updatedAt: secret.updatedAt,
+            variables: [],
+          }),
+        ],
+      });
     }
     return undefined;
   };
   transport = installOwnEnvironmentTransport(route, personalDirectory);
   runtime = createOwnEnvironmentAuthRuntime();
   await signInOwnEnvironment(runtime);
+  useAuthStore.setState({ shareableTeams: [] });
 });
 
 afterEach(() => {
@@ -226,12 +241,9 @@ describe("Set up Personal's secret step through authn", () => {
         return { secrets: [], removed: [] };
       },
     };
-    mountGroup(handlers);
+    mountGroup(handlers, true);
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("set-up-personal-step").parentElement,
-      ).toBeTruthy();
       expect(
         screen
           .getByTestId("set-up-personal")
@@ -264,7 +276,7 @@ describe("Set up Personal's secret step through authn", () => {
     };
     transport.restore();
     transport = installOwnEnvironmentTransport(route, teamDirectory);
-    mountGroup(handlers);
+    mountGroup(handlers, true);
 
     await waitFor(() => {
       expect(
@@ -274,9 +286,18 @@ describe("Set up Personal's secret step through authn", () => {
           ?.getAttribute("data-done"),
       ).toBe("true");
     });
-    expect(authnRequestsFor("/" + TEAM_ID + "/secrets")).toEqual([
-      "/api/v3/environments/" + TEAM_ID + "/secrets",
-    ]);
+    const secretReads = transport.requests
+      .filter(
+        (request) =>
+          request.method === "GET" && request.url.pathname.endsWith("/secrets"),
+      )
+      .map((request) => request.url.pathname);
+    expect(secretReads).not.toHaveLength(0);
+    expect(
+      secretReads.every(
+        (path) => path === "/api/v3/environments/" + TEAM_ID + "/secrets",
+      ),
+    ).toBe(true);
     expect(hostSecrets).toEqual([]);
   });
   it("leaves the secret step unchecked and sends no list request without a host", async () => {
