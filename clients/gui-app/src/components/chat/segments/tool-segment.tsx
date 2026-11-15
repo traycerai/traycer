@@ -1,5 +1,5 @@
 import type { AgentMessagePeerOrigin } from "@traycer/protocol/host/agent/message-peer";
-import { Globe2, SendHorizontal, Wrench } from "lucide-react";
+import { Globe2, Wrench } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -36,7 +36,8 @@ import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
 import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
-import { AgentHeaderLink } from "./agent-header-link";
+import { A2APeerPicture, AgentHeaderLink } from "./agent-header-link";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { a2aSendRefusalSentence } from "./a2a-send-refusal";
 import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
@@ -755,25 +756,43 @@ function BackgroundOutputPanels(props: {
 function A2ASendReceiverLink(props: {
   readonly send: AgentMessageSend;
   readonly receipt: AgentMessageReceipt | null;
+  /** Colours an agent receiver's glyph by how the send was delivered. */
+  readonly glyphClassName: string;
 }): ReactNode {
-  const { send, receipt } = props;
+  const { send, receipt, glyphClassName } = props;
   if (useMaybeOpenEpicHandle() === null) {
     return (
-      <AgentHeaderLink
-        name={shortAgentName(send.receiverAgentId)}
-        onOpen={null}
-      />
+      <>
+        <A2APeerPicture botId={null} glyphClassName={glyphClassName} />
+        <AgentHeaderLink
+          name={shortAgentName(send.receiverAgentId)}
+          onOpen={null}
+        />
+      </>
     );
   }
-  return <EpicA2ASendReceiverLink send={send} receipt={receipt} />;
+  return (
+    <EpicA2ASendReceiverLink
+      send={send}
+      receipt={receipt}
+      glyphClassName={glyphClassName}
+    />
+  );
 }
 
 function EpicA2ASendReceiverLink(props: {
   readonly send: AgentMessageSend;
   readonly receipt: AgentMessageReceipt | null;
+  readonly glyphClassName: string;
 }): ReactNode {
-  const { name, onOpen } = useA2ASendReceiver(props.send, props.receipt);
-  return <AgentHeaderLink name={name} onOpen={onOpen} />;
+  const { name, botId, onOpen } = useA2ASendReceiver(props.send, props.receipt);
+  const shownName = useStandaloneBotName(botId, name);
+  return (
+    <>
+      <A2APeerPicture botId={botId} glyphClassName={props.glyphClassName} />
+      <AgentHeaderLink name={shownName} onOpen={onOpen} />
+    </>
+  );
 }
 
 function shortAgentName(agentId: string): string {
@@ -783,7 +802,12 @@ function shortAgentName(agentId: string): string {
 function useA2ASendReceiver(
   send: AgentMessageSend,
   receipt: AgentMessageReceipt | null,
-): { readonly name: string; readonly onOpen: (() => void) | null } {
+): {
+  readonly name: string;
+  /** The receiver's bot, where it is a bot's session; `null` for an agent. */
+  readonly botId: string | null;
+  readonly onOpen: (() => void) | null;
+} {
   const receiver = useA2AMessagePeer(
     receipt?.receiverAgentId ?? send.receiverAgentId,
     sentMessageOrigin(receipt),
@@ -817,6 +841,7 @@ function useA2ASendReceiver(
 
   return {
     name: receiverName,
+    botId: receiver?.bot?.botId ?? null,
     onOpen: receiver === null ? null : openReceiverTab,
   };
 }
@@ -869,18 +894,19 @@ function A2ASendToolSegment(
   // The header is one row and the receiver name is the only element allowed
   // to shrink, so every fixed-width neighbour costs name characters on a
   // phone card or a narrow desktop tile. "Sent message" is spoken, not
-  // painted: the icon and "to" already say it. The reply-expected marker is
+  // painted: "to" already says it, and the picture after it says whether the
+  // receiver is a bot or an agent. The reply-expected marker is
   // an icon for the same reason (see `ReplyExpectedIcon`).
   const header = (
     <>
-      <SendHorizontal
-        className={cn("size-3.5 shrink-0", delivery.iconClassName)}
-        aria-hidden
-      />
       <span className="sr-only">{delivery.srLabel}</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">to</span>
-        <A2ASendReceiverLink send={send} receipt={receipt} />
+        <A2ASendReceiverLink
+          send={send}
+          receipt={receipt}
+          glyphClassName={delivery.iconClassName}
+        />
         {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
       {delivery.badge}
