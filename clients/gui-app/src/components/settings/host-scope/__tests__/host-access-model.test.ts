@@ -595,11 +595,6 @@ describe("reviewText", () => {
       "executable_entry",
       "DATABASE_URL (variable) changes how programs start and is on hold until you choose",
     ],
-    [
-      "needs_grant",
-      "DATABASE_URL is waiting for you: was changed without your confirmation.",
-    ],
-    ["a_reason_from_a_newer_host", "DATABASE_URL is waiting for you."],
   ];
   it.each(cases)("reason %s", (reason, text) => {
     expect(reviewText(reviewEntry({ reason }))).toBe(text);

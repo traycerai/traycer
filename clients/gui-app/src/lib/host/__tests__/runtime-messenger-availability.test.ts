@@ -55,10 +55,16 @@ import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport
 import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
-import type {
-  FatalErrorDetails,
-  SchemaVersion,
+import {
+  schemaVersionSchema,
+  type FatalErrorDetails,
+  type SchemaVersion,
 } from "@traycer/protocol/framework/index";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   hostRpcRegistry,
@@ -628,6 +634,10 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       );
       expect(localQuery.result.current.error).toBeNull();
       expect(remoteQuery.result.current.error).toBeNull();
+      await waitFor(() => {
+        expect(localQuery.result.current.fetchStatus).toBe("idle");
+        expect(remoteQuery.result.current.fetchStatus).toBe("idle");
+      });
       expect(FakeNativeWebSocket.instances).toHaveLength(0);
       expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
       expect(h.remoteRequests.value).toBe(0);
@@ -642,6 +652,21 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         h.hostListChanged();
       });
 
+      expect(h.recovered).toEqual(
+        expect.arrayContaining([LOCAL_HOST_ID, REMOTE_HOST_ID]),
+      );
+      expect(h.recovered).toHaveLength(2);
+      const recoveredQueryScopes = queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.queryKey.slice(0, 2));
+      expect(recoveredQueryScopes).toEqual(
+        expect.arrayContaining([
+          ["host", LOCAL_HOST_ID],
+          ["host", REMOTE_HOST_ID],
+        ]),
+      );
+
       await waitFor(() => {
         expect(FakeNativeWebSocket.instances).toHaveLength(1);
       });
@@ -649,6 +674,11 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       if (socket === undefined) {
         throw new Error("Expected the recovered local query to open a socket");
       }
+      const hostManifest = splitConnectionManifest(
+        hostRpcRegistry,
+        RELEASED_FLOOR_METHOD_NAMES,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       socket.fireOpen();
       await waitFor(() => {
         expect(sentFramesOfKind(socket, "open")).toHaveLength(1);
@@ -656,8 +686,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       socket.fireMessage(
         JSON.stringify({
           kind: "openAck",
-          manifest: { "host.status": { major: 1, minor: 0 } },
-          optionalManifest: {},
+          manifest: hostManifest.manifest,
+          optionalManifest: hostManifest.optionalManifest,
         }),
       );
       await waitFor(() => {
@@ -666,16 +696,23 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       const requestFrame = sentFramesOfKind(socket, "request").at(0);
       if (
         requestFrame === undefined ||
-        typeof requestFrame.requestId !== "string"
+        typeof requestFrame.requestId !== "string" ||
+        requestFrame.method !== "host.status"
       ) {
         throw new Error("Expected the local status request frame");
+      }
+      const requestSchemaVersion = schemaVersionSchema.safeParse(
+        requestFrame.schemaVersion,
+      );
+      if (!requestSchemaVersion.success) {
+        throw new Error("Expected the negotiated local status schema version");
       }
       socket.fireMessage(
         JSON.stringify({
           kind: "response",
           requestId: requestFrame.requestId,
           method: "host.status",
-          schemaVersion: { major: 1, minor: 0 },
+          schemaVersion: requestSchemaVersion.data,
           result: hostStatusResponse,
           error: null,
         }),
