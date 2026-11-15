@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { fixture, nextFrames } from "./support/fixtures.ts";
+import { fixture } from "./support/fixtures.ts";
 
 // A press that starts a comment replaces the task's open draft, so the draft
 // must be asked about, once. The question comes from the opener
@@ -10,6 +10,13 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 // keyboard (Tab). The press the relay then dispatches on the frame element
 // carries the opener mark while Comments is on, so the draft box leaves it
 // alone and that Tab asks nothing.
+//
+// Every gesture is followed to its own end, never to a quiet interval: the
+// guest's pick message arrives, the selection ring settles on the picked
+// element, and then the pick's terminal is observed (its question, or for an
+// accepted question the draft moving to the new element). A trace installed
+// in the top window counts the guest's pick messages and the relayed frame
+// presses, so each gesture also proves how many of each it produced.
 //
 // Everything is real input at element centres in the real comment surface and
 // sandboxed frame; the questions are the page's `window.confirm` dialogs.
@@ -28,8 +35,15 @@ interface CommentModeProbe {
     readonly base64: string;
   }>;
 }
+
+interface PressTrace {
+  picks: number;
+  relayed: number;
+}
+
 interface ProbeWindow extends Window {
   __commentModeProbe?: CommentModeProbe;
+  __pressTrace?: PressTrace;
 }
 
 interface Box {
@@ -39,14 +53,50 @@ interface Box {
   readonly height: number;
 }
 
+interface Answers {
+  readonly asked: string[];
+  accept: boolean;
+}
+
 /** `window.confirm` questions, answered as `accept` says when each arrives. */
-function answerConfirms(page: Page): { asked: string[]; accept: boolean } {
-  const state = { asked: [] as string[], accept: false };
+function answerConfirms(page: Page): Answers {
+  const state: Answers = { asked: [], accept: false };
   page.on("dialog", (dialog) => {
     state.asked.push(dialog.message());
     void (state.accept ? dialog.accept() : dialog.dismiss());
   });
   return state;
+}
+
+/**
+ * Runs in the top window before the app: counts the guest's pick messages and
+ * the presses the relay replays on the frame element (synthetic clicks whose
+ * target is an iframe). Init scripts also run in frames, which are skipped.
+ */
+function installPressTrace(): void {
+  if (window !== window.top) return;
+  const trace = { picks: 0, relayed: 0 };
+  Reflect.set(window, "__pressTrace", trace);
+  window.addEventListener("message", (event) => {
+    const data: unknown = event.data;
+    if (typeof data !== "object" || data === null) return;
+    if (!("jsonrpc" in data) || !("method" in data)) return;
+    if (data.jsonrpc === "2.0" && data.method === "traycer/canvas/pick")
+      trace.picks += 1;
+  });
+  window.addEventListener("click", (event) => {
+    if (!event.isTrusted && event.target instanceof HTMLIFrameElement)
+      trace.relayed += 1;
+  });
+}
+
+async function readTrace(page: Page): Promise<PressTrace> {
+  return page.evaluate(() => {
+    const trace = (window as ProbeWindow).__pressTrace;
+    if (trace === undefined)
+      throw new Error("the press trace is not installed");
+    return { picks: trace.picks, relayed: trace.relayed };
+  });
 }
 
 function frameElement(page: Page): Locator {
@@ -99,12 +149,16 @@ async function serveArtifactFromPage(page: Page): Promise<void> {
 
 async function open(page: Page): Promise<void> {
   await serveArtifactFromPage(page);
+  await page.addInitScript(installPressTrace);
   await page.goto(fixture("html-artifact-comment-mode"));
   await expect(pageFrame(page).locator("#counter")).toHaveText("count 0");
   await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "false");
 }
 
-/** Press the toggle; the page waits for the mode, and nothing else. */
+/**
+ * Press the toggle. Each press asks synchronously in its pointerdown, before
+ * the click flips the mode, so the mode changing is that press's terminal.
+ */
 async function pressComments(page: Page, on: boolean): Promise<void> {
   await commentsToggle(page).click();
   await expect(commentsToggle(page)).toHaveAttribute(
@@ -142,9 +196,31 @@ async function centreInPage(
   };
 }
 
+/** Largest edge by which `marker` misses the element's box. */
+async function boxDelta(
+  page: Page,
+  marker: Locator,
+  selector: string,
+): Promise<number> {
+  const outline = await marker.first().boundingBox();
+  if (outline === null) return Number.POSITIVE_INFINITY;
+  const target = await boxInPage(page, selector);
+  return Math.max(
+    Math.abs(outline.x - target.x),
+    Math.abs(outline.y - target.y),
+    Math.abs(outline.width - target.width),
+    Math.abs(outline.height - target.height),
+  );
+}
+
 /** The hover rectangle, which is the outline without the selection's ring. */
 function hoverOutline(page: Page): Locator {
   return page.locator("[data-canvas-selection-outline]:not(.ring-1)");
+}
+
+/** The picked element's rectangle: the outline with the selection's ring. */
+function selectionRing(page: Page): Locator {
+  return page.locator("[data-canvas-selection-outline].ring-1");
 }
 
 /** Move onto the element and wait until the hover rectangle is its own. */
@@ -152,55 +228,80 @@ async function hover(page: Page, selector: string): Promise<void> {
   const centre = await centreInPage(page, selector);
   await page.mouse.move(centre.x, centre.y);
   await expect
-    .poll(async () => {
-      const outline = await hoverOutline(page).first().boundingBox();
-      if (outline === null) return Number.POSITIVE_INFINITY;
-      const target = await boxInPage(page, selector);
-      return Math.max(
-        Math.abs(outline.x - target.x),
-        Math.abs(outline.y - target.y),
-        Math.abs(outline.width - target.width),
-        Math.abs(outline.height - target.height),
-      );
-    })
+    .poll(() => boxDelta(page, hoverOutline(page), selector))
     .toBeLessThanOrEqual(2);
 }
 
-/** Hover, then press: the way a reader picks. */
-async function pick(page: Page, selector: string): Promise<void> {
+/** Hover, then press: the way a reader picks with a mouse. */
+async function mousePick(page: Page, selector: string): Promise<void> {
   await hover(page, selector);
   const centre = await centreInPage(page, selector);
   await page.mouse.click(centre.x, centre.y);
 }
 
-/** The press right where the pointer lands, with nothing awaited before it. */
-async function pickAtOnce(page: Page, selector: string): Promise<void> {
+/** The press right where the pointer lands, with no hover before it. */
+async function mouseClick(page: Page, selector: string): Promise<void> {
   const centre = await centreInPage(page, selector);
   await page.mouse.click(centre.x, centre.y);
+}
+
+async function tap(page: Page, selector: string): Promise<void> {
+  const centre = await centreInPage(page, selector);
+  await page.touchscreen.tap(centre.x, centre.y);
+}
+
+/**
+ * One pick, followed to its end: the guest delivers exactly one pick message,
+ * the selection ring settles on the element, and then `terminal` observes what
+ * the pick finally did. Nothing is relayed by a pick, so the relayed count
+ * stays where it was.
+ */
+async function gesture(
+  page: Page,
+  selector: string,
+  press: () => Promise<void>,
+  terminal: () => Promise<void>,
+): Promise<void> {
+  const before = await readTrace(page);
+  await press();
+  await expect
+    .poll(async () => (await readTrace(page)).picks)
+    .toBe(before.picks + 1);
+  await expect
+    .poll(() => boxDelta(page, selectionRing(page), selector))
+    .toBeLessThanOrEqual(2);
+  await terminal();
+  expect(await readTrace(page)).toEqual({
+    picks: before.picks + 1,
+    relayed: before.relayed,
+  });
+}
+
+/**
+ * The questions asked so far are exactly `count`. A declined pick ends at its
+ * question, and nothing a gesture asks comes after its terminal.
+ */
+async function expectQuestions(answers: Answers, count: number): Promise<void> {
+  await expect.poll(() => answers.asked.length).toBe(count);
+  expect(answers.asked).toHaveLength(count);
+  for (const question of answers.asked)
+    expect(question).toContain(DISCARD_QUESTION);
 }
 
 /** Comments on, a draft opened on `#top`, and `WORDS` typed into it. */
 async function openDirtyDraft(page: Page): Promise<string> {
   await pressComments(page, true);
-  await pick(page, "#top");
-  await expect(newComment(page)).toBeVisible();
+  await gesture(
+    page,
+    "#top",
+    () => mousePick(page, "#top"),
+    () => expect(newComment(page)).toBeVisible(),
+  );
   await draftText(page).fill(WORDS);
   await expect(draftText(page)).toHaveText(WORDS);
   const label = await draftLabel(page).textContent();
   if (label === null) throw new Error("the draft has no label");
   return label;
-}
-
-/** Let the gesture settle, then the count must still be what it was. */
-async function expectAsked(
-  asked: readonly string[],
-  count: number,
-  page: Page,
-): Promise<void> {
-  await expect.poll(() => asked.length).toBe(count);
-  await nextFrames(page, 8);
-  expect(asked).toHaveLength(count);
-  for (const question of asked) expect(question).toContain(DISCARD_QUESTION);
 }
 
 async function frameHasFocus(page: Page): Promise<boolean> {
@@ -213,10 +314,15 @@ test("a pick on another element asks once, and declining keeps the draft where i
   const answers = answerConfirms(page);
   await open(page);
   const label = await openDirtyDraft(page);
+  await expectQuestions(answers, 0);
 
-  await pick(page, "#note");
+  await gesture(
+    page,
+    "#note",
+    () => mousePick(page, "#note"),
+    () => expectQuestions(answers, 1),
+  );
 
-  await expectAsked(answers.asked, 1, page);
   await expect(newComment(page)).toBeVisible();
   await expect(draftLabel(page)).toHaveText(label);
   await expect(draftText(page)).toHaveText(WORDS);
@@ -226,12 +332,20 @@ test("each further pick asks again", async ({ page }) => {
   const answers = answerConfirms(page);
   await open(page);
   await openDirtyDraft(page);
+  await gesture(
+    page,
+    "#note",
+    () => mousePick(page, "#note"),
+    () => expectQuestions(answers, 1),
+  );
 
-  await pick(page, "#note");
-  await expectAsked(answers.asked, 1, page);
-  await pick(page, "#fresh");
+  await gesture(
+    page,
+    "#fresh",
+    () => mousePick(page, "#fresh"),
+    () => expectQuestions(answers, 2),
+  );
 
-  await expectAsked(answers.asked, 2, page);
   await expect(draftText(page)).toHaveText(WORDS);
 });
 
@@ -243,16 +357,22 @@ test("accepting the question moves the draft to the picked element, empty", asyn
   const label = await openDirtyDraft(page);
   answers.accept = true;
 
-  await pick(page, "#note");
+  await gesture(
+    page,
+    "#note",
+    () => mousePick(page, "#note"),
+    async () => {
+      await expectQuestions(answers, 1);
+      await expect(draftLabel(page)).not.toHaveText(label);
+    },
+  );
 
-  await expectAsked(answers.asked, 1, page);
   await expect(newComment(page)).toBeVisible();
-  await expect(draftLabel(page)).not.toHaveText(label);
   await expect(draftText(page)).not.toContainText(WORDS);
   await expect(page.getByText(WORDS)).toHaveCount(0);
 });
 
-test("a pick the moment Comments turns on again asks exactly once", async ({
+test("the first pick after Comments is turned back on asks once", async ({
   page,
 }) => {
   const answers = answerConfirms(page);
@@ -260,15 +380,19 @@ test("a pick the moment Comments turns on again asks exactly once", async ({
   await openDirtyDraft(page);
 
   // The mode's own toggle is an outside press too: each press of it asks, and
-  // declining keeps the draft.
+  // declining keeps the draft. Each press ends when the mode has flipped.
   await pressComments(page, false);
   await pressComments(page, true);
   await expect(draftText(page)).toHaveText(WORDS);
   const before = answers.asked.length;
 
-  await pickAtOnce(page, "#note");
+  await gesture(
+    page,
+    "#note",
+    () => mouseClick(page, "#note"),
+    () => expectQuestions(answers, before + 1),
+  );
 
-  await expectAsked(answers.asked, before + 1, page);
   await expect(draftText(page)).toHaveText(WORDS);
 });
 
@@ -278,6 +402,7 @@ test("Tab into the frame asks nothing, and the next pick asks once", async ({
   const answers = answerConfirms(page);
   await open(page);
   await openDirtyDraft(page);
+  const before = await readTrace(page);
 
   // Keyboard is the only way focus enters the frame in comment mode. The press
   // the relay dispatches on the frame element announces it, and the frame
@@ -286,15 +411,22 @@ test("Tab into the frame asks nothing, and the next pick asks once", async ({
   let inFrame = false;
   for (let tabs = 0; tabs < MAX_TABS && !inFrame; tabs += 1) {
     await page.keyboard.press("Tab");
-    await nextFrames(page, 2);
     inFrame = await frameHasFocus(page);
   }
   expect(inFrame).toBe(true);
-  await expectAsked(answers.asked, 0, page);
+  await expect
+    .poll(async () => (await readTrace(page)).relayed)
+    .toBe(before.relayed + 1);
+  expect(answers.asked).toHaveLength(0);
+  await expect(draftText(page)).toHaveText(WORDS);
 
-  await pick(page, "#fresh");
+  await gesture(
+    page,
+    "#fresh",
+    () => mousePick(page, "#fresh"),
+    () => expectQuestions(answers, 1),
+  );
 
-  await expectAsked(answers.asked, 1, page);
   await expect(draftText(page)).toHaveText(WORDS);
 });
 
@@ -308,16 +440,22 @@ test.describe("on a touch screen", () => {
     await open(page);
     await commentsToggle(page).tap();
     await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
-    const top = await centreInPage(page, "#top");
-    await page.touchscreen.tap(top.x, top.y);
-    await expect(newComment(page)).toBeVisible();
+    await gesture(
+      page,
+      "#top",
+      () => tap(page, "#top"),
+      () => expect(newComment(page)).toBeVisible(),
+    );
     await draftText(page).fill(WORDS);
     await expect(draftText(page)).toHaveText(WORDS);
-    const fresh = await centreInPage(page, "#fresh");
 
-    await page.touchscreen.tap(fresh.x, fresh.y);
+    await gesture(
+      page,
+      "#fresh",
+      () => tap(page, "#fresh"),
+      () => expectQuestions(answers, 1),
+    );
 
-    await expectAsked(answers.asked, 1, page);
     await expect(draftText(page)).toHaveText(WORDS);
   });
 });
