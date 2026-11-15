@@ -14,6 +14,7 @@ import {
   useSettingsItemExists,
   useSettingsSave,
 } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
   confirmEnvironmentProfile,
   PROFILE_SAVE_KINDS,
@@ -59,6 +60,7 @@ export function useRenameProviderProfileForClient(
 ): RenameProviderProfileMutationResult {
   const queryClient = useQueryClient();
   const prepareSave = useSettingsSave(client, PROFILE_SAVE_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const environmentProfileExists = useSettingsItemExists(
     client,
     "managed_profile",
@@ -75,12 +77,15 @@ export function useRenameProviderProfileForClient(
       providerProfileSaveRequest({ type: "rename", ...variables }),
     prepareRequest: (request) =>
       confirmEnvironmentProfile(request, environmentProfileExists),
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "providers.setEnabled", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "providers.setEnabled", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     options: {
       mutationKey: providersMutationKeys.renameProfile(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
