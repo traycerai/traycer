@@ -340,7 +340,7 @@ describe("MobileNavDrawer rows", () => {
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(TRACY));
   });
 
-  describe("the Tracy row's unread count", () => {
+  describe("the Tracy row's unread signal", () => {
     function openTracyRow(): void {
       useTracySurfaceStore.setState({
         open: true,
@@ -371,31 +371,21 @@ describe("MobileNavDrawer rows", () => {
       };
     }
 
-    it.each([
-      { unreadCount: 3, shown: "3" },
-      { unreadCount: 120, shown: "99+" },
-    ])(
-      "draws $shown on the glyph and names it, bold",
-      async ({ unreadCount, shown }) => {
-        openTracyRow();
-        tracyIndicators(true, unreadCount);
-        renderDrawer();
+    it("names the unread count and bolds the label without drawing a count", async () => {
+      openTracyRow();
+      tracyIndicators(true, 3);
+      renderDrawer();
 
-        const row = await screen.findByTestId("mobile-nav-tracy");
-        const count = within(row).getByTestId("tracy-entry-unread-count");
-        expect(count.textContent).toBe(shown);
-        // The drawer's ground is the popover, not the strip's canvas.
-        expect(count.classList.contains("ring-popover")).toBe(true);
-        expect(count.classList.contains("ring-canvas")).toBe(false);
-        expect(row.getAttribute("aria-label")).toBe(`Tracy, ${shown} unread`);
-        expect(row.hasAttribute("data-unread")).toBe(true);
-        expect(within(row).getByText("Tracy").className).toContain(
-          "font-semibold",
-        );
-      },
-    );
+      const row = await screen.findByTestId("mobile-nav-tracy");
+      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
+      expect(row.getAttribute("aria-label")).toBe("Tracy, 3 unread");
+      expect(row.hasAttribute("data-unread")).toBe(true);
+      expect(within(row).getByText("Tracy").className).toContain(
+        "font-semibold",
+      );
+    });
 
-    it("draws no count at zero", async () => {
+    it("is unmarked and unbolded at zero", async () => {
       openTracyRow();
       tracyIndicators(false, 0);
       renderDrawer();
@@ -404,6 +394,9 @@ describe("MobileNavDrawer rows", () => {
       expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
       expect(row.getAttribute("aria-label")).toBe("Tracy");
       expect(row.hasAttribute("data-unread")).toBe(false);
+      expect(within(row).getByText("Tracy").className).not.toContain(
+        "font-semibold",
+      );
     });
 
     it("keeps the bold name and draws no count for a host that does not count", async () => {

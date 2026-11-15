@@ -1128,22 +1128,24 @@ describe("the fixed Tracy entry - signals", () => {
     },
   );
 
-  describe("the unread count", () => {
-    // The rail tile's chip clips what overhangs it, so the row draws the count.
+  describe("the unread signal", () => {
+    // The entry shows no number: the label is bold while unread, the
+    // collapsed rail (which has no label) shows the unread badge, and the
+    // accessible name still carries the count.
     const PLACEMENTS = [
       {
         placement: "top strip",
-        countTestId: "tracy-entry-unread-count",
+        railed: false,
         mountEntry: () => mountTopStrip("/"),
       },
       {
         placement: "vertical strip",
-        countTestId: "tracy-entry-unread-count",
+        railed: false,
         mountEntry: () => mountSideStrip("/"),
       },
       {
         placement: "collapsed rail",
-        countTestId: "side-tab-rail-count",
+        railed: true,
         mountEntry: () => {
           useSideTabStripStore.setState({ collapsed: true });
           return mountSideStrip("/");
@@ -1163,106 +1165,58 @@ describe("the fixed Tracy entry - signals", () => {
     }
 
     it.each(PLACEMENTS)(
-      "is drawn on the glyph in the $placement, outside the rail tile's chip, and named by the entry",
-      async ({ placement, countTestId, mountEntry }) => {
+      "marks the entry in the $placement without drawing the count, and names it with the count",
+      async ({ railed, mountEntry }) => {
         tracyIndicators({ unreadDone: true, unreadCount: 3 });
         mountEntry();
 
         const entry = await screen.findByTestId("tab-tracy");
-        const count = within(entry).getByTestId(countTestId);
-        expect(count.textContent).toBe("3");
-        const glyph = within(entry).getByTestId("tracy-entry-icon");
-        if (placement === "collapsed rail") {
-          const chip = within(entry).getByTestId("side-tab-monogram-chip");
-          expect(chip.contains(glyph)).toBe(true);
-          expect(chip.contains(count)).toBe(false);
-          expect(
-            within(chip).queryByTestId("tracy-entry-unread-count"),
-          ).toBeNull();
-        } else {
-          expect(count.parentElement?.contains(glyph)).toBe(true);
-        }
+        expect(entry.hasAttribute("data-unread")).toBe(true);
         expect(entry.getAttribute("aria-label")).toBe("Tracy, 3 unread");
-        expect(entry.hasAttribute("data-unread")).toBe(true);
-        // The count stands for the rail's unread badge.
-        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
-      },
-    );
-
-    it.each(PLACEMENTS)(
-      "wears the solid primary tone in the $placement, and the strips seat it off the glyph in a ring",
-      async ({ placement, countTestId, mountEntry }) => {
-        tracyIndicators({ unreadDone: true, unreadCount: 3 });
-        mountEntry();
-
-        const entry = await screen.findByTestId("tab-tracy");
-        const count = within(entry).getByTestId(countTestId);
-        expect(count.getAttribute("data-slot")).toBe("badge");
-        expect(count.getAttribute("data-variant")).toBe("default");
-        expect(count.classList.contains("bg-primary")).toBe(true);
-        expect(count.classList.contains("text-primary-foreground")).toBe(true);
-        if (placement !== "collapsed rail") {
-          for (const seat of [
-            "-top-3.5",
-            "left-3.5",
-            "right-auto",
-            "ring-2",
-            "ring-canvas",
-          ]) {
-            expect(count.classList.contains(seat)).toBe(true);
-          }
-          expect(count.classList.contains("-right-px")).toBe(false);
-          expect(count.classList.contains("translate-x-1/2")).toBe(false);
-        }
-      },
-    );
-
-    it("reads 99+ past ninety-nine", async () => {
-      tracyIndicators({ unreadDone: true, unreadCount: 120 });
-      mountTopStrip("/");
-
-      const entry = await screen.findByTestId("tab-tracy");
-      expect(
-        within(entry).getByTestId("tracy-entry-unread-count").textContent,
-      ).toBe("99+");
-      expect(entry.getAttribute("aria-label")).toBe("Tracy, 99+ unread");
-    });
-
-    it.each(PLACEMENTS)(
-      "is not drawn in the $placement while nothing is unread",
-      async ({ countTestId, mountEntry }) => {
-        tracyIndicators({ unreadCount: 0 });
-        mountEntry();
-
-        const entry = await screen.findByTestId("tab-tracy");
-        expect(within(entry).queryByTestId(countTestId)).toBeNull();
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
-        expect(entry.hasAttribute("data-unread")).toBe(false);
-      },
-    );
-
-    it.each(PLACEMENTS)(
-      "is not drawn in the $placement for a host that does not count, which keeps the bold name or the rail's unread badge",
-      async ({ placement, countTestId, mountEntry }) => {
-        tracyIndicators({ unreadDone: true, unreadCount: null });
-        mountEntry();
-
-        const entry = await screen.findByTestId("tab-tracy");
-        expect(within(entry).queryByTestId(countTestId)).toBeNull();
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
-        expect(entry.hasAttribute("data-unread")).toBe(true);
-        if (placement === "top strip") {
-          expect(within(entry).getByText("Tracy").className).toContain(
-            "font-semibold",
-          );
-        }
-        if (placement === "collapsed rail") {
+        expect(
+          within(entry).queryByTestId("tracy-entry-unread-count"),
+        ).toBeNull();
+        expect(within(entry).queryByTestId("side-tab-rail-count")).toBeNull();
+        if (railed) {
           expect(
             within(entry)
               .getByTestId("side-tab-rail-badge")
               .getAttribute("data-kind"),
           ).toBe("unread");
+        } else {
+          // The top strip bolds the text; the vertical row bolds its title wrapper.
+          expect(
+            within(entry).getByText("Tracy").closest(".font-semibold"),
+          ).not.toBeNull();
         }
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "leaves the $placement unmarked, with no badge, while nothing is unread",
+      async ({ mountEntry }) => {
+        tracyIndicators({ unreadCount: 0 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        expect(entry.hasAttribute("data-unread")).toBe(false);
+        expect(entry.getAttribute("aria-label")).toBe("Tracy");
+        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "marks the $placement for a host that does not count, naming it without a count",
+      async ({ railed, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: null });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        expect(entry.getAttribute("aria-label")).toBe("Tracy");
+        expect(
+          within(entry).queryByTestId("side-tab-rail-badge") !== null,
+        ).toBe(railed);
       },
     );
   });
