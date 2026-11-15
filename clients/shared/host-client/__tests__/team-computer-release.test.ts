@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import { releaseTeamComputerViaHttp } from "../team-computer-release";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://authn.example.test";
 const BEARER = "member-session-token";
@@ -180,4 +181,36 @@ describe("team computer release timeout", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(lateText).not.toHaveBeenCalled();
   });
+});
+
+describe("a redirect answered to a team computer release", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error, never as released, with the choice sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(async () => answer({}));
+
+      await expect(release()).resolves.toEqual({ kind: "network-error" });
+
+      const { init } = onlyCall(fetchMock);
+      expect(init.redirect).toBe("manual");
+      expect(headerOf(init, "Authorization")).toBe(`Bearer ${BEARER}`);
+      expect(JSON.parse(String(init.body))).toEqual({
+        environmentId: ENVIRONMENT_ID,
+      });
+    },
+  );
 });

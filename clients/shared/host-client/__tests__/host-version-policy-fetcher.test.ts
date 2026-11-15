@@ -3,6 +3,7 @@ import {
   updateHostVersionPolicyViaHttp,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import {
   removeNativeAbortHelpers,
   signalOfLastFetch,
@@ -269,4 +270,50 @@ describe("updateHostVersionPolicyViaHttp on a fetch that ignores its signal", ()
     expect(settled).toBe(true);
     expect(await pending).toEqual({ kind: "network-error" });
   });
+});
+
+describe("a redirect answered to a host version policy update", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error, never as the applied policy, with the bearer and policy sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer(okBody()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await updateHostVersionPolicyViaHttp(
+        AUTHN,
+        "jwt-abc",
+        "host-1",
+        updateInput(),
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer jwt-abc",
+      );
+      expect(JSON.parse(String(init?.body))).toEqual({
+        updatePolicy: "manual",
+        desiredVersion: "1.5.0",
+      });
+    },
+  );
 });

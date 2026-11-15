@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deregisterHostViaHttp } from "../host-deregister-fetcher";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import {
   removeNativeAbortHelpers,
   signalOfLastFetch,
@@ -115,4 +116,43 @@ describe("deregisterHostViaHttp on a fetch that ignores its signal", () => {
     expect(settled).toBe(true);
     expect(await pending).toEqual({ kind: "network-error" });
   });
+});
+
+describe("a redirect answered to a host removal", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error, never as removed, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ host_id: "host-1", deregistered: true }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await deregisterHostViaHttp(AUTHN, "jwt-abc", "host-1");
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
 });

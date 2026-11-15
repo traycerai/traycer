@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { listTeamComputersViaHttp, type TeamComputer } from "../team-computers";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://authn.example.test";
 const BEARER = "member-session-token";
@@ -133,4 +134,37 @@ describe("listTeamComputersViaHttp", () => {
       listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
     ).resolves.toEqual({ kind: "network-error" });
   });
+});
+
+describe("a redirect answered to a team computers read", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error, never as the team's computers, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(async () =>
+        answer({ hosts: [computer({})] }),
+      );
+
+      await expect(
+        listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
+      ).resolves.toEqual({ kind: "network-error" });
+
+      const { init } = onlyCall(fetchMock);
+      expect(init.redirect).toBe("manual");
+      expect(headerOf(init, "Authorization")).toBe(`Bearer ${BEARER}`);
+    },
+  );
 });

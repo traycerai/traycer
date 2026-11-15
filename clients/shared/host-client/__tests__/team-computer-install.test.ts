@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mintTeamComputerInstallTokenViaHttp } from "../team-computer-install";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN = "https://authn.example.test";
 const BEARER = "user-jwt-secret";
@@ -181,4 +182,57 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
     expect(settled).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+describe("a redirect answered to a team install token request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error that names only the status, with the environment sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({
+          token: INSTALL_TOKEN,
+          environmentId: ENVIRONMENT_ID,
+          expiresAt: 1_800_000_000,
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintTeamComputerInstallTokenViaHttp(
+        AUTHN,
+        BEARER,
+        ENVIRONMENT_ID,
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the install-token request answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+      expect(init?.body).toBe(
+        JSON.stringify({ environmentId: ENVIRONMENT_ID }),
+      );
+    },
+  );
 });
