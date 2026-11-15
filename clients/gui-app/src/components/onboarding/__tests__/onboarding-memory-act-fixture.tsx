@@ -47,6 +47,7 @@ import {
   providerState,
   type ProviderSpec,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-provider-state";
+import { abandonedSaveError } from "@/lib/environment/__tests__/settings-save-failure-fixtures";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
 import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
@@ -111,6 +112,8 @@ interface World {
   setAnswers: SetAnswer[];
   /** Per harness id: how many more `providers.setNativeMemory` calls fail. */
   nativeFailures: Map<string, number>;
+  /** What a failing `providers.setNativeMemory` call fails as. */
+  nativeFailureKind: "refused" | "abandoned";
   /**
    * A landed `providers.setNativeMemory` changes what the next
    * `providers.list` says. Off by default: the list then stays as it was
@@ -163,6 +166,7 @@ function freshWorld(): World {
     providers: defaultProviders(),
     setAnswers: ["applied"],
     nativeFailures: new Map(),
+    nativeFailureKind: "refused",
     applyNativeWrites: false,
     chatSettingsGate: null,
     accepted: [],
@@ -322,7 +326,9 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         const failures = world.nativeFailures.get(request.harnessId) ?? 0;
         if (failures > 0) {
           world.nativeFailures.set(request.harnessId, failures - 1);
-          throw hostFailure("providers.setNativeMemory");
+          throw world.nativeFailureKind === "abandoned"
+            ? abandonedSaveError("providers.setNativeMemory")
+            : hostFailure("providers.setNativeMemory");
         }
         if (world.applyNativeWrites) {
           const providerId =

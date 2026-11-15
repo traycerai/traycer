@@ -264,6 +264,40 @@ describe("the Memory act: order and failure", () => {
   });
 });
 
+describe("the Memory act: a write abandoned before it was sent", () => {
+  it("ends the save unsent, sends nothing more, and leaves the act as it was before the press", async () => {
+    world.signedIn = false;
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    const advance = screen.getByTestId("onboarding-advance");
+    const labelBefore = advance.textContent;
+
+    await clickAdvance();
+    await waitFor(() => expect(advance.hasAttribute("disabled")).toBe(false));
+
+    expect(screen.queryByTestId("onboarding-memory-save-report")).toBeNull();
+    expect(currentStepId()).toBe("agent-memories");
+    expect(advance.textContent).toBe(labelBefore);
+    expect(paramsOf("config.agentMemories.set")).toEqual([]);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+  });
+
+  it("still files a provider write abandoned before it was sent as failed", async () => {
+    world.nativeFailures.set("codex", 1);
+    world.nativeFailureKind = "abandoned";
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+
+    await clickAdvance();
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+
+    expect(report.textContent).toContain("Couldn't change Codex memories.");
+    expect(currentStepId()).toBe("agent-memories");
+  });
+});
+
 describe("the Memory act: a queued Traycer write", () => {
   it("is never re-sent, and moves on once the receipt names it", async () => {
     world.setAnswers = ["queued"];
