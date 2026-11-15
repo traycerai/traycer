@@ -2515,18 +2515,11 @@ describe("<WindowHostModalHost />", () => {
     ).toBe("Reason: UNAUTHORIZED");
     expect(buttonsOf(surface)).toEqual([
       "Retry",
-      "Report issue",
       "Open settings",
+      "Report issue",
     ]);
   });
 
-  /**
-   * The mobile app's post-latch narration, whose subject is the DOCUMENT rather
-   * than the copy: a modal layer over a mounted shell raises the pointer
-   * barrier, and on that shell the barrier is what the edge-swipe recognizer
-   * reads before it reserves a touch. The gesture is the phone's only history
-   * affordance, so the narration must not cost it.
-   */
   async function renderDoorCoverCard(
     state: HostDoorState,
     shell: "phone" | "launch",
@@ -2758,6 +2751,13 @@ describe("<WindowHostModalHost />", () => {
     });
   });
 
+  /**
+   * The mobile app's post-latch narration, whose subject is the DOCUMENT rather
+   * than the copy: a modal layer over a mounted shell raises the pointer
+   * barrier, and on that shell the barrier is what the edge-swipe recognizer
+   * reads before it reserves a touch. The gesture is the phone's only history
+   * affordance, so the narration must not cost it.
+   */
   describe("on the mobile app", () => {
     beforeEach(() => {
       setMobileApp(true);

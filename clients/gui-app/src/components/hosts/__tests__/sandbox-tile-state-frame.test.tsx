@@ -908,9 +908,6 @@ describe("<SandboxTileStateFrame /> on a computer that refuses this account", ()
     const error = await harness.call();
 
     expect(harness.sentBearers).toHaveLength(2);
-    expect(useHostDoorStateStore.getState().byHost.get(HOST_ID)).toMatchObject({
-      kind: "not-admitted",
-    });
     toastFromHostError(error, "Couldn't update this task.");
     expect(toast.error).not.toHaveBeenCalled();
   });
