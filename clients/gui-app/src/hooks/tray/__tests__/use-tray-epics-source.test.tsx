@@ -25,6 +25,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Epic A",
     initialUserPrompt: "",
+    createdAtMs: 100,
     updatedAtMs: 100,
     updatedLabel: "old",
     updatedBucket: "earlier",

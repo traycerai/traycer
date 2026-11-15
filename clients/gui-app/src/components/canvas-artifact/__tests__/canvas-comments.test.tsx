@@ -104,6 +104,14 @@ function tree() {
   );
 }
 
+const wholePageThread: CommentThreadWire = {
+  threadId: THREAD_ID,
+  resolved: false,
+  createdAt: 1,
+  comments: [],
+  data: { createdByUserId: "user-1", anchorKind: "artifact" },
+};
+
 beforeEach(() => {
   registry = new CanvasFrameRegistry();
   mocks.threads = null;
@@ -157,6 +165,64 @@ describe("<CanvasCommentIndex /> anchor reveal", () => {
     act(() => registry.setView(viewWith(ready, false)));
 
     expect(ready).not.toHaveBeenCalled();
+  });
+});
+
+describe("<CanvasCommentIndex /> on a surface with no view", () => {
+  function twoSurfaces(
+    older: CanvasFrameRegistry,
+    current: CanvasFrameRegistry,
+  ) {
+    return (
+      <QueryClientProvider client={createAppQueryClient()}>
+        <CanvasCommentIndex
+          scope={scope}
+          tileId="tile-older"
+          registry={older}
+        />
+        <CanvasCommentIndex
+          scope={scope}
+          tileId="tile-current"
+          registry={current}
+        />
+      </QueryClientProvider>
+    );
+  }
+
+  // An older card of the same artifact publishes no view. A whole-page thread
+  // names no board, so a registration from it would claim the thread and show
+  // nothing, ahead of the surface that can.
+  it("leaves a whole-page thread's reveal to the surface that has a view", () => {
+    const older = new CanvasFrameRegistry();
+    const current = new CanvasFrameRegistry();
+    mocks.threads = [wholePageThread];
+    render(twoSurfaces(older, current));
+    const setCommenting = vi.fn<(commenting: boolean) => void>();
+    act(() =>
+      current.setView({ ...viewWith(() => true, false), setCommenting }),
+    );
+
+    act(() => {
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, THREAD_ID);
+      requestCommentThreadAnchorReveal(EPIC_ID, ARTIFACT_ID, THREAD_ID);
+    });
+
+    expect(setCommenting).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("publishes no anchor positions for the artifact until a view exists", () => {
+    mocks.threads = [wholePageThread];
+    render(tree());
+
+    expect(useAnchorPositionsStore.getState().mapByKey).toEqual({});
+
+    act(() => registry.setView(viewWith(() => true, false)));
+
+    expect(
+      useAnchorPositionsStore
+        .getState()
+        .mapByKey[`${EPIC_ID}::${ARTIFACT_ID}`].positions.get(THREAD_ID),
+    ).toBe(0);
   });
 });
 

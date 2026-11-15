@@ -1,5 +1,6 @@
 import {
   EnvironmentCloudError,
+  SETTINGS_REFUSED_MESSAGE,
   type EnvironmentCloud,
   type EnvironmentErrorKind,
 } from "@traycer-clients/shared/environment/environment-cloud";
@@ -88,10 +89,7 @@ type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
  */
 function namedEnvironment(environmentId: string | null): string {
   if (environmentId === null) {
-    throw new EnvironmentCloudError(
-      "invalid",
-      "The settings request was refused.",
-    );
+    throw new EnvironmentCloudError("invalid", SETTINGS_REFUSED_MESSAGE);
   }
   return environmentId;
 }
@@ -165,6 +163,7 @@ const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "E_ROLE_FORBIDDEN",
   invalid: "E_INVALID_ARGUMENT",
+  not_readable: "E_ENVIRONMENT_NOT_A_MEMBER",
   refused: "RPC_ERROR",
   unavailable: "RPC_ERROR",
   no_response: "RPC_ERROR",

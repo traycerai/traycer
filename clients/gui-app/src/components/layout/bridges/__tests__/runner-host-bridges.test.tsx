@@ -6,6 +6,7 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const testState = {
   historyQueryMounts: 0,
@@ -14,7 +15,7 @@ const testState = {
 // `useTrayEpicsSource` is the only caller of `useHistoryQuery` under this
 // bridge, so counting mounts of the hook counts History queries.
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => {
+  useHistoryQuery: (params: UseHistoryQueryParams) => {
     const hasMountedQuery = useRef(false);
     if (!hasMountedQuery.current) {
       hasMountedQuery.current = true;
@@ -22,6 +23,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     }
     return {
       data: { items: [], totalCount: 0, hostRequiresCloudToList: false },
+      sort: params.search.sort,
+      createdSortAvailable: true,
       isPending: false,
       cloudPagePending: false,
       isFetching: false,

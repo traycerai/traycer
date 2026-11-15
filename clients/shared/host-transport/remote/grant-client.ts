@@ -662,6 +662,9 @@ async function postHostRoute(
           ...(body === null ? {} : { body }),
           redirect: "manual",
           signal: abort.signal,
+          // The sign-in rides in a header, so a redirect is never followed:
+          // it would carry the sign-in to wherever the answer pointed.
+          redirect: "manual",
         }),
         abort.signal,
       );
@@ -671,6 +674,9 @@ async function postHostRoute(
         detail: `the mint request never completed (${describeFetchFailure(error).classification})`,
       };
     }
+    // A redirect is an answer that minted nothing, refused like any status
+    // this route does not name. A browser reports it as an opaque response
+    // with status 0, which the range check below also refuses.
     if (response.status < 200 || response.status >= 300)
       return {
         kind: "refused",
@@ -761,10 +767,31 @@ export type RelayPassMintOutcome =
     }
   /** A bare 404, any computer this person may not open: refused as today. */
   | { readonly kind: "not-admitted"; readonly provision: AttachGrantProvision }
+  /**
+   * A 403 `team_membership_required`: authn admitted the person to a team's
+   * computer, then found their seat gone before it minted. Not a member, as
+   * the local mint says, refused as the 404 is.
+   */
+  | { readonly kind: "not-a-member"; readonly provision: AttachGrantProvision }
   /** authn could not be reached (a transport failure or a 5xx). */
   | { readonly kind: "unreachable"; readonly provision: AttachGrantProvision }
+  /**
+   * authn refused the sign-in (401). The caller refreshes it once and mints
+   * again, as the local door does; `provision` is today's answer otherwise.
+   */
+  | {
+      readonly kind: "sign-in-rejected";
+      readonly provision: AttachGrantProvision;
+    }
   /** Every other refusal, handled exactly as a relay pass mint is today. */
   | { readonly kind: "as-today"; readonly provision: AttachGrantProvision };
+
+/** The refusal a relay pass mint ends a person's open on: no retry. */
+const MEMBERSHIP_REFUSED: AttachGrantProvision = provisionOfFailedMint({
+  kind: "team-membership-required",
+  detail: "membership refused",
+  context: "",
+});
 
 /**
  * A remote open's one call: the relay pass and, beside it, the host-only
@@ -790,15 +817,18 @@ export async function mintRelayPassWithHostTokenViaHttp(
     };
   if (answer.kind === "refused") {
     if (answer.status === 404)
-      return {
-        kind: "not-admitted",
-        provision: provisionOfFailedMint({
-          kind: "team-membership-required",
-          detail: "membership refused",
-          context: "",
-        }),
-      };
+      return { kind: "not-admitted", provision: MEMBERSHIP_REFUSED };
+    if (
+      answer.status === 403 &&
+      membershipRefusalCode(answer.bodyText) === TEAM_MEMBERSHIP_REQUIRED_CODE
+    )
+      return { kind: "not-a-member", provision: MEMBERSHIP_REFUSED };
     const refusal = classifyOtherRefusal(answer.status, answer.bodyText);
+    if (answer.status === 401)
+      return {
+        kind: "sign-in-rejected",
+        provision: provisionOfFailedMint(refusal),
+      };
     return {
       kind: answer.status >= 500 ? "unreachable" : "as-today",
       provision: provisionOfFailedMint(refusal),

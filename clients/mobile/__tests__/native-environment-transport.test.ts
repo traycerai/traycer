@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { verifySecret } from "@traycer-clients/shared/environment/configuration-secrets";
+import {
+  listSecrets,
+  verifySecret,
+} from "@traycer-clients/shared/environment/configuration-secrets";
 import { EnvironmentCloudError } from "@traycer-clients/shared/environment/environment-cloud";
 import { nativeEnvironmentTransport } from "../src/native-environment-transport";
 
@@ -17,6 +20,41 @@ afterEach(() => {
 });
 
 describe("the phone's environment transport", () => {
+  it("keeps a redirected GET as a non-success without following it", async () => {
+    native.request.mockResolvedValue({
+      status: 302,
+      data: "",
+      headers: { Location: "https://elsewhere.example.invalid/secrets" },
+      url: `${AUTHN}/api/v3/environments/env-1/secrets`,
+    });
+
+    const answer = listSecrets(
+      {
+        authnBaseUrl: AUTHN,
+        bearer: { kind: "cloud", getBearerToken: () => BEARER },
+        transport: nativeEnvironmentTransport,
+        onOriginSignIn: () => true,
+      },
+      "env-1",
+    );
+
+    const error: unknown = await answer.catch((caught: unknown) => caught);
+    if (!(error instanceof EnvironmentCloudError)) {
+      throw new Error("expected the caller's refusal");
+    }
+    expect(error.kind).toBe("unavailable");
+    expect(native.request).toHaveBeenCalledTimes(1);
+    expect(native.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining(
+          `${AUTHN}/api/v3/environments/env-1/secrets`,
+        ),
+        method: "GET",
+        disableRedirects: true,
+      }),
+    );
+  });
+
   it("answers a 307 on a POST as a refusal, sent once and never followed", async () => {
     native.request.mockResolvedValue({
       status: 307,

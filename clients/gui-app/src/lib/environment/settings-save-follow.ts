@@ -9,9 +9,12 @@ import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/
 export type PendingSettingsSave =
   | {
       readonly kind: "send";
-      /** The host answered the save. */
+      /** The host's answer proposed the save to its configuration. */
       readonly answered: () => void;
-      /** The save failed, or nothing answered it. */
+      /**
+       * The save was not proposed: it failed, nothing answered it, or the
+       * host's answer proposes nothing to a configuration.
+       */
       readonly failed: () => void;
     }
   /**
@@ -21,10 +24,16 @@ export type PendingSettingsSave =
    */
   | { readonly kind: "abandoned"; readonly method: string };
 
-/** Sends a followed save and tells `pending` whether the host answered it. */
+/**
+ * Sends a followed save and tells `pending` whether the host proposed it:
+ * `proposes` reads the host's answer, and an answer that proposes nothing (a
+ * save completed on a computer bound to no environment) settles the save as
+ * not proposed, so nothing is applied for it.
+ */
 export async function sendFollowedSave<T>(
   pending: PendingSettingsSave,
   send: () => Promise<T>,
+  proposes: (answer: T) => boolean,
 ): Promise<T> {
   if (pending.kind === "abandoned") {
     throw new HostRequestAbortedError({
@@ -41,6 +50,24 @@ export async function sendFollowedSave<T>(
     pending.failed();
     throw cause;
   }
-  pending.answered();
+  if (proposes(answer)) pending.answered();
+  else pending.failed();
   return answer;
+}
+
+/** `proposes` for a method none of whose answers is a local-only save. */
+export function everyAnswerProposes(): boolean {
+  return true;
+}
+
+/**
+ * `error`, or null when it is a request abandoned before it was sent, as
+ * {@link sendFollowedSave} abandons a save whose sign-in has ended: nothing
+ * went out, so the screen stays as it was before the press and says nothing.
+ * Any other failure, a lost reply included, is returned as it is.
+ */
+export function reportedSaveFailure<E>(error: E): E | null {
+  return error instanceof HostRequestAbortedError && !error.mayHaveDispatched
+    ? null
+    : error;
 }

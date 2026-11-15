@@ -6,6 +6,10 @@ import {
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
 // distinct field tuples can never collide into the same key. Matches the
@@ -73,13 +77,25 @@ export function hostTransportKeyFor(
   entry: HostDirectoryEntry | null,
   hasReadySession: boolean,
 ): string | null {
-  if (entry === null || entry.websocketUrl === null) return null;
+  if (
+    entry === null ||
+    hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  )
+    return null;
+  if (entry.websocketUrl === null) return null;
   if (isConfirmedTransportRefusal(entry, hasReadySession)) return null;
   return [
     entry.hostId,
     entry.kind,
     entry.version ?? "",
     entry.websocketUrl,
+    // Whose computer it is, kind and id only (a rename is the same owner). A
+    // change of owner reopens this surface's stream, and a reopen builds
+    // fresh; the host's close is what ends a stream another holder still
+    // holds.
+    isRemoteHostDirectoryEntry(entry) && entry.owner !== null
+      ? `${entry.owner.kind}:${entry.owner.id}`
+      : "",
   ].join(SEPARATOR);
 }
 
@@ -119,7 +135,12 @@ export function dialableHostEndpointFor(
   entry: HostDirectoryEntry | null,
   hasReadySession: boolean,
 ): HostTransportEndpoint | null {
-  if (entry === null || entry.websocketUrl === null) return null;
+  if (
+    entry === null ||
+    hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  )
+    return null;
+  if (entry.websocketUrl === null) return null;
   if (isConfirmedTransportRefusal(entry, hasReadySession)) return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
 }

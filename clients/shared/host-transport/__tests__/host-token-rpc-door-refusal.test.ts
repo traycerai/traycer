@@ -8,6 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
+  HOST_DOOR_REASONS,
+  type HostDoorReason,
+} from "@traycer/protocol/framework/door-reason";
+import {
   clientFrameSchema,
   type HostFatalErrorFrame,
   type HostOpenAckFrame,
@@ -40,7 +44,11 @@ import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/clie
 import { createAuthAwareMessenger } from "../auth-aware-messenger";
 import { createRetryingMessenger } from "../retrying-messenger";
 import type { DialPriority } from "../dial-priority";
-import { hostDoorStateOfRefusal, type HostDoorState } from "../host-door-state";
+import {
+  hostDoorStateOfRefusal,
+  type HostDoorState,
+  type HostDoorStateKind,
+} from "../host-door-state";
 import type { HostRequestOptions } from "../host-messenger";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import type {
@@ -93,6 +101,86 @@ const SOCKET_URL = "ws://127.0.0.1/rpc";
 const USER_ID = "user-a";
 const SIGN_IN = "sign-in-secret";
 const HELD_TOKEN = "host-token-1";
+
+interface RpcDoorReasonCase {
+  readonly name: string;
+  readonly doorReason: string;
+  readonly expectedKind: HostDoorStateKind | null;
+  readonly expectedMintAttempts: number;
+  readonly expectedRequests: number;
+  readonly refuseAgainAfterMint: boolean;
+}
+
+type RpcDoorOutcome = Omit<RpcDoorReasonCase, "name" | "doorReason">;
+
+// Keyed by every current reason, so a reason added to the protocol fails to
+// compile here until it names its outcome, and then runs through the consumer.
+const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
+  keys_unavailable: {
+    expectedKind: "keys-unavailable",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  clock_skew: {
+    expectedKind: "clock-skew",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  token_expired: {
+    expectedKind: "token-expired",
+    expectedMintAttempts: 1,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  not_admitted: {
+    expectedKind: "not-admitted",
+    expectedMintAttempts: 1,
+    expectedRequests: 2,
+    refuseAgainAfterMint: true,
+  },
+  enrolment_broken: {
+    expectedKind: "enrolment-broken",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  membership_removed: {
+    expectedKind: "membership-removed",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  session_revoked: {
+    expectedKind: null,
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  host_claimed: {
+    expectedKind: "host-claimed",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+};
+
+const RPC_DOOR_CASES: readonly RpcDoorReasonCase[] = [
+  ...HOST_DOOR_REASONS.map((reason) => ({
+    name: reason,
+    doorReason: reason,
+    ...RECOGNISED_RPC_DOOR_OUTCOMES[reason],
+  })),
+  {
+    name: "a reason this client does not recognise",
+    doorReason: "future_door_reason",
+    expectedKind: "unrecognised-refusal",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+];
 
 type ParsedFrame = z.infer<typeof clientFrameSchema>;
 type ResponseError = NonNullable<HostResponseFrame["error"]>;
@@ -235,22 +323,36 @@ interface DoorHarness {
   readonly states: HostDoorState[];
   readonly refusals: FatalErrorDetails[];
   readonly minted: string[];
+  readonly mintAttempts: number;
   readonly mintSignIns: string[];
   readonly refusedBearer: RefusalAwareAuthRevalidator["revalidateRefusedBearer"];
+  readonly expireHeldToken: () => void;
+  readonly setNextMintOutcome: (outcome: HostTokenMintOutcome) => void;
 }
 
 function doorHarness(): DoorHarness {
   const states: HostDoorState[] = [];
   const refusals: FatalErrorDetails[] = [];
   const minted: string[] = [];
+  let mintAttempts = 0;
   const mintSignIns: string[] = [];
+  const initialNow = Date.now();
+  const heldExpiresAtMs = initialNow + 3_600_000;
+  let currentNow = initialNow;
+  let nextMintOutcome: HostTokenMintOutcome | null = null;
   const mint: HostTokenMint = (_hostId, signInToken) => {
     mintSignIns.push(signInToken);
+    mintAttempts += 1;
+    if (nextMintOutcome !== null) {
+      const outcome = nextMintOutcome;
+      nextMintOutcome = null;
+      return Promise.resolve(outcome);
+    }
     const token = `host-token-${minted.length + 2}`;
     minted.push(token);
     const outcome: HostTokenMintOutcome = {
       kind: "ok",
-      token: { token, expiresAtMs: Date.now() + 3_600_000 },
+      token: { token, expiresAtMs: currentNow + 3_600_000 },
     };
     return Promise.resolve(outcome);
   };
@@ -258,7 +360,7 @@ function doorHarness(): DoorHarness {
     persistence: memoryPersistence(),
     mint,
     signIn: (userId) => (userId === USER_ID ? SIGN_IN : null),
-    now: () => Date.now(),
+    now: () => currentNow,
   });
   const sockets: StubWebSocket[] = [];
   const socketWaiters: Array<() => void> = [];
@@ -313,7 +415,7 @@ function doorHarness(): DoorHarness {
     onState: (hostId, kind) => {
       states.push({ hostId, kind, detail: null });
     },
-    now: () => Date.now(),
+    now: () => currentNow,
   });
   const refusedBearer = vi.spyOn(recovery, "revalidateRefusedBearer");
   const auth: RefusalAwareAuthRevalidator = {
@@ -338,7 +440,16 @@ function doorHarness(): DoorHarness {
     refusals,
     minted,
     mintSignIns,
+    get mintAttempts() {
+      return mintAttempts;
+    },
     refusedBearer,
+    expireHeldToken: () => {
+      currentNow = heldExpiresAtMs + 1;
+    },
+    setNextMintOutcome: (outcome) => {
+      nextMintOutcome = outcome;
+    },
     call: (message) =>
       wrapped.request(
         "host.echo",
@@ -374,10 +485,15 @@ function doorHarness(): DoorHarness {
           resolve(created);
         });
       }),
-    ready: tokens.adopt(USER_ID, HOST_ID, {
-      token: HELD_TOKEN,
-      expiresAtMs: Date.now() + 3_600_000,
-    }),
+    ready: tokens.adopt(
+      USER_ID,
+      HOST_ID,
+      {
+        token: HELD_TOKEN,
+        expiresAtMs: heldExpiresAtMs,
+      },
+      tokens.era(USER_ID),
+    ),
   };
 }
 
@@ -433,6 +549,73 @@ describe("persistent /rpc door refusals through the host-only token", () => {
   afterEach(() => {
     resetNegotiatedManifests();
   });
+
+  it.each(RPC_DOOR_CASES)(
+    "raises the door state of a persistent /rpc answer carrying $name",
+    async ({
+      doorReason,
+      expectedKind,
+      expectedMintAttempts,
+      expectedRequests,
+      refuseAgainAfterMint,
+    }) => {
+      const harness = doorHarness();
+      await harness.ready;
+      const pending = captureRejection(harness.call("match the stream door"));
+      const socket = await harness.nextSocket();
+      const first = await firstRequest(socket);
+      if (doorReason === "token_expired") {
+        harness.expireHeldToken();
+        harness.setNextMintOutcome({
+          kind: "unavailable",
+          detail: "authn unavailable",
+        });
+      }
+      const refusal = responseError(
+        "UNAUTHORIZED",
+        "host refused the host-only token",
+        doorReason,
+        false,
+      );
+
+      if (refuseAgainAfterMint) {
+        const retryWrite = socket.nextSend();
+        socket.fireMessage(refusalFrame(first, refusal));
+        await retryWrite;
+        const second = requestFrames(socket.sent)[1];
+        if (second === undefined)
+          throw new Error("expected the one post-mint unary retry");
+        socket.fireMessage(refusalFrame(second, refusal));
+      } else {
+        socket.fireMessage(refusalFrame(first, refusal));
+      }
+
+      const error = await pending;
+      expect(error).toBeInstanceOf(HostRpcError);
+      if (!(error instanceof HostRpcError))
+        throw new Error("expected the /rpc door refusal");
+
+      expect(harness.mintAttempts).toBe(expectedMintAttempts);
+      expect(harness.minted).toHaveLength(
+        refuseAgainAfterMint ? expectedMintAttempts : 0,
+      );
+      expect(requestFrames(socket.sent)).toHaveLength(expectedRequests);
+      expect(harness.states.map(({ kind }) => kind)).toEqual(
+        expectedKind === null ? [] : [expectedKind],
+      );
+      expect(error.doorRefusal?.doorReason).toBe(doorReason);
+      if (doorReason === "future_door_reason") {
+        expect(harness.states[0]).toMatchObject({
+          hostId: HOST_ID,
+          kind: "unrecognised-refusal",
+          detail: {
+            code: "UNAUTHORIZED",
+            doorReason: "future_door_reason",
+          },
+        });
+      }
+    },
+  );
 
   it("mints a fresh token once when a persistent answer says token_expired, and the retry succeeds", async () => {
     const harness = doorHarness();
@@ -642,13 +825,14 @@ describe("persistent /rpc door refusals through the host-only token", () => {
 
   it.each([
     { code: "FORBIDDEN", expected: [] },
+    { code: "UNAUTHORIZED", expected: ["older-host"] },
     { code: "TEAM_MEMBERSHIP_REQUIRED", expected: ["older-host"] },
     { code: "TEAM_MEMBERSHIP_UNAVAILABLE", expected: [] },
     { code: "INCOMPATIBLE", expected: [] },
     { code: "REMOTE_ACCESS_OFF", expected: [] },
     { code: "HOST_RESTARTING", expected: [] },
   ])(
-    "records only the right state for reasonless /rpc open code $code",
+    "a /rpc open refused without a reason under $code is rethrown and raises only the state its code earns",
     async ({ code, expected }) => {
       const harness = doorHarness();
       await harness.ready;
@@ -659,7 +843,11 @@ describe("persistent /rpc door refusals through the host-only token", () => {
         kind: "fatalError",
         details: fatalDetails(code, undefined, false),
       });
-      await pending;
+      const error = await pending;
+      expect(error).toBeInstanceOf(HostRpcError);
+      if (!(error instanceof HostRpcError))
+        throw new Error("expected the refused open to be rethrown");
+      expect(error.fatalDetails?.code).toBe(code);
       expect(harness.states.map(({ kind }) => kind)).toEqual(expected);
     },
   );
@@ -690,7 +878,7 @@ describe("persistent /rpc door refusals through the host-only token", () => {
     expect(harness.minted).toEqual([]);
   });
 
-  it("recovers nothing from an envelope with no doorReason", async () => {
+  it("a per-request answer without a doorReason raises no door state and reaches its caller", async () => {
     const harness = doorHarness();
     await harness.ready;
     const pending = captureRejection(harness.call("older"));

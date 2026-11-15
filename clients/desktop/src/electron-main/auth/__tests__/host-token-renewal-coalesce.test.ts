@@ -278,6 +278,7 @@ describe("desktop host-token renewal", () => {
           },
           USER_ID,
           HOST_IDS,
+          hostTokens.era(USER_ID),
         ),
       );
 

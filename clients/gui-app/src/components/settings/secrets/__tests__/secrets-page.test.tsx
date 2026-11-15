@@ -3,11 +3,12 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
-// The page names its environment through the surface's client and the viewer.
-const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+// The page names its environment through the surface's client and the viewer;
+// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => hostBoundary.client,
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -30,7 +31,7 @@ vi.mock(
   }),
 );
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -50,9 +51,17 @@ import type {
   SecretVerifyResult,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   SECRET_REVOKED_LABEL,
@@ -93,8 +102,8 @@ interface SecretsHostState {
   environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
   createAnswer: EnvironmentSecretsCreateResponse;
-  /** The create rejects with this. */
-  createError: Error | null;
+  /** The sign-in's create is refused with this text, as authn words a refusal. */
+  createRefusal: string | null;
   /** The create waits for this to settle before it answers. */
   createHold: Promise<void> | null;
 }
@@ -102,6 +111,7 @@ interface SecretsHostState {
 interface SecretsHost {
   readonly state: SecretsHostState;
   readonly client: HostClient<HostRpcRegistry>;
+  readonly harness: TeamPageHarness;
   readonly reads: { list: number };
   readonly verifyRequests: EnvironmentSecretsVerifyRequest[];
   readonly createRequests: EnvironmentSecretsCreateRequest[];
@@ -126,7 +136,10 @@ function secretFixture(
   };
 }
 
-function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
+function mountSecretsHost(
+  overrides: Partial<SecretsHostState>,
+  source: ConfigurationSource,
+): SecretsHost {
   const state: SecretsHostState = {
     secrets: [],
     versions: [
@@ -148,86 +161,125 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       outcome: "created",
       secret: secretFixture({ secretId: "sec-new" }),
     },
-    createError: null,
+    createRefusal: null,
     createHold: null,
     ...overrides,
   };
   const reads = { list: 0 };
   const verifyRequests: EnvironmentSecretsVerifyRequest[] = [];
   const createRequests: EnvironmentSecretsCreateRequest[] = [];
-  const { client } = buildEnvironmentClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.list": () => {
-        if (state.environmentsError !== null) throw state.environmentsError;
-        return {
-          environments: [
-            {
-              environmentId: PERSONAL_ENV,
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        };
-      },
-      "environment.secrets.versions": () => ({
-        versions: [...state.versions],
-        removal: null,
-      }),
-      "environment.secrets.rotation": () => ({
-        rotation: null,
-        lastVerify: null,
-      }),
-      "environment.history": () => ({
-        readerScope: "full" as const,
-        entries: [],
-        hostStates: [],
-      }),
-      "environment.secrets.list": async () => {
-        reads.list += 1;
-        if (state.listHold !== null) await state.listHold;
-        if (state.listError !== null) throw state.listError;
-        return { removed: [], secrets: [...state.secrets] };
-      },
-      "environment.secrets.verify": (request) => {
-        verifyRequests.push(request);
-        return state.verifyAnswer;
-      },
-      "environment.secrets.create": async (request) => {
-        createRequests.push(request);
-        if (state.createHold !== null) await state.createHold;
-        if (state.createError !== null) throw state.createError;
-        return state.createAnswer;
-      },
+  const harness = mountTeamPage(source, {
+    "environment.list": () => {
+      if (state.environmentsError !== null) throw state.environmentsError;
+      return {
+        environments: [
+          {
+            environmentId: PERSONAL_ENV,
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      };
+    },
+    "environment.secrets.versions": () => ({
+      versions: [...state.versions],
+      removal: null,
+    }),
+    "environment.secrets.rotation": () => ({
+      rotation: null,
+      lastVerify: null,
+    }),
+    "environment.history": () => ({
+      readerScope: "full" as const,
+      entries: [],
+      hostStates: [],
+    }),
+    "environment.secrets.list": async () => {
+      reads.list += 1;
+      if (state.listHold !== null) await state.listHold;
+      if (state.listError !== null) throw state.listError;
+      return { removed: [], secrets: [...state.secrets] };
+    },
+    "environment.secrets.verify": (request) => {
+      verifyRequests.push(request);
+      return state.verifyAnswer;
+    },
+    "environment.secrets.create": async (request) => {
+      createRequests.push(request);
+      if (state.createHold !== null) await state.createHold;
+      return state.createAnswer;
     },
   });
-  return { state, client, reads, verifyRequests, createRequests };
+  const baseCloud = harness.auth.environmentCloud.bind(harness.auth);
+  harness.auth.environmentCloud = () => {
+    const cloud = baseCloud();
+    return {
+      ...cloud,
+      transport: async (request) => {
+        if (
+          state.createRefusal !== null &&
+          request.method === "POST" &&
+          new URL(request.url).pathname.endsWith("/secrets")
+        ) {
+          return {
+            status: 409,
+            text: JSON.stringify({ message: state.createRefusal }),
+          };
+        }
+        return cloud.transport(request);
+      },
+    };
+  };
+  return {
+    state,
+    client: requireTeamHostClient(),
+    harness,
+    reads,
+    verifyRequests,
+    createRequests,
+  };
+}
+
+function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
+  return mountSecretsHost(overrides, personalPoolSource());
+}
+
+/**
+ * A Local pick on a computer's own settings (`source.kind === "host"`) names no
+ * environment (`useAddressedEnvironment`), so its secrets calls stay the
+ * host's own: the only list that carries a revoked row, and the only create
+ * whose refused and pending outcomes reach the dialog. A named environment's
+ * are authn's: live rows only, and a create that answers created or a refusal
+ * in its own words.
+ */
+function buildLocalSecretsHost(
+  overrides: Partial<SecretsHostState>,
+): SecretsHost {
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
+  });
+  return mountSecretsHost(overrides, { kind: "host" });
 }
 
 function renderPage(host: SecretsHost): QueryClient {
-  hostBoundary.client = host.client;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
   render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        <SecretsPage
-          client={host.client}
-          hostId={HOST_ID}
-          emptyText={SECRETS_EMPTY_TEXT}
-          hostName={() => "dev-box"}
-        />
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+      <SecretsPage
+        client={host.client}
+        hostId={HOST_ID}
+        emptyText={SECRETS_EMPTY_TEXT}
+        hostName={() => "dev-box"}
+      />
+    </RunnerHostContext.Provider>,
+    { wrapper: host.harness.Wrapper },
   );
-  return queryClient;
+  return host.harness.queryClient;
 }
 
 beforeEach(() => {
@@ -243,7 +295,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  hostBoundary.client = null;
+  resetTeamPageHarness();
   navigateToSettingsSectionMock.mockReset();
   useAuthStore.setState({ status: "signed-out" });
 });
@@ -391,7 +443,8 @@ describe("the secrets list", () => {
   });
 
   it("marks a revoked secret, and its Details offers no Verify", async () => {
-    const host = buildSecretsHost({
+    // authn lists live secrets only, so a revoked row is the host's own list's.
+    const host = buildLocalSecretsHost({
       secrets: [
         secretFixture({ secretId: "sec-1", name: "STRIPE_KEY" }),
         secretFixture({ secretId: "sec-3", name: "OLD_KEY", revoked: true }),
@@ -540,15 +593,17 @@ describe("a row's Verify", () => {
   });
 });
 
-describe("a row's Details on a Local pick", () => {
+describe("a row's Details when Personal's environment cannot be named", () => {
   it("keeps Verify and the versions when the environment list cannot be read", async () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
-    });
-    const host = buildSecretsHost({
-      secrets: [secretFixture({ secretId: "sec-1" })],
-      environmentsError: new Error("environment list unavailable"),
-    });
+    // On the Personal pick of a computer's own settings, a list that cannot be
+    // read names no environment, so the page falls back to the host's own.
+    const host = mountSecretsHost(
+      {
+        secrets: [secretFixture({ secretId: "sec-1" })],
+        environmentsError: new Error("environment list unavailable"),
+      },
+      { kind: "host" },
+    );
     renderPage(host);
 
     const row = await screen.findByTestId("secret-row");
@@ -798,10 +853,10 @@ describe("saving a secret", () => {
     expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
   });
 
-  it("shows the host's own words when the create is rejected, and keeps the dialog", async () => {
+  it("shows the refusal's own words when the create is rejected, and keeps the dialog", async () => {
     const host = buildSecretsHost({
       secrets: [],
-      createError: new Error("A secret named STRIPE_KEY already exists."),
+      createRefusal: "A secret named STRIPE_KEY already exists.",
     });
     renderPage(host);
 
@@ -816,7 +871,7 @@ describe("saving a secret", () => {
   });
 
   it("says to use the provider's key variable when the name is not a provider's", async () => {
-    const host = buildSecretsHost({
+    const host = buildLocalSecretsHost({
       secrets: [],
       createAnswer: { outcome: "refused", code: "provider_name_unknown" },
     });
@@ -833,7 +888,7 @@ describe("saving a secret", () => {
   });
 
   it("says a code it has no line for with a plain failure line", async () => {
-    const host = buildSecretsHost({
+    const host = buildLocalSecretsHost({
       secrets: [],
       createAnswer: { outcome: "refused", code: "a_code_from_a_newer_host" },
     });
@@ -847,7 +902,7 @@ describe("saving a secret", () => {
   });
 
   it("offers only Done once a save is waiting to reach the account, and re-reads the list", async () => {
-    const host = buildSecretsHost({
+    const host = buildLocalSecretsHost({
       secrets: [],
       createAnswer: { outcome: "pending", uploadId: "u1" },
     });

@@ -14,6 +14,7 @@ import type { HistorySearchState } from "@/lib/history-search";
 import {
   DEFAULT_HISTORY_SEARCH,
   parseHistorySearch,
+  patchHistorySearch,
 } from "@/lib/history-search";
 import {
   __resetCloudEpicTasksClientsForTests,
@@ -27,6 +28,10 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { fetchHostLocalHistoryPageByHostId } from "@/lib/cloud-epic-tasks-query/query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { HistoryHostContribution } from "@/lib/history-composition/compose-history-page";
@@ -796,6 +801,78 @@ describe("the deletion fence after a cursor page's pool response", () => {
         expect(race.retained()).not.toContain("cursor-gone-after");
       });
     } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("the created-desc sort on a labelled History read", () => {
+  it("refuses a serving host whose organization.history predates the sort, sending nothing", async () => {
+    let historyCalls = 0;
+    const queryClient = new QueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "created-sort-refusal",
+      handlers: {
+        "organization.history": () => {
+          historyCalls += 1;
+          return { tasks: [], hasMore: false };
+        },
+        "epic.localHistory.read": () => ({
+          complete: true,
+          willComplete: true,
+          localHomeRows: [],
+          preservedRows: [],
+          tombstonedEpicIds: [],
+          localRows: "none",
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    __resetHistoryContributionsForTests();
+    __resetCloudEpicTasksClientsForTests();
+    registerCloudEpicTasksClient(
+      mockLocalHostEntry.hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "organization.history": { major: 1, minor: 1 },
+    });
+
+    try {
+      await expect(
+        fetchCloudEpicTasksFirstPageByHostId(
+          mockLocalHostEntry.hostId,
+          USER_ID,
+          {
+            request: listCloudTasksRequestForHistorySearch(
+              patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+                labelNames: ["urgent"],
+                sort: "created-desc",
+                sortExplicit: true,
+              }),
+            ),
+            abortSignal: undefined,
+            localFirstPhase: undefined,
+            requestContextPolicy: "require-current",
+            queryClient,
+          },
+        ),
+      ).rejects.toThrow(
+        "Update this device to use Newest created with labels or groups.",
+      );
+      expect(historyCalls).toBe(0);
+    } finally {
+      resetNegotiatedManifests();
       __resetCloudEpicTasksClientsForTests();
       useAuthStore.getState().setSignedOut();
     }

@@ -6,6 +6,7 @@ import { HomeHero } from "@/components/home/home-hero";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
+import { AccessCheckNotice } from "@/components/home/access-check-notice";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { CurrentTasksSection } from "@/components/home/current-tasks-section";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
@@ -174,8 +175,9 @@ export function LandingDraftSurface() {
         )}
       >
         <LandingAppearanceWallpaper />
-        <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
+          <AccessCheckNotice />
         </div>
 
         <section

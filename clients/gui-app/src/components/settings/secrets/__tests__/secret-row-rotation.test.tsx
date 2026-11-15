@@ -1,8 +1,9 @@
-// The page names its environment through the surface's client and the viewer.
-const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+// The page names its environment through the surface's client and the viewer;
+// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => hostBoundary.client,
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -32,7 +33,7 @@ vi.mock(
   }),
 );
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -54,9 +55,17 @@ import type {
   EnvironmentSecretsUndoResponse,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import {
@@ -99,6 +108,7 @@ interface RotationHostState {
 interface RotationHost {
   readonly state: RotationHostState;
   readonly client: HostClient<HostRpcRegistry>;
+  readonly harness: TeamPageHarness;
   readonly reads: { list: number; rotation: number; versions: number };
   readonly replaceRequests: EnvironmentSecretsReplaceValueRequest[];
   readonly undoRequests: EnvironmentSecretsUndoRequest[];
@@ -208,8 +218,9 @@ function enforcedRotation(): LiveRotation {
   };
 }
 
-function buildRotationHost(
+function mountRotationHost(
   overrides: Partial<RotationHostState>,
+  source: ConfigurationSource,
 ): RotationHost {
   const state: RotationHostState = {
     secrets: [secretFixture({})],
@@ -232,66 +243,64 @@ function buildRotationHost(
   const replaceRequests: EnvironmentSecretsReplaceValueRequest[] = [];
   const undoRequests: EnvironmentSecretsUndoRequest[] = [];
   const destroyRequests: EnvironmentSecretsDestroyRequest[] = [];
-  const { client } = buildEnvironmentClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENV,
-            ownerKind: "user" as const,
-            ownerId: "user-me",
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner" as const,
-            kind: "personal" as const,
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
-      "environment.history": () => ({
-        readerScope: "full" as const,
-        entries: [],
-        hostStates: [],
-      }),
-      "environment.secrets.list": () => {
-        reads.list += 1;
-        return { removed: [], secrets: [...state.secrets] };
-      },
-      "environment.secrets.rotation": () => {
-        reads.rotation += 1;
-        return { rotation: state.rotation, lastVerify: null };
-      },
-      "environment.secrets.versions": () => {
-        reads.versions += 1;
-        return { versions: [...state.versions], removal: null };
-      },
-      "environment.secrets.replaceValue": (request) => {
-        replaceRequests.push(request);
-        if (state.replaceAnswer.outcome === "accepted") {
-          const { versionId } = state.replaceAnswer;
-          state.secrets = state.secrets.map((secret) =>
-            secret.secretId === request.secretId
-              ? { ...secret, currentVersionId: versionId }
-              : secret,
-          );
-        }
-        return state.replaceAnswer;
-      },
-      "environment.secrets.undo": (request) => {
-        undoRequests.push(request);
-        return state.undoAnswer;
-      },
-      "environment.secrets.destroy": (request) => {
-        destroyRequests.push(request);
-        return state.destroyAnswer;
-      },
+  const harness = mountTeamPage(source, {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: PERSONAL_ENV,
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "environment.history": () => ({
+      readerScope: "full" as const,
+      entries: [],
+      hostStates: [],
+    }),
+    "environment.secrets.list": () => {
+      reads.list += 1;
+      return { removed: [], secrets: [...state.secrets] };
+    },
+    "environment.secrets.rotation": () => {
+      reads.rotation += 1;
+      return { rotation: state.rotation, lastVerify: null };
+    },
+    "environment.secrets.versions": () => {
+      reads.versions += 1;
+      return { versions: [...state.versions], removal: null };
+    },
+    "environment.secrets.replaceValue": (request) => {
+      replaceRequests.push(request);
+      if (state.replaceAnswer.outcome === "accepted") {
+        const { versionId } = state.replaceAnswer;
+        state.secrets = state.secrets.map((secret) =>
+          secret.secretId === request.secretId
+            ? { ...secret, currentVersionId: versionId }
+            : secret,
+        );
+      }
+      return state.replaceAnswer;
+    },
+    "environment.secrets.undo": (request) => {
+      undoRequests.push(request);
+      return state.undoAnswer;
+    },
+    "environment.secrets.destroy": (request) => {
+      destroyRequests.push(request);
+      return state.destroyAnswer;
     },
   });
   return {
     state,
-    client,
+    client: requireTeamHostClient(),
+    harness,
     reads,
     replaceRequests,
     undoRequests,
@@ -299,24 +308,40 @@ function buildRotationHost(
   };
 }
 
-function renderPage(host: RotationHost): QueryClient {
-  hostBoundary.client = host.client;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+function buildRotationHost(
+  overrides: Partial<RotationHostState>,
+): RotationHost {
+  return mountRotationHost(overrides, personalPoolSource());
+}
+
+/**
+ * A Local pick on a computer's own settings (`source.kind === "host"`) names no
+ * environment (`useAddressedEnvironment`), so its secrets calls stay the
+ * host's own: the only list that carries a revoked row, and the only replace
+ * that answers pending. A named environment's are authn's: live rows only.
+ */
+function buildLocalRotationHost(
+  overrides: Partial<RotationHostState>,
+): RotationHost {
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
+  return mountRotationHost(overrides, { kind: "host" });
+}
+
+function renderPage(host: RotationHost): QueryClient {
   render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        <SecretsPage
-          client={host.client}
-          hostId={HOST_ID}
-          emptyText={SECRETS_EMPTY_TEXT}
-          hostName={(hostId) => (hostId === "host-2" ? "dev-box" : hostId)}
-        />
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+      <SecretsPage
+        client={host.client}
+        hostId={HOST_ID}
+        emptyText={SECRETS_EMPTY_TEXT}
+        hostName={(hostId) => (hostId === "host-2" ? "dev-box" : hostId)}
+      />
+    </RunnerHostContext.Provider>,
+    { wrapper: host.harness.Wrapper },
   );
-  return queryClient;
+  return host.harness.queryClient;
 }
 
 beforeEach(() => {
@@ -333,7 +358,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  hostBoundary.client = null;
+  resetTeamPageHarness();
   useAuthStore.setState({ status: "signed-out" });
   openLinkMock.mockReset();
 });
@@ -551,7 +576,7 @@ describe("Replace", () => {
   });
 
   it("keeps the dialog and says the save is waiting when the host queued it", async () => {
-    const host = buildRotationHost({
+    const host = buildLocalRotationHost({
       replaceAnswer: { outcome: "pending", uploadId: "u1" },
     });
     renderPage(host);
@@ -566,7 +591,7 @@ describe("Replace", () => {
 
   it("offers no Replace on a revoked secret", async () => {
     renderPage(
-      buildRotationHost({ secrets: [secretFixture({ revoked: true })] }),
+      buildLocalRotationHost({ secrets: [secretFixture({ revoked: true })] }),
     );
 
     await screen.findByTestId("secret-row");
@@ -678,7 +703,7 @@ describe("a secret's versions", () => {
   });
 
   it("restores a revoked secret's version with the re-grant, under the label Restore", async () => {
-    const host = buildRotationHost({
+    const host = buildLocalRotationHost({
       secrets: [secretFixture({ revoked: true })],
     });
     renderPage(host);
@@ -694,7 +719,7 @@ describe("a secret's versions", () => {
           secretId: "sec-1",
           versionId: "ver-2",
           regrant: true,
-          environmentId: PERSONAL_ENV,
+          environmentId: null,
         },
       ]);
     });

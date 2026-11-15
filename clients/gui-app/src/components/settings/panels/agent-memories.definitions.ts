@@ -25,10 +25,17 @@ export const AGENT_MEMORIES = defineSettingsSection("agent-memories", {
     kind: "row",
     group: "memories",
     search: { contributesTo: "page" },
-    label: "Agents use shared memories",
+    label: "Let agents use and update common memory",
     description:
-      "Agents receive shared memories in context and can keep them up to date. Turning this off keeps saved memories.",
+      "What all your bots and agents here can remember and use. Turning this off keeps saved memories.",
     availableWhen: alwaysAvailable,
-    keywords: ["memory", "memories", "shared", "remember"],
+    keywords: [
+      "memory",
+      "memories",
+      "common",
+      "environment",
+      "shared",
+      "remember",
+    ],
   },
 });

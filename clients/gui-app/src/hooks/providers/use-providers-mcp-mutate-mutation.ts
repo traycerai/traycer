@@ -22,7 +22,10 @@ import {
   useSettingsSave,
   type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
-import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+} from "@/lib/environment/settings-save-follow";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
@@ -194,6 +197,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
           ? { kind: "abandoned", method: save.method }
           : await pressed.prepare(save, hostId, pressed.pressedOn),
         () => client.request("providers.nativeMutate", sent),
+        everyAnswerProposes,
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },

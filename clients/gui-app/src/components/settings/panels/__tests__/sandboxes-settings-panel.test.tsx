@@ -23,7 +23,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
-  requireTeamCloudAuth,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -129,6 +129,7 @@ const LISTED_CATALOGUE: SandboxCatalogue = {
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
+  fallbackBinding: null as FakeSandboxBinding | null,
   entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
   settingsItems: [] as readonly {
@@ -154,27 +155,25 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
-vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
-  return {
-    ...actual,
-    useHostClient: () => requireTeamHostClient(),
-    useHostBinding: () => {
-      const binding = actual.useHostBinding();
-      return mocks.binding === null
-        ? binding
-        : {
-            ...binding,
-            ...mocks.binding,
-            auth: {
-              ...mocks.binding.auth,
-              listEnvironments: () => requireTeamCloudAuth().listEnvironments(),
-              environmentCloud: () => requireTeamCloudAuth().environmentCloud(),
-            },
-          };
-    },
-  };
-});
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => {
+    const authnBinding = requireTeamEnvironmentAuthnBinding();
+    const sandboxBinding = mocks.binding ?? mocks.fallbackBinding;
+    return {
+      ...authnBinding,
+      ...(sandboxBinding ?? {}),
+      // The panel caches its list under its `auth`'s identity, which the cases
+      // read back from the sandbox binding: the authn members go onto that
+      // object rather than into a new one on every call.
+      auth:
+        sandboxBinding === null
+          ? { ...authnBinding.auth }
+          : Object.assign(sandboxBinding.auth, authnBinding.auth),
+    };
+  },
+}));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -526,20 +525,6 @@ function hostPage(): TeamPageHarness {
     "environment.configuration.items.put": () =>
       host.put === null ? { outcome: "saved", revision: 1 } : host.put(),
   });
-  useAuthStore.setState({
-    shareableTeams: host.environments.flatMap((environment) =>
-      environment.ownerKind === "organization" &&
-      environment.providerHandle !== null
-        ? [
-            {
-              teamId: environment.ownerId,
-              slug: environment.providerHandle,
-              avatarUrl: null,
-            },
-          ]
-        : [],
-    ),
-  });
   return harness;
 }
 
@@ -570,6 +555,7 @@ function names(): string[] {
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
     mocks.binding = null;
+    mocks.fallbackBinding = createFakeSandboxBinding();
     mocks.entry = null;
     resetNegotiatedManifests();
     recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);

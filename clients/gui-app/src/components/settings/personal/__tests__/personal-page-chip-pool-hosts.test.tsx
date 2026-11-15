@@ -13,7 +13,6 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentHostRecordV12,
 } from "@traycer/protocol/host/environment/contracts";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -21,6 +20,7 @@ import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fi
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { PageChip } from "@/components/settings/personal/page-chip";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -28,6 +28,7 @@ import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
@@ -62,6 +63,7 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -121,7 +123,7 @@ afterEach(() => {
 });
 
 describe("Personal page chip on a build with a server pool", () => {
-  it("reads the Personal environment and running hosts from the pool with no active host", async () => {
+  it("reads the Personal environment and running hosts from authn with no active host", async () => {
     const poolHost = listed("pool-personal-runner", "Personal runner");
     const harness = mountTeamPageOnPoolBuild(personalPoolSource(), {
       "environment.list": () => ({ environments: [personal] }),
@@ -136,14 +138,12 @@ describe("Personal page chip on a build with a server pool", () => {
       ),
       "user-me",
     ];
-    const poolKey = [
-      ...hostQueryKeys.method<HostRpcRegistry, "environment.host.list">(
-        POOL_HOST_ID,
-        "environment.host.list",
-        { environmentId: "env-personal" },
-      ),
+    const authnKey = environmentCloudQueryKey(
+      "environment.host.list",
+      { environmentId: "env-personal" },
       "user-me",
-    ];
+      [],
+    );
     const decoyHosts = [listed("caller-decoy", "Caller decoy")];
     harness.queryClient.setQueryDefaults(decoyKey, { gcTime: 60_000 });
     harness.queryClient.setQueryData(decoyKey, { hosts: decoyHosts });
@@ -161,22 +161,18 @@ describe("Personal page chip on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
-      expect(hostIdsOf(harness, "environment.host.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.host.list")).not.toHaveLength(0);
       expect(screen.getByTestId("chip").textContent).toBe(
         "✓ On Personal runner",
       );
     });
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-    expect(new Set(hostIdsOf(harness, "environment.host.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.list")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
     expect(harness.queryClient.getQueryData(decoyKey)).toEqual({
       hosts: decoyHosts,
     });
-    expect(harness.queryClient.getQueryData(poolKey)).toEqual({
+    expect(harness.queryClient.getQueryData(authnKey)).toEqual({
       hosts: [poolHost],
     });
   });

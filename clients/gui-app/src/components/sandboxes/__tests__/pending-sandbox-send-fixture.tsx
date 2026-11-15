@@ -647,13 +647,13 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
 }));
 
-// The failed line's actions read it through their tab host's client: it
-// records the host of each client it is handed.
-const environmentListClientHosts = vi.hoisted(() => [] as Array<string | null>);
+// The failed line's actions ask the app-scoped environment-list query with an
+// enabled flag; the list no longer takes a host client.
+const environmentListEnabledCalls = vi.hoisted((): boolean[] => []);
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: (client: { readonly hostId: string } | null) => {
-    environmentListClientHosts.push(client === null ? null : client.hostId);
+  useEnvironmentListQuery: (enabled: boolean) => {
+    environmentListEnabledCalls.push(enabled);
     return { data: { environments: [] } };
   },
 }));
@@ -1575,7 +1575,7 @@ export function openTask(
 
 export {
   mirrorMountHosts,
-  environmentListClientHosts,
+  environmentListEnabledCalls,
   mocks,
   handoffHold,
   sessionBridge,

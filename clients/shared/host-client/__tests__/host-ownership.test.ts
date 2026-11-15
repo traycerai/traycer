@@ -160,6 +160,55 @@ describe("readHostOwnershipViaHttp", () => {
     ).resolves.toEqual({ kind: "unauthorized" });
   });
 
+  it.each(["location-bearing 302", "opaque redirect"] as const)(
+    "does not follow an authn %s and sends the bearer once",
+    async (redirectKind) => {
+      const redirectTarget = "https://redirect.example.test/collect";
+      const followResult = jsonResponse(200, { hosts: [localHost({})] });
+      let fetchMock: Mock<typeof fetch>;
+      fetchMock = vi.fn<typeof fetch>(
+        async (input, init): Promise<Response> => {
+          if (fetchMock.mock.calls.length > 1) {
+            return followResult;
+          }
+          if (init?.redirect !== "manual") {
+            return fetchMock(redirectTarget, {
+              ...init,
+              redirect: "manual",
+            });
+          }
+          if (redirectKind === "location-bearing 302") {
+            return new Response(null, {
+              status: 302,
+              headers: { location: redirectTarget },
+            });
+          }
+          const opaqueRedirect = new Response(null);
+          Object.defineProperties(opaqueRedirect, {
+            status: { value: 0 },
+            type: { value: "opaqueredirect" },
+          });
+          return opaqueRedirect;
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        readHostOwnershipViaHttp(AUTHN, BEARER, HOST_ID),
+      ).resolves.toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [input, init] = fetchMock.mock.calls[0];
+      expect(String(input)).toBe(
+        `${AUTHN}/api/v3/hosts?include=owner%2CremoteAccess%2CsandboxState`,
+      );
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
   it("settles a request that ignores abort at the timeout without leaking an error", async () => {
     vi.useFakeTimers();
     stubFetch(() => new Promise<Response>(() => {}));
