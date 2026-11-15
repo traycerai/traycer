@@ -148,7 +148,25 @@ export function ProviderModelProviderConnectDialog(props: {
   );
   const [cancelError, setCancelError] = useState<string | null>(null);
 
-  const auth = useProvidersModelProviderAuth();
+  const auth = useProvidersModelProviderAuth((target) => {
+    switch (target.action) {
+      case "connect":
+        return {
+          ...target,
+          key: secret.trim(),
+          inputs: modelProviderPromptInputs(choice?.prompts ?? [], answers),
+        };
+      case "startOauth":
+        return {
+          ...target,
+          inputs: modelProviderPromptInputs(choice?.prompts ?? [], answers),
+        };
+      case "submitCode":
+        return { ...target, code: code.trim() };
+      default:
+        throw new Error("Model provider input is unavailable.");
+    }
+  }, null);
   const awaitAuth = useProvidersAwaitModelProviderAuth();
   const cancelAuth = useProvidersCancelModelProviderAuth();
   const openLink = useOpenLink();
@@ -441,7 +459,6 @@ export function ProviderModelProviderConnectDialog(props: {
     }
     setErrorMessage(null);
     setRestartNotice(null);
-    const promptInputs = modelProviderPromptInputs(choice.prompts, answers);
     if (choice.kind === "oauth") {
       if (choice.methodIndex === null) return;
       auth.mutate(
@@ -451,17 +468,12 @@ export function ProviderModelProviderConnectDialog(props: {
             action: "startOauth",
             modelProviderId: entry.id,
             methodIndex: choice.methodIndex,
-            inputs: promptInputs,
           },
         },
         { onSuccess: (data) => applyStartResult(data.result) },
       );
       return;
     }
-    // `key` is the pasted SECRET, not a key name - upstream's `ApiAuth.key`,
-    // which reads like an identifier and is not one. The client no longer says
-    // anything about where the credential belongs: the provider's own store
-    // takes whatever is sent.
     auth.mutate(
       {
         providerId,
@@ -469,14 +481,11 @@ export function ProviderModelProviderConnectDialog(props: {
           action: "connect",
           modelProviderId: entry.id,
           methodIndex: choice.methodIndex,
-          key: secret.trim(),
-          inputs: promptInputs,
         },
       },
       { onSuccess: (data) => applyResult(data.result, false) },
     );
   }, [
-    answers,
     applyResult,
     applyStartResult,
     auth,
@@ -484,7 +493,6 @@ export function ProviderModelProviderConnectDialog(props: {
     credentialRefusal,
     entry,
     providerId,
-    secret,
   ]);
 
   const handleSubmitCode = useCallback(() => {
@@ -509,7 +517,6 @@ export function ProviderModelProviderConnectDialog(props: {
           action: "submitCode",
           modelProviderId: entry.id,
           attemptId: attempt.attemptId,
-          code: code.trim(),
         },
       },
       { onSuccess: (data) => applyResult(data.result, false) },

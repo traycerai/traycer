@@ -9,6 +9,7 @@ import {
 import { Plus } from "lucide-react";
 import type {
   ModelProviderAuthResult,
+  ModelProviderAuthAction,
   ModelProviderEntry,
   ModelProvidersListResult,
   ProviderModelProvidersCapabilities,
@@ -398,7 +399,19 @@ function useCustomProviderForm(
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
-  const auth = useProvidersModelProviderAuth();
+  const submittedAction = useRef<ModelProviderAuthAction | null>(null);
+  const auth = useProvidersModelProviderAuth(
+    () => {
+      const action = submittedAction.current;
+      submittedAction.current = null;
+      if (action === null)
+        throw new Error("Model provider input is unavailable.");
+      return action;
+    },
+    () => {
+      submittedAction.current = null;
+    },
+  );
 
   const open = useCallback((initial: CustomProviderValues | null) => {
     setError(null);
@@ -420,27 +433,31 @@ function useCustomProviderForm(
       const token = configWrite.claim(values.modelProviderId);
       if (token === null) return;
       setError(null);
+      submittedAction.current = {
+        // One shape, two verbs - the wire's own split. `updateCustom` is
+        // only reachable for a row the host flagged `configDeclaredCustom`,
+        // which is the same set of rows it will accept an update for.
+        action: declaring ? "createCustom" : "updateCustom",
+        modelProviderId: values.modelProviderId,
+        name: values.name,
+        baseUrl: values.baseUrl,
+        models: values.models.map((model) => ({ ...model })),
+        headers: values.headers.map((header) => ({ ...header })),
+        // Null means "leave whatever is stored alone" - the read side never
+        // carries a key back, so an edit that types nothing must not be
+        // read as clearing the credential.
+        key: values.key,
+        // Same word, and the empty array is NOT the same as it: `[]` is the
+        // wire's clear signal, so an untouched form must send null rather
+        // than an empty list it happens to be holding.
+        env: values.env === null ? null : [...values.env],
+      };
       auth.mutate(
         {
           providerId,
           action: {
-            // One shape, two verbs - the wire's own split. `updateCustom` is
-            // only reachable for a row the host flagged `configDeclaredCustom`,
-            // which is the same set of rows it will accept an update for.
             action: declaring ? "createCustom" : "updateCustom",
             modelProviderId: values.modelProviderId,
-            name: values.name,
-            baseUrl: values.baseUrl,
-            models: values.models.map((model) => ({ ...model })),
-            headers: values.headers.map((header) => ({ ...header })),
-            // Null means "leave whatever is stored alone" - the read side never
-            // carries a key back, so an edit that types nothing must not be
-            // read as clearing the credential.
-            key: values.key,
-            // Same word, and the empty array is NOT the same as it: `[]` is the
-            // wire's clear signal, so an untouched form must send null rather
-            // than an empty list it happens to be holding.
-            env: values.env === null ? null : [...values.env],
           },
         },
         {
@@ -546,7 +563,7 @@ export function ProviderModelProvidersTab(props: {
     providerId,
     enabled: true,
   });
-  const auth = useProvidersModelProviderAuth();
+  const auth = useProvidersModelProviderAuth(null, null);
   const configWrite = useConfigWriteOwner();
   const customForm = useCustomProviderForm(
     providerId,
