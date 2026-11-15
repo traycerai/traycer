@@ -130,28 +130,48 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider opens its own durable transport via this factory, and
-// UNCONDITIONALLY. This stub used to THROW - "openTransport must not be called
-// when the factory is overridden" - and the name of the thing it referred to is
-// the point: the `__setEpicStreamClientFactoryForTests` override made the
-// provider short-circuit before the opener ran, so every test in this file
-// passed WITHOUT one. That override is deleted (a stream factory built on MAIN
-// cannot cross `postMessage` to a runtime living in the worker), and with it the
-// only reason a throw here was safe.
-//
-// The fake supplies "no socket in tests" at the opener instead. It keeps the
-// property the old stub's comment named as load-bearing: the real hook returns a
-// referentially-STABLE opener, and this one is a single module-scoped instance
-// for the same reason - so the acquire effect's `openTransport` dep never churns.
-// Resetting it clears the record array in place rather than replacing it.
-vi.mock("@/lib/host/use-durable-stream-transport", async () => {
-  const { fakeDurableStreamTransports } =
-    await import("@/lib/host/test-support/fake-durable-stream-transport");
-  return {
-    useDurableStreamTransportFactory: () =>
-      fakeDurableStreamTransports().opener,
-  };
+// The provider opens its own durable transport through the REAL
+// `useDurableStreamTransportFactory` and `openDurableStreamTransport`, so a row
+// below the floor is refused by the opener exactly as in the app
+// (`buildHostStreamClient`). Only what sits below the opener is supplied here:
+// the runner host, the directory and the request context it reads, and the
+// network boundary (`createRemoteHostTransport`), whose stream client is the
+// inert one `fakeDurableStreamTransports().opener` mints (a case may replace
+// that opener to count or throw on the socket's creation).
+vi.mock("@/providers/use-runner-host", async () => {
+  const { MockRunnerHost } =
+    await import("@traycer-clients/shared/host-client/mock/mock-runner-host");
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: null,
+  });
+  return { useRunnerHost: () => runnerHost };
 });
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    const { fakeDurableStreamTransports } =
+      await import("@/lib/host/test-support/fake-durable-stream-transport");
+    return {
+      ...actual,
+      createRemoteHostTransport: (options: { readonly hostId: string }) => ({
+        session: { start: () => undefined },
+        streamClient: fakeDurableStreamTransports().opener(options.hostId)
+          .wsStreamClient,
+      }),
+    };
+  },
+);
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => hostState.id,
@@ -166,9 +186,26 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     resolveSessionHostClient(hostId),
 }));
 
+// What the real opener reads off the app's directory and request context; the
+// members are filled in below, beside the row helpers they read.
+const openerDirectory = vi.hoisted(() => ({
+  findById: (_hostId: string): unknown => null,
+  onChange: (_listener: () => void) => ({ dispose: () => undefined }),
+}));
+const openerRequestContext = vi.hoisted(() => ({
+  getRequestContextUserId: (): string | null => null,
+  getRequestContext: () => null,
+  onBearerRotated: (_listener: () => void) => () => undefined,
+  onCloudVerdictChanged: (_listener: () => void) => () => undefined,
+  notifyHostAvailabilityRecovered: (_hostId: string, _kind: string) =>
+    undefined,
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBindingRef.value,
   useAuthService: () => authServiceStub,
+  useHostDirectory: () => openerDirectory,
+  useHostClient: () => openerRequestContext,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -813,6 +850,17 @@ function ownerIdentityRemoteTarget(
     },
   };
 }
+
+// A host whose row a case has not published still opens its transport, from a
+// current remote row; a published row (possibly below the floor) is what the
+// opener sees.
+openerDirectory.findById = (hostId) =>
+  sessionHostRows.byHostId.get(hostId) ?? {
+    ...ownerIdentityRemoteTarget("pubkey-default"),
+    hostId,
+  };
+openerRequestContext.getRequestContextUserId = () =>
+  sessionHostRows.userId ?? OWNER_IDENTITY_FIXTURE_USER_ID;
 
 /**
  * Publishes `hostId`'s directory row and returns a rotate function.
@@ -2698,6 +2746,10 @@ describe("<TestEpicSessionTab />", () => {
       readonly streams: ControlledStream[];
       /** Publishes the host's row at `appVersion`, or removes it for `null`. */
       readonly publishRow: (appVersion: string | null) => void;
+      /** The session's latest presentation kind, `null` before the first. */
+      readonly presentationKind: () => EpicSessionPresentation["kind"] | null;
+      /** The mounted session's handle, once it has one. */
+      readonly handle: () => OpenEpicStoreHandle | undefined;
     }
 
     async function mountSessionAtFloor(): Promise<FloorSession> {
@@ -2733,18 +2785,34 @@ describe("<TestEpicSessionTab />", () => {
         emitRowChanged();
       };
       publishRow("2.0.0");
+      let presentationKind: EpicSessionPresentation["kind"] | null = null;
+      let handle: OpenEpicStoreHandle | undefined;
       render(
         <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
-          <HandleProbe onHandle={() => undefined} />
+          <HandleProbe
+            onHandle={(mounted) => {
+              handle = mounted;
+            }}
+          />
+          <PresentationProbe
+            onPresentation={(presentation) => {
+              presentationKind = presentation?.kind ?? null;
+            }}
+          />
         </TestEpicSessionTab>,
       );
       await waitFor(() => {
         expect(streams).toHaveLength(1);
       });
-      return { streams, publishRow };
+      return {
+        streams,
+        publishRow,
+        presentationKind: () => presentationKind,
+        handle: () => handle,
+      };
     }
 
     afterEach(() => {
@@ -2752,7 +2820,8 @@ describe("<TestEpicSessionTab />", () => {
     });
 
     it("releases the mounted session's durable stream when its row falls below the floor", async () => {
-      const { streams, publishRow } = await mountSessionAtFloor();
+      const { streams, publishRow, presentationKind } =
+        await mountSessionAtFloor();
 
       act(() => {
         publishRow("1.5.4");
@@ -2761,17 +2830,26 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
+      // The release settles into the failed presentation (the opener refuses
+      // the row), and nothing later closes the stream again or opens another.
+      await waitFor(() => {
+        expect(presentationKind()).toBe("failed");
+      });
+      expect(streams).toHaveLength(1);
+      expect(streams[0].closeCount).toBe(1);
     });
 
     it("keeps the stream when its row is removed", async () => {
-      const { streams, publishRow } = await mountSessionAtFloor();
+      const { streams, publishRow, handle } = await mountSessionAtFloor();
 
       act(() => {
         publishRow(null);
       });
-      await act(async () => {
-        await Promise.resolve();
-      });
+      // A round trip over the worker's bridge answers after any close the
+      // removal had sent, so the count below is read after it settled.
+      const mounted = handle();
+      if (mounted === undefined) throw new Error("expected a mounted session");
+      await mounted.encodeRootState();
       expect(streams[0].closeCount).toBe(0);
     });
   });
