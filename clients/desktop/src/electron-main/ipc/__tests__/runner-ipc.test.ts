@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
+import { ipcRenderer } from "electron";
 import {
   afterEach,
   beforeEach,
@@ -17,6 +18,7 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
+import { buildAuthBridge } from "../../../electron-preload/auth-bridge";
 import type {
   DesktopPublishedHostSnapshot,
   LocalHostUnresponsive,
@@ -92,6 +94,9 @@ import {
 const featureSettings = vi.hoisted(() => ({
   agentRoles: false,
   agentFeedback: true,
+}));
+const recordedMainLoggerCalls = vi.hoisted(() => ({
+  entries: [] as Array<{ readonly level: string; readonly values: unknown[] }>,
 }));
 /** The control-plane call the `runSandboxVerb` handler makes, observed. */
 const runSandboxVerbViaHttpMock = vi.hoisted(() =>
@@ -234,12 +239,18 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
   setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
 }));
-vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
-  fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
-  fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
-  fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
-  decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
-}));
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-secrets",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-secrets")
+    >()),
+    fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
+    fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
+    fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
+    decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+  }),
+);
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -376,20 +387,40 @@ vi.mock("electron", () => ({
       ipcMainState.syncListeners.get(channel)?.delete(listener);
     },
   },
-}));
-
-vi.mock("electron-log", () => ({
-  default: {
-    transports: {
-      file: { level: "info" },
-      console: { level: "info" },
+  ipcRenderer: {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+    invoke: (channel: string, ...args: unknown[]): Promise<unknown> => {
+      const handler = ipcMainState.handlers.get(channel);
+      if (handler === undefined) {
+        return Promise.reject(new Error("IPC handler is not registered"));
+      }
+      return Promise.resolve(handler(sender(0), ...args));
     },
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
   },
 }));
+
+vi.mock("electron-log", () => {
+  const record =
+    (level: string) =>
+    (...values: unknown[]): void => {
+      recordedMainLoggerCalls.entries.push({ level, values });
+    };
+  return {
+    default: {
+      transports: {
+        file: { level: "info" },
+        console: { level: "info" },
+      },
+      silly: vi.fn(record("silly")),
+      verbose: vi.fn(record("verbose")),
+      debug: vi.fn(record("debug")),
+      info: vi.fn(record("info")),
+      warn: vi.fn(record("warn")),
+      error: vi.fn(record("error")),
+    },
+  };
+});
 
 class FakeHost extends EventEmitter implements IpcHostLifecycle {
   private snapshot: DesktopPublishedHostSnapshot | null = null;
@@ -683,6 +714,46 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function valueContainsText(value: unknown, text: string): boolean {
+  if (typeof value === "string") return value.includes(text);
+  if (value instanceof Error) {
+    return (
+      valueContainsText(value.message, text) ||
+      valueContainsText(value.stack, text) ||
+      valueContainsText(value.cause, text)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsText(entry, text));
+  }
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.values(value).some((entry) => valueContainsText(entry, text))
+  );
+}
+
+function valueContainsSerializedBody(value: unknown, body: string): boolean {
+  if (typeof value === "string") return value.includes(body);
+  if (value instanceof Error) {
+    return (
+      valueContainsSerializedBody(value.message, body) ||
+      valueContainsSerializedBody(value.stack, body) ||
+      valueContainsSerializedBody(value.cause, body)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsSerializedBody(entry, body));
+  }
+  if (value === null || typeof value !== "object") return false;
+  return (
+    JSON.stringify(value) === body ||
+    Object.values(value).some((entry) =>
+      valueContainsSerializedBody(entry, body),
+    )
+  );
+}
+
 function readQuitRequestId(message: SentMessage | undefined): string {
   if (message === undefined) {
     throw new Error("quitRequested message missing");
@@ -756,6 +827,7 @@ beforeEach(() => {
   ipcMainState.handlers.clear();
   ipcMainState.syncListeners.clear();
   sentMessages.length = 0;
+  recordedMainLoggerCalls.entries.length = 0;
   vi.unstubAllGlobals();
   featureSettings.agentRoles = false;
   featureSettings.agentFeedback = true;
@@ -860,6 +932,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
           RunnerHostInvoke.getEnvironmentProviders,
+          RunnerHostInvoke.replaceEnvironmentApiKey,
           RunnerHostInvoke.decideSecretRequest,
           RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
@@ -1660,6 +1733,189 @@ describe("RunnerIpcBridge", () => {
     expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
     expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
+  });
+
+  it("keeps a replaced environment API key out of main logs, bridge errors, and renderer results", async () => {
+    type ReplaceScenario =
+      | {
+          readonly kind: "response";
+          readonly status: number;
+          readonly body: unknown;
+        }
+      | { readonly kind: "throw-get" }
+      | { readonly kind: "reject-post" };
+
+    const apiKey = "TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9";
+    const request = {
+      environmentId: "environment-1",
+      profileId: "profile-1",
+      harnessId: "claude",
+      key: apiKey,
+    };
+    const httpRequestBody = JSON.stringify({
+      kind: "api_key",
+      harnessId: request.harnessId,
+      key: apiKey,
+      expectedBindingVersion: 17,
+    });
+    const ipcRequestBody = JSON.stringify(request);
+    const malformedRequest = {
+      environmentId: "environment-1",
+      profileId: "profile-1",
+      key: apiKey,
+    };
+    const malformedRequestBody = JSON.stringify(malformedRequest);
+    const scenarios: Array<ReplaceScenario> = [
+      {
+        kind: "response",
+        status: 200,
+        body: {
+          profileId: request.profileId,
+          harnessId: request.harnessId,
+          kind: "api_key",
+          status: "connected",
+        },
+      },
+      { kind: "response", status: 409, body: { code: "binding-changed" } },
+      {
+        kind: "response",
+        status: 422,
+        body: { code: "harness_token_shape" },
+      },
+      { kind: "response", status: 401, body: { code: "unauthorized" } },
+      { kind: "response", status: 403, body: { code: "forbidden" } },
+      {
+        kind: "response",
+        status: 409,
+        body: { code: "profile_record_account_unproven" },
+      },
+      {
+        kind: "response",
+        status: 404,
+        body: { code: "profile_record_not_found" },
+      },
+      {
+        kind: "response",
+        status: 500,
+        body: { code: "request_failed", message: "synthetic server detail" },
+      },
+      { kind: "throw-get" },
+      { kind: "reject-post" },
+    ];
+    let scenario: ReplaceScenario = { kind: "throw-get" };
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      if (init?.method === "GET") {
+        if (scenario.kind === "throw-get") {
+          throw new Error("synthetic transport failure");
+        }
+        return jsonResponse(200, {
+          connections: [{ profileId: request.profileId, bindingVersion: 17 }],
+        });
+      }
+      if (scenario.kind === "reject-post") {
+        return Promise.reject(new Error("synthetic transport failure"));
+      }
+      if (scenario.kind === "response") {
+        return jsonResponse(scenario.status, scenario.body);
+      }
+      throw new Error("unexpected key replacement request");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const preload = buildAuthBridge();
+    const rendererResults: unknown[] = [];
+    const escapedErrors: unknown[] = [];
+    for (const nextScenario of scenarios) {
+      scenario = nextScenario;
+      try {
+        rendererResults.push(
+          await preload.replaceEnvironmentApiKey("bearer-fixture", request),
+        );
+      } catch (error: unknown) {
+        escapedErrors.push(error);
+      }
+    }
+
+    const callsBeforeMalformed = fetchMock.mock.calls.length;
+    try {
+      rendererResults.push(
+        await ipcRenderer.invoke(
+          RunnerHostInvoke.replaceEnvironmentApiKey,
+          "bearer-fixture",
+          malformedRequest,
+        ),
+      );
+    } catch (error: unknown) {
+      escapedErrors.push(error);
+    }
+    bridge.dispose();
+
+    const resultKinds = rendererResults.map((result) => {
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "kind" in result &&
+        typeof result.kind === "string"
+      ) {
+        return result.kind;
+      }
+      return "invalid-result";
+    });
+    const resultsHaveClosedShape = rendererResults.every(
+      (result) =>
+        result !== null &&
+        typeof result === "object" &&
+        !Array.isArray(result) &&
+        Object.hasOwn(result, "kind") &&
+        Object.keys(result).length === 1,
+    );
+    const observations = [
+      recordedMainLoggerCalls.entries,
+      escapedErrors,
+      rendererResults,
+    ];
+    const keyIsAbsent = observations.every(
+      (value) => !valueContainsText(value, apiKey),
+    );
+    const requestBodiesAreAbsent = [
+      httpRequestBody,
+      ipcRequestBody,
+      malformedRequestBody,
+    ].every((body) =>
+      observations.every((value) => !valueContainsSerializedBody(value, body)),
+    );
+
+    expect(resultKinds).toEqual([
+      "ok",
+      "binding-changed",
+      "malformed-key",
+      "unauthorized",
+      "forbidden",
+      "account-unproven",
+      "removed",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(resultsHaveClosedShape).toBe(true);
+    expect(escapedErrors.length).toBe(0);
+    expect(fetchMock.mock.calls.length - callsBeforeMalformed).toBe(0);
+    expect(keyIsAbsent).toBe(true);
+    expect(requestBodiesAreAbsent).toBe(true);
   });
 
   it("releases sleep prevention when the renderer process disappears", async () => {

@@ -445,3 +445,124 @@ export async function fetchEnvironmentProvidersViaHttp(
     },
   };
 }
+
+export const ENVIRONMENT_API_KEY_REPLACE_HARNESSES = [
+  "claude",
+  "codex",
+] as const;
+
+export interface EnvironmentApiKeyReplaceRequest {
+  readonly environmentId: string;
+  readonly profileId: string;
+  readonly harnessId: string;
+  readonly key: string;
+}
+
+export type EnvironmentApiKeyReplaceResult = {
+  readonly kind:
+    | "ok"
+    | "binding-changed"
+    | "malformed-key"
+    | "unauthorized"
+    | "forbidden"
+    | "account-unproven"
+    | "removed"
+    | "failed";
+};
+
+const connectionBindingsSchema = z.object({
+  connections: z.array(
+    z.object({
+      profileId: z.string(),
+      bindingVersion: z.number().int().positive().nullable().optional(),
+    }),
+  ),
+});
+const replacedConnectionSchema = z.object({
+  profileId: z.string(),
+  harnessId: z.string(),
+  kind: z.literal("api_key"),
+  status: z.literal("connected"),
+});
+const refusalCodeSchema = z.object({ code: z.string() });
+
+/** The binding is read by exact record id on the same app session, immediately
+ * before the write. No server text or transport error escapes this boundary. */
+export async function replaceEnvironmentApiKeyViaHttp(
+  authnBaseUrl: string,
+  bearer: string,
+  request: EnvironmentApiKeyReplaceRequest,
+): Promise<EnvironmentApiKeyReplaceResult> {
+  if (
+    !PATH_ID_PATTERN.test(request.environmentId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(request.profileId) ||
+    !ENVIRONMENT_API_KEY_REPLACE_HARNESSES.some(
+      (id) => id === request.harnessId,
+    )
+  )
+    return { kind: "failed" };
+  try {
+    const list = await call(
+      secretsUrl(authnBaseUrl, request.environmentId, "harness-connections"),
+      "GET",
+      null,
+      bearer,
+    );
+    if (list.kind !== "response" || list.status !== 200)
+      return { kind: "failed" };
+    const parsed = connectionBindingsSchema.safeParse(list.body);
+    if (!parsed.success) return { kind: "failed" };
+    const rows = parsed.data.connections.filter(
+      (row) => row.profileId === request.profileId,
+    );
+    if (rows.length !== 1 || rows[0].bindingVersion == null)
+      return { kind: "failed" };
+    const result = await call(
+      secretsUrl(
+        authnBaseUrl,
+        request.environmentId,
+        `harness-connections/${request.profileId}/connect`,
+      ),
+      "POST",
+      JSON.stringify({
+        kind: "api_key",
+        harnessId: request.harnessId,
+        key: request.key,
+        expectedBindingVersion: rows[0].bindingVersion,
+      }),
+      bearer,
+    );
+    if (result.kind !== "response") return { kind: "failed" };
+    if (result.status === 401) return { kind: "unauthorized" };
+    if (result.status === 403) return { kind: "forbidden" };
+    const code = refusalCodeSchema.safeParse(result.body);
+    if (code.success) {
+      if (result.status === 409 && code.data.code === "binding-changed")
+        return { kind: "binding-changed" };
+      if (result.status === 422 && code.data.code === "harness_token_shape")
+        return { kind: "malformed-key" };
+      if (
+        result.status === 409 &&
+        code.data.code === "profile_record_account_unproven"
+      )
+        return { kind: "account-unproven" };
+      if (
+        result.status === 404 &&
+        code.data.code === "profile_record_not_found"
+      )
+        return { kind: "removed" };
+    }
+    const saved = replacedConnectionSchema.safeParse(result.body);
+    return {
+      kind:
+        result.status === 200 &&
+        saved.success &&
+        saved.data.profileId === request.profileId &&
+        saved.data.harnessId === request.harnessId
+          ? "ok"
+          : "failed",
+    };
+  } catch {
+    return { kind: "failed" };
+  }
+}

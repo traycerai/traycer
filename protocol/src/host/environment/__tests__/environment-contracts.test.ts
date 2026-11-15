@@ -40,10 +40,6 @@ import {
   environmentConfigurationSkillsUpdateV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
-  environmentProvidersListV10,
-  environmentProvidersRemoveProfileV10,
-  environmentProvidersRenameProfileV10,
-  environmentProvidersSignOutProfileV10,
   environmentPlansListV10,
   environmentPlansListV11,
   environmentPlansUnlinkV11,
@@ -144,6 +140,19 @@ describe("environment.list protocol contract", () => {
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       environmentListUpgradeV10ToV11,
     );
+  });
+});
+
+describe("retired team provider profile methods", () => {
+  it("does not register retired provider profile calls on the real host registry", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(hostRpcRegistry, method)).toBe(false);
+    }
   });
 });
 
@@ -1286,64 +1295,6 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
       hostStates: [],
     },
     badResponse: { entries: [], readerScope: "everything", hostStates: [] },
-  },
-  {
-    method: "environment.providers.list",
-    contract: environmentProvidersListV10,
-    request: { environmentId: TEAM.environmentId },
-    badRequest: { environmentId: "" },
-    response: { profileSyncEnabled: false, providers: [] },
-    badResponse: { providers: [] },
-  },
-  {
-    method: "environment.providers.signOutProfile",
-    contract: environmentProvidersSignOutProfileV10,
-    request: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "1",
-    },
-    badRequest: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "",
-    },
-    response: { signedOut: true },
-    badResponse: { signedOut: false },
-  },
-  {
-    method: "environment.providers.removeProfile",
-    contract: environmentProvidersRemoveProfileV10,
-    request: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "1",
-    },
-    badRequest: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "",
-    },
-    response: { removed: true },
-    badResponse: { removed: false },
-  },
-  {
-    method: "environment.providers.renameProfile",
-    contract: environmentProvidersRenameProfileV10,
-    request: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "1",
-      label: "Chosen",
-    },
-    badRequest: {
-      environmentId: TEAM.environmentId,
-      providerId: "future-provider",
-      profileId: "",
-      label: "Chosen",
-    },
-    response: { label: "Chosen" },
-    badResponse: { label: 1 },
   },
   {
     method: "environment.plans.list",

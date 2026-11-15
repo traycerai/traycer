@@ -57,10 +57,6 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.members.seats",
   "environment.members.setRole",
   "environment.plans.list",
-  "environment.providers.list",
-  "environment.providers.removeProfile",
-  "environment.providers.renameProfile",
-  "environment.providers.signOutProfile",
   "environment.plans.unlink",
   "environment.plans.unlinkPreview",
   "environment.secrets.consent",
@@ -101,6 +97,17 @@ const EXPECTED_POOL_ONLY = [
 ].sort();
 
 describe("host RPC routing table", () => {
+  it("does not route retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
+  });
+
   it("routes every released unary and stream name and every registry key", () => {
     const names = [
       ...releasedMethodNames,

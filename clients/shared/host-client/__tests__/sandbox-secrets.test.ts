@@ -10,6 +10,7 @@ import {
 import {
   SANDBOX_SECRETS_FETCH_TIMEOUT_MS,
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -1218,5 +1219,189 @@ describe("decideSecretRequestViaHttp on a fetch that ignores its signal", () => 
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
     expect(await pending).toEqual(TIMED_OUT);
+  });
+});
+
+describe("replaceEnvironmentApiKeyViaHttp", () => {
+  const request = {
+    environmentId: ENV_ID,
+    profileId: "profile.with.dots",
+    harnessId: "claude",
+    key: "synthetic-provider-key-DO-NOT-LOG",
+  };
+  const binding = {
+    connections: [{ profileId: request.profileId, bindingVersion: 7 }],
+  };
+
+  it("reads the exact own row and sends its binding version in the POST body", async () => {
+    const replies = [
+      jsonResponse(200, binding),
+      jsonResponse(200, {
+        profileId: request.profileId,
+        harnessId: request.harnessId,
+        kind: "api_key",
+        status: "connected",
+      }),
+    ];
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      const response = replies.shift();
+      if (response === undefined) throw new Error("no response configured");
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await replaceEnvironmentApiKeyViaHttp(BASE, BEARER, request);
+
+    expect(result).toEqual({ kind: "ok" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${BASE}/api/v3/environments/${ENV_ID}/secrets/harness-connections`,
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "GET",
+      body: null,
+    });
+    const post = fetchMock.mock.calls[1][1];
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `${BASE}/api/v3/environments/${ENV_ID}/secrets/harness-connections/${request.profileId}/connect`,
+    );
+    expect(post?.method).toBe("POST");
+    expect(JSON.parse(String(post?.body))).toEqual({
+      kind: "api_key",
+      harnessId: "claude",
+      key: request.key,
+      expectedBindingVersion: 7,
+    });
+    expect(
+      String(fetchMock.mock.calls[0][0]) + String(fetchMock.mock.calls[1][0]),
+    ).not.toContain(request.key);
+    expect(JSON.stringify(result)).not.toContain(request.key);
+  });
+
+  it.each([
+    [
+      "missing exact own id",
+      { connections: [{ profileId: "other", bindingVersion: 7 }] },
+    ],
+    [
+      "duplicate exact own ids",
+      {
+        connections: [
+          { profileId: request.profileId, bindingVersion: 7 },
+          { profileId: request.profileId, bindingVersion: 8 },
+        ],
+      },
+    ],
+    [
+      "missing binding version",
+      { connections: [{ profileId: request.profileId }] },
+    ],
+    [
+      "null binding version",
+      { connections: [{ profileId: request.profileId, bindingVersion: null }] },
+    ],
+    [
+      "family alias only",
+      {
+        connections: [
+          {
+            profileId: "family-entry",
+            bindingVersion: 7,
+            alias: request.profileId,
+          },
+        ],
+      },
+    ],
+  ])("does not POST when the pre-read has %s", async (_case, body) => {
+    const fetchMock = stubFetch(() => jsonResponse(200, body));
+
+    await expect(
+      replaceEnvironmentApiKeyViaHttp(BASE, BEARER, request),
+    ).resolves.toEqual({ kind: "failed" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+  });
+
+  it.each([
+    ["unavailable read", jsonResponse(503, { message: "raw server details" })],
+    ["malformed read", jsonResponse(200, { connections: "invalid" })],
+  ])("does not POST after a %s", async (_case, response) => {
+    const fetchMock = stubFetch(() => response);
+
+    await expect(
+      replaceEnvironmentApiKeyViaHttp(BASE, BEARER, request),
+    ).resolves.toEqual({ kind: "failed" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "success",
+      200,
+      {
+        profileId: request.profileId,
+        harnessId: "claude",
+        kind: "api_key",
+        status: "connected",
+      },
+      "ok",
+    ],
+    ["unauthorized", 401, { code: "auth" }, "unauthorized"],
+    ["forbidden", 403, { code: "role" }, "forbidden"],
+    ["binding changed", 409, { code: "binding-changed" }, "binding-changed"],
+    ["malformed key", 422, { code: "harness_token_shape" }, "malformed-key"],
+    [
+      "unproven account",
+      409,
+      { code: "profile_record_account_unproven" },
+      "account-unproven",
+    ],
+    [
+      "removed exact record",
+      404,
+      { code: "profile_record_not_found" },
+      "removed",
+    ],
+    ["environment missing", 404, { code: "environment_not_found" }, "failed"],
+    [
+      "unknown hostile body",
+      500,
+      { message: request.key, nested: { key: request.key } },
+      "failed",
+    ],
+  ] as const)(
+    "maps %s to a closed result",
+    async (_case, status, body, kind) => {
+      const replies = [jsonResponse(200, binding), jsonResponse(status, body)];
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        const response = replies.shift();
+        if (response === undefined) throw new Error("no response configured");
+        return response;
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await replaceEnvironmentApiKeyViaHttp(
+        BASE,
+        BEARER,
+        request,
+      );
+
+      expect(result).toEqual({ kind });
+      expect(JSON.stringify(result)).not.toContain(request.key);
+      expect(String(fetchMock.mock.calls[1][0])).not.toContain(request.key);
+    },
+  );
+
+  it("turns a thrown error containing the key into a closed failure", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(200, binding))
+      .mockRejectedValueOnce(new Error(`transport failed ${request.key}`));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await replaceEnvironmentApiKeyViaHttp(BASE, BEARER, request);
+
+    expect(result).toEqual({ kind: "failed" });
+    expect(JSON.stringify(result)).not.toContain(request.key);
   });
 });

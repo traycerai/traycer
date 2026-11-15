@@ -675,7 +675,7 @@ export function useProviderDestinationLoginFlow(
     onFailed,
   } = input;
   const [state, setState] = useState<ProviderProfileLoginFlowState>(() =>
-    target !== null && !destinationSupported(targetClient)
+    target !== null && !providerLoginDestinationSupported(targetClient)
       ? { kind: "target-refused", targetRefusal: "unsupported-computer" }
       : { kind: "start" },
   );
@@ -1580,7 +1580,7 @@ export function useProviderDestinationLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
-      if (target !== null && !destinationSupported(targetClient)) {
+      if (target !== null && !providerLoginDestinationSupported(targetClient)) {
         setState({
           kind: "target-refused",
           targetRefusal: "unsupported-computer",
@@ -1844,7 +1844,7 @@ export function useProviderDestinationLoginFlow(
   };
 }
 
-function destinationSupported(
+export function providerLoginDestinationSupported(
   client: HostClient<HostRpcRegistry> | null,
 ): boolean {
   const hostId = client?.getActiveHostId() ?? null;

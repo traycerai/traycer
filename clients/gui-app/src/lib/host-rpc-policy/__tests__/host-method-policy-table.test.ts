@@ -144,6 +144,17 @@ const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
 
 describe("host method poll policy table", () => {
+  it("has no scheduling entries for retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(HOST_METHOD_POLL_TABLE, method)).toBe(false);
+    }
+  });
+
   it("has exactly the host registry's method keys", () => {
     expect(() =>
       assertExactHostMethodPollTableKeys(HOST_METHOD_POLL_TABLE),
@@ -351,7 +362,6 @@ describe("host method poll policy table", () => {
       "environment.configuration.skills.list",
       "environment.configuration.skills.state",
       "environment.plans.list",
-      "environment.providers.list",
     ] as const) {
       expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
         mode: "latest",
@@ -372,22 +382,6 @@ describe("host method poll policy table", () => {
     ] as const) {
       const neverPolled: null = HOST_METHOD_POLL_TABLE[method].poll;
       expect(neverPolled).toBeNull();
-    }
-  });
-
-  it("schedules a team account's sign-out, removal and rename like unlinking a plan", () => {
-    const unlink = HOST_METHOD_POLL_TABLE["environment.plans.unlink"];
-    expect(unlink).toEqual({
-      mode: "fifo",
-      joinResponseTimeoutMs: null,
-      poll: null,
-    });
-    for (const method of [
-      "environment.providers.signOutProfile",
-      "environment.providers.removeProfile",
-      "environment.providers.renameProfile",
-    ] as const) {
-      expect(HOST_METHOD_POLL_TABLE[method]).toEqual(unlink);
     }
   });
 
