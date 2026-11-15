@@ -1,8 +1,13 @@
 import { TRAYCER_CHAT_TAG } from "./const";
 import type { Element, Root } from "hast";
 import { visit } from "unist-util-visit";
-import { extractTextContent, pickStringProp } from "./hast-utils";
+import { pickStringProp } from "./hast-utils";
 
+/**
+ * Turns a `<traycer-chat epicId chatId>` tag into the reference component's
+ * data attributes. The tag needs no text inside it: the component draws the
+ * agent's title from the ids.
+ */
 export function rehypeTraycerChat() {
   return (tree: Root) => {
     visit(tree, "element", (node: Element) => {
@@ -15,11 +20,6 @@ export function rehypeTraycerChat() {
       const title = pickStringProp(node.properties, "title");
 
       if (epicId === undefined || chatId === undefined) {
-        return;
-      }
-
-      const displayText = extractTextContent(node.children).trim();
-      if (!displayText) {
         return;
       }
 
