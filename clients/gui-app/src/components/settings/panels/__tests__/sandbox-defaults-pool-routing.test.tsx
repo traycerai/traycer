@@ -199,8 +199,6 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     });
     expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
-    expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
     readsFromCloud(harness, "items");
   });
