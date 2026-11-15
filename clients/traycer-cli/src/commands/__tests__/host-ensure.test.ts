@@ -555,7 +555,9 @@ describe("buildHostEnsureCommand", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
+    // The team is read from the sign-in's list twice: before anything is
+    // installed, and again by the transfer itself.
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
     expect(ctx.progress).toHaveBeenCalledWith(
       expect.objectContaining({

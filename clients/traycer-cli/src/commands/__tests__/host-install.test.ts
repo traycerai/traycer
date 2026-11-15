@@ -1026,7 +1026,9 @@ describe("buildHostInstallCommand", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
+    // The team is read from the sign-in's list twice: before anything is
+    // staged, and again by the transfer itself.
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
     expect(ctx.progress).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1043,6 +1045,12 @@ describe("buildHostInstallCommand", () => {
       mocks.resolveHostAuthMock.mockResolvedValue(null);
       const token = `retained-install-${failure}`;
       mocks.runDeviceAuthFlowMock.mockImplementation(async () => {
+        // The inline sign-in is now the one the command resolves.
+        mocks.resolveHostAuthMock.mockResolvedValue({
+          token,
+          authnBaseUrl: "https://authn.test",
+          userId: "test-person",
+        });
         await writeCredentialsFile(
           cliCredentialsPath("production"),
           {
@@ -1100,10 +1108,18 @@ describe("buildHostInstallCommand", () => {
 
   it("passes the inline-created sign-in token into team completion", async () => {
     mocks.resolveHostAuthMock.mockResolvedValue(null);
-    mocks.runDeviceAuthFlowMock.mockResolvedValue({
-      token: "inline-team-token",
-      user: { id: "member-1", email: "member@example.test", name: "Member" },
-      authnBaseUrl: "https://authn.test",
+    mocks.runDeviceAuthFlowMock.mockImplementation(() => {
+      // The inline sign-in is now the one the command resolves.
+      mocks.resolveHostAuthMock.mockResolvedValue({
+        token: "inline-team-token",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      });
+      return Promise.resolve({
+        token: "inline-team-token",
+        user: { id: "member-1", email: "member@example.test", name: "Member" },
+        authnBaseUrl: "https://authn.test",
+      });
     });
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
     mocks.createServiceInstallLifecycleMock.mockReturnValue(
