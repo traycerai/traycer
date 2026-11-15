@@ -21,6 +21,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
   EnvironmentCloud,
+  EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -278,6 +279,32 @@ export function mountTeamPageOnPoolBuild(
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
   return buildTeamPage(source, handlers, null, true);
+}
+
+/** authn's answer: a status and the body it sends with it. */
+export function authnAnswer(
+  status: number,
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status, text: JSON.stringify(body) };
+}
+
+/**
+ * What authn answers the team's host list read for `environmentId` from now
+ * on; `null` is no answer at all, as when the transport fails.
+ */
+export function answerTeamHostList(
+  harness: TeamPageHarness,
+  environmentId: string,
+  answer: EnvironmentTransportAnswer | null,
+): void {
+  harness.cloudResponses.set(
+    `GET /api/v3/environments/${encodeURIComponent(environmentId)}/hosts`,
+    () => {
+      if (answer === null) throw new Error("The transport did not answer.");
+      return answer;
+    },
+  );
 }
 
 /** The host id each request for `method` was sent to, in order. */

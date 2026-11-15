@@ -15,7 +15,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { EnvironmentTransportAnswer } from "@traycer-clients/shared/environment/environment-cloud";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
-import { TeamContentNeedsHost } from "@/components/settings/environment/team-content-needs-host";
+import { TeamVariableLiveFacts } from "@/components/settings/environment/team-variable-live-facts";
 import { TeamViewingHostPicker } from "@/components/settings/environment/team-viewing-host-picker";
 import {
   canSwitchViewingHost,
@@ -24,7 +24,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { reachableHost, teamEnvironments } from "./mcp-skills-test-support";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import {
+  answerTeamHostList,
+  authnAnswer,
   mountTeamPage,
   poolSource,
   requireTeamHostClient,
@@ -92,14 +95,6 @@ function mountTeamHarness(hosts: readonly EnvironmentHostRecordV12[]) {
   return harness;
 }
 
-/** authn's answer: a status and the body it sends with it. */
-function authnAnswer(
-  status: number,
-  body: unknown,
-): EnvironmentTransportAnswer {
-  return { status, text: JSON.stringify(body) };
-}
-
 function mountMutableTeamHarness(
   hosts: readonly EnvironmentHostRecordV12[],
   environmentId: string,
@@ -121,20 +116,19 @@ function mountMutableTeamHarness(
         return { hosts: [...hosts] };
       },
       "environment.list": () => teamEnvironments,
+      "config.shell.get": () => ({
+        path: "/bin/zsh",
+        args: [],
+        synthesised: false,
+        entries: [],
+      }),
+      "config.env.list": () => ({ entries: [] }),
     },
   );
-  const hostsRoute = `GET /api/v3/environments/${environmentId}/hosts`;
   return {
     ...harness,
     setFailure: (next: Error | null): void => {
       failure = next;
-    },
-    /** What authn answers the host list read from now on; null is no answer. */
-    answerHosts: (next: EnvironmentTransportAnswer | null): void => {
-      harness.cloudResponses.set(hostsRoute, () => {
-        if (next === null) throw new Error("The transport did not answer.");
-        return next;
-      });
     },
   };
 }
@@ -177,7 +171,7 @@ async function viewLaptopThenReadHosts(
   );
   expect(await screen.findByText("as reported by Laptop")).toBeTruthy();
 
-  harness.answerHosts(answer);
+  answerTeamHostList(harness, environmentId, answer);
   let refetchFailed = false;
   await act(async () => {
     refetchFailed = (await result.current.hosts.refetch()).isError;
@@ -338,30 +332,46 @@ describe("useTeamViewingHost, the window's own host", () => {
     expect(screen.getByText("Use another host")).toBeTruthy();
   });
 
-  it("tells a page that needs a host that the team's hosts could not be read after a refusal", async () => {
-    const harness = mountMutableTeamHarness(
-      studioAndLaptop(),
-      "env-host-list-needs-host",
-      null,
-    );
-    render(
-      <TeamContentNeedsHost
-        content="guide"
-        teamName="Acme"
-        onPickHost={() => {}}
-      />,
-      { wrapper: harness.Wrapper },
-    );
-    expect(await screen.findByText("Pick one.")).toBeTruthy();
+  it("replaces a page's live values with the card that says the hosts could not be read after a refusal", async () => {
+    const harness = mountMutableTeamHarness(studioAndLaptop(), "env-a", null);
+    render(<TeamVariableLiveFacts />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("Applied on Studio")).toBeTruthy();
 
-    harness.answerHosts(
+    answerTeamHostList(
+      harness,
+      "env-a",
       authnAnswer(403, { code: "environment_action_forbidden" }),
     );
-    await act(() => harness.queryClient.refetchQueries());
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
 
     expect(await screen.findByText("Couldn't read Acme's hosts.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByText("Pick one.")).toBeNull();
+    expect(screen.queryByText("Applied on Studio")).toBeNull();
+  });
+
+  it("keeps a page's live values through a host list outage", async () => {
+    const harness = mountMutableTeamHarness(studioAndLaptop(), "env-a", null);
+    render(<TeamVariableLiveFacts />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("Applied on Studio")).toBeTruthy();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(screen.getByText("Applied on Studio")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't read Acme's hosts/)).toBeNull();
   });
 
   it("starts without selectable hosts when the first list read fails", async () => {
