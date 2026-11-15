@@ -17,13 +17,16 @@ vi.mock("sonner", () => {
 
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   toastFromHostError,
   classifySendRefusal,
   toastFromHostErrorOnFork,
+  toastFromBackgroundHostError,
   toastSendRefusal,
   toastFromHostErrorWithDetail,
 } from "@/lib/host-error-toast";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -33,6 +36,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
@@ -1022,5 +1026,69 @@ describe("toastSendRefusal", () => {
       "Couldn't send your message.",
     );
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe("below-minimum host errors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function error(): HostBelowMinimumError {
+    return new HostBelowMinimumError({
+      requestId: "floor-request",
+      method: "terminal.create",
+    });
+  }
+
+  it("is a local HostRpcError, not an abort or transport failure", () => {
+    const belowMinimum = error();
+
+    expect(belowMinimum).toBeInstanceOf(HostRpcError);
+    expect(belowMinimum).not.toBeInstanceOf(HostRequestAbortedError);
+    expect(belowMinimum).not.toBeInstanceOf(HostTransportFailureError);
+    expect(belowMinimum.code).toBe("RPC_ERROR");
+    expect(mayHaveReachedHost(belowMinimum)).toBe(false);
+    expect(belowMinimum.message).toBe(HOST_UPDATE_SKEW_COPY.title);
+  });
+
+  it.each([
+    ["ordinary", toastFromHostError],
+    ["detail-preserving", toastFromHostErrorWithDetail],
+  ])(
+    "shows only the existing update title through the %s gesture mapper",
+    (_label, show) => {
+      show(error(), "This fallback must not appear.");
+
+      expect(vi.mocked(toast).mock.calls).toHaveLength(1);
+      expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe(
+        HOST_UPDATE_SKEW_COPY.title,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+    },
+  );
+
+  it("is silent for background work but keeps ordinary background failures visible", () => {
+    toastFromBackgroundHostError(error(), "Couldn't restore the terminal.");
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+
+    toastFromBackgroundHostError(
+      makeError("RPC_ERROR", "The host rejected the request."),
+      "Couldn't restore the terminal.",
+    );
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't restore the terminal.",
+    );
   });
 });

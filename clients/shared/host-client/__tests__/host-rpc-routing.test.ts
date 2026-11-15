@@ -53,7 +53,6 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.members.invite",
   "environment.members.noticeSeen",
   "environment.members.remove",
-  "environment.members.removePreview",
   "environment.members.seats",
   "environment.members.setRole",
   "environment.plans.list",

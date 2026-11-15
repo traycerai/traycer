@@ -9,13 +9,11 @@ import type {
 
 afterEach(cleanup);
 
+const WORK = { activeTurns: 1, terminals: 0, hostName: "This Mac" };
+
 const PREVIEW: RemovePreviewModel = {
-  activeTurns: 1,
-  terminals: 0,
-  hostName: "This Mac",
-  sharedSignIns: ["github"],
-  paidSandboxes: [{ name: "build-box", startedBy: "Priya" }],
-  linkedPlan: "Claude Max",
+  sandboxesToRekey: 1,
+  workNow: WORK,
 };
 
 function renderRemove(preview: RemovePreviewModel): string {
@@ -57,13 +55,16 @@ describe("RemovePreviewDialog", () => {
   });
 
   it("says None. in the shared sign-ins and linked plan rows when there are none", () => {
-    renderRemove({ ...PREVIEW, sharedSignIns: [], linkedPlan: null });
+    renderRemove({ ...PREVIEW, sandboxesToRekey: 0 });
     expect(rowValue("Shared sign-ins")).toBe("None.");
     expect(rowValue("Linked plan")).toBe("None.");
   });
 
   it("states the work, the timing rule, the sign-in replacement, the plan and what cannot be recalled", () => {
-    const text = renderRemove({ ...PREVIEW, terminals: 2 });
+    const text = renderRemove({
+      ...PREVIEW,
+      workNow: { ...WORK, terminals: 2 },
+    });
     expect(rowValue("Priya's work now")).toBe(
       "1 turn and 2 terminals on This Mac. Priya's access is revoked now; each finishes its current step and starts no new one. If a host does not answer in time, stopping shows as pending until it does.",
     );
@@ -78,19 +79,19 @@ describe("RemovePreviewDialog", () => {
   });
 
   it("leaves the host out of the work row when the window cannot label it", () => {
-    renderRemove({ ...PREVIEW, hostName: null });
+    renderRemove({ ...PREVIEW, workNow: { ...WORK, hostName: null } });
     expect(rowValue("Priya's work now")).toMatch(
       /^1 turn and 0 terminals\. Priya's access is revoked now;/,
     );
   });
 
   it("gives work the host cannot count no count, and None. when both are zero", () => {
-    renderRemove({ ...PREVIEW, activeTurns: null, terminals: null });
+    renderRemove({ ...PREVIEW, workNow: null });
     expect(rowValue("Priya's work now")).toBe(
       "Priya's access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.",
     );
     cleanup();
-    renderRemove({ ...PREVIEW, activeTurns: 0, terminals: 0 });
+    renderRemove({ ...PREVIEW, workNow: { ...WORK, activeTurns: 0 } });
     expect(rowValue("Priya's work now")).toBe("None.");
   });
 
@@ -154,18 +155,9 @@ describe("DemotionPreviewDialog", () => {
         teamName="Acme"
         currentRole={options.currentRole}
         nextRole={options.nextRole}
-        preview={{
-          status: "ready",
-          preview: {
-            planLabel: options.planLabel,
-            turnsOnPlan: 2,
-            whatKeepsWorking: "Sandboxes keep running.",
-          },
-        }}
         busy={false}
         blockedReason={null}
         onOpenChange={() => undefined}
-        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );
@@ -183,11 +175,9 @@ describe("DemotionPreviewDialog", () => {
         teamName="Acme"
         currentRole={options.currentRole}
         nextRole={options.nextRole}
-        preview={{ status: "failed" }}
         busy={false}
         blockedReason={null}
         onOpenChange={() => undefined}
-        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );
@@ -263,11 +253,9 @@ describe("DemotionPreviewDialog", () => {
         teamName="Acme"
         currentRole="admin"
         nextRole="editor"
-        preview={{ status: "loading" }}
         busy={false}
         blockedReason={null}
         onOpenChange={() => undefined}
-        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );

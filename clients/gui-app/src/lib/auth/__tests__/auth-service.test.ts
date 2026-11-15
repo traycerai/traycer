@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { putConfigurationMcpServer } from "@traycer-clients/shared/environment/configuration-settings";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
@@ -12,6 +13,7 @@ import type {
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   DEFAULT_SKEW_ENTER_MS,
   DEFAULT_SKEW_EXIT_MS,
@@ -4196,6 +4198,145 @@ describe("AuthService", () => {
       expect(appServerClock.currentState().verdict).toBe("ok");
 
       resetAppClockToOk();
+    });
+  });
+
+  describe("environment calls stop at the sign-in an operation began on", () => {
+    const ITEMS_URL =
+      "http://localhost:5005/api/v3/environments/env-1/items?kind=mcp_server";
+    const SERVER_URL =
+      "http://localhost:5005/api/v3/environments/env-1/mcp-servers/srv-1";
+
+    /** A server save: it reads the server's item, then writes the server. */
+    const SAVE: EnvironmentConfigurationMcpServerPutRequestV11 = {
+      environmentId: "env-1",
+      serverId: "srv-1",
+      name: "github",
+      transport: "http",
+      url: "https://mcp.example.com",
+      command: null,
+      args: [],
+      env: [],
+      toolToggles: {},
+      offFor: [],
+      credential: { kind: "unchanged" },
+    };
+
+    interface Sent {
+      readonly url: string;
+      readonly method: string;
+      readonly authorization: string;
+    }
+
+    /**
+     * Answers the save's item read once `beforeAnswer` settles, and refuses
+     * its write; records every environment request. Account B's token
+     * validates as `user-2`, every other as the default profile.
+     */
+    function installEnvironmentFetch(
+      beforeAnswer: () => Promise<void>,
+    ): Sent[] {
+      const sent: Sent[] = [];
+      restoreFetch();
+      restoreFetch = installFetch(async (input, init) => {
+        const url = String(input);
+        if (!url.includes("/api/v3/environments/")) {
+          return init?.headers?.Authorization === "Bearer account-b-token"
+            ? okWithProfileForUser("user-2")
+            : okWithProfile();
+        }
+        sent.push({
+          url,
+          method: init?.method ?? "GET",
+          authorization: init?.headers?.Authorization ?? "",
+        });
+        if (url !== ITEMS_URL) {
+          return Response.json({ code: "item_refused" }, { status: 400 });
+        }
+        await beforeAnswer();
+        return Response.json({
+          items: [
+            {
+              kind: "mcp_server",
+              key: "github",
+              os: null,
+              value: { mcpServerId: "srv-1", toolToggles: {} },
+              revision: 3,
+              updatedAt: 1,
+              writtenBy: { source: "dashboard", hostId: null, hostName: null },
+            },
+          ],
+        });
+      });
+      return sent;
+    }
+
+    async function signedIn(): Promise<{
+      service: AuthService;
+      host: MockRunnerHost;
+    }> {
+      const made = makeService();
+      await made.service.start();
+      await deviceSignIn(made.service, made.host, "account-a-token");
+      return made;
+    }
+
+    it("sends both of a save's requests while its sign-in holds", async () => {
+      const { service } = await signedIn();
+      const sent = installEnvironmentFetch(() => Promise.resolve());
+
+      await expect(
+        putConfigurationMcpServer(service.environmentCloud(), SAVE, 3),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "item_refused",
+        serverId: null,
+      });
+
+      expect(sent).toEqual([
+        {
+          url: ITEMS_URL,
+          method: "GET",
+          authorization: "Bearer account-a-token",
+        },
+        {
+          url: SERVER_URL,
+          method: "PATCH",
+          authorization: "Bearer account-a-token",
+        },
+      ]);
+    });
+
+    it("never sends a save's write once another person's session replaces it", async () => {
+      const { service } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() => {
+        service.applyExternalSession(
+          externalSessionForUser("user-2", "account-b-token"),
+        );
+        return Promise.resolve();
+      });
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
+    });
+
+    it("never sends a save's write once the same person signs in again", async () => {
+      const { service, host } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() =>
+        deviceSignIn(service, host, "account-a-token-2"),
+      );
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
     });
   });
 });

@@ -1,3 +1,8 @@
+import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
+import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "../environment-directory";
 import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
@@ -255,6 +260,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly sandboxArtifacts = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = fetchEnvironmentTransport;
   // Fixed test-only value: no test constructs a real remote transport against
   // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
@@ -743,6 +749,15 @@ export class MockRunnerHost implements IRunnerHost {
   // The sandbox control plane: same no-CORS-boundary parity as above.
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+    );
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {

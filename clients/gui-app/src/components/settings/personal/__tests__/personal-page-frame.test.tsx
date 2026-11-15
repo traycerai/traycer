@@ -4,12 +4,37 @@
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
+const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: updateAction.update,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
 // The configuration status chip reads the host runtime this suite does not
 // mount, and none of these cases is about it.
 vi.mock("@/components/settings/personal/page-chip", () => ({
@@ -21,6 +46,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostMethods,
@@ -113,6 +139,29 @@ function FakePanel(props: {
       <button type="button">Edit the page</button>
       <RowNotesProbe target={props.target} />
     </SettingsPanelShell>
+  );
+}
+
+function LocalSecretsPageProbe(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const result = useHostQuery<HostRpcRegistry, "config.env.list">({
+    cacheKeyIdentity: undefined,
+    client: props.client,
+    method: "config.env.list",
+    params: {},
+    options: { enabled: true },
+  });
+  return (
+    <>
+      <button type="button" onClick={props.onOpen}>
+        Open secrets
+      </button>
+      {result.data?.entries.map((entry) => (
+        <span key={entry.key}>{entry.key}</span>
+      ))}
+    </>
   );
 }
 
@@ -300,6 +349,41 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
 });
 
 describe("<PersonalPageFrame /> around a page that is not a Personal page", () => {
+  it("leaves an Application page available for a Local pick below the host minimum", () => {
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {},
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+    });
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: HOST_ID,
+        name: HOST_NAME,
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: HOST_ID,
+          version: "1.5.4",
+        },
+      }),
+      hostId: HOST_ID,
+      status: "ready",
+      client,
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PersonalPageFrame section="general">
+          <FakePanel target={VARIABLE_TARGET} />
+        </PersonalPageFrame>
+      </QueryClientProvider>,
+    );
+
+    const edit = screen.getByRole("button", { name: "Edit the page" });
+    expect(edit.closest("[inert]")).toBeNull();
+    expect(screen.queryByTestId("host-scope-update-needed")).toBeNull();
+  });
+
   it("renders its children untouched and never asks the host for a status", async () => {
     const calls = renderFrame({
       section: "general",
@@ -324,6 +408,69 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
     expect(
       within(screen.getByTestId("row-notes")).queryAllByRole("listitem"),
     ).toEqual([]);
+  });
+});
+
+describe("<PersonalPageFrame /> for a Local Secrets page below the minimum", () => {
+  it("keeps secret reads and controls unavailable with a non-null scoped client, then enables them at the floor", async () => {
+    const reads = { list: 0 };
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "config.env.list": () => {
+          reads.list += 1;
+          return { entries: [{ key: "API_TOKEN", value: "stored" }] };
+        },
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ["config.env.list"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+    });
+    const hostAt = (version: string) =>
+      hostScopeOptionFixture({
+        hostId: HOST_ID,
+        name: HOST_NAME,
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: HOST_ID,
+          version,
+        },
+      });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const onOpen = vi.fn();
+    const pageAt = (version: string) => {
+      scopeOverrides.current = {
+        host: hostAt(version),
+        hostId: HOST_ID,
+        status: "ready",
+        client,
+      };
+      return (
+        <QueryClientProvider client={queryClient}>
+          <PersonalPageFrame section="secrets">
+            <LocalSecretsPageProbe client={client} onOpen={onOpen} />
+          </PersonalPageFrame>
+        </QueryClientProvider>
+      );
+    };
+    const { rerender } = render(pageAt("1.5.4"));
+
+    expect(reads.list).toBe(0);
+    expect(scopeOverrides.current.client).toBe(client);
+    expect(
+      screen.getByTestId("host-scope-update-needed").textContent,
+    ).toContain("Host update needed");
+    expect(screen.queryByRole("button", { name: "Open secrets" })).toBeNull();
+
+    rerender(pageAt("2.0.0"));
+
+    expect(await screen.findByText("API_TOKEN")).not.toBeNull();
+    expect(reads.list).toBe(1);
+    screen.getByRole("button", { name: "Open secrets" }).click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
 

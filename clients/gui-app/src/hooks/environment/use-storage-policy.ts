@@ -1,23 +1,13 @@
 import { z } from "zod";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
-import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
 import {
   useSandboxDefaultsEnvironments,
   type SandboxDefaultsEnvironment,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
-
-const METHOD = "environment.configuration.items";
 
 /** The item the Storage page writes. */
 export const STORAGE_POLICY_KIND = "storage_policy";
@@ -122,25 +112,13 @@ export function useConfigurationStoragePolicy(
     useSandboxDefaultsEnvironments(true),
     pick,
   );
-  const client = usePoolTierHostClient(useHostClient());
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const read = useHostQueryWithResponseMap<
-    HostRpcRegistry,
-    typeof METHOD,
-    ConfigurationStoragePolicy
-  >({
-    cacheKeyIdentity: [viewerId, STORAGE_POLICY_KIND],
-    client,
-    method: METHOD,
+  const read = useEnvironmentCloudQuery({
+    method: "environment.configuration.items",
     params: { environmentId: environment?.environmentId ?? "" },
-    preflight: cloudVerdictPreflight(METHOD),
-    mapResponse: ({ response }) => storagePolicyOf(response.items),
-    options: {
-      enabled: environment !== null && viewerId.length > 0 && authorized,
-    },
+    cacheKeyIdentity: [STORAGE_POLICY_KIND],
+    mapResponse: (response) => storagePolicyOf(response.items),
+    enabled: environment !== null,
+    poll: false,
   });
   return { environment, read };
 }

@@ -1,3 +1,8 @@
+import { nativeEnvironmentTransport } from "./native-environment-transport";
+import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "@traycer-clients/shared/host-client/environment-directory";
 import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
@@ -361,6 +366,7 @@ interface RetainedStepUpCredential {
 export class MobileRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = nativeEnvironmentTransport;
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
@@ -823,6 +829,17 @@ export class MobileRunnerHost implements IRunnerHost {
   // CapacitorHttp, so traycer-server's CORS allow-list does not apply.
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  // Through the native request that follows no redirect, as the
+  // environment calls go, rather than the patched `fetch`.
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+    );
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {

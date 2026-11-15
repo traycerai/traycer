@@ -18,7 +18,6 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { useOptionalHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { chatContinueMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import {
@@ -154,10 +153,7 @@ export function useChatContinueHere(args: {
     authorizesCloudCapability(state.status),
   );
   const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
-  const environments = useEnvironmentListQuery(
-    useOptionalHostClient(),
-    listApplies,
-  ).data;
+  const environments = useEnvironmentListQuery(listApplies).data;
   const teamId = environmentTeamId(environments, args.ownerUserId);
   const directory = useHostDirectoryList().data ?? NO_ENTRIES;
   const readTarget = useCallback(

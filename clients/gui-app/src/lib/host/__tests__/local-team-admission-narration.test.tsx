@@ -49,7 +49,6 @@ function modalProps(
     bootBody: null,
     onRetry: null,
     retryPending: false,
-    onUpdateHost: null,
     onOpenSettings: () => undefined,
     showReportIssue: false,
     settingsEmphasis: "button",
