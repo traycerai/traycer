@@ -678,6 +678,18 @@ describe("reviewText", () => {
     );
   });
 
+  it("names a held managed profile by its kind alone", () => {
+    expect(
+      reviewText(
+        reviewEntry({
+          kind: "managed_profile",
+          key: "claude:work",
+          reason: "executable_entry",
+        }),
+      ),
+    ).toBe("claude:work (managed profile) is on hold until you choose");
+  });
+
   it("names the kind alone for a held command with no command to show", () => {
     expect(
       reviewText(

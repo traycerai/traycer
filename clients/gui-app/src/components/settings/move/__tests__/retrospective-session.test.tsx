@@ -416,6 +416,37 @@ describe("<RetrospectiveSession /> commands on hold", () => {
     );
   });
 
+  it.each([
+    ["managed_profile", "claude:work", null, "claude:work (managed profile)"],
+    ["pack_policy", "pack-a", null, "pack-a (pack policy)"],
+    [
+      "variable",
+      "NODE_ENV",
+      "production",
+      "NODE_ENV (variable) changes how programs start: NODE_ENV=production. Once approved, every computer and sandbox running Personal starts programs with it.",
+    ],
+  ])(
+    "words a held %s by what it is and what approving it does",
+    async (kind, key, value, line) => {
+      renderSession(
+        SHARED,
+        [
+          entryOf({
+            entryId: "held-1",
+            reason: "executable_entry",
+            kind,
+            key,
+            value,
+          }),
+        ],
+        [],
+      );
+
+      const row = await screen.findByTestId("retrospective-held-held-1");
+      expect(row.querySelector("p")?.textContent).toBe(line);
+    },
+  );
+
   it("draws the masked held values from authn's review response", async () => {
     const EVERYWHERE = "every computer and sandbox running Personal";
     const cases: readonly {
@@ -428,7 +459,7 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           kind: "future_widget",
           key: "review",
         }),
-        line: `review (future widget). Once approved, it runs on ${EVERYWHERE}.`,
+        line: "review (future widget)",
       },
       {
         entry: entryOf({
