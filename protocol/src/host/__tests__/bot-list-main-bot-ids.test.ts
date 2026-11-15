@@ -4,8 +4,10 @@ import {
   botListV10,
   botListV11,
   botListV12,
+  botListV13,
   botReadV10,
   botReadV11,
+  botReadV12,
   botUpdateAppearanceV10,
 } from "@traycer/protocol/host/bot/contracts";
 
@@ -35,7 +37,8 @@ const entry = hostRpcRegistry["bot.list"][1];
 
 describe("bot.list@1.1 main bot ids", () => {
   it("keeps 1.1 and 1.0 registered below the head", () => {
-    expect(entry.latestMinor).toBe(2);
+    expect(entry.latestMinor).toBe(3);
+    expect(entry.versions[3].contract).toBe(botListV13);
     expect(entry.versions[2].contract).toBe(botListV12);
     expect(entry.versions[1].contract).toBe(botListV11);
     expect(entry.versions[0].contract).toBe(botListV10);
@@ -82,6 +85,48 @@ describe("bot.list@1.1 main bot ids", () => {
         botListV11.responseSchema.safeParse({ bots: [], mainBotIds }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe("bot profile choice directory field", () => {
+  const listEntry = hostRpcRegistry["bot.list"][1];
+  const readEntry = hostRpcRegistry["bot.read"][1];
+
+  it("carries the pending choice on bot.list@1.3 and bot.read@1.2, and strips it for older readers", () => {
+    const chosen = { ...BOT_ROW, profileChoice: "ambiguous" as const };
+    expect(
+      botListV13.responseSchema.parse({ bots: [chosen], mainBotIds: null })
+        .bots[0]?.profileChoice,
+    ).toBe("ambiguous");
+    expect(
+      botReadV12.responseSchema.parse({ bot: chosen }).bot.profileChoice,
+    ).toBe("ambiguous");
+
+    expect(
+      botListV12.responseSchema.parse({ bots: [chosen], mainBotIds: null })
+        .bots[0],
+    ).toEqual(BOT_ROW);
+    expect(botReadV11.responseSchema.parse({ bot: chosen }).bot).toEqual(
+      BOT_ROW,
+    );
+    expect(
+      botUpdateAppearanceV10.responseSchema.parse({ bot: chosen }).bot,
+    ).toEqual(BOT_ROW);
+  });
+
+  it("keeps profile choice optional and validates only the pending state", () => {
+    expect(
+      botListV13.responseSchema.parse({ bots: [BOT_ROW], mainBotIds: null })
+        .bots[0]?.profileChoice,
+    ).toBeUndefined();
+    expect(
+      botReadV12.responseSchema.safeParse({
+        bot: { ...BOT_ROW, profileChoice: "settled" },
+      }).success,
+    ).toBe(false);
+    expect(listEntry.versions[3].contract).toBe(botListV13);
+    expect(readEntry.latestMinor).toBe(2);
+    expect(readEntry.versions[2].contract).toBe(botReadV12);
   });
 });
 

@@ -62,9 +62,13 @@ import {
   environmentMovePlanV11,
   environmentMovePlanV12,
   environmentMoveStopPreviewUpgradeV10ToV11,
+  environmentMoveStopPreviewUpgradeV11ToV12,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
+  environmentMoveStopPreviewV12,
+  environmentMoveStopUpgradeV10ToV11,
   environmentMoveStopV10,
+  environmentMoveStopV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 
 /**
@@ -151,7 +155,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stopPreview": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentMoveStopPreviewV10,
@@ -161,6 +165,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
           contract: environmentMoveStopPreviewV11,
           upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV10ToV11,
         },
+        2: {
+          contract: environmentMoveStopPreviewV12,
+          upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -168,11 +176,15 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentMoveStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMoveStopV11,
+          upgradeFromPreviousVersion: environmentMoveStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
