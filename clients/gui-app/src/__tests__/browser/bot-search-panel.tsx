@@ -32,7 +32,10 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { openBotSearch } from "@/stores/bots/bot-search-store";
+import {
+  openBotSearch,
+  useBotSearchStore,
+} from "@/stores/bots/bot-search-store";
 import "@/index.css";
 
 /**
@@ -204,7 +207,8 @@ useAuthStore.setState({
     email: "vee@example.com",
   },
 });
-openBotSearch(BOT_ID, { kind: "all" }, "release");
+openBotSearch(BOT_ID, { kind: "all" });
+useBotSearchStore.getState().setQuery("release");
 
 /** Holds the panel back until the host client has its request context. */
 function RequestContext(props: { readonly children: ReactNode }): ReactNode {

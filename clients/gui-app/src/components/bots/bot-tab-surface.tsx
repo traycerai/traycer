@@ -1015,7 +1015,7 @@ function useChannelSearchEntry(args: {
     showChannel();
   }, [opens]);
   const open = useCallback(
-    () => openBotSearch(botId, { kind: "bot", botId }, null),
+    () => openBotSearch(botId, { kind: "bot", botId }),
     [botId],
   );
   const paneVisible = usePaneVisible();
