@@ -1016,12 +1016,20 @@ describe("useCloudEpicTasksQuery", () => {
       }),
     );
     await waitFor(() => expect(listTasksCalls()).toHaveLength(1));
+    vi.useFakeTimers();
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
     );
 
     expect(taskLightIds(result.current.tasks)).toEqual(["pending-local"]);
+    try {
+      // Past the request-context wait, the one timer a revalidation dispatch
+      // can be held on, while the refetch is still out.
+      await act(() => vi.advanceTimersByTimeAsync(15_001));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(
       listTasksCalls().filter(([, params]) =>
         hasLocalFirstPhase(params, "revalidate"),
