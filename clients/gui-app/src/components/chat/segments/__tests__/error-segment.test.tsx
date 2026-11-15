@@ -8,6 +8,7 @@ import {
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import {
   installHostDirectoryRows,
@@ -670,8 +671,11 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     return root;
   }
 
-  it("renders SANDBOX_FROZEN in the interrupted presentation with the frozen copy", () => {
-    const root = renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
+  it("renders SANDBOX_FROZEN in the interrupted presentation with the frozen copy on the person's own sandbox", () => {
+    const root = renderFrozenOnHostRows(
+      [sandboxHostEntry(TRANSCRIPT_HOST_ID, null)],
+      { code: "SANDBOX_FROZEN", message: RAW_MESSAGE },
+    );
 
     expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
     expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
@@ -777,6 +781,46 @@ describe("<ErrorSegment /> sandbox refusals", () => {
   });
 
   const TRANSCRIPT_HOST_ID = "sandbox-host-acme";
+
+  /**
+   * The error row inside a transcript whose host is read from `rows` (the
+   * person's host directory), with no billing runtime: the cases here never
+   * reach a team's role read.
+   */
+  function renderFrozenOnHostRows(
+    rows: ReadonlyArray<HostDirectoryEntry>,
+    input: { readonly code: string | null; readonly message: string },
+  ): HTMLElement {
+    installHostDirectoryRows(rows);
+    const { container } = render(
+      <ChatTranscriptProvider
+        value={{
+          chatId: "chat-on-frozen-host",
+          hostId: TRANSCRIPT_HOST_ID,
+          payerHostId: TRANSCRIPT_HOST_ID,
+        }}
+      >
+        <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
+          turnId={null}
+          message={input.message}
+          code={input.code}
+          recoverable={false}
+          findUnitId={null}
+          harnessId="traycer"
+          failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
+        />
+      </ChatTranscriptProvider>,
+    );
+    const root = container.querySelector("[data-failure-presentation]");
+    if (!(root instanceof HTMLElement)) {
+      throw new Error("the error row did not render");
+    }
+    return root;
+  }
 
   function renderTranscriptRow(input: {
     readonly team: { readonly id: string; readonly name: string } | null;
@@ -967,37 +1011,43 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     },
   );
 
-  it("keeps today's copy when the transcript host is not a sandbox", () => {
-    installHostDirectoryRows([plainHostEntry(TRANSCRIPT_HOST_ID)]);
-    render(
-      <ChatTranscriptProvider
-        value={{
-          chatId: "chat-on-personal-host",
-          hostId: TRANSCRIPT_HOST_ID,
-          payerHostId: TRANSCRIPT_HOST_ID,
-        }}
-      >
-        <ErrorSegment
-          hostTimestamp={null}
-          reportTurnId={null}
-          turnId={null}
-          message={RAW_MESSAGE}
-          code="SANDBOX_FROZEN"
-          recoverable={false}
-          findUnitId={null}
-          harnessId="traycer"
-          failure={null}
-          settledNotice={null}
-          settledNoticeFindUnitId={null}
-        />
-      </ChatTranscriptProvider>,
-    );
+  // The chat error row tells a remedy as the reader's only when the person's
+  // host directory says whose sandbox froze. Every other state keeps the cut:
+  // the turn's ending and no remedy.
+  const CUT_COPY = "This sandbox ran out of credits, which ended the turn.";
+  const ADD_CREDITS_COPY =
+    "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
 
-    expect(screen.getByText("Paused: account out of credits")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
-      ),
-    ).toBeTruthy();
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the cut when the directory has no row for the transcript's host (%s)",
+    (code) => {
+      renderFrozenOnHostRows([], { code, message: RAW_MESSAGE });
+
+      expect(screen.getByText(CUT_COPY)).toBeTruthy();
+      expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the cut when the directory row names no owner (%s)",
+    (code) => {
+      renderFrozenOnHostRows(
+        [{ ...sandboxHostEntry(TRANSCRIPT_HOST_ID, null), owner: null }],
+        { code, message: RAW_MESSAGE },
+      );
+
+      expect(screen.getByText(CUT_COPY)).toBeTruthy();
+      expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+    },
+  );
+
+  it("keeps the cut when the transcript host is a computer that is not a sandbox", () => {
+    renderFrozenOnHostRows([plainHostEntry(TRANSCRIPT_HOST_ID)], {
+      code: "SANDBOX_FROZEN",
+      message: RAW_MESSAGE,
+    });
+
+    expect(screen.getByText(CUT_COPY)).toBeTruthy();
+    expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
   });
 });

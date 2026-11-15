@@ -8,6 +8,7 @@ import {
   type MockInstance,
 } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -274,25 +275,38 @@ describe("wakeSandboxOnPick", () => {
     );
   });
 
-  it("does not offer a personal top-up in the wake toast while the directory has no owner", async () => {
-    const binding = createFakeSandboxBinding();
-    mocks.binding = binding;
-    binding.auth.listSandboxes.mockImplementation(
-      listOf({ state: "suspended" }),
-    );
-    binding.auth.runSandboxVerb.mockResolvedValueOnce({
-      ...refusal(402, "insufficient_credit"),
-      shortfallMc: 10_100,
-      creditSource: "personal",
-    });
+  // The wake tells the person's own top-up only when the directory row names
+  // them as its owner (the control is the case above): a row with no owner and
+  // no row at all say nothing about whose sandbox it is.
+  it.each<readonly [string, HostDirectoryEntry | null]>([
+    ["no directory row for the host", null],
+    [
+      "a directory row with no owner",
+      { ...sandboxHostEntry(HOST_ID, null), owner: null },
+    ],
+  ])(
+    "does not offer a personal top-up in the wake toast with %s",
+    async (_state, row) => {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      binding.directory.findById.mockReturnValue(row);
+      binding.auth.listSandboxes.mockImplementation(
+        listOf({ state: "suspended" }),
+      );
+      binding.auth.runSandboxVerb.mockResolvedValueOnce({
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 10_100,
+        creditSource: "personal",
+      });
 
-    wakeSandboxOnPick(sandboxOption("suspended", false), null);
-    await settleWake();
+      wakeSandboxOnPick(sandboxOption("suspended", false), null);
+      await settleWake();
 
-    expect(mocks.toastWarning).toHaveBeenCalledWith(
-      "Not enough credits to wake this sandbox",
-    );
-  });
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        "Not enough credits to wake this sandbox",
+      );
+    },
+  );
 
   it("names the pot a team sandbox's refused wake was checked against, in the line a row shows", async () => {
     const binding = createFakeSandboxBinding();
@@ -386,7 +400,7 @@ describe("wakeSandboxOnPick", () => {
     );
 
     // Older servers omit the pot name. A known team gets the board's generic
-    // add-credits remedy; this is expected red until the builder's follow-up.
+    // add-credits remedy.
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 10_100,

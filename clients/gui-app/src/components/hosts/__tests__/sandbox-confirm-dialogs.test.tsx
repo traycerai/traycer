@@ -140,6 +140,14 @@ const SANDBOX = sandboxSummaryFixture({
   state: "awake",
   environmentId: "env-personal",
 });
+// The team the "team ... dialog" cases speak for: the configuration and the
+// row carry the same environment id, or the resolver reads the row as Personal.
+const TEAM_ENVIRONMENT_ID = "env-team-1";
+const TEAM_SANDBOX = sandboxSummaryFixture({
+  displayName: NAME,
+  state: "awake",
+  environmentId: TEAM_ENVIRONMENT_ID,
+});
 
 function render(element: ReactElement) {
   const client = new QueryClient();
@@ -469,22 +477,37 @@ describe("sandbox confirm dialogs", () => {
     });
 
     it.each([
-      ["Suspend", SandboxSuspendDialog],
-      ["Stop", SandboxStopDialog],
+      [
+        "Suspend",
+        SandboxSuspendDialog,
+        "sandbox-confirm-suspend",
+        "Storage uses acme's credits.",
+      ],
+      [
+        "Stop",
+        SandboxStopDialog,
+        "sandbox-confirm-stop",
+        "The disk is kept at the lower storage rate on acme's credits.",
+      ],
     ])(
       "ends a team %s dialog's sessions block at the caption, with no sentence about who is told",
-      (_name, Dialog) => {
+      (_name, Dialog, dialogTestId, teamStorageLine) => {
         mocks.configuration = {
           kind: "team",
           teamId: "team-1",
           teamName: "acme",
-          environmentId: null,
+          environmentId: TEAM_ENVIRONMENT_ID,
         };
         mocks.report = liveSessionReport(
           { agents: [agentSessionFixture({})], terminals: [] },
           true,
         );
-        render(<Dialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+        render(<Dialog sandbox={TEAM_SANDBOX} open onOpenChange={vi.fn()} />);
+
+        // The row resolves to the team, not to Personal.
+        expect(screen.getByTestId(dialogTestId).textContent).toContain(
+          teamStorageLine,
+        );
 
         expect(
           screen.getByText(
@@ -502,7 +525,7 @@ describe("sandbox confirm dialogs", () => {
         kind: "team",
         teamId: "team-1",
         teamName: "acme",
-        environmentId: null,
+        environmentId: TEAM_ENVIRONMENT_ID,
       };
       mocks.report = liveSessionReport(
         { agents: [agentSessionFixture({})], terminals: [] },
@@ -510,7 +533,7 @@ describe("sandbox confirm dialogs", () => {
       );
       render(
         <SandboxDestroyDialog
-          sandbox={SANDBOX}
+          sandbox={TEAM_SANDBOX}
           open
           onOpenChange={vi.fn()}
           onDestroyed={null}

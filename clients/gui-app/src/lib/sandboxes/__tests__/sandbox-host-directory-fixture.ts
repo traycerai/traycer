@@ -4,10 +4,13 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 
 /**
  * A sandbox host's directory row: a remote row carrying sandbox facts. `team`
- * names the owning team, or `null` for the person's own (Personal) sandbox.
+ * names the owning team, or `null` for the person's own (Personal) sandbox,
+ * whose row names the viewer as its owner. A row the registry sent with no
+ * `owner` is written on purpose with `{ ...sandboxHostEntry(id, null), owner: null }`.
  */
 export function sandboxHostEntry(
   hostId: string,
@@ -29,7 +32,10 @@ export function sandboxHostEntry(
       lastSeenAt: null,
     },
     publicKey: `pubkey-${hostId}`,
-    owner: null,
+    owner:
+      team === null
+        ? { kind: "user", id: AUTHENTICATED_USER_FIXTURE_ID }
+        : { kind: "team", id: team.id, name: team.name },
     relayFuseGrace: false,
     sandbox: {
       state: "awake",
