@@ -1,8 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { RenderResult } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   afterAll,
   afterEach,
@@ -50,17 +49,27 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { AccountWaitSurface } from "../account-wait-card";
 import { useChatAccountWait } from "../use-chat-account-wait";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  createLegacyChatSessionHarness,
+  emitLegacySnapshot,
+  emitTurnState,
+} from "@/stores/chats/__tests__/chat-session-test-support";
+import type { LegacyChatSessionHarness } from "@/stores/chats/__tests__/chat-session-test-support";
+import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  observeComposerDraft,
+  type ComposerDraftSelectionRef,
+} from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import {
   pinProfile,
   providerState,
 } from "@/components/providers/__tests__/profile-pin-fixtures";
 
-interface WaitState {
-  readonly accountWait: ChatAccountWait | null;
-}
-
 const mockState = vi.hoisted(() => ({
-  sessions: new Map<string, { readonly store: StoreApi<WaitState> }>(),
+  sessions: new Map<string, ChatSessionStoreHandle>(),
   previewSupported: true,
   commitSupported: true,
   openSettings: vi.fn(),
@@ -154,6 +163,13 @@ const WAIT_WITHOUT_SOURCE: ChatAccountWait = chatAccountWaitSchema.parse({
   reason: "needs-sign-in",
   source: null,
 });
+const WAIT_SESSION_IDENTITY = {
+  epicId: "epic-test",
+  chatId: "chat-test",
+  hostId: HOST_ID,
+  userId: "owner-wait-test",
+};
+let waitSessionHarness: LegacyChatSessionHarness | null = null;
 
 function providersList(
   offersSignIns: boolean | undefined,
@@ -350,8 +366,12 @@ function ContinueProfileRequestProbe(): ReactNode {
 
 beforeEach(() => {
   mockState.sessions.clear();
-  mockState.sessions.set("active", {
-    store: createStore<WaitState>()(() => ({ accountWait: SOURCE_WAIT })),
+  waitSessionHarness = createLegacyChatSessionHarness(WAIT_SESSION_IDENTITY);
+  mockState.sessions.set("active", waitSessionHarness.handle);
+  emitLegacySnapshot(waitSessionHarness.callbacks(), WAIT_SESSION_IDENTITY, {
+    pendingFallback: undefined,
+    pendingReturn: undefined,
+    accountWait: SOURCE_WAIT,
   });
   mockState.previewSupported = true;
   mockState.commitSupported = true;
@@ -361,7 +381,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  waitSessionHarness?.handle.dispose();
+  waitSessionHarness = null;
   mockState.sessions.clear();
+  useComposerDraftStore.setState({ drafts: {} });
   const cleanupRequestId = armTerminalAgentContinueProfile(
     HOST_ID,
     "epic-terminal",
@@ -382,6 +405,88 @@ afterAll(() => {
 });
 
 describe("account wait choices", () => {
+  it.each(["released", "continued"] as const)(
+    "preserves typed unsent composer text through account wait and %s",
+    async (outcome) => {
+      const session = waitSessionHarness;
+      if (session === null) throw new Error("Expected chat session");
+      const user = userEvent.setup();
+      const editorRef: { current: ComposerPromptEditorHandle | null } = {
+        current: null,
+      };
+      const selectionRef: ComposerDraftSelectionRef = { current: null };
+      const toolbar = toolbarStore();
+      emitLegacySnapshot(session.callbacks(), WAIT_SESSION_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
+      renderWithClient(
+        <>
+          <WaitScene list={providersList(true)} toolbar={toolbar}>
+            {null}
+          </WaitScene>
+          <ComposerDraftEditorHarness
+            chatId={WAIT_SESSION_IDENTITY.chatId}
+            epicId={WAIT_SESSION_IDENTITY.epicId}
+            hostId={WAIT_SESSION_IDENTITY.hostId}
+            editorRef={editorRef}
+            selectionRef={selectionRef}
+          />
+        </>,
+        new QueryClient(),
+      );
+
+      await user.type(
+        await screen.findByRole("textbox", { name: "test" }),
+        "unsent account wait line",
+      );
+      const observe = () =>
+        observeComposerDraft(
+          WAIT_SESSION_IDENTITY.chatId,
+          editorRef,
+          screen.getByTestId("composer-editor"),
+        );
+      const before = observe();
+      expect(before.editorJSON).toBe(before.draftJSON);
+      expect(before.visibleText).toBe("unsent account wait line");
+
+      act(() =>
+        emitLegacySnapshot(session.callbacks(), WAIT_SESSION_IDENTITY, {
+          pendingFallback: undefined,
+          pendingReturn: undefined,
+          accountWait: SOURCE_WAIT,
+        }),
+      );
+      await screen.findByRole("button", { name: "Sign in again" });
+      const during = observe();
+      expect(during).toEqual(before);
+
+      act(() => {
+        if (outcome === "released") {
+          emitLegacySnapshot(session.callbacks(), WAIT_SESSION_IDENTITY, {
+            pendingFallback: undefined,
+            pendingReturn: undefined,
+            accountWait: null,
+          });
+        } else {
+          emitTurnState(session.callbacks(), WAIT_SESSION_IDENTITY, {
+            pendingFallback: undefined,
+            pendingReturn: undefined,
+            accountWait: null,
+          });
+        }
+      });
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Sign in again" }),
+        ).toBeNull(),
+      );
+      const after = observe();
+      expect(after).toEqual(before);
+    },
+  );
+
   it.each([
     ["older list without offersSignIns", "absent"],
     ["list with offersSignIns false", "false"],
