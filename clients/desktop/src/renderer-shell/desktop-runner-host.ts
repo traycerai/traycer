@@ -1,9 +1,6 @@
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
-import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
@@ -266,12 +263,6 @@ export interface DesktopPreloadBridge {
     bearer: string,
     environmentId: string,
   ): Promise<TeamComputersResult>;
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult>;
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -1328,19 +1319,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     environmentId: string,
   ): Promise<TeamComputersResult> {
     return this.bridge.listTeamComputers(bearer, environmentId);
-  }
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    return this.bridge.setEnvironmentBotHost(
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
   }
   mintTeamComputerInstallToken(
     bearerToken: string,
