@@ -151,6 +151,24 @@ interface ProfileDropdownProps {
  * separator and a final "Add a profile" row.
  */
 export function ProfileDropdown(props: ProfileDropdownProps) {
+  return <ProfileDropdownView props={props} trigger={null} />;
+}
+
+/** The ordinary profile menu opened by an action with its own button label. */
+export function ProfileDropdownWithTrigger({
+  trigger,
+  ...props
+}: ProfileDropdownProps & { readonly trigger: ReactNode }) {
+  return <ProfileDropdownView props={props} trigger={trigger} />;
+}
+
+function ProfileDropdownView({
+  props,
+  trigger,
+}: {
+  readonly props: ProfileDropdownProps;
+  readonly trigger: ReactNode | null;
+}) {
   const {
     providerLabel,
     profiles,
@@ -226,30 +244,32 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         setPreviewProfileId(activeCommitId);
       }}
     >
-      <div className="relative w-full">
+      <div className={trigger === null ? "relative w-full" : "relative"}>
         <DropdownMenuTrigger asChild>
-          <button
-            id={triggerId}
-            type="button"
-            aria-label={profileTriggerAccessibleLabel(
-              providerLabel,
-              triggerProfile,
-              showTerminalBadge,
-            )}
-            className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
-          >
-            <ProfileTriggerContents
-              profile={triggerProfile}
-              besideSwitch={
-                triggerProfile !== null && eligibilityControls !== null
-              }
-              showTerminalBadge={showTerminalBadge}
-            />
-            <ChevronDown
-              data-slot="profile-dropdown-chevron"
-              className="size-4 shrink-0 text-muted-foreground"
-            />
-          </button>
+          {trigger ?? (
+            <button
+              id={triggerId}
+              type="button"
+              aria-label={profileTriggerAccessibleLabel(
+                providerLabel,
+                triggerProfile,
+                showTerminalBadge,
+              )}
+              className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
+            >
+              <ProfileTriggerContents
+                profile={triggerProfile}
+                besideSwitch={
+                  triggerProfile !== null && eligibilityControls !== null
+                }
+                showTerminalBadge={showTerminalBadge}
+              />
+              <ChevronDown
+                data-slot="profile-dropdown-chevron"
+                className="size-4 shrink-0 text-muted-foreground"
+              />
+            </button>
+          )}
         </DropdownMenuTrigger>
         <TriggerEnablementSwitch
           controls={eligibilityControls}
