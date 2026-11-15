@@ -3,6 +3,7 @@ import {
   registerDevicePushTokenViaHttp,
   removeDevicePushTokenViaHttp,
 } from "../push-token-fetcher";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import {
   removeNativeAbortHelpers,
   signalOfLastFetch,
@@ -191,4 +192,68 @@ describe("registerDevicePushTokenViaHttp on a fetch that ignores its signal", ()
     expect(settled).toBe(true);
     expect(await pending).toEqual({ kind: "network-error" });
   });
+});
+
+describe("a redirect answered to a push token request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on a register as a network error, never as stored, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer({}));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await registerDevicePushTokenViaHttp(AUTHN, "jwt-abc", {
+        token: "push-word",
+        platform: "ios",
+        environment: "production",
+        mutedSeverities: [],
+      });
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a remove as a network error, never as removed, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer({}));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await removeDevicePushTokenViaHttp(
+        AUTHN,
+        "jwt-abc",
+        "push-word",
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
 });

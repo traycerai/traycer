@@ -3,6 +3,7 @@ import {
   acceptEnvironmentInvitation,
   fetchEnvironmentInvitations,
 } from "../environment-invitations";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const BEARER = "invitation-test-bearer";
@@ -236,4 +237,69 @@ describe("environment invitation acceptance on a fetch that ignores its signal",
     expect(settled).toBe(true);
     await rejection;
   });
+});
+
+describe("a redirect answered to an environment invitation request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the list as a failed read, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const requests = stubFetch(() =>
+        answer({
+          invitations: [
+            {
+              environmentId: "env-beta",
+              teamName: "Beta",
+              role: "viewer",
+              paidPlan: true,
+            },
+          ],
+        }),
+      );
+
+      await expect(
+        fetchEnvironmentInvitations(AUTHN_BASE_URL, BEARER, null),
+      ).rejects.toThrow(
+        new Error("Couldn't reach team invitations. Try again."),
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.init?.redirect).toBe("manual");
+      expect(new Headers(requests[0]?.init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on an acceptance as a failed acceptance, with the choice sent once and never followed",
+    async ({ answer }) => {
+      const requests = stubFetch(() => answer({ outcome: "accepted" }));
+
+      await expect(
+        acceptEnvironmentInvitation(AUTHN_BASE_URL, BEARER, "env-beta"),
+      ).rejects.toThrow(
+        new Error("Couldn't accept this invitation. Try again."),
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.init?.redirect).toBe("manual");
+      expect(requests[0]?.init?.body).toBe(
+        JSON.stringify({ environmentId: "env-beta" }),
+      );
+    },
+  );
 });
