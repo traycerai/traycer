@@ -22,6 +22,7 @@ import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 
 const PUBLICATION_TARGETS_METHOD = "epic.listChatPublicationTargets" as const;
 const UNEXPLAINED_ROW_RECHECK_MS = 60_000;
+const MAX_FAILED_ROW_RECHECKS = 3;
 
 interface PublicationTargetsRefreshState {
   mounts: number;
@@ -29,6 +30,7 @@ interface PublicationTargetsRefreshState {
   readonly seenRows: Set<string>;
   readonly pendingRows: Map<string, number>;
   readonly recheckedRows: Set<string>;
+  readonly failedRechecks: Map<string, number>;
   inFlight: {
     readonly rows: ReadonlySet<string>;
     readonly dataUpdateCount: number;
@@ -50,6 +52,7 @@ function publicationTargetsRefreshState(
     seenRows: new Set(),
     pendingRows: new Map(),
     recheckedRows: new Set(),
+    failedRechecks: new Map(),
     inFlight: null,
   };
   refreshStates.set(query, state);
@@ -66,14 +69,18 @@ function settlePublicationTargetsRecheck(
   if (query.state.dataUpdateCount > inFlight.dataUpdateCount) {
     for (const id of inFlight.rows) state.recheckedRows.add(id);
   } else if (
-    query.state.status === "error" &&
     !(
       query.state.error instanceof HostRpcError &&
       query.state.error.code === "E_HOST_UNSUPPORTED"
     )
   ) {
     const deadline = Date.now() + UNEXPLAINED_ROW_RECHECK_MS;
-    for (const id of inFlight.rows) state.pendingRows.set(id, deadline);
+    for (const id of inFlight.rows) {
+      const failures = (state.failedRechecks.get(id) ?? 0) + 1;
+      state.failedRechecks.set(id, failures);
+      if (failures < MAX_FAILED_ROW_RECHECKS)
+        state.pendingRows.set(id, deadline);
+    }
   }
   state.inFlight = null;
 }
@@ -305,6 +312,7 @@ function useChatPublicationTargetsQuery(
         state.seenRows.clear();
         state.pendingRows.clear();
         state.recheckedRows.clear();
+        state.failedRechecks.clear();
         state.inFlight = null;
         state.lastRefresh = null;
       }
@@ -358,27 +366,30 @@ function useChatPublicationTargetsQuery(
 
   // Refresh when the unexplained own-row set differs from the last answer's
   // set. A newly unexplained row gets one successful re-check per mount about
-  // 60 s later; a failed non-unsupported read retries after another 60 s.
+  // 60 s later. Failed or reverted reads wait another 60 s, capped at three
+  // failures per row per mount; other refresh triggers remain available.
   // Until the clone is listed, the other host's row can remain folded under
   // the local id; listing the clone triggers refresh. Fork edges on the
   // addressable host can refresh the map sooner.
   useEffect(() => {
+    const cached = queryClient.getQueryCache().get(queryHash);
+    if (cached === undefined) return;
+    const state = publicationTargetsRefreshState(cached);
+    settlePublicationTargetsRecheck(cached, state);
     if (!isEnabled || isFetching) {
       return;
     }
-    const cached = queryClient.getQueryCache().get(queryHash);
     // Check the shared entry too: another observer's effect can start the
     // refresh before this observer renders its fetching state. Unsupported
     // hosts do not retry; other failures can recover on a new trigger.
     if (
-      cached?.state.fetchStatus !== "idle" ||
+      cached.state.fetchStatus !== "idle" ||
       (cached.state.error instanceof HostRpcError &&
         cached.state.error.code === "E_HOST_UNSUPPORTED") ||
       cached.state.dataUpdatedAt !== dataUpdatedAt
     ) {
       return;
     }
-    const state = publicationTargetsRefreshState(cached);
     const now = Date.now();
     const dueRows = unexplained.ids.filter((id) => {
       const deadline = state.pendingRows.get(id);

@@ -118,9 +118,10 @@ export interface UseHostQueryWithResponseMapOptions<
    * map refreshes when the unexplained own-row set differs from the last
    * answer's set. Until a clone is listed, the other host's row can stay folded
    * under the local id; listing the clone triggers a refresh, and one re-check
-   * about 60 s later, once per mount. A failed re-check waits another 60 s
-   * before retrying. Fork edges on the addressable host can refresh it sooner.
-   * Local membership does not require a new key.
+   * about 60 s later, once per mount. Failed or reverted re-checks wait another
+   * 60 s, capped at three failures per row per mount. Fork edges on the
+   * addressable host can refresh it sooner. Local membership does not require
+   * a new key.
    *
    * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
    * `captureRequestContext` - so the ordering fence stays the last thing read

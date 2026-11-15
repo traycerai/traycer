@@ -89,6 +89,13 @@ vi.mock("sonner", () => ({
 
 const CHAT_ID = "chat-1";
 const EPIC_ID = "epic-1";
+const TARGETS_QUERY_KEY = queryKeys.hostMethod<
+  HostRpcRegistry,
+  "epic.listChatPublicationTargets"
+>(mockLocalHostEntry.hostId, "epic.listChatPublicationTargets", {
+  epicId: EPIC_ID,
+  chatIds: [],
+});
 
 interface Harness {
   readonly queryClient: QueryClient;
@@ -329,18 +336,13 @@ describe("fork lifecycle notification-indicator refresh", () => {
     });
 
     await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
-    const key = queryKeys.hostMethod<
-      HostRpcRegistry,
-      "epic.listChatPublicationTargets"
-    >(mockLocalHostEntry.hostId, "epic.listChatPublicationTargets", {
-      epicId: EPIC_ID,
-      chatIds: [],
-    });
     expect(sidebar.result.current.data).toEqual(palette.result.current.data);
     expect(harness.targetRequests).toHaveLength(1);
     expect([...(harness.targetRequests[0] ?? [])].sort()).toEqual(paletteIds);
     expect(
-      harness.queryClient.getQueryCache().findAll({ queryKey: key }),
+      harness.queryClient
+        .getQueryCache()
+        .findAll({ queryKey: TARGETS_QUERY_KEY }),
     ).toHaveLength(1);
   });
 
@@ -389,6 +391,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
     await waitFor(() => expect(harness.targetRequests).toHaveLength(1));
     expect(harness.targetRequests[0]).toEqual(knownIds);
 
+    const writesBeforeRecovery =
+      harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount ??
+      0;
     ids = allIds;
     authoritative = true;
     failed = false;
@@ -399,8 +404,11 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(1);
     harness.targetGate.release?.();
 
-    await waitFor(() => expect(harness.targetRequests).toHaveLength(2));
-    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    await waitFor(() =>
+      expect(
+        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+      ).toBe(writesBeforeRecovery + 2),
+    );
     expect(harness.targetRequests).toEqual([knownIds, allIds]);
   });
 
@@ -435,6 +443,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
     harness.targetGate.promise = new Promise<void>((resolve) => {
       harness.targetGate.release = resolve;
     });
+    const writesBeforeRecovery =
+      harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount ??
+      0;
     act(() => {
       void sidebar.result.current.refetch();
     });
@@ -452,8 +463,11 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(2);
     harness.targetGate.release?.();
 
-    await waitFor(() => expect(harness.targetRequests).toHaveLength(3));
-    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    await waitFor(() =>
+      expect(
+        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+      ).toBe(writesBeforeRecovery + 2),
+    );
     expect(harness.targetRequests).toEqual([partialIds, partialIds, allIds]);
   });
 
@@ -707,6 +721,188 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(6);
   });
 
+  it("returns a cancelled and reverted recheck to pending for another 60 seconds", async () => {
+    const harness = createHarness(null);
+    let cloudChats: readonly CloudChatSummary[] = [];
+    const { result, rerender } = renderHook(
+      () =>
+        useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          cloudChats,
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
+          enabled: true,
+        }),
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    vi.useFakeTimers();
+    cloudChats = [cloudSummary("clone-cancelled", "host-other", true)];
+    act(() => rerender());
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+      ).toBe(2);
+    });
+    expect(harness.targetRequests).toHaveLength(2);
+
+    harness.targetGateIndex.value = 3;
+    harness.targetGate.promise = new Promise<void>((resolve) => {
+      harness.targetGate.release = resolve;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(true);
+    });
+    expect(harness.targetRequests).toHaveLength(3);
+
+    await act(async () => {
+      await harness.queryClient.cancelQueries(
+        { queryKey: TARGETS_QUERY_KEY, exact: true },
+        { revert: true },
+      );
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
+    expect(
+      harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+    ).toBe(2);
+
+    harness.targetRedirects.value = [
+      { chatId: CHAT_ID, publicationChatId: "clone-cancelled" },
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    expect(harness.targetRequests).toHaveLength(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(publicationTargetMap(result.current.data).get(CHAT_ID)).toBe(
+        "clone-cancelled",
+      );
+    });
+    expect(harness.targetRequests).toEqual(
+      Array.from({ length: 4 }, () => [CHAT_ID]),
+    );
+
+    harness.targetGate.release?.();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(harness.targetRequests).toHaveLength(4);
+  });
+
+  it("stops after three failed rechecks per row while allowing a fork refresh", async () => {
+    const harness = createHarness(null);
+    harness.queryClient.setDefaultOptions({
+      queries: {
+        ...harness.queryClient.getDefaultOptions().queries,
+        retryDelay: 0,
+      },
+      mutations: { retry: false },
+    });
+    let cloudChats: readonly CloudChatSummary[] = [];
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: [CHAT_ID],
+        cloudChats,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+        enabled: true,
+      });
+    const sidebar = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+
+    vi.useFakeTimers();
+    cloudChats = [cloudSummary("clone-capped", "host-other", true)];
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+      ).toBe(2);
+    });
+    expect(harness.targetRequests).toHaveLength(2);
+
+    harness.targetFailure.value = "rpc-error";
+    for (let failure = 1; failure <= 3; failure += 1) {
+      const errorsBeforeRecheck =
+        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)
+          ?.errorUpdateCount ?? 0;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await vi.waitFor(async () => {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(
+          harness.queryClient.getQueryState(TARGETS_QUERY_KEY)
+            ?.errorUpdateCount,
+        ).toBe(errorsBeforeRecheck + 1);
+        expect(sidebar.result.current.isFetching).toBe(false);
+      });
+      expect(harness.targetRequests).toHaveLength(2 + 3 * failure);
+    }
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(harness.targetRequests).toHaveLength(11);
+
+    harness.targetFailure.value = null;
+    harness.targetRedirects.value = [
+      { chatId: CHAT_ID, publicationChatId: "clone-capped" },
+    ];
+    act(() => {
+      invalidateChatPublicationTargets(
+        harness.queryClient,
+        mockLocalHostEntry.hostId,
+      );
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        publicationTargetMap(sidebar.result.current.data).get(CHAT_ID),
+      ).toBe("clone-capped");
+    });
+    expect(harness.targetRequests).toHaveLength(12);
+  });
+
   it("waits for an in-flight target read before sending the due recheck", async () => {
     const harness = createHarness(null);
     let cloudChats: readonly CloudChatSummary[] = [];
@@ -828,8 +1024,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       sidebar.rerender();
       palette.rerender();
     });
-    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
-    expect(palette.result.current.isFetching).toBe(false);
+    await waitFor(() => expect(sidebar.result.current.isError).toBe(false));
     expect(harness.targetRequests).toHaveLength(5);
   });
 
