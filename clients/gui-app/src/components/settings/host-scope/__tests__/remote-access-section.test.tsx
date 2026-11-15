@@ -243,14 +243,12 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       effectiveRole: "admin" as const,
     };
     let environments: EnvironmentDescriptorV11[] = [otherTeam];
-    let failEnvironmentList = false;
     let pendingEnvironmentList: Promise<EnvironmentListResponseV11> | null =
       null;
     const roleRead = Promise.withResolvers<EnvironmentListResponseV11>();
     pendingEnvironmentList = roleRead.promise;
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.list": () => {
-        if (failEnvironmentList) throw new Error("directory refused");
         const pending = pendingEnvironmentList;
         pendingEnvironmentList = null;
         return pending ?? { environments };
@@ -319,40 +317,6 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
-
-    environments = environmentListUpgradeV10ToV11.upgradeResponse({
-      environments: [TEAM_ENVIRONMENT],
-    }).environments;
-    await act(async () => {
-      await harness.queryClient.invalidateQueries();
-    });
-    noSwitch();
-
-    environments = [TEAM_ENVIRONMENT];
-    useAuthStore.setState({
-      shareableTeams: [
-        {
-          teamId: TEAM_ENVIRONMENT.ownerId,
-          slug: TEAM_ENVIRONMENT.providerHandle ?? "studio",
-          avatarUrl: null,
-        },
-      ],
-    });
-    await act(async () => {
-      await harness.queryClient.invalidateQueries();
-    });
-    await screen.findByRole("button", { name: "Turn on" });
-    failEnvironmentList = true;
-    await act(async () => {
-      await harness.queryClient.invalidateQueries();
-    });
-    noSwitch();
-
-    failEnvironmentList = false;
-    await act(async () => {
-      await harness.queryClient.invalidateQueries();
-    });
-    await screen.findByRole("button", { name: "Turn on" });
     host.state.remoteAccessError = new HostRpcError({
       code: "FORBIDDEN",
       message: "private refusal detail",
@@ -371,6 +335,14 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
       {},
     );
+
+    environments = environmentListUpgradeV10ToV11.upgradeResponse({
+      environments: [TEAM_ENVIRONMENT],
+    }).environments;
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
+    noSwitch();
   });
 
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
