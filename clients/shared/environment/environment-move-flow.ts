@@ -1,6 +1,6 @@
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
-import { recordMoveAcceptance } from "@traycer-clients/shared/environment/move-acceptance";
+import { HostRpcError } from "../host-transport/host-messenger";
+import type { EnvironmentCloud } from "./environment-cloud";
+import { recordMoveAcceptance } from "./move-acceptance";
 import type {
   EnvironmentMoveOutcomeAnswer,
   EnvironmentMovePersonal,

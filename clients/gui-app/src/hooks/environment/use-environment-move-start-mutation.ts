@@ -15,7 +15,7 @@ import {
   runEnvironmentMove,
   type EnvironmentMoveAcceptance,
   type EnvironmentMoveResult,
-} from "@/lib/environment/environment-move-flow";
+} from "@traycer-clients/shared/environment/environment-move-flow";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";

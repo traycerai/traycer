@@ -3,8 +3,8 @@ import {
   EnvironmentCloudError,
   type EnvironmentCloud,
   type EnvironmentTransportRequest,
-} from "@traycer-clients/shared/environment/environment-cloud";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+} from "../environment-cloud";
+import { HostRpcError } from "../../host-transport/host-messenger";
 import type {
   EnvironmentMoveOutcomeAnswer,
   EnvironmentMoveStageRequest,
