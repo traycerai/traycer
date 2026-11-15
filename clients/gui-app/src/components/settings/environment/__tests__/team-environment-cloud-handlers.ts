@@ -56,7 +56,7 @@ function appliedItemStatus(state: string): "applied" | "failed" | "pending" {
   return "pending";
 }
 
-function authnMcpServer(
+export function authnMcpServer(
   server: EnvironmentConfigurationMcpServersListResponse["servers"][number],
 ): AuthnMcpServer {
   const hasSecret = server.credential.kind === "secret";
@@ -100,6 +100,13 @@ export function authnSecretsList(response: EnvironmentSecretsListResponseV12) {
   };
 }
 
+export type TeamEnvironmentCloudResponses = Map<
+  string,
+  (
+    request: EnvironmentTransportRequest,
+  ) => EnvironmentTransportAnswer | Promise<EnvironmentTransportAnswer>
+>;
+
 export interface TeamEnvironmentCloudCall {
   readonly method: string;
   readonly params: unknown;
@@ -112,6 +119,8 @@ export function createTeamEnvironmentCloudHandlers(
 ) {
   const calls: TeamEnvironmentCloudCall[] = [];
   const requests: EnvironmentTransportRequest[] = [];
+  const responses: TeamEnvironmentCloudResponses = new Map();
+  const declarationToggles = new Map<string, AuthnMcpServer["toolToggles"]>();
   const conflictHistory = new Map<string, EnvironmentHistoryResponse>();
   let environments: readonly EnvironmentDescriptorV11[] = [];
 
@@ -211,7 +220,16 @@ export function createTeamEnvironmentCloudHandlers(
         return response === undefined
           ? null
           : jsonEnvironmentAnswer({
-              servers: response.servers.map(authnMcpServer),
+              servers: response.servers.map((server) => {
+                const row = authnMcpServer(server);
+                return {
+                  ...row,
+                  toolToggles:
+                    declarationToggles.get(
+                      JSON.stringify([environmentId, row.id]),
+                    ) ?? row.toolToggles,
+                };
+              }),
             });
       },
     ],
@@ -357,8 +375,10 @@ export function createTeamEnvironmentCloudHandlers(
     request: EnvironmentTransportRequest,
   ): Promise<EnvironmentTransportAnswer | null> {
     requests.push(request);
-    if (request.method !== "GET") return answerWrite(request);
     const url = new URL(request.url);
+    const response = responses.get(`${request.method} ${url.pathname}`);
+    if (response !== undefined) return response(request);
+    if (request.method !== "GET") return answerWrite(request);
     const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
     if (match === null) return null;
     const environmentId = decodeURIComponent(match[1]);
@@ -589,8 +609,13 @@ export function createTeamEnvironmentCloudHandlers(
       Object.keys(body).length === 1 &&
       "toolToggles" in body
     ) {
-      // Disabling retains row-level tool choices before deleting the item.
-      // The following item write is the fixture's observable mutation.
+      const serverId = decodeURIComponent(route.slice("mcp-servers/".length));
+      declarationToggles.set(
+        JSON.stringify([environmentId, serverId]),
+        z
+          .record(z.string(), z.record(z.string(), z.boolean()))
+          .parse(body.toolToggles),
+      );
       return jsonEnvironmentAnswer({});
     }
     if (route.startsWith("mcp-servers/") && request.method === "DELETE") {
@@ -605,6 +630,12 @@ export function createTeamEnvironmentCloudHandlers(
       if (response.outcome === "forbidden") return { status: 403, text: "{}" };
       if (response.outcome === "refused")
         return { status: 400, text: JSON.stringify({ code: response.reason }) };
+      declarationToggles.delete(
+        JSON.stringify([
+          environmentId,
+          decodeURIComponent(route.slice("mcp-servers/".length)),
+        ]),
+      );
       return jsonEnvironmentAnswer({ deleted: true });
     }
 
@@ -851,5 +882,5 @@ export function createTeamEnvironmentCloudHandlers(
     });
   }
 
-  return { calls, requests, onRequest, listEnvironments };
+  return { calls, requests, responses, onRequest, listEnvironments };
 }
