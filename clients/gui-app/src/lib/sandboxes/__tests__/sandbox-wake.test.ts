@@ -17,7 +17,10 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxListFetchResult,
@@ -280,10 +283,7 @@ describe("wakeSandboxOnPick", () => {
   // no row at all say nothing about whose sandbox it is.
   it.each<readonly [string, HostDirectoryEntry | null]>([
     ["no directory row for the host", null],
-    [
-      "a directory row with no owner",
-      { ...sandboxHostEntry(HOST_ID, null), owner: null },
-    ],
+    ["a directory row with no owner", sandboxHostEntryWithoutOwner(HOST_ID)],
   ])(
     "does not offer a personal top-up in the wake toast with %s",
     async (_state, row) => {

@@ -10,6 +10,7 @@ import {
   installHostDirectoryRows,
   resetHostDirectoryRows,
   sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
@@ -75,7 +76,7 @@ describe("a failed operation's credit line reads whose sandbox it is from the di
     ["no directory row for the host", [] as const],
     [
       "a directory row with no owner",
-      [{ ...sandboxHostEntry(HOST_ID, null), owner: null }] as const,
+      [sandboxHostEntryWithoutOwner(HOST_ID)] as const,
     ],
   ])(
     "tells nothing as the person's own and offers no top-up with %s",
