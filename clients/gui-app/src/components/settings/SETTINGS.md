@@ -6031,8 +6031,9 @@ use-team-chat-auto-archive.ts`). The same controls as the account
         to 1 second to 365 days, so no value outside the route is sent. A
         team that never saved one shows it off. Anyone the configuration
         gate does not let change it (`mayChangeConfiguration`) sees the value
-        with the controls greyed out. A failed read says the account row's
-        read line; a failed save, its save toast.
+        with the controls greyed out. A failed read adds "Couldn't read this
+        setting." under the description, naming no host, since no computer is
+        in the path; a failed save shows the account row's save toast.
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
         days". It is independent of Chats, so the switch never disables it.

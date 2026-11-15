@@ -147,15 +147,12 @@ describe("TeamChatAutoArchiveRow", () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
-  it("says the read failed in the account row's words when the read is refused", async () => {
+  it("says the read failed without naming a host when the read is refused", async () => {
     mocks.read.mockResolvedValue({ kind: "forbidden" });
     renderRow("admin");
 
-    expect(
-      await screen.findByText(
-        "Couldn't read the auto-archive setting from this host.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't read this setting.")).toBeTruthy();
+    expect(screen.queryByText(/from this host/)).toBeNull();
     expect(mainSwitch().hasAttribute("disabled")).toBe(true);
   });
 });

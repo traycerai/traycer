@@ -11,10 +11,7 @@ import {
 import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import { ChatAutoArchiveRowView } from "@/components/settings/panels/chat-auto-archive-settings-row";
 import { useQueuedAutoArchiveSave } from "@/hooks/chat-auto-archive/use-queued-auto-archive-save";
-import {
-  CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS,
-  chatAutoArchiveDefaultIdleSeconds,
-} from "@/components/settings/panels/chat-auto-archive-copy";
+import { chatAutoArchiveDefaultIdleSeconds } from "@/components/settings/panels/chat-auto-archive-copy";
 import {
   useTeamChatAutoArchiveQuery,
   useTeamChatAutoArchiveSetMutation,
@@ -24,6 +21,10 @@ import { useHostBinding } from "@/lib/host";
 import type { GrantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+
+// The team's setting is read from the account, not from a computer, so its
+// failure names no host.
+const TEAM_CHAT_AUTO_ARCHIVE_READ_ERROR = "Couldn't read this setting.";
 
 /**
  * Environment ▸ Storage ▸ Archived chats ▸ "Archive idle agents
@@ -82,7 +83,7 @@ function TeamChatAutoArchiveRowBody(props: {
         query.isError ? (
           <div className="flex flex-col gap-1">
             <p>{row.description}</p>
-            <p>{CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS}</p>
+            <p>{TEAM_CHAT_AUTO_ARCHIVE_READ_ERROR}</p>
           </div>
         ) : undefined
       }
