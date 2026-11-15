@@ -2,15 +2,9 @@ import { MessageSquare } from "lucide-react";
 import { useContext, useMemo, type ReactNode } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useEpicChatTitleQuery } from "@/hooks/chats/use-epic-chat-title-query";
 import { useRegisteredEpicLiveAgents } from "@/lib/epic-selectors";
 import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
 import { extractText } from "./extract-react-node-text";
 import { TraycerReferenceChip } from "./traycer-reference-chip";
 import { useTraycerReferenceOpenHandler } from "./use-traycer-reference-open";
@@ -86,7 +80,7 @@ function ChatReferenceLabel(props: {
   const queryClient = useContext(QueryClientContext);
   const hostClient = useOptionalHostClient();
   if (live !== null) {
-    return live.title ?? UNTITLED_AGENT_LABEL;
+    return titleOrUntitled(live.title);
   }
   // Markdown also renders with no host or query client behind it (the layout
   // editor's sample transcript).
@@ -107,38 +101,24 @@ function ChatReferenceLabel(props: {
 function LookedUpChatReferenceLabel(props: {
   readonly taskId: string;
   readonly chatId: string;
-  /** The app-wide host: the title is the account's, not one machine's. */
+  /** The surface's host, which the lookup passes to the pool when there is one. */
   readonly hostClient: HostClient<HostRpcRegistry>;
   readonly children: ReactNode;
 }): ReactNode {
-  const { taskId, chatId, hostClient } = props;
-  const servingClient = useMemo(
-    () => resolvePoolTierHostClient(hostClient),
-    [hostClient],
-  );
-  const viewerUserId = useAuthStore(
-    (state) => state.contextMetadata?.userId ?? null,
-  );
-  const cloudAuthorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const params = useMemo(() => ({ taskId, chatId }), [taskId, chatId]);
-  const lookup = useHostQuery<HostRpcRegistry, "epic.getChatTitle">({
-    // The answer is the viewer's: which row the cloud picks, and whether it
-    // may be read at all, differ between two accounts on one installation.
-    cacheKeyIdentity: viewerUserId === null ? undefined : [viewerUserId],
-    client: servingClient,
-    method: "epic.getChatTitle",
-    params,
-    preflight: cloudVerdictPreflight("epic.getChatTitle"),
-    options: {
-      enabled: cloudAuthorized && viewerUserId !== null,
-      refetchOnWindowFocus: false,
-    },
+  const lookup = useEpicChatTitleQuery({
+    client: props.hostClient,
+    taskId: props.taskId,
+    chatId: props.chatId,
   });
   const chat = lookup.data?.chat;
   if (chat === undefined || chat === null) {
     return labelAsWritten(props.children);
   }
-  return chat.title ?? UNTITLED_AGENT_LABEL;
+  return titleOrUntitled(chat.title);
+}
+
+function titleOrUntitled(title: string | null): string {
+  return title === null || title.trim().length === 0
+    ? UNTITLED_AGENT_LABEL
+    : title;
 }

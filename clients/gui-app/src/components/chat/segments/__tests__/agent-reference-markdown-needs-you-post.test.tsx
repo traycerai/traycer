@@ -17,8 +17,17 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const mocks = vi.hoisted(() => {
   const request =
@@ -90,6 +99,10 @@ let queryClient: QueryClient;
 beforeEach(() => {
   navigateToTabIntent.mockClear();
   openOrFocusEpicIntent.mockClear();
+  // Observers hear a query's answer synchronously, so a chip has drawn the
+  // answer by the time `titleLookupAnswered` returns.
+  notifyManager.setScheduler((notify) => notify());
+  recordNegotiatedHostMethods("host-test", ["epic.getChatTitle"]);
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -107,7 +120,23 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   mocks.request.mockReset();
   useAuthStore.getState().setSignedOut();
+  resetNegotiatedManifests();
+  notifyManager.setScheduler(defaultScheduler);
 });
+
+/** Resolves once the chip's one title lookup has answered and been drawn. */
+async function titleLookupAnswered(): Promise<void> {
+  await act(async () => {
+    await vi.waitFor(() => {
+      expect(
+        queryClient
+          .getQueryCache()
+          .getAll()
+          .map((query) => query.state.status),
+      ).toEqual(["success"]);
+    });
+  });
+}
 
 /** The host answers every `epic.getChatTitle` with `chat`. */
 function answerChatTitle(chat: { title: string | null } | null): void {
@@ -139,11 +168,12 @@ function renderPost(markdown: string): HTMLElement {
 }
 
 describe("a Needs you post in a channel with no open epic", () => {
-  it("draws an agent as a chip that opens its task and focuses that chat, and a pull request as a link", () => {
+  it("draws an agent as a chip that opens its task and focuses that chat, and a pull request as a link", async () => {
     answerChatTitle(null);
     const container = renderPost(
       `- <traycer-chat epicId="epic-7" chatId="chat-9">Fix the build</traycer-chat> waits on a steer\n- [Review comments on #42](${PR_URL})`,
     );
+    await titleLookupAnswered();
 
     const chip = screen.getByRole("button", { name: "Fix the build" });
     expect(chip.getAttribute("data-traycer-ref")).toBe("chat");
@@ -193,24 +223,42 @@ describe("an agent chip's label", () => {
   it("is Agent for an empty tag whose chat the host cannot find, and is still clickable", async () => {
     answerChatTitle(null);
     renderPost(`<traycer-chat epicId="epic-7" chatId="chat-9"></traycer-chat>`);
+    await titleLookupAnswered();
 
-    await screen.findByRole("button", { name: "Agent" });
-    await vi.waitFor(() => {
-      expect(chatTitleRequests()).toHaveLength(1);
-    });
     fireEvent.click(screen.getByRole("button", { name: "Agent" }));
 
     expect(openOrFocusEpicIntent.mock.calls[0][0].epicId).toBe("epic-7");
   });
 
-  it("is Untitled agent for a found chat that has no title", async () => {
-    answerChatTitle({ title: null });
+  it.each([
+    ["no title", null],
+    ["a blank title", "  "],
+  ])("is Untitled agent for a found chat with %s", async (_case, title) => {
+    answerChatTitle({ title });
     renderPost(
       `<traycer-chat epicId="epic-7" chatId="chat-9">Fix the build</traycer-chat>`,
     );
 
     await screen.findByRole("button", { name: "Untitled agent" });
     expect(screen.queryByRole("button", { name: "Fix the build" })).toBeNull();
+  });
+
+  it("keeps the written text, and the host is never asked, when the serving peer has not advertised the lookup", () => {
+    recordNegotiatedHostMethods("host-test", []);
+    answerChatTitle({ title: "From the host" });
+    renderPost(
+      `<traycer-chat epicId="epic-7" chatId="chat-9">Fix the build</traycer-chat>`,
+    );
+
+    screen.getByRole("button", { name: "Fix the build" });
+    // A fetch marks its query fetching the moment it starts, so an idle query
+    // after mount is one that never asked.
+    expect(
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.state.fetchStatus),
+    ).toEqual(["idle"]);
   });
 
   it("is the live title of a task mounted in this window, and the host is never asked", async () => {
