@@ -73,10 +73,7 @@ describe("main resolves the browser.sessions host itself", () => {
     });
     directory.subscribe(() => {
       const publishedOwner = directory.peek("host-1")?.owner;
-      if (
-        publishedOwner?.kind === "user" &&
-        publishedOwner.id === owner.id
-      ) {
+      if (publishedOwner?.kind === "user" && publishedOwner.id === owner.id) {
         resolveOwnerPublication();
       }
     });
