@@ -242,7 +242,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       environmentId: "another-team",
       effectiveRole: "admin" as const,
     };
-    let environments = [otherTeam];
+    let environments: EnvironmentDescriptorV11[] = [otherTeam];
     let failEnvironmentList = false;
     let pendingEnvironmentList: Promise<EnvironmentListResponseV11> | null =
       null;
