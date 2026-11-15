@@ -832,6 +832,12 @@ export const HOST_UNARY_RPC_ROUTES = {
   "worktree.setEntryMode": "target-host",
   "worktree.setRepoBranchPrefix": "target-host",
   "worktree.setRepoScripts": "target-host",
+  "epic.getChatTitle": "pool-only",
+  "providers.answerProfileName": "target-host",
+  "providers.previewProfileMove": "target-host",
+  "providers.commitProfileMove": "target-host",
+  "providers.beginApiKeyChange": "target-host",
+  "providers.settleApiKeyChange": "target-host",
 } as const satisfies { readonly [Method in HostUnaryRpcMethod]: HostRpcRoute };
 
 export const HOST_STREAM_RPC_ROUTES = {
