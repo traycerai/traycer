@@ -13,6 +13,7 @@ import type {
 import {
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -26,10 +27,17 @@ import {
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
 
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => ({
+      ...actual.useHostBinding(),
+      auth: requireTeamCloudAuth(),
+    }),
+  };
+});
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -106,7 +114,7 @@ function renderPanel(options: {
           effectiveRole: role,
           kind: "team" as const,
           hostCount: 1,
-          providerHandle: null,
+          providerHandle: "handle-a",
         },
       ],
     }),

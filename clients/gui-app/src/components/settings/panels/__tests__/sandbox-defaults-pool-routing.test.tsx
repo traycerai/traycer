@@ -10,7 +10,6 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   EnvironmentMembersResponseV12,
@@ -19,7 +18,6 @@ import type {
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import {
   configurationItem,
-  hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
   requireTeamHostClient,
@@ -162,16 +160,27 @@ function mountViewer(
   return harness;
 }
 
-function everyRequestWentToThePool(
-  harness: TeamPageHarness,
-  method: string,
-): void {
-  expect(hostIdsOf(harness, method)).not.toHaveLength(0);
-  expect(new Set(hostIdsOf(harness, method))).toEqual(new Set([POOL_HOST_ID]));
+function readsFromCloud(harness: TeamPageHarness, route: string): void {
+  expect(
+    harness.cloudRequests.some((request) => {
+      const url = new URL(request.url);
+      return (
+        request.method === "GET" &&
+        url.pathname === `/api/v3/environments/env-acme/${route}`
+      );
+    }),
+  ).toBe(true);
+  expect(
+    harness.messenger.calls.filter(
+      (call) =>
+        call.method ===
+        `environment.${route === "items" ? "configuration.items" : "members"}`,
+    ),
+  ).toEqual([]);
 }
 
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
-  it("shows the item's values, read through the server pool", async () => {
+  it("shows the item's values, read from the cloud on a build with a pool", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -188,10 +197,11 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
-    everyRequestWentToThePool(harness, "environment.configuration.items");
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
+    readsFromCloud(harness, "items");
   });
 
-  it("shows the editor roster read through the pool and the Members link", async () => {
+  it("shows the editor roster read from the cloud and the Members link", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -201,7 +211,7 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
       await screen.findByText("Ada, Bo can change defaults."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Members" })).toBeTruthy();
-    everyRequestWentToThePool(harness, "environment.members");
+    readsFromCloud(harness, "members");
   });
 
   it("shows roster loading until the members read answers", async () => {

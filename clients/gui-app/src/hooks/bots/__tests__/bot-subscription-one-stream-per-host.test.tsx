@@ -54,6 +54,10 @@ import { StubSession } from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
 const bindingRef = vi.hoisted(() => ({
   value: null as {
     readonly hostClient: HostClient<HostRpcRegistry>;
+    readonly directory: {
+      findById(hostId: string): HostDirectoryEntry | null;
+      onChange(listener: () => void): { dispose: () => void };
+    };
   } | null,
   directory: null as {
     findById(hostId: string): HostDirectoryEntry | null;
@@ -231,6 +235,7 @@ function pointWindowAtEffectiveHost(): void {
   bindingRef.directory = directory;
   bindingRef.value = {
     hostClient: client.createRequesterForHostId(EFFECTIVE_HOST.hostId),
+    directory,
   };
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
