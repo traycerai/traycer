@@ -43,7 +43,9 @@ import {
   QosClass,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
+  sessionOpenPayloadSchema,
   type ResumePayload,
+  type SessionOpenPayload,
 } from "../../mux";
 import {
   encodeResumeFrame,
@@ -255,6 +257,7 @@ class FakeRelay {
   readonly dialTimes: number[] = [];
   readonly clientFrames: ClientFrameRecord[] = [];
   readonly resumes: ResumePayload[] = [];
+  readonly openPayloads: SessionOpenPayload[] = [];
   readonly requestStreamIds: number[] = [];
   readonly pendingRequests: PendingRequest[] = [];
   readonly subscribedStreams: number[] = [];
@@ -273,6 +276,8 @@ class FakeRelay {
   autoTick = true;
   /** Runs in the tick right after a fresh (non-claim) ack. */
   onFreshAck: ((leg: Leg) => void) | null = null;
+  nextOpenFatal: { readonly code: string; readonly retryable: boolean } | null =
+    null;
 
   get publicKey(): Uint8Array {
     return this.keys.publicKey;
@@ -316,6 +321,17 @@ class FakeRelay {
     leg.closed = true;
     this.onLegClosed(leg, code);
     leg.onclose?.({ code, reason, wasClean: false });
+  }
+
+  /** The host closes its current open socket; the relay keeps the resumable row. */
+  hostCloseOpenConnection(): void {
+    const leg = this.currentLeg();
+    leg.closed = true;
+    leg.onclose?.({
+      code: 1006,
+      reason: "host closed open connection",
+      wasClean: false,
+    });
   }
 
   /** The host leg goes away; the relay says so. */
@@ -542,6 +558,13 @@ class FakeRelay {
       message.streamId === SESSION_CONTROL_STREAM_ID &&
       message.type === MuxFrameType.OPEN
     ) {
+      this.openPayloads.push(sessionOpenPayloadSchema.parse(json));
+      const fatal = this.nextOpenFatal;
+      if (fatal !== null) {
+        this.nextOpenFatal = null;
+        await this.sendSessionFatal(fatal.code, fatal.retryable);
+        return;
+      }
       await this.sendMux(session, {
         type: MuxFrameType.OPEN_ACK,
         streamId: SESSION_CONTROL_STREAM_ID,
@@ -668,16 +691,22 @@ function buildEvidence(relay: FakeRelay): EvidenceSpies {
   };
 }
 
-function hostAuth(revalidate: FixtureConfig["revalidate"]): RemoteSessionAuth {
+function hostAuth(
+  revalidate: FixtureConfig["revalidate"],
+  readBearer: () => string,
+): RemoteSessionAuth {
   return {
     missingOpenAuthCause: "missing-host-credential",
-    readOpenAuth: () => ({
-      bearer: "relink-bearer",
-      authz: null,
-      fingerprint: "relink-bearer",
-    }),
-    readCredentialUpdateBearer: () => "relink-bearer",
-    currentFingerprint: () => "relink-bearer",
+    readOpenAuth: (attachGrant) => {
+      const bearer = readBearer();
+      return {
+        bearer,
+        authz: { v: 1, grant: attachGrant.grant },
+        fingerprint: `${bearer}:${attachGrant.grant}`,
+      };
+    },
+    readCredentialUpdateBearer: readBearer,
+    currentFingerprint: readBearer,
     revalidateForReconnect: revalidate,
   };
 }
@@ -706,6 +735,7 @@ interface Fixture {
   readonly statuses: StatusEvent[];
   readonly readinessLost: Mock<() => void>;
   readonly recovered: Mock<() => void>;
+  readonly setOpenBearer: (bearer: string) => void;
 }
 
 const opened: Session[] = [];
@@ -756,12 +786,13 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     }),
   );
   let nextRequestId = 0;
+  let openBearer = "relink-bearer";
   const session: Session = new RemoteSession({
     hostId: HOST_ID,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.publicKey,
     grantProvider: grants,
-    auth: hostAuth(config.revalidate),
+    auth: hostAuth(config.revalidate, () => openBearer),
     clock: null,
     rpcRegistry,
     streamRegistry,
@@ -805,6 +836,9 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     statuses,
     readinessLost,
     recovered,
+    setOpenBearer: (bearer) => {
+      openBearer = bearer;
+    },
   };
 }
 
@@ -2237,6 +2271,71 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs).toHaveLength(2);
       expect(relay.legs[1]?.claim).toBeNull();
       expect(relay.sessions).toHaveLength(2);
+    });
+  });
+
+  describe("a host closes and the same session reopens", () => {
+    it("redials after the host closes an open connection and presents the newly read host-only token", async () => {
+      const fixture = await readyFixture({ ...LIVE, issueKeys: false });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+      fixture.setOpenBearer("reopened-host-only-token");
+      fixture.grants.mockImplementationOnce(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "reopened-grant-jws", expiresInSeconds: 300 },
+        }),
+      );
+      relay.hostCloseOpenConnection();
+
+      expect(session.isClosed()).toBe(false);
+      expect(onClosed).not.toHaveBeenCalled();
+
+      await advanceUntil(() => relay.openPayloads.length === 2, 30_000);
+      await advanceUntil(() => session.isReady(), 30_000);
+      await relay.host().queue;
+      await settleNoise();
+
+      expect(session.isReady()).toBe(true);
+      expect(session.isClosed()).toBe(false);
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(relay.legs).toHaveLength(2);
+      expect(relay.openPayloads.map(({ bearer }) => bearer)).toEqual([
+        "relink-bearer",
+        "reopened-host-only-token",
+      ]);
+      expect(relay.openPayloads[0]?.authz).toEqual({
+        v: 1,
+        grant: "grant-jws",
+      });
+      expect(relay.openPayloads[1]?.authz).toEqual({
+        v: 1,
+        grant: "reopened-grant-jws",
+      });
+      expect(fixture.session).toBe(session);
+    });
+
+    it("ends on the host's non-retryable UNAUTHORIZED answer at reopen", async () => {
+      const fixture = await readyFixture({ ...LIVE, issueKeys: false });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+      relay.nextOpenFatal = { code: "UNAUTHORIZED", retryable: false };
+
+      relay.hostCloseOpenConnection();
+
+      expect(session.isClosed()).toBe(false);
+      expect(onClosed).not.toHaveBeenCalled();
+
+      await advanceUntil(() => relay.openPayloads.length === 2, 30_000);
+      await advanceUntil(() => session.isClosed(), 1_000);
+      await until(() => onClosed.mock.calls.length === 1);
+
+      expect(session.isClosed()).toBe(true);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(session.terminalFatal()?.code).toBe("UNAUTHORIZED");
+      expect(relay.openPayloads).toHaveLength(2);
     });
   });
 
