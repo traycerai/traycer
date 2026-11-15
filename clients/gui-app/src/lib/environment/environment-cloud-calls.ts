@@ -1,5 +1,6 @@
 import {
   EnvironmentCloudError,
+  SETTINGS_REFUSED_MESSAGE,
   type EnvironmentCloud,
   type EnvironmentErrorKind,
 } from "@traycer-clients/shared/environment/environment-cloud";
@@ -88,10 +89,7 @@ type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
  */
 function namedEnvironment(environmentId: string | null): string {
   if (environmentId === null) {
-    throw new EnvironmentCloudError(
-      "invalid",
-      "The settings request was refused.",
-    );
+    throw new EnvironmentCloudError("invalid", SETTINGS_REFUSED_MESSAGE);
   }
   return environmentId;
 }
