@@ -18,6 +18,7 @@ import { useRegionShown, useStatusBarVisible } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -54,6 +55,7 @@ export function MobileAppHeader(): ReactNode {
   const showGlobalResourceMonitor = !footerShown && resourceMonitorShown;
   const showUsageLimits = !footerShown && usageLimitsShown;
   const surface = useMobileHeaderSurface();
+  const botHeaderSlot = useMobileBotHeaderSlot();
   const epicTabId = surface.kind === "epic" ? surface.tabId : null;
   const epicId = useMobileHeaderEpicId(epicTabId);
   const title = useMobileHeaderTitle(surface, epicId, epicTabId);
@@ -94,11 +96,19 @@ export function MobileAppHeader(): ReactNode {
           <Menu className="size-4" />
         </Button>
       )}
-      <MobileHeaderTitleSlot
-        title={title}
-        settingsSection={settingsSection}
-        epicId={epicId}
-      />
+      {surface.kind === "bot" ? (
+        <div
+          ref={botHeaderSlot?.setTarget}
+          className="flex h-full min-w-0 flex-1 items-center"
+          data-testid="mobile-bot-header-slot"
+        />
+      ) : (
+        <MobileHeaderTitleSlot
+          title={title}
+          settingsSection={settingsSection}
+          epicId={epicId}
+        />
+      )}
       {/* Right cluster: global status controls sit parallel to the hamburger,
           mirroring the desktop header's rate-limit + resource-monitor gating
           (navDisabled never applies here - MobileAppHeader only renders for the

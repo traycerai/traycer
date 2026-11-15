@@ -1,15 +1,23 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import { createPortal } from "react-dom";
 import {
   BotChannelSidebar,
   type BotThreadsViewState,
 } from "@/components/bots/bot-channel-sidebar";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
+import { MobileLevel2Column } from "@/components/layout/shell/mobile-level2";
+import { Button } from "@/components/ui/button";
 import {
-  MobileLevel2Column,
-  MobileLevel2MenuContent,
-  MobileLevel2MenuTrigger,
-} from "@/components/layout/shell/mobile-level2";
-import { Popover } from "@/components/ui/popover";
+  Drawer,
+  DrawerContent,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
+import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
+import { cn } from "@/lib/utils";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 
@@ -81,18 +89,27 @@ export function BotUnselectedLevel2Pane(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { level2 } = props;
+  const botHeaderSlot = useMobileBotHeaderSlot();
+  const target = titlePicks(level2) ? (botHeaderSlot?.target ?? null) : null;
   if (!titlePicks(level2)) return props.children;
+  const title = (
+    <BotChannelTitle
+      level2={level2}
+      title={props.title}
+      activeBotId={null}
+      hostId={props.hostId}
+      threadsView={props.threadsView}
+    />
+  );
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
-        <BotChannelTitle
-          level2={level2}
-          title={props.title}
-          activeBotId={null}
-          hostId={props.hostId}
-          threadsView={props.threadsView}
-        />
-      </header>
+      {target === null ? (
+        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+          {title}
+        </header>
+      ) : (
+        createPortal(title, target)
+      )}
       {props.children}
     </div>
   );
@@ -100,8 +117,8 @@ export function BotUnselectedLevel2Pane(props: {
 
 /**
  * The bot's name at the head of its channel. Where the installed app draws no
- * column the name is also the picker: the bots list in a menu under it, closed
- * by a pick or by tapping outside.
+ * column the name is also the picker: a full-width bots sheet, closed by a
+ * pick or by dismissing it.
  */
 export function BotChannelTitle(props: {
   readonly level2: MobileLevel2Form | null;
@@ -141,6 +158,8 @@ function BotChannelPicker(props: {
 }): ReactNode {
   const { title, activeBotId, hostId, threadsView } = props;
   const [open, setOpen] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const { resolvedTheme, themePreset } = useResolvedTheme();
   const close = (): void => setOpen(false);
   // The list that shows the environment is closed while this is read.
   const name = useStandaloneBotName(activeBotId, title);
@@ -159,21 +178,42 @@ function BotChannelPicker(props: {
     [threadsView],
   );
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <MobileLevel2MenuTrigger
-        testId="bot-channel-picker-trigger"
-        className={undefined}
+    <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
+      <DrawerTrigger asChild>
+        <Button
+          type="button"
+          variant="muted"
+          size="sm"
+          data-testid="bot-channel-picker-trigger"
+          className="min-w-0 max-w-full shrink justify-start"
+        >
+          <span className="min-w-0 truncate">{name}</span>
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      </DrawerTrigger>
+      <DrawerContent
+        ref={contentRef}
+        tabIndex={-1}
+        data-mobile-shell-touch-scope=""
+        data-testid="bot-channel-picker"
+        data-theme={themePreset}
+        className={cn(
+          resolvedTheme === "dark" && "dark",
+          "bottom-(--keyboard-inset)! h-[min(70%,var(--spacing-safe-dvh))] pb-safe-bottom",
+        )}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          contentRef.current?.focus();
+        }}
       >
-        <span className="min-w-0 truncate">{name}</span>
-      </MobileLevel2MenuTrigger>
-      <MobileLevel2MenuContent label="Channels" testId="bot-channel-picker">
+        <DrawerTitle className="sr-only">Channels</DrawerTitle>
         <BotChannelSidebar
           activeBotId={activeBotId}
           hostId={hostId}
           threadsView={pickerThreadsView}
           onChannelOpened={close}
         />
-      </MobileLevel2MenuContent>
-    </Popover>
+      </DrawerContent>
+    </Drawer>
   );
 }
