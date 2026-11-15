@@ -943,7 +943,7 @@ describe("A skill on a provider's Skills tab", () => {
 
       const row = await skillRow("deploy");
       fireEvent.click(
-        await within(row).findByRole("button", { name: "Add to Personal" }),
+        await within(row).findByRole("button", { name: "Add to Acme" }),
       );
 
       expect(await within(row).findByText(sentence)).toBeTruthy();
