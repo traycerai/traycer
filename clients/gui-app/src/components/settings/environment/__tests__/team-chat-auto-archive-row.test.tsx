@@ -9,15 +9,21 @@ import type {
   TeamChatAutoArchiveSetRequest,
   TeamChatAutoArchiveWriteResult,
 } from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+const ERA: AuthEra = { identity: "user-a", credentialGeneration: 1 };
+
 const mocks = vi.hoisted(() => ({
-  read: vi.fn<(teamId: string) => Promise<TeamChatAutoArchiveReadResult>>(),
+  read: vi.fn<
+    (teamId: string, era: AuthEra) => Promise<TeamChatAutoArchiveReadResult>
+  >(),
   write:
     vi.fn<
       (
         teamId: string,
         request: TeamChatAutoArchiveSetRequest,
+        era: AuthEra,
       ) => Promise<TeamChatAutoArchiveWriteResult>
     >(),
   list: { current: { environments: [] as unknown[] } },
@@ -27,6 +33,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => ({
     auth: {
+      currentAuthEra: (): AuthEra => ERA,
       getTeamChatAutoArchive: mocks.read,
       setTeamChatAutoArchive: mocks.write,
     },
@@ -104,7 +111,7 @@ describe("TeamChatAutoArchiveRow", () => {
       expect(mainSwitch().hasAttribute("disabled")).toBe(false),
     );
     expect(mainSwitch().getAttribute("aria-checked")).toBe("false");
-    expect(mocks.read).toHaveBeenCalledWith("team-a");
+    expect(mocks.read).toHaveBeenCalledWith("team-a", ERA);
     expect(
       screen.getByText(
         "Tidy up chats agents started once they go quiet. Applies on every host in this environment.",
@@ -113,11 +120,11 @@ describe("TeamChatAutoArchiveRow", () => {
 
     await userEvent.click(mainSwitch());
 
-    expect(mocks.write).toHaveBeenCalledExactlyOnceWith("team-a", {
-      enabled: true,
-      includeUserCreated: false,
-      idleSeconds: 3600,
-    });
+    expect(mocks.write).toHaveBeenCalledExactlyOnceWith(
+      "team-a",
+      { enabled: true, includeUserCreated: false, idleSeconds: 3600 },
+      ERA,
+    );
     expect(
       await screen.findByText("Include chats members started"),
     ).toBeTruthy();

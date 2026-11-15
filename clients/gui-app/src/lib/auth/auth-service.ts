@@ -3175,21 +3175,11 @@ export class AuthService {
     hostId: string,
     era: AuthEra,
   ): Promise<HostOwnershipResult> {
-    const before = this.currentAuthEra();
-    if (
-      before.identity !== era.identity ||
-      before.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+    this.assertLiveAuthEra(era);
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     const result = await this.runnerHost.readHostOwnership(bearer, hostId);
-    const after = this.currentAuthEra();
-    if (
-      after.identity !== era.identity ||
-      after.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+    this.assertLiveAuthEra(era);
     return result;
   }
 
@@ -3296,28 +3286,51 @@ export class AuthService {
   }
 
   /**
-   * A team's chat auto-archive setting on traycer-server, on the person's
-   * sign-in. A build that cannot reach traycer-server reads it as a failure.
+   * A team's chat auto-archive setting on traycer-server, on the sign-in
+   * `era` names. A build that cannot reach traycer-server reads it as a
+   * failure; an era that is no longer the live one throws
+   * {@link SupersededAuthEraError}, before the request or after its answer.
    */
   async getTeamChatAutoArchive(
     teamId: string,
+    era: AuthEra,
   ): Promise<TeamChatAutoArchiveReadResult> {
     if (this.sandboxControlUnavailableReason() !== null)
       return { kind: "failed" };
+    this.assertLiveAuthEra(era);
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.getTeamChatAutoArchive(bearer, teamId);
+    const result = await this.runnerHost.getTeamChatAutoArchive(bearer, teamId);
+    this.assertLiveAuthEra(era);
+    return result;
   }
 
+  /**
+   * Saves a team's setting with the bearer of the sign-in that made the
+   * choice. A save queued behind another one is sent later, so `era` is the
+   * sign-in captured when the person chose, and a different live one throws
+   * {@link SupersededAuthEraError} instead of sending it as someone else.
+   */
   async setTeamChatAutoArchive(
     teamId: string,
     request: TeamChatAutoArchiveSetRequest,
+    era: AuthEra,
   ): Promise<TeamChatAutoArchiveWriteResult> {
     if (this.sandboxControlUnavailableReason() !== null)
       return { kind: "failed" };
+    this.assertLiveAuthEra(era);
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setTeamChatAutoArchive(bearer, teamId, request);
+  }
+
+  private assertLiveAuthEra(era: AuthEra): void {
+    const live = this.currentAuthEra();
+    if (
+      live.identity !== era.identity ||
+      live.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
   }
 
   async getTraycerModels(): Promise<TraycerModelsFetchResult> {

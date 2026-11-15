@@ -20,6 +20,7 @@ import {
   useTeamChatAutoArchiveSetMutation,
 } from "@/hooks/chat-auto-archive/use-team-chat-auto-archive";
 import { trackSettingChanged } from "@/lib/analytics";
+import { useHostBinding } from "@/lib/host";
 import type { GrantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -54,15 +55,25 @@ function TeamChatAutoArchiveRowBody(props: {
   readonly teamId: string;
   readonly canEdit: boolean;
 }): ReactNode {
+  const auth = useHostBinding()?.auth ?? null;
   const query = useTeamChatAutoArchiveQuery(props.teamId);
   const setPolicy = useTeamChatAutoArchiveSetMutation(props.teamId);
   const record = query.data;
   const current = setPolicy.isPending
-    ? setPolicy.variables
+    ? setPolicy.variables.request
     : teamShownPolicy(record);
-  const save = useQueuedAutoArchiveSave(current, setPolicy.mutate, () => {
-    trackSettingChanged("storage", "chatAutoArchive");
-  });
+  const save = useQueuedAutoArchiveSave(
+    current,
+    (request, callbacks) => {
+      // A read answered, so a sign-in exists; its era is taken now, at the
+      // choice, not when the queued save's turn comes.
+      if (auth === null) return;
+      setPolicy.mutate({ request, era: auth.currentAuthEra() }, callbacks);
+    },
+    () => {
+      trackSettingChanged("storage", "chatAutoArchive");
+    },
+  );
   const row = STORAGE.definitions.chatAutoArchive;
   return (
     <ChatAutoArchiveRowView
