@@ -22,6 +22,7 @@ import {
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
@@ -41,6 +42,7 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
+const SAVED_KINDS = ["agent_memory"] as const;
 
 interface ConfirmationSnapshot<T> {
   readonly response: T;
@@ -179,6 +181,7 @@ function hostRowStatus(input: {
  */
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const queryClient = useQueryClient();
   const entryHash = useHostQueryEntryHash({
     cacheKeyIdentity: undefined,
@@ -188,6 +191,11 @@ function AgentMemoriesRow(): ReactNode {
   });
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: AGENT_MEMORIES_SET, request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.agentMemoriesSet(),
     errorMessage: "Couldn't update memories",
     // The observer owns sequential confirmation reads. Mark this exact entry
