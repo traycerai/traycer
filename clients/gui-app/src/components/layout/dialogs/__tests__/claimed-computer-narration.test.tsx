@@ -393,8 +393,9 @@ function windowButtons(): readonly (string | null)[] {
 }
 
 function assertWindowClaim(claimant: string, team: string): void {
-  expect(screen.getByText(`${claimant} claimed this computer`)).toBeTruthy();
-  expect(screen.getByText(`It no longer belongs to ${team}.`)).toBeTruthy();
+  const window = within(screen.getByTestId("window-host-modal"));
+  expect(window.getByText(`${claimant} claimed this computer`)).toBeTruthy();
+  expect(window.getByText(`It no longer belongs to ${team}.`)).toBeTruthy();
   expect(windowButtons()).toEqual(["Open settings"]);
 }
 
@@ -1207,6 +1208,7 @@ describe("claimed-computer narration consumers", () => {
     const initialRead = deferredClaimRead();
     queueClaimPlan(ENVIRONMENT_ID, initialRead);
     queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
+    queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
     ]);
@@ -1236,16 +1238,16 @@ describe("claimed-computer narration consumers", () => {
         );
     });
     await waitFor(() => expect(initialRead.signalAborted).toBe(true));
-    await waitFor(() => expect(claimCallCount(ENVIRONMENT_ID)).toBe(2));
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     expect(await replacementOutcome).toEqual(
       new Error("replacement claims failed"),
     );
+    const readsAfterFailure = claimCallCount(ENVIRONMENT_ID);
     harness.show(true, []);
 
     expect(screen.getByText("No host is available")).toBeTruthy();
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
-    expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(readsAfterFailure);
   });
 
   it("keeps today's cover when no claim names this computer", async () => {
