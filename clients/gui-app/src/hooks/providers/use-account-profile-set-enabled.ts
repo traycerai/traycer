@@ -6,10 +6,7 @@ import {
   type RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { TUI_HARNESS_ID_TO_PROVIDER_ID } from "@traycer/protocol/host/provider-schemas";
-import {
-  listOffersSignIns,
-  profileUsesRecord,
-} from "@/components/providers/provider-profile-model";
+import { profileUsesRecord } from "@/components/providers/provider-profile-model";
 import { useAuthService, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -43,13 +40,11 @@ export function useAccountProfileSetEnabledForClient(
     [client, hostId],
   );
   const list = useCachedProvidersList(client);
-  const offersSignIns = listOffersSignIns(list);
   const profiles = list?.providers.find(
     (provider) => provider.providerId === providerId,
   )?.profiles;
   const hasRecord =
-    profiles?.some((profile) => profileUsesRecord(profile, offersSignIns)) ===
-    true;
+    profiles?.some((profile) => profileUsesRecord(profile)) === true;
   const environmentId = useProfileRecordEnvironmentId(client, hasRecord);
   const reader = useCachedProviderProfilesReader(pinnedClient, providerId);
   const record = useMutation<void, HostRpcError, SetEnabledRequest>({
@@ -95,7 +90,7 @@ export function useAccountProfileSetEnabledForClient(
       const profile = profiles?.find(
         (row) => row.profileId === variables.profileId,
       );
-      if (profile !== undefined && profileUsesRecord(profile, offersSignIns))
+      if (profile !== undefined && profileUsesRecord(profile))
         record.mutate(variables);
       else local.mutate(variables);
     },

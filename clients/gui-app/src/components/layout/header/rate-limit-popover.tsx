@@ -1,4 +1,3 @@
-import { useCachedProvidersList } from "@/hooks/providers/use-cached-providers-list";
 import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
@@ -40,7 +39,6 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { ProfileOtherNameChips } from "@/components/providers/profile-other-name-chips";
 import {
-  listOffersSignIns,
   profileCommitId,
   profileDisplayLabel,
   resolvedProfileRow,
@@ -2184,7 +2182,6 @@ function ProfileRateLimitProviderBlock({
     client,
     providerId,
   );
-  const offersSignIns = listOffersSignIns(useCachedProvidersList(client));
   const profileEnablementAvailable = profiles.some(
     (profile) => profile.kind === "managed",
   );
@@ -2359,7 +2356,7 @@ function ProfileRateLimitProviderBlock({
                 true,
                 providerDisplayName(providerId),
                 target.profile,
-                { profiles, offersSignIns },
+                profiles,
               )}
               onSetProfileEnabled={(enabled) =>
                 setProfileEnabled.mutate({
