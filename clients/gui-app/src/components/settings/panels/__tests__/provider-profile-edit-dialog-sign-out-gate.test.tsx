@@ -33,6 +33,7 @@ const fixture = vi.hoisted(() => ({
     | "own_settings"
     | "pending"
     | "failed"
+    | "cached-bound-error"
     | "empty",
   bindingRefetch: vi.fn(),
   auth: {
@@ -72,6 +73,16 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     if (fixture.bindingAnswer === "pending") return { kind: "pending" };
     if (fixture.bindingAnswer === "failed") {
       return { kind: "failed", retry: vi.fn() };
+    }
+    if (fixture.bindingAnswer === "cached-bound-error") {
+      return {
+        kind: "binding",
+        query: {
+          data: { environment: { environmentId: "bound-environment" } },
+          isError: true,
+          refetch: fixture.bindingRefetch,
+        },
+      };
     }
     return {
       kind: "binding",
@@ -464,6 +475,25 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       expect(fixture.openChanges).toEqual([]);
     },
   );
+
+  it("fails closed when a cached binding is present but its query failed", async () => {
+    fixture.offersSignIns = true;
+    fixture.bindingAnswer = "cached-bound-error";
+    const messenger = installSignOutClient();
+    renderDialog({ ...profile(undefined, undefined), aliases: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() =>
+      expect(storedToastTitles()).toContain("Couldn't sign out."),
+    );
+    expect(fixture.auth.signOutProfileRecord).not.toHaveBeenCalled();
+    expect(fixture.auth.removeProfileRecord).not.toHaveBeenCalled();
+    expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+    expect(messenger.calls).toEqual([]);
+    expect(fixture.openChanges).toEqual([]);
+  });
 
   it("tells the person to refresh when the connection changed, and leaves the retry to them", async () => {
     fixture.supportsSignOut = true;
