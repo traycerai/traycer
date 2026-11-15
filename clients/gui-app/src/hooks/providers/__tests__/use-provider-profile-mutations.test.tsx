@@ -43,6 +43,7 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.client,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => mocks.client,
+  useHostBinding: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
