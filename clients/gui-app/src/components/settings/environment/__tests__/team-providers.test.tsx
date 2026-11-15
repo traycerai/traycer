@@ -20,7 +20,6 @@ import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
 import {
   mountTeamPage,
   mountVerifiedTeamProvidersPage,
@@ -80,7 +79,6 @@ afterEach(() => {
   resetTeamPageHarness();
   resetNegotiatedManifests();
   apiKeyPageHost.hostId = null;
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   useSettingsEnvironmentPickStore.setState({ pick: null });
   setSystemTabModalApi(null);
   vi.restoreAllMocks();
