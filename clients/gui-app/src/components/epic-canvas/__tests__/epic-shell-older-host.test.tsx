@@ -118,11 +118,15 @@ const directory = vi.hoisted(() => ({
       },
     },
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
+  // What the window's narration reads off the directory.
+  hasConcludedDiscovery: () => true,
+  getLocalHostId: (): string | null => null,
 }));
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => hostClient,
   useHostRuntimeClient: () => hostClient,
+  useOptionalHostClient: () => hostClient,
   useHostBinding: () => ({ hostClient, directory }),
   useHostDirectory: () => directory,
   useAuthService: () => ({
@@ -197,20 +201,25 @@ vi.mock(
   },
 );
 
-// Counts every attempt to open a transport, whether the opener refuses it or
-// not: "no further attempt" is the claim of the ladder cases.
-vi.mock("@/lib/host/durable-stream-transport", async (importOriginal) => {
+// Counts every attempt to open a transport, whether the real opener refuses it
+// or not: "no further attempt" is the claim of the ladder cases.
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
   const actual =
     await importOriginal<
-      typeof import("@/lib/host/durable-stream-transport")
+      typeof import("@/lib/host/use-durable-stream-transport")
     >();
+  const { useMemo } = await import("react");
   return {
     ...actual,
-    openDurableStreamTransport: (
-      params: Parameters<typeof actual.openDurableStreamTransport>[0],
-    ) => {
-      seams.openAttempts.push(params.target.hostId);
-      return actual.openDurableStreamTransport(params);
+    useDurableStreamTransportFactory: () => {
+      const real = actual.useDurableStreamTransportFactory();
+      return useMemo(
+        () => (hostId: string) => {
+          seams.openAttempts.push(hostId);
+          return real(hostId);
+        },
+        [real],
+      );
     },
   };
 });
@@ -379,6 +388,19 @@ function renderTabOnTheWindowsComputer(): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  // The window is attached to this computer and has been served by it: the
+  // drop below the floor then reads as a computer that stopped being usable,
+  // not as a first launch.
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: TAB_HOST_ID,
+      effectiveHostId: TAB_HOST_ID,
+      leases: [{ hostId: TAB_HOST_ID, status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -393,9 +415,12 @@ function renderTabOnTheWindowsComputer(): void {
   );
 }
 
-function renderTabOnAnotherComputer(): void {
-  // The tab's own computer, not the window's: the create-host seed names it.
-  markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
+  // The tab's own computer, not the window's: the create-host seed names it,
+  // and the window's computer is then the tab's original host. Without the
+  // seed the tab simply follows the effective computer.
+  if (hasOriginalHost) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+  else seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -464,13 +489,33 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     setMobileApp(false);
   });
 
-  it("shows Host update needed with one Update now and no Retry", async () => {
+  it("shows Host update needed, Update now and Open on original host, and no Retry", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
 
     publishTabRow("1.5.4");
+
+    const card = await screen.findByTestId("epic-repoint-failure");
+    expect(within(card).getByText("Host update needed")).toBeTruthy();
+    // The card's one action is Update now; "Open on original host" is the
+    // re-point's own way back, present because this tab has an original host.
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Update now", "Open on original host"]);
+    expect(within(card).queryByText(/Retry/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load this task/)).toBeNull();
+    expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
+  });
+
+  it("shows Update now alone when the tab never had a session to go back to", async () => {
+    installStreams();
+    publishTabRow("1.5.4");
+
+    renderTabOnAnotherComputer(false);
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
@@ -480,33 +525,42 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         .map((button) => button.textContent),
     ).toEqual(["Update now"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
-    expect(screen.queryByText(/Couldn't load this task/)).toBeNull();
-    expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
   });
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     expect(seams.openAttempts).toEqual([TAB_HOST_ID]);
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
-    // The one failed construction: the opener was asked once more and refused.
-    expect(seams.openAttempts).toEqual([TAB_HOST_ID, TAB_HOST_ID]);
+    // Two refusals, both local, before any dial: the run key's demand segment
+    // moves once after a failed rebuild that follows a release, and that move
+    // starts one more run (epic-session-controller.ts, the run key). Below the
+    // floor no ladder follows.
+    const attemptsAtFailure = [...seams.openAttempts];
+    expect(attemptsAtFailure).toEqual([TAB_HOST_ID, TAB_HOST_ID, TAB_HOST_ID]);
 
+    // The ladder's first rung would fall due after a minute; the card is still
+    // the answer then, and no transport was opened for it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    expect(seams.openAttempts).toEqual(attemptsAtFailure);
+    expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
+
+    // No later rung opens one either, up to and past the ladder's longest wait.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60_000);
     });
-
-    expect(seams.openAttempts).toEqual([TAB_HOST_ID, TAB_HOST_ID]);
-    expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
+    expect(seams.openAttempts).toEqual(attemptsAtFailure);
   });
 
   it("acquires once and shows the task again when the row rises back to the floor", async () => {
     const streams = installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
@@ -524,7 +578,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
   it("opens Settings, Host, Updates for the tab's computer from Update now", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     publishTabRow("1.5.4");
     const card = await screen.findByTestId("epic-repoint-failure");
