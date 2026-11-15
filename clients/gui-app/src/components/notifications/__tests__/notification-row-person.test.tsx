@@ -2,31 +2,33 @@
  * A bell row about a member's post in a bot's conversation draws that member,
  * or its kind glyph when we do not know them; the bot's picture is for the
  * bot's own rows. The real `NotificationRow` under
- * the real `NotificationBotsProvider` and the real loaded-members read over a
- * mock messenger; the merged row and the host's `bot.list` answer are the
- * boundaries.
+ * the real `NotificationBotsProvider` and the real loaded-members read over the
+ * page harness's fake authn, which serves the Members pages; the merged row and
+ * the host's `bot.list` answer are the boundaries.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { QueryClient } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { queryKeys } from "@/lib/query-keys";
+import { useEnvironmentMembersPages } from "@/hooks/environment/use-environment-members-list";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ENVIRONMENT_ID = "env-1";
@@ -34,7 +36,6 @@ const ENVIRONMENT_ID = "env-1";
 const mocks = vi.hoisted(() => ({
   row: null as MergedNotificationRow | null,
   bots: undefined as BotListResponse | undefined,
-  client: null as HostClient<HostRpcRegistry> | null,
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
@@ -63,26 +64,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/notifications/use-notification-host", () => ({
   useNotificationResolveHost: () => ({
     hostId: mockLocalHostEntry.hostId,
-    client: mocks.client,
+    client: null,
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "bot.list",
-}));
-vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: (
-    client: { getActiveHostId: () => string | null } | null,
-  ) => {
-    const hostId = client === null ? null : client.getActiveHostId();
-    return {
-      hostId,
-      requestContextUserId: "user-1",
-      isReady: hostId !== null,
-      hasRpcEndpoint: hostId !== null,
-      canExecute: hostId !== null,
-    };
-  },
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (_client: unknown, enabled: boolean) => ({
@@ -94,6 +81,7 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
 import { NotificationRow } from "@/components/notifications/notification-row";
 import { NotificationBotsProvider } from "@/components/notifications/notification-bots";
 
+let harness: TeamPageHarness;
 let queryClient: QueryClient;
 let memberRequests: number;
 
@@ -119,15 +107,17 @@ function membersPage(member: {
   };
 }
 
+/** Publishes a page as the Members surface would have read it from authn. */
 function cacheMembers(page: EnvironmentMembersResponseV12): void {
+  const keys = renderHook(
+    () => useEnvironmentMembersPages(ENVIRONMENT_ID, false),
+    { wrapper: harness.Wrapper },
+  );
   queryClient.setQueryData(
-    queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
-      mockLocalHostEntry.hostId,
-      "environment.members",
-      { environmentId: ENVIRONMENT_ID, cursor: null },
-    ),
+    keys.result.current.pageKey(ENVIRONMENT_ID, null),
     page,
   );
+  keys.unmount();
 }
 
 function conversationRow(
@@ -164,7 +154,7 @@ function conversationRow(
 function renderRow(row: MergedNotificationRow): HTMLElement {
   mocks.row = row;
   render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <NotificationBotsProvider>
         <ul>
           <NotificationRow
@@ -175,7 +165,7 @@ function renderRow(row: MergedNotificationRow): HTMLElement {
           />
         </ul>
       </NotificationBotsProvider>
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
   return screen.getByTestId("notification-entry");
 }
@@ -212,35 +202,18 @@ beforeEach(() => {
       { userId: "user-1", username: "Viewer" },
       [],
     );
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   memberRequests = 0;
-  let requestCount = 0;
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${String((requestCount += 1))}`,
-      handlers: {
-        "environment.members": () => {
-          memberRequests += 1;
-          return membersPage({
-            userId: "never",
-            displayName: null,
-            avatarUrl: null,
-          });
-        },
-      },
-    }),
+  harness = mountTeamPage(poolSource("viewer"), {
+    "environment.members": () => {
+      memberRequests += 1;
+      return membersPage({
+        userId: "never",
+        displayName: null,
+        avatarUrl: null,
+      });
+    },
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  mocks.client = spine.createRequester(mockLocalHostEntry);
+  queryClient = harness.queryClient;
   stubImmediateImage();
 });
 
@@ -248,6 +221,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
+  resetTeamPageHarness();
   useAuthStore.getState().setSignedOut();
 });
 
@@ -315,7 +289,7 @@ describe("<NotificationRow /> about a member's post", () => {
     expect(entry.querySelector("svg.lucide")).not.toBeNull();
   });
 
-  it("asks the host for no members when none are cached", () => {
+  it("asks authn for no members when none are cached", () => {
     renderRow(conversationRow(BOT_ID, "user-2"));
 
     expect(queryClient.isFetching()).toBe(0);

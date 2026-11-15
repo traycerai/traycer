@@ -81,6 +81,12 @@ vi.mock("@/lib/host", () => ({
     }
     return directoryRef.value;
   },
+  useHostBinding: () => {
+    if (directoryRef.value === null) {
+      throw new Error("test directory not configured");
+    }
+    return { directory: directoryRef.value };
+  },
 }));
 
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";

@@ -8,42 +8,21 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  EnvironmentListResponse,
+  EnvironmentMembersResponseV12,
+} from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
 import { MembersPage } from "@/components/settings/members/members-page";
 import {
-  hostIdsOf,
-  mountTeamPageOnPoolBuild,
+  mountTeamPage,
   poolSource,
-  requireTeamHostClient,
   resetTeamPageHarness,
-  teamHostBoundary,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
-import { queryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
-  useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
-  useHostSupportsMethod: () => true,
-}));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-  useOptionalHostClient: () => requireTeamHostClient(),
-  useHostDirectory: () => ({
-    findById: (hostId: string) =>
-      hostId === mockLocalHostEntry.hostId ? { label: "This Mac" } : null,
-  }),
-}));
 
 const ENVIRONMENT_ID = "env-a";
 const VIEWER_ID = "u-admin";
@@ -92,10 +71,6 @@ function page(
   };
 }
 
-beforeAll(() => {
-  settleProcessHostRpcTierPlan(poolEntry);
-});
-
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
@@ -103,17 +78,37 @@ afterEach(() => {
   useAuthStore.setState({ profile: null });
 });
 
-describe("useEnvironmentMembersList on a pooled build", () => {
-  it("reads cached pages and refreshes them through each real members write on the pool", async () => {
+const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+  environments: [
+    {
+      environmentId: ENVIRONMENT_ID,
+      ownerKind: "organization",
+      ownerId: "team-a",
+      roomId: "room-a",
+      label: "Acme",
+      effectiveRole: "admin",
+      kind: "team",
+      hostCount: 1,
+      providerHandle: "handle-a",
+    },
+  ],
+};
+
+describe("useEnvironmentMembersList", () => {
+  it("refreshes its pages through each real members write", async () => {
     let revision = 0;
-    const requestedCursors: Array<string | null> = [];
-    const harness = mountTeamPageOnPoolBuild(poolSource("admin"), {
-      "environment.members": ({ cursor }) => {
-        requestedCursors.push(cursor);
-        if (cursor === null)
-          return page([member("u-admin", "admin")], "page-1");
-        return page([member(`u-revision-${String(revision)}`, "viewer")], null);
-      },
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.list": () => TEAM_ENVIRONMENTS,
+      "environment.members": () =>
+        page(
+          [
+            member("u-admin", "admin"),
+            ...(revision === 0
+              ? []
+              : [member(`u-revision-${String(revision)}`, "viewer")]),
+          ],
+          null,
+        ),
       "environment.members.invite": () => {
         revision += 1;
         return { outcome: "sent", seatDelta: null };
@@ -131,34 +126,6 @@ describe("useEnvironmentMembersList on a pooled build", () => {
       queries: { retry: false, gcTime: 0, staleTime: Infinity },
       mutations: { retry: false },
     });
-    harness.queryClient.setQueryDefaults(
-      ["host", POOL_HOST_ID, "environment.members"],
-      { gcTime: Infinity, staleTime: Infinity },
-    );
-    const poolSecondPageKey = [
-      ...queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
-        POOL_HOST_ID,
-        "environment.members",
-        { environmentId: ENVIRONMENT_ID, cursor: "page-1" },
-      ),
-      VIEWER_ID,
-    ];
-    const callerSecondPageKey = [
-      ...queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
-        mockLocalHostEntry.hostId,
-        "environment.members",
-        { environmentId: ENVIRONMENT_ID, cursor: "page-1" },
-      ),
-      VIEWER_ID,
-    ];
-    harness.queryClient.setQueryData(
-      poolSecondPageKey,
-      page([member("u-pool-page-2", "viewer")], null),
-    );
-    harness.queryClient.setQueryData(
-      callerSecondPageKey,
-      page([member("u-caller-decoy", "viewer")], null),
-    );
 
     const { result } = renderHook(
       () => ({
@@ -171,17 +138,14 @@ describe("useEnvironmentMembersList on a pooled build", () => {
     await waitFor(() => {
       expect(result.current.list.members.map(({ userId }) => userId)).toEqual([
         "u-admin",
-        "u-pool-page-2",
       ]);
     });
-    expect(requestedCursors).toEqual([null]);
-    expect(hostIdsOf(harness, "environment.members")).toEqual([POOL_HOST_ID]);
 
     const expectRefreshedPage = async (
       write: () => Promise<unknown>,
       nextRevision: number,
     ): Promise<void> => {
-      const readsBefore = hostIdsOf(harness, "environment.members").length;
+      const readsBefore = harness.paramsOf("environment.members").length;
       await act(async () => {
         await write();
       });
@@ -192,15 +156,9 @@ describe("useEnvironmentMembersList on a pooled build", () => {
           ),
         ).toBe(true);
       });
-      expect(hostIdsOf(harness, "environment.members").length).toBeGreaterThan(
+      expect(harness.paramsOf("environment.members").length).toBeGreaterThan(
         readsBefore,
       );
-      expect(
-        hostIdsOf(harness, "environment.members").every(
-          (hostId) => hostId === POOL_HOST_ID,
-        ),
-      ).toBe(true);
-      expect(requestedCursors).toContain("page-1");
     };
 
     await expectRefreshedPage(
@@ -211,45 +169,25 @@ describe("useEnvironmentMembersList on a pooled build", () => {
         }),
       1,
     );
-    expect(hostIdsOf(harness, "environment.members.invite")).toEqual([
-      POOL_HOST_ID,
-    ]);
+    expect(harness.paramsOf("environment.members.invite")).toHaveLength(1);
 
     await expectRefreshedPage(
       () => result.current.writes.setRole({ userId: "u-admin", role: "admin" }),
       2,
     );
-    expect(hostIdsOf(harness, "environment.members.setRole")).toEqual([
-      POOL_HOST_ID,
-    ]);
+    expect(harness.paramsOf("environment.members.setRole")).toHaveLength(1);
 
     await expectRefreshedPage(
       () => result.current.writes.remove({ userId: "u-admin" }),
       3,
     );
-    expect(hostIdsOf(harness, "environment.members.remove")).toEqual([
-      POOL_HOST_ID,
-    ]);
+    expect(harness.paramsOf("environment.members.remove")).toHaveLength(1);
   });
 
-  it("sends the real Members invite dialog through the pool with no active host", async () => {
+  it("sends the real Members invite dialog with no active host", async () => {
     const inviteRequests: Array<{ email: string; role: MemberRole }> = [];
-    const harness = mountTeamPageOnPoolBuild(poolSource("admin"), {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: ENVIRONMENT_ID,
-            ownerKind: "organization",
-            ownerId: "team-a",
-            roomId: "room-a",
-            label: "Acme",
-            effectiveRole: "admin",
-            kind: "team",
-            hostCount: 1,
-            providerHandle: "handle-a",
-          },
-        ],
-      }),
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.list": () => TEAM_ENVIRONMENTS,
       "environment.members": () => page([member(VIEWER_ID, "admin")], null),
       "environment.members.seats": () => ({ seats: null }),
       "environment.members.invite": (request) => {
@@ -257,8 +195,6 @@ describe("useEnvironmentMembersList on a pooled build", () => {
         return { outcome: "sent", seatDelta: null };
       },
     });
-    const client = requireTeamHostClient();
-    teamHostBoundary.client = client.createRequesterForHostId(null);
     useSelectionAuthorityStore.getState().reset();
     useAuthStore.setState({
       profile: {
@@ -277,9 +213,7 @@ describe("useEnvironmentMembersList on a pooled build", () => {
     );
     await screen.findByTestId("members-invite-email");
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.members.seats")).toEqual([
-        POOL_HOST_ID,
-      ]);
+      expect(harness.paramsOf("environment.members.seats")).toHaveLength(1);
     });
     await userEvent.type(
       screen.getByTestId("members-invite-email"),
@@ -291,11 +225,6 @@ describe("useEnvironmentMembersList on a pooled build", () => {
     expect(inviteRequests).toEqual([
       { email: "new@acme.test", role: "editor" },
     ]);
-    expect(new Set(hostIdsOf(harness, "environment.members"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-    expect(hostIdsOf(harness, "environment.members.invite")).toEqual([
-      POOL_HOST_ID,
-    ]);
+    expect(harness.paramsOf("environment.members.invite")).toHaveLength(1);
   });
 });

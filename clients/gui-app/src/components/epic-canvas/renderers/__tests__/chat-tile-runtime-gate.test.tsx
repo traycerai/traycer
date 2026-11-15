@@ -39,6 +39,19 @@ vi.mock("../use-chat-tile-host-update", () => ({
   useChatTileHostUpdate: vi.fn(),
 }));
 
+// The gate compares the host's version with the minimum host version, not the
+// app's own; the real minimum admits every host, so the suite sets its own.
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "1.3.0" };
+  },
+);
+
 // The lease is keyed by the tab's host. The real hook reads a context this
 // suite has no reason to mount a provider for.
 vi.mock(
