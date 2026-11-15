@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useState } from "react";
 import {
   useMutation,
   useQueryClient,
@@ -132,13 +132,13 @@ export function useProvidersPromoteToPersonal(
   const cloud = useEnvironmentCloud();
   const grant = useExecutableWriteGrant();
   const queries = useQueryClient();
-  const capturedRequests = useRef(
-    new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
+  const [capturedRequests] = useState(
+    () => new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
   );
   const mutationFn = useCallback(
     (variables: PromoteToEnvironmentVariables) =>
       withHostQueryErrorBoundary(METHOD, async () => {
-        const captured = capturedRequests.current.get(variables);
+        const captured = capturedRequests.get(variables);
         if (captured === undefined)
           throw new Error("Missing promote request capture.");
         if (captured.kind === "failed") throw captured.error;
@@ -194,13 +194,13 @@ export function useProvidersPromoteToPersonal(
         if (intent === null) return { kind: "added" };
         return intentOutcome(await readIntentState(intent), environmentName);
       }),
-    [client, environmentName, grant],
+    [capturedRequests, client, environmentName, grant],
   );
   const onMutate = useCallback(
     (variables: PromoteToEnvironmentVariables) => ({
-      hostId: capturedRequests.current.get(variables)?.hostId ?? null,
+      hostId: capturedRequests.get(variables)?.hostId ?? null,
     }),
-    [],
+    [capturedRequests],
   );
   const onSettled = useCallback(
     (
@@ -209,7 +209,7 @@ export function useProvidersPromoteToPersonal(
       variables: PromoteToEnvironmentVariables,
       context: PromoteContext | undefined,
     ) => {
-      capturedRequests.current.delete(variables);
+      capturedRequests.delete(variables);
       if (context?.hostId === null || context === undefined) return;
       if (
         error === null &&
@@ -234,7 +234,7 @@ export function useProvidersPromoteToPersonal(
         });
       }
     },
-    [queries],
+    [capturedRequests, queries],
   );
   const mutation = useMutation<
     PromoteToEnvironmentOutcome,
@@ -280,14 +280,14 @@ export function useProvidersPromoteToPersonal(
       const intentRequired =
         variables.entryKind === "mcp" && takesIntent(client);
       const operation = intentRequired && cloud !== null ? cloud() : null;
-      capturedRequests.current.set(request, {
+      capturedRequests.set(request, {
         kind: "ready",
         hostId,
         operation,
         intentRequired,
       });
     } catch (error) {
-      capturedRequests.current.set(request, { kind: "failed", hostId, error });
+      capturedRequests.set(request, { kind: "failed", hostId, error });
     }
     return request;
   };
