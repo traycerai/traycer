@@ -40,6 +40,7 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ENVIRONMENT_ID = "env-1";
@@ -121,7 +122,22 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
 import { NotificationRow } from "@/components/notifications/notification-row";
 import { NotificationBotsProvider } from "@/components/notifications/notification-bots";
 
+const notificationMessengerFactory = ({
+  registry,
+}: {
+  registry: HostRpcRegistry;
+}) =>
+  new MockHostMessenger<HostRpcRegistry>({
+    registry,
+    requestId: () => "notification-starter-runtime",
+    handlers: {},
+  });
+
+const notificationRemoteFetcher = () =>
+  Promise.resolve({ kind: "hosts" as const, entries: [] });
+
 let queryClient: QueryClient;
+let runnerHost: MockRunnerHost;
 let memberRequests: number;
 let hostMessenger: MockHostMessenger<HostRpcRegistry>;
 const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
@@ -257,33 +273,16 @@ function notificationRowTree(row: MergedNotificationRow, taskIsOpen: boolean) {
       </NotificationBotsProvider>
     </PersonMembersContext.Provider>
   );
-  const runnerHost = new MockRunnerHost({
-    signInUrl: "https://example.com",
-    authnBaseUrl: "https://auth.example.com",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
         <RunnerHostProvider runnerHost={runnerHost}>
           <HostRuntimeProvider
             registry={hostRpcRegistry}
-            messengerFactory={({ registry }) =>
-              new MockHostMessenger<HostRpcRegistry>({
-                registry,
-                requestId: () => "notification-starter-runtime",
-                handlers: {},
-              })
-            }
+            messengerFactory={notificationMessengerFactory}
             invalidator={null}
             requestId={null}
-            remoteFetcher={() =>
-              Promise.resolve({ kind: "hosts", entries: [] })
-            }
+            remoteFetcher={notificationRemoteFetcher}
             fallback={<div data-testid="notification-runtime-fallback" />}
           >
             {taskIsOpen ? (
@@ -298,6 +297,12 @@ function notificationRowTree(row: MergedNotificationRow, taskIsOpen: boolean) {
       </QueryClientProvider>
     </TestRouterProvider>
   );
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
 }
 
 function renderRow(row: MergedNotificationRow): HTMLElement {
@@ -319,7 +324,82 @@ function renderRow(row: MergedNotificationRow): HTMLElement {
   return screen.getByTestId("notification-entry");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+    const url = requestUrl(input);
+    if (url.includes("/api/v3/user/negotiated")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            user: {
+              id: "user-1",
+              name: "Viewer",
+              providerId: "provider-1",
+              providerHandle: "viewer",
+              providerType: "GITHUB",
+              email: "v@example.com",
+              avatarUrl: null,
+              activatedAt: null,
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z",
+              lastSeenAt: null,
+              privacyMode: false,
+              isLearningEnabled: true,
+            },
+            userSubscription: {
+              id: "subscription-1",
+              userID: "user-1",
+              orgID: null,
+              teamID: null,
+              customerId: "customer-1",
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z",
+              subscriptionExpiry: null,
+              trialEndsAt: null,
+              subscriptionStatus: "FREE",
+              hasPaymentMethod: false,
+              isInTrial: false,
+              rechargeRateSeconds: 0,
+            },
+            teamSubscriptions: [],
+            payAsYouGoUsage: { allowPayAsYouGo: false },
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "x-traycer-user-record-version": "2.0",
+            },
+          },
+        ),
+      );
+    }
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+  runnerHost = new MockRunnerHost({
+    signInUrl: "https://example.com",
+    authnBaseUrl: "https://auth.example.com",
+    localHost: {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl: "ws://127.0.0.1:4917/rpc",
+      version: "0.0.0-mock",
+      pid: 1,
+      systemHostName: "notification-test",
+      displayName: "Notification test",
+      availability: "available",
+    },
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  runnerHost.selectionPreferredStore.save("user-1", mockLocalHostEntry.hostId);
+  runnerHost.selectionIdentity.set("user-1");
+  runnerHost.setHosts([]);
+  await runnerHost.tokenStore.signIn(
+    { token: "test-cloud-bearer", refreshToken: "test-refresh-token" },
+    { id: "user-1", email: "v@example.com", name: "Viewer" },
+  );
   epicHarness.install(null, "editor");
   mocks.row = null;
   starterPeople.clear();
@@ -393,6 +473,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();
   useAuthStore.getState().setSignedOut();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("<NotificationRow /> about a member's post", () => {
@@ -484,7 +565,7 @@ describe("NotificationRow started-by attribution", () => {
   it("keeps a closed task's text without a host or authn lookup for its starter", () => {
     const authnRequests: string[] = [];
     vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
-      authnRequests.push(String(input));
+      authnRequests.push(requestUrl(input));
       return Promise.resolve(new Response(null, { status: 404 }));
     });
     const entry = renderRow(starterNotificationRow("completed"));

@@ -126,6 +126,34 @@ function identityName(userId: string): string | null {
   return screen.getByTestId(`identity-${userId}`).getAttribute("data-name");
 }
 
+function findEnvironmentListQuery() {
+  const query = harness.queryClient
+    .getQueryCache()
+    .getAll()
+    .find((candidate) => candidate.queryKey.includes("environment.list"));
+  if (query === undefined) {
+    throw new Error("Expected the environment list query to exist");
+  }
+  return query;
+}
+
+function findFormerPersonQuery(userId: string) {
+  const query = harness.queryClient
+    .getQueryCache()
+    .getAll()
+    .find(
+      (candidate) =>
+        candidate.queryKey[1] === "environment-person" &&
+        candidate.queryKey[3] === VIEWER_USER_ID &&
+        candidate.queryKey[4] === TEAM_ENVIRONMENT_ID &&
+        candidate.queryKey[5] === userId,
+    );
+  if (query === undefined) {
+    throw new Error(`Expected the ${userId} person query to exist`);
+  }
+  return query;
+}
+
 beforeEach(async () => {
   stubImmediateImage();
   harness = await createTeamPeopleHarness({});
@@ -244,9 +272,30 @@ describe("former members on a team host", () => {
     const view = render(wrapHarness(<IdentityProbe userId={FORMER_USER_ID} />));
 
     expect(await screen.findByText(`unknown:${FORMER_USER_ID}`)).toBeTruthy();
-    await waitFor(() => expect(harness.personReads).toHaveLength(1));
-    view.rerender(wrapHarness(<IdentityProbe userId={FORMER_USER_ID} />));
-    await act(async () => Promise.resolve());
+    await waitFor(() => {
+      const query = findFormerPersonQuery(FORMER_USER_ID);
+      expect(query.state.status).toBe("success");
+      expect(query.state.fetchStatus).toBe("idle");
+      expect(query.state.data).toEqual({ kind: "not-found" });
+    });
+    expect(harness.personReads).toHaveLength(1);
+
+    view.rerender(
+      wrapHarness(
+        <>
+          <IdentityProbe userId={FORMER_USER_ID} />
+          <IdentityProbe userId={FORMER_USER_ID} />
+        </>,
+      ),
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(`unknown:${FORMER_USER_ID}`)).toHaveLength(2);
+      const query = findFormerPersonQuery(FORMER_USER_ID);
+      expect(query.getObserversCount()).toBe(1);
+      expect(query.state.status).toBe("success");
+      expect(query.state.fetchStatus).toBe("idle");
+      expect(query.state.data).toEqual({ kind: "not-found" });
+    });
     expect(harness.personReads).toHaveLength(1);
   });
 
@@ -262,7 +311,9 @@ describe("former members on a team host", () => {
     );
 
     expect(await screen.findByText("Team Member")).toBeTruthy();
-    await waitFor(() => expect(harness.memberRequests).toHaveLength(1));
+    expect(harness.memberRequests).toEqual([
+      { environmentId: TEAM_ENVIRONMENT_ID, cursor: null },
+    ]);
     expect(harness.personReads).toEqual([]);
     expect(identityName("system")).toBe("");
   });
@@ -293,7 +344,9 @@ describe("team environment resolution", () => {
   });
 
   it("keeps task collaborators while the team environment list is pending and after it fails", async () => {
-    let rejectList: ((error: Error) => void) | null = null;
+    let rejectList: (error: Error) => void = () => {
+      throw new Error("Expected the environment list request to be pending");
+    };
     const list = new Promise<EnvironmentListResponseV11>((_resolve, reject) => {
       rejectList = reject;
     });
@@ -318,14 +371,24 @@ describe("team environment resolution", () => {
 
     expect(await screen.findByText("Task Collaborator")).toBeTruthy();
     expect(screen.getByText(`unknown:${TEAM_ONLY_USER_ID}`)).toBeTruthy();
+    await waitFor(() => {
+      expect(findEnvironmentListQuery().state.status).toBe("pending");
+      expect(findEnvironmentListQuery().state.fetchStatus).toBe("fetching");
+    });
     expect(harness.memberRequests).toEqual([]);
     expect(harness.personReads).toEqual([]);
 
-    await act(async () => {
-      rejectList?.(new Error("environment list unavailable"));
-      await Promise.resolve();
+    act(() => {
+      rejectList(new Error("environment list unavailable"));
     });
-    await waitFor(() => expect(harness.environmentListRequests).toBe(1));
+    await waitFor(
+      () => {
+        const query = findEnvironmentListQuery();
+        expect(query.state.status).toBe("error");
+        expect(query.state.fetchStatus).toBe("idle");
+      },
+      { timeout: 5_000 },
+    );
     view.rerender(
       wrapHarness(
         <>
@@ -338,7 +401,7 @@ describe("team environment resolution", () => {
     expect(screen.getByText(`unknown:${TEAM_ONLY_USER_ID}`)).toBeTruthy();
     expect(harness.memberRequests).toEqual([]);
     expect(harness.personReads).toEqual([]);
-  });
+  }, 10_000);
 
   it("uses the surface directory when the environment list has no row for the team", async () => {
     harness.dispose();
@@ -358,23 +421,16 @@ describe("team environment resolution", () => {
     harness.dispose();
     harness = await createTeamPeopleHarness({
       environmentList: () => {
-        if (failList)
+        if (failList) {
           return Promise.reject(new Error("environment list unavailable"));
+        }
         return environmentListWithTeam();
       },
     });
     const view = render(wrapHarness(<IdentityProbe userId={MEMBER_USER_ID} />));
 
     expect(await screen.findByText("Team Member")).toBeTruthy();
-    const listQuery = harness.queryClient
-      .getQueryCache()
-      .getAll()
-      .find((query) =>
-        JSON.stringify(query.queryKey).includes("environment.list"),
-      );
-    if (listQuery === undefined) {
-      throw new Error("Expected the team environment list query to exist");
-    }
+    const listQuery = findEnvironmentListQuery();
     const memberReadCount = harness.memberRequests.length;
     failList = true;
     await act(async () => {
@@ -384,12 +440,8 @@ describe("team environment resolution", () => {
       });
     });
     await waitFor(() => {
-      expect(
-        harness.queryClient.getQueryCache().find({
-          queryKey: listQuery.queryKey,
-          exact: true,
-        })?.state.status,
-      ).toBe("error");
+      expect(listQuery.state.status).toBe("error");
+      expect(listQuery.state.fetchStatus).toBe("idle");
     });
     view.rerender(
       wrapHarness(
@@ -399,8 +451,8 @@ describe("team environment resolution", () => {
         </>,
       ),
     );
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 
+    expect(await screen.findByText(`unknown:${MEMBER_USER_ID}`)).toBeTruthy();
     expect(identityName(MEMBER_USER_ID)).toBe("");
     expect(harness.memberRequests).toHaveLength(memberReadCount);
     expect(harness.personReads).toEqual([]);

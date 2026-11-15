@@ -424,7 +424,7 @@ describe("<TabStrip />", () => {
     useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
   });
 
-  it("shows terminal viewer identities and the remaining names in the canvas tab strip", async () => {
+  it("shows terminal viewer identities and the remaining names in the canvas tab strip", () => {
     const viewerIds = [
       "viewer-a",
       "viewer-b",
@@ -474,7 +474,7 @@ describe("<TabStrip />", () => {
       "person-avatar",
     );
     expect(faces).toHaveLength(1);
-    expect(await tooltipTextFor(faces[0])).toBe("Viewer A");
+    expect(tooltipTextFor(faces[0])).toBe("Viewer A");
 
     act(() => {
       terminalViewerSession?.emitViewers(
@@ -486,7 +486,7 @@ describe("<TabStrip />", () => {
       "person-avatar",
     );
     expect(faces).toHaveLength(1);
-    expect(await tooltipTextFor(faces[0])).toBe("viewer-unrecorded");
+    expect(tooltipTextFor(faces[0])).toBe("viewer-unrecorded");
 
     act(() => {
       terminalViewerSession?.emitViewers(
@@ -508,10 +508,10 @@ describe("<TabStrip />", () => {
     );
     expect(faces).toHaveLength(3);
     expect(screen.getByTestId("terminal-viewers-more").textContent).toBe("+2");
-    expect(await tooltipTextFor(faces[0])).toBe("Viewer A");
-    expect(
-      await tooltipTextFor(screen.getByTestId("terminal-viewers-more")),
-    ).toBe("Viewer D, viewer-unrecorded");
+    expect(tooltipTextFor(faces[0])).toBe("Viewer A");
+    expect(tooltipTextFor(screen.getByTestId("terminal-viewers-more"))).toBe(
+      "Viewer D, viewer-unrecorded",
+    );
   });
 
   it("draws nothing for an unknown or empty viewer set", () => {
@@ -637,7 +637,7 @@ describe("<TabStrip />", () => {
     if (!(face instanceof HTMLElement)) {
       throw new Error("Expected the landing viewer face to be an HTMLElement");
     }
-    expect(await tooltipTextFor(face)).toBe("Landing Viewer");
+    expect(tooltipTextFor(face)).toBe("Landing Viewer");
   });
 
   it("writes a chat tile's resolved title into its persisted name snapshot", () => {

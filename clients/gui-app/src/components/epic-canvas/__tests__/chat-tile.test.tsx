@@ -663,7 +663,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
-import type { OpenUserMessageSender } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
 import type {
   ChatRecordSummaryV12,
   ChatRecordSummaryV15,
@@ -1052,7 +1052,7 @@ function testWorktreeBinding(): WorktreeBinding {
 
 function userSenderMessage(
   messageId: string,
-  sender: OpenUserMessageSender,
+  sender: UserMessageSender,
   text: string,
 ): Message {
   return {

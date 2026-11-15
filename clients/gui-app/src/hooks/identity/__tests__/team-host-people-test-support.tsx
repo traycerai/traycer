@@ -94,33 +94,39 @@ export async function createTeamPeopleHarness(
   };
   let personStatus = 200;
   const personReads: string[] = [];
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input.url;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    let url: string;
+    if (typeof input === "string") {
+      url = input;
+    } else if (input instanceof URL) {
+      url = input.href;
+    } else {
+      url = input.url;
+    }
     if (url.includes("/api/v3/user/negotiated")) {
-      return new Response(JSON.stringify(authenticatedUser()), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "x-traycer-user-record-version": "2.0",
-        },
-      });
+      return Promise.resolve(
+        new Response(JSON.stringify(authenticatedUser()), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "x-traycer-user-record-version": "2.0",
+          },
+        }),
+      );
     }
     if (url.includes("/api/v3/environments/") && url.includes("/people/")) {
       personReads.push(url);
-      return new Response(
-        personStatus === 404 ? null : JSON.stringify(personAnswer),
-        {
-          status: personStatus,
-          headers: { "Content-Type": "application/json" },
-        },
+      return Promise.resolve(
+        new Response(
+          personStatus === 404 ? null : JSON.stringify(personAnswer),
+          {
+            status: personStatus,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
       );
     }
-    return new Response(null, { status: 404 });
+    return Promise.resolve(new Response(null, { status: 404 }));
   });
   if (options.cloudSession !== "unverified") {
     await runnerHost.tokenStore.signIn(

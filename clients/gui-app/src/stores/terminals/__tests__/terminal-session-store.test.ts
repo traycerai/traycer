@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
+import type { TerminalViewersFrame } from "@/components/terminals/__tests__/terminal-viewer-test-support";
 import {
   createTerminalSessionStore,
   type TerminalWrite,
@@ -28,7 +29,6 @@ type TerminalExitFrame = Extract<
   TerminalSubscribeServerFrame,
   { readonly kind: "exit" }
 >;
-type TerminalViewersFrame = Parameters<TerminalStreamCallbacks["onViewers"]>[0];
 
 function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
