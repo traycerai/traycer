@@ -142,6 +142,7 @@ describe("a redirect answered to a team computers read", () => {
       name: "a 307 with a Location",
       answer: (body: unknown) =>
         new Response(JSON.stringify(body), {
+          status: 307,
           headers: { location: "https://elsewhere.test/collect" },
         }),
     },
