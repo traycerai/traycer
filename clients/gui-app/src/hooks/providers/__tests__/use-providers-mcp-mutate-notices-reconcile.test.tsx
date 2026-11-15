@@ -58,6 +58,35 @@ interface MutationObserverReference {
   readonly options: unknown;
 }
 
+const consoleSpyRestorers: Array<() => void> = [];
+
+function captureConsoleOutput(): unknown[][] {
+  const output: unknown[][] = [];
+  const debug = vi.spyOn(console, "debug").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const info = vi.spyOn(console, "info").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const log = vi.spyOn(console, "log").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const error = vi.spyOn(console, "error").mockImplementation((...values) => {
+    output.push(values);
+  });
+  consoleSpyRestorers.push(
+    () => debug.mockRestore(),
+    () => info.mockRestore(),
+    () => log.mockRestore(),
+    () => warn.mockRestore(),
+    () => error.mockRestore(),
+  );
+  return output;
+}
+
 function containsFakeMcpSecret(value: unknown): boolean {
   const seen = new WeakSet<object>();
   function contains(current: unknown): boolean {
@@ -120,6 +149,7 @@ afterEach(() => {
   cleanup();
   mockClientHolder.client = null;
   for (const unsubscribe of mutationCacheUnsubscribers.splice(0)) unsubscribe();
+  for (const restore of consoleSpyRestorers.splice(0)) restore();
 });
 
 describe("useProvidersMcpMutate notice reconciliation", () => {
@@ -129,6 +159,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
   ])(
     "sends the credential at dispatch and retains no credential after it settles $settles",
     async ({ fail }) => {
+      const consoleOutput = captureConsoleOutput();
       const observations = {
         outgoingRequestContainsSecret: false,
         rejectionContainsSecret: false,
@@ -253,6 +284,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
         observations.outgoingRequestContainsSecret &&
           !mutationStateContainsFakeMcpSecret(queryClient, observers) &&
           !containsFakeMcpSecret(rendered.result.current) &&
+          !containsFakeMcpSecret(consoleOutput) &&
           !observations.rejectionContainsSecret &&
           replayRefused &&
           !replayErrorContainsSecret &&
