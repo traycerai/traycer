@@ -83,7 +83,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useRemoteSessionPollReadiness: () => false,
   useHostReachability: () => ({ status: "reachable" }),
 }));
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importActual) => ({
+  ...(await importActual<typeof import("@/providers/use-runner-host")>()),
   useRunnerHostOrNull: () => null,
 }));
 vi.mock("@/hooks/notifications/use-notification-host", () => ({

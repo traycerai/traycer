@@ -2648,15 +2648,17 @@ describe("<ChatTile />", () => {
 
     expect(await screen.findByText("Team Directory Member")).not.toBeNull();
     expect(await screen.findByText("Former Directory Member")).not.toBeNull();
-    const pictures = screen
-      .getAllByTestId("person-avatar")
-      .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
-    expect(pictures).toContain(
-      "https://images.example.test/chat-team-member.png",
-    );
-    expect(pictures).toContain(
-      "https://images.example.test/chat-former-member.png",
-    );
+    await waitFor(() => {
+      const pictures = screen
+        .getAllByTestId("person-avatar")
+        .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
+      expect(pictures).toContain(
+        "https://images.example.test/chat-team-member.png",
+      );
+      expect(pictures).toContain(
+        "https://images.example.test/chat-former-member.png",
+      );
+    });
     expect(screen.queryByText("team-member", { exact: true })).toBeNull();
     expect(screen.queryByText("former-member", { exact: true })).toBeNull();
   });
@@ -2709,6 +2711,11 @@ describe("<ChatTile />", () => {
         settings: null,
         messages: [
           userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
             "system-row",
             { type: "user", userId: "system" },
             "System status row",
@@ -2718,10 +2725,14 @@ describe("<ChatTile />", () => {
       });
     });
 
-    expect(await screen.findByText("System status row")).not.toBeNull();
-    expect(screen.queryByText("system", { exact: true })).toBeNull();
-    expect(screen.queryByTestId("person-avatar")).toBeNull();
-    const stamp = screen.getByTestId("chat-message-timestamp");
+    const systemText = await screen.findByText("System status row");
+    const systemRow = systemText.closest('[class~="group/message"]');
+    if (!(systemRow instanceof HTMLElement)) {
+      throw new Error("expected the system sender row");
+    }
+    expect(within(systemRow).queryByText("system", { exact: true })).toBeNull();
+    expect(within(systemRow).queryByTestId("person-avatar")).toBeNull();
+    const stamp = within(systemRow).getByTestId("chat-message-timestamp");
     expect(stamp.closest("span.text-overline")?.textContent).not.toContain(
       " · ",
     );

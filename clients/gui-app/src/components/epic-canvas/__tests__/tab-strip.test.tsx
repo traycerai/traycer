@@ -17,6 +17,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -627,9 +628,11 @@ describe("<TabStrip />", () => {
       "person-avatar",
     );
     expect(faces).toHaveLength(1);
-    expect(faces[0]?.querySelector("img")?.getAttribute("src")).toBe(
-      "https://images.example.test/landing-viewer.png",
-    );
+    await waitFor(() => {
+      expect(faces[0]?.querySelector("img")?.getAttribute("src")).toBe(
+        "https://images.example.test/landing-viewer.png",
+      );
+    });
     const face = faces[0];
     if (!(face instanceof HTMLElement)) {
       throw new Error("Expected the landing viewer face to be an HTMLElement");

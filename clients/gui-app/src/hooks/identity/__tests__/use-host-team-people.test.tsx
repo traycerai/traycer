@@ -7,7 +7,6 @@ import { CommentThreadCard } from "@/components/comments/comment-thread-card";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   collaboratorEntry,
   collaboratorsResponse,
@@ -199,14 +198,8 @@ describe("team host member identity in a rendered comment", () => {
   });
 
   it("does not ask while the viewer has no cloud verdict", async () => {
-    useAuthStore.getState().setUnverifiedSession(
-      {
-        userId: VIEWER_USER_ID,
-        userName: "Viewer",
-        email: "viewer@example.test",
-      },
-      { userId: VIEWER_USER_ID, username: "Viewer" },
-    );
+    harness.dispose();
+    harness = await createTeamPeopleHarness({ cloudSession: "unverified" });
 
     render(wrapHarness(<IdentityProbe userId={MEMBER_USER_ID} />));
 
@@ -341,7 +334,7 @@ describe("team environment resolution", () => {
         </>,
       ),
     );
-    expect(screen.getByText("Task Collaborator")).toBeTruthy();
+    expect(await screen.findByText("Task Collaborator")).toBeTruthy();
     expect(screen.getByText(`unknown:${TEAM_ONLY_USER_ID}`)).toBeTruthy();
     expect(harness.memberRequests).toEqual([]);
     expect(harness.personReads).toEqual([]);

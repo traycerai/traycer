@@ -49,6 +49,7 @@ export const TEAM_MEMBER = {
 
 export interface TeamPeopleHarnessOptions {
   readonly owner?: RemoteHostDirectoryEntry["owner"];
+  readonly cloudSession?: "verified" | "unverified";
   readonly environmentList?: () =>
     | EnvironmentListResponseV11
     | Promise<EnvironmentListResponseV11>;
@@ -121,10 +122,12 @@ export async function createTeamPeopleHarness(
     }
     return new Response(null, { status: 404 });
   });
-  await runnerHost.tokenStore.signIn(
-    { token: "test-cloud-bearer", refreshToken: "test-refresh-token" },
-    { id: VIEWER_USER_ID, email: "viewer@example.test", name: "Viewer" },
-  );
+  if (options.cloudSession !== "unverified") {
+    await runnerHost.tokenStore.signIn(
+      { token: "test-cloud-bearer", refreshToken: "test-refresh-token" },
+      { id: VIEWER_USER_ID, email: "viewer@example.test", name: "Viewer" },
+    );
+  }
 
   const people = createPersonAvatarHarness();
   const queryClient = people.queryClient;
@@ -146,15 +149,50 @@ export async function createTeamPeopleHarness(
     TEAM_HOST_ID,
     options.methods ?? ["environment.list", "environment.members"],
   );
-  useAuthStore.getState().setSignedIn(
-    {
-      userId: VIEWER_USER_ID,
-      userName: "Viewer",
-      email: "viewer@example.test",
-    },
-    { userId: VIEWER_USER_ID, username: "Viewer" },
-    [],
-  );
+  if (options.cloudSession === "unverified") {
+    useAuthStore.getState().setUnverifiedSession(
+      {
+        userId: VIEWER_USER_ID,
+        userName: "Viewer",
+        email: "viewer@example.test",
+      },
+      { userId: VIEWER_USER_ID, username: "Viewer" },
+    );
+  } else {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: VIEWER_USER_ID,
+        userName: "Viewer",
+        email: "viewer@example.test",
+      },
+      { userId: VIEWER_USER_ID, username: "Viewer" },
+      [],
+    );
+  }
+  const messengerFactory = ({ registry }: { registry: HostRpcRegistry }) =>
+    new MockHostMessenger<HostRpcRegistry>({
+      registry,
+      requestId: () => `identity-test-${++requestSeq}`,
+      handlers: {
+        "environment.list": () => {
+          environmentListRequests += 1;
+          return options.environmentList?.() ?? environmentListWithTeam();
+        },
+        "environment.members": (request) => {
+          memberRequests.push(request);
+          return (
+            options.members?.(request.environmentId, request.cursor) ?? {
+              members: [TEAM_MEMBER],
+              nextCursor: null,
+              legacyRoleNoticeSeenAt: null,
+              legacyMembers: [],
+            }
+          );
+        },
+      },
+    });
+  const remoteFetcher = (): Promise<RemoteHostFetchOutcome> =>
+    Promise.resolve({ kind: "hosts", entries: [remoteHost] });
   return {
     memberRequests,
     get environmentListRequests() {
@@ -172,42 +210,10 @@ export async function createTeamPeopleHarness(
         {people.wrap(
           <HostRuntimeProvider
             registry={hostRpcRegistry}
-            messengerFactory={({ registry }) =>
-              new MockHostMessenger<HostRpcRegistry>({
-                registry,
-                requestId: () => `identity-test-${++requestSeq}`,
-                handlers: {
-                  "environment.list": () => {
-                    environmentListRequests += 1;
-                    return (
-                      options.environmentList?.() ?? environmentListWithTeam()
-                    );
-                  },
-                  "environment.members": (request) => {
-                    memberRequests.push(request);
-                    return (
-                      options.members?.(
-                        request.environmentId,
-                        request.cursor,
-                      ) ?? {
-                        members: [TEAM_MEMBER],
-                        nextCursor: null,
-                        legacyRoleNoticeSeenAt: null,
-                        legacyMembers: [],
-                      }
-                    );
-                  },
-                },
-              })
-            }
+            messengerFactory={messengerFactory}
             invalidator={null}
             requestId={null}
-            remoteFetcher={() =>
-              Promise.resolve<RemoteHostFetchOutcome>({
-                kind: "hosts",
-                entries: [remoteHost],
-              })
-            }
+            remoteFetcher={remoteFetcher}
             fallback={<div data-testid="team-runtime-fallback" />}
           >
             <PersonMembersContext.Provider value={outer}>
