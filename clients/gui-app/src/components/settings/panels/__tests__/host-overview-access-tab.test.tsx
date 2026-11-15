@@ -858,7 +858,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     const notice = await screen.findByTestId("moved-to-personal-notice");
@@ -920,7 +920,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
     await screen.findByTestId("moved-to-personal-notice");
 
@@ -958,7 +958,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
     const notice = await screen.findByTestId("moved-to-personal-notice");
 
