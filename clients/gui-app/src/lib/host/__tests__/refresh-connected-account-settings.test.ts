@@ -353,7 +353,6 @@ describe("refreshConnectedAccountSettings", () => {
       publicKey: "",
       authnBaseUrl: "",
       authRecovery: "revalidate",
-      openAuth: null,
     };
     const client = new FakeStreamClient(true);
     const lease = acquireHostStreamClient(identity, () => client);
