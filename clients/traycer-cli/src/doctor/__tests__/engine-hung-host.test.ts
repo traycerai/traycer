@@ -378,6 +378,7 @@ describe("runDoctor against a host that answers not yet", () => {
   it.each([
     { form: "a retryable error on a request", pick: "notYetOnRequest" },
     { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
+    { form: "a post-open request timeout", pick: "requestTimeout" },
   ] as const)(
     "stops asking five seconds after the first attempt when the host still answers $form, and raises no issue for the probe",
     async ({ pick }) => {
@@ -416,24 +417,36 @@ describe("runDoctor against a host that answers not yet", () => {
     expect(probeIssueCodes(result.issues)).toEqual([]);
   });
 
-  it("still reports a host that did not answer as unresponsive, after one attempt and no wait", async () => {
-    const attempts: number[] = [];
-    stageWedgedHost(`ws://127.0.0.1:${port}/rpc`, async (_attempt, errors) => {
-      attempts.push(Date.now());
-      throw errors.silent("host.status");
-    });
+  it.each([
+    { name: "did not answer", pick: "silent" },
+    {
+      name: "timed out after the open as a host through 1.1.9 says it",
+      pick: "legacyRequestTimeout",
+    },
+  ] as const)(
+    "still reports a host that $name as unresponsive, after one attempt and no wait",
+    async ({ pick }) => {
+      const attempts: number[] = [];
+      stageWedgedHost(
+        `ws://127.0.0.1:${port}/rpc`,
+        async (_attempt, errors) => {
+          attempts.push(Date.now());
+          throw errors[pick]("host.status");
+        },
+      );
 
-    const result = await runDoctorOnFakeClock();
+      const result = await runDoctorOnFakeClock();
 
-    expect(attempts).toHaveLength(1);
-    const hung = result.issues.find(
-      (issue) => issue.code === "HOST_RPC_UNRESPONSIVE",
-    );
-    expect(hung?.message).toContain(`pid=${process.pid}`);
-    expect(hung?.message).toContain("is not responding");
-    expect(hung?.terminalCommand).toBe(FORCE_RESTART_COMMAND);
-    expect(hung?.fixAction).toBe("host-restart");
-  });
+      expect(attempts).toHaveLength(1);
+      const hung = result.issues.find(
+        (issue) => issue.code === "HOST_RPC_UNRESPONSIVE",
+      );
+      expect(hung?.message).toContain(`pid=${process.pid}`);
+      expect(hung?.message).toContain("is not responding");
+      expect(hung?.terminalCommand).toBe(FORCE_RESTART_COMMAND);
+      expect(hung?.fixAction).toBe("host-restart");
+    },
+  );
 
   it("reports a final refusal as the host rejecting the credentials, after one attempt and no wait", async () => {
     const attempts: number[] = [];
