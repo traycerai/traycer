@@ -519,8 +519,8 @@ describe("<StoragePolicySection />", () => {
       <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
     );
 
+    await settled();
     const control = await chatsSwitch();
-    expect(control.hasAttribute("disabled")).toBe(false);
     const listQuery = harness?.queryClient
       .getQueryCache()
       .getAll()

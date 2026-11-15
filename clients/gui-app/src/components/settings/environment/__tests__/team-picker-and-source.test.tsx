@@ -89,6 +89,16 @@ function mountClient(list: ListHandler): {
   const harness = mountTeamPage(poolSource("admin"), {
     "environment.list": () => list(),
   });
+  // The person's teams are on the account before the list is read; the
+  // harness would only learn them from the list's own answer, too late for
+  // the read that joins each row to its team.
+  useAuthStore.setState({
+    shareableTeams: ["a", "admin", "editor", "viewer"].map((id) => ({
+      teamId: `team-${id}`,
+      slug: `handle-${id}`,
+      avatarUrl: null,
+    })),
+  });
   return {
     Wrapper: harness.Wrapper,
     queryClient: harness.queryClient,
