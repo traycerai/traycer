@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
 import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
@@ -986,7 +988,15 @@ function renderWindowNarrationHook(serving: boolean) {
     });
   });
 
-  return renderHook(() => useWindowNarration());
+  // `useWindowNarration` reaches `useQueryClient()` through `useHostClaim`, so
+  // every render needs a client; a fresh one per call keeps cases independent.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderHook(() => useWindowNarration(), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+  });
 }
 
 describe("useWindowNarration door states through the real stores", () => {
