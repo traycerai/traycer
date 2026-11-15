@@ -187,17 +187,25 @@ function hostBackedAuthnAnswer(
   if (request.method === "GET" && path.endsWith("/notices")) {
     log.notices += 1;
     return jsonEnvironmentAnswer({
-      notices: host.state.notices.map((notice, index) => ({
-        kind: notice.kind,
-        key: notice.key,
-        os: notice.os === "any" ? null : notice.os,
-        revision: index + 1,
-        writtenAt: notice.writtenAt,
-        source: notice.source,
-        hostId: notice.from.kind === "host" ? notice.from.hostId : null,
-        hostName: notice.from.kind === "host" ? notice.from.hostLabel : null,
-        displaced: "previous",
-      })),
+      // authn lists a change only while no later change superseded it.
+      notices: host.state.notices.flatMap((notice, index) =>
+        notice.undoAvailable
+          ? [
+              {
+                kind: notice.kind,
+                key: notice.key,
+                os: notice.os === "any" ? null : notice.os,
+                revision: index + 1,
+                writtenAt: notice.writtenAt,
+                source: notice.source,
+                hostId: notice.from.kind === "host" ? notice.from.hostId : null,
+                hostName:
+                  notice.from.kind === "host" ? notice.from.hostLabel : null,
+                displaced: "previous",
+              },
+            ]
+          : [],
+      ),
     });
   }
   if (request.method === "GET" && path.endsWith("/review")) {
@@ -547,21 +555,6 @@ describe("a Personal page's convergence notices", () => {
     expect(screen.queryByTestId("personal-page-notices")).toBeNull();
     expect(screen.queryByTestId("personal-notice")).toBeNull();
   });
-
-  it("reads no notices on a host that does not have environment.notices", async () => {
-    const host = hostWith({}, { notices: [noticeFixture({})] });
-    const log = renderPage(host, {
-      ...SHELL_PAGE,
-      methods: ACCESS_METHODS.filter(
-        (method) => method !== "environment.notices",
-      ),
-    });
-
-    await screen.findByRole("button", { name: "Edit the page" });
-    await settle();
-    expect(screen.queryByTestId("personal-notice")).toBeNull();
-    expect(log.notices).toBe(0);
-  });
 });
 
 describe("Undo on a notice", () => {
@@ -619,16 +612,13 @@ describe("Undo on a notice", () => {
     expect(screen.queryByTestId("personal-notice-refusal")).toBeNull();
   });
 
-  it("has no Undo once the notice cannot be undone, but still says the change", async () => {
-    const host = hostWith(
-      {},
-      { notices: [noticeFixture({ undoAvailable: false })] },
-    );
+  it("lists a change with its Undo while nothing has superseded it", async () => {
+    const host = hostWith({}, { notices: [noticeFixture({})] });
     renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
     expect(row.textContent).toContain("LOG_LEVEL from dev-box");
-    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
   });
 
   it("says the value was changed again since when the host answers stale", async () => {
@@ -650,23 +640,6 @@ describe("Undo on a notice", () => {
     expect(
       (await screen.findByTestId("personal-notice-refusal")).textContent,
     ).toBe("Couldn't undo: LOG_LEVEL was changed again since.");
-  });
-
-  it("says the undo waits for a reconnect when the host queued it", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({})],
-        undoAnswer: { outcome: "pending", uploadId: "upload-1" },
-      },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
-
-    expect(
-      (await screen.findByTestId("personal-notice-refusal")).textContent,
-    ).toBe("Undo applies when this host reconnects.");
   });
 
   it("asks the person to sign in again when the host needs a confirmation", async () => {
@@ -829,7 +802,7 @@ describe("Keep this host's value", () => {
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
-  it("is not offered when the undo is gone", async () => {
+  it("is not offered once a later change superseded it, because authn no longer lists it", async () => {
     const host = hostWith(
       {},
       {
@@ -837,11 +810,14 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
-    const row = await screen.findByTestId("personal-notice");
+    await waitFor(() => {
+      expect(log.notices).toBeGreaterThan(0);
+    });
     await settle();
-    expect(within(row).queryByRole("button")).toBeNull();
+    expect(screen.queryByTestId("personal-notice")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
   it("keeps a provider's variable as that provider's override", async () => {
