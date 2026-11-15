@@ -15,6 +15,7 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../store/credentials-store";
+import type { SignInRevalidator } from "./cli-host-tokens";
 import { resolveHostAuth } from "./host-auth";
 import { hostTokenFailureCliError } from "./host-door-words";
 
@@ -103,13 +104,16 @@ export async function readSignInEnvironments(): Promise<
   if (first.kind === "network-error") throw unreachable();
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const store = createCliCredentialsStore();
+  // Typed to its own refresh, as the mint's is: the shared `AuthRevalidator`
+  // it also satisfies declares the same method as `Promise<unknown>`.
+  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
   let refreshed: RevalidateOutcome;
   try {
-    refreshed = await createStoreBackedRevalidator({
-      store,
-      lease,
-      signal: null,
-    }).revalidateCurrentContext();
+    refreshed = await revalidator.revalidateCurrentContext();
   } finally {
     store.dispose();
   }
