@@ -348,7 +348,7 @@ describe("the Activity tab's titles over a real epic.getTaskContexts read", () =
     expect(within(second).getByText("Second")).toBeTruthy();
   });
 
-  it("says Task unavailable only when the host answered denied", async () => {
+  it("explains an explicit denial with the sentence that the task may no longer be available to the viewer", async () => {
     mocks.request.mockImplementation(() =>
       Promise.resolve({
         tasks: { "t-titled": { status: "unknown", reason: "denied" } },

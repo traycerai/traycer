@@ -89,8 +89,8 @@ export interface UseEpicGetTaskContextsOptions {
 
 /**
  * Resolves task ids to their cloud `ListTaskLight` contexts via cap-sized
- * `epic.getTaskContexts` batches. Only `found` rows enter the map; absence and
- * unknown outcomes stay unavailable to this presentation-only caller. Cache identity is
+ * `epic.getTaskContexts` batches. Only `found` rows enter `tasksById`;
+ * `resolutionsById` carries the host's other verdicts. Cache identity is
  * scoped by `userId` because permission-dependent responses must not leak
  * across account switches; the hook stays disabled until a user is known.
  * An older host without the method degrades to an empty map, not an error.
