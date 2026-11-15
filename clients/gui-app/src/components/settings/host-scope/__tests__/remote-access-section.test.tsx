@@ -18,7 +18,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
       typeof import("@/hooks/host/use-host-directory-entry")
     >();
   const { accessHostDirectoryEntryFor } =
-    await import("@/components/settings/host-scope/__tests__/host-access-test-support");
+    await import("@/components/settings/host-scope/__tests__/access-host-directory-entry");
   return {
     ...actual,
     useHostDirectoryEntry: accessHostDirectoryEntryFor,

@@ -82,6 +82,22 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// The computer being claimed is asked through the card's own fake host, by the
+// binding's id-pinned requester as the hook resolves it, with no runtime
+// provider (the hook's own `useHostClient()` needs one).
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const { resolveNamedHostClient } =
+    await import("@/lib/host/binding-host-client");
+  return {
+    useHostClientForHostId: (hostId: string | null) => {
+      const hostClient = hostBindingMock.current?.hostClient;
+      return hostId === null || hostClient === undefined
+        ? null
+        : resolveNamedHostClient({ hostClient }, hostId);
+    },
+  };
+});
+
 // The drawer itself has a separate suite; keep its controls real so dated
 // lines remain covered through the Details action.
 vi.mock("@/components/settings/details/settings-details-button", () => ({
@@ -176,8 +192,6 @@ const GIVE_PLAN: EnvironmentMovePlanResponseV20 = {
     staysOnThisComputer: [],
     alreadyInPersonal: [],
     differsMasked: [],
-    looksLikeAKey: [],
-    sameNameInPersonal: [],
   },
   guideDiffers: false,
   personalHoldsSecrets: false,
@@ -728,9 +742,17 @@ describe("<HostOverviewSettingsCard />", () => {
     } as const;
     expect(calls.plans[0]).toEqual({ target, personal: null });
     expect(calls.stages).toEqual([{ target, keyChoices: [], personal: null }]);
-    expect(
-      authnFixture.requests.map(({ method, url, body }) => [method, url, body]),
-    ).toEqual([
+    // The card's own team list reads the team's hosts and members from authn;
+    // the one write it sends is the acceptance.
+    const [reads, writes] = [
+      authnFixture.requests.filter(({ method }) => method === "GET"),
+      authnFixture.requests.filter(({ method }) => method !== "GET"),
+    ];
+    expect(reads.map(({ url }) => new URL(url).pathname).sort()).toEqual([
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/hosts`,
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/members`,
+    ]);
+    expect(writes.map(({ method, url, body }) => [method, url, body])).toEqual([
       [
         "POST",
         `https://authn.test/api/v3/hosts/${GIVE_HOST_ID}/move-acceptances`,
@@ -889,6 +911,8 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(
       screen.queryByRole("option", { name: /Use this computer for the team/ }),
     ).toBeNull();
+    // An open select hides the rest of the page from the accessibility tree.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
     fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(directoryReadCount).toBe(2));
   });
