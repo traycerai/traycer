@@ -28,6 +28,7 @@ import {
   toAgentCliError,
 } from "../internal/host-rpc";
 import { createCliEnvironmentCloud } from "../internal/cli-environment-cloud";
+import { storedCredentialRejectedCliError } from "../internal/host-door-words";
 import {
   readCredentialsFile,
   type StoredCredentials,
@@ -629,18 +630,6 @@ async function hostIdentityMayExist(
   }
 }
 
-// Becomes `storedCredentialRejectedCliError()` (`internal/host-door-words.ts`)
-// when the doors' batch is merged; until then the same words, said once here.
-function storedCredentialRejected(): CliError {
-  return cliError({
-    code: CLI_ERROR_CODES.AUTH_REJECTED,
-    message:
-      "The stored credential was rejected. Run `traycer login` to re-authenticate.",
-    details: null,
-    exitCode: 1,
-  });
-}
-
 function teamTransferNotConfirmed(): CliError {
   return cliError({
     code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
@@ -901,7 +890,7 @@ function acceptanceFailure(
   signInRejected: boolean,
 ): CliError {
   if (error.kind === "unauthorized" && signInRejected)
-    return storedCredentialRejected();
+    return storedCredentialRejectedCliError();
   return teamTransferNotConfirmed();
 }
 

@@ -259,6 +259,10 @@ interface Composition {
   readonly directory: HostDirectoryService;
   readonly runtime: HostRuntime<HostRpcRegistry>;
   readonly runnerHost: MockRunnerHost;
+  readonly hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }>;
 }
 
 const built: Composition[] = [];
@@ -288,8 +292,12 @@ function buildComposition(): Composition {
     onRegistryPollTick: null,
   });
   let requestSeq = 0;
+  const hostTokenRenewals: Composition["hostTokenRenewals"] = [];
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry: hostRpcRegistry,
     singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -310,7 +318,13 @@ function buildComposition(): Composition {
     selectedHostId: () => null,
     connectionRegistry: null,
   });
-  const composition = { auth, directory, runtime, runnerHost };
+  const composition = {
+    auth,
+    directory,
+    runtime,
+    runnerHost,
+    hostTokenRenewals,
+  };
   built.push(composition);
   return composition;
 }
