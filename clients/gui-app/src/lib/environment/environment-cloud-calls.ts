@@ -84,8 +84,8 @@ type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
 
 /**
  * A secrets request names its environment for the app to send it to authn. A
- * null one means "the environment this computer runs", which only a host
- * knows, so such a request stays a host call and never reaches here.
+ * null one names none (a computer that runs none, or one not yet told apart),
+ * and is refused here, unsent, as a host with no environment refused it.
  */
 function namedEnvironment(environmentId: string | null): string {
   if (environmentId === null) {

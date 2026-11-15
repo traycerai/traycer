@@ -9,10 +9,10 @@ import {
 } from "@/components/onboarding/set-up-personal";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
+import { useHostOwnEnvironment } from "@/hooks/environment/use-host-own-environment";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useOptionalHostClient } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
@@ -32,16 +32,16 @@ export function SetUpPersonalGroup(props: {
     enabled: client !== null,
     subscribed: true,
   });
-  const secretsSupported = useHostMethodSupport(
-    hostId,
-    "environment.secrets.list",
-  );
-  const secrets = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: undefined,
-    client,
+  // The secrets of the environment the window's host runs, read from authn
+  // on the person's sign-in.
+  const ownEnvironment = useHostOwnEnvironment(client, hostId, true);
+  const secrets = useEnvironmentCloudQuery({
     method: "environment.secrets.list",
-    params: { environmentId: null },
-    options: { enabled: secretsSupported === true },
+    params: { environmentId: ownEnvironment.environmentId },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: ownEnvironment.resolved,
+    poll: false,
   });
   const status = useEnvironmentStatusRead(client, hostId, true);
   const done = setUpPersonalDone({
