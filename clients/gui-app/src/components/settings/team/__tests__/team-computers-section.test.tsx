@@ -134,13 +134,22 @@ function mountSection(
   effectiveRole: "owner" | "admin" | "editor" | null,
   providerHandle: string | null,
 ) {
+  const environments = [
+    environment(ENVIRONMENT_ID, providerHandle),
+    environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
+  ];
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
-    "environment.list": () => ({
-      environments: [
-        environment(ENVIRONMENT_ID, providerHandle),
-        environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
-      ],
-    }),
+    "environment.list": () => ({ environments }),
+  });
+  // The account's teams as the app has them at sign-in: the environment list
+  // joins each team's handle from them, and a team with no handle is not
+  // among them.
+  useAuthStore.setState({
+    shareableTeams: environments.flatMap((row) =>
+      row.providerHandle === null
+        ? []
+        : [{ teamId: row.ownerId, slug: row.providerHandle, avatarUrl: null }],
+    ),
   });
   vi.spyOn(harness.auth, "listTeamComputers").mockImplementation(
     auth.listTeamComputers,
