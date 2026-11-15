@@ -6753,9 +6753,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        its switch named
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
-       in on Providers to use one everywhere." (a team host: "This host's own
-       sign-in, which stays on this host. An admin can link a plan on
-       <Team>'s Providers to use one everywhere."), with a switch over
+       in on Providers to use one everywhere." for this computer, or the named
+       computer form otherwise, on both personal and team computers, with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value
