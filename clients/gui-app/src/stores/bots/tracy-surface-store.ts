@@ -50,6 +50,11 @@ interface TracySurfaceState {
   readonly openSurface: (hostId: string) => void;
   /** Commits the selected channel. */
   readonly selectChannel: (botId: string | null) => void;
+  /**
+   * Shows the selected channel itself: Messages, with no session in its
+   * place and Threads left. The rail beside it stays as it is.
+   */
+  readonly showChannel: () => void;
   /** Moves an open surface to `hostId`. */
   readonly rebind: (hostId: string) => void;
   readonly markVisited: (botId: string) => void;
@@ -118,12 +123,20 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         const previous = get().botId;
         if (previous === botId) return;
         actedOnSinceBind = true;
-        // A channel left shows afresh when it is next selected, on Messages
-        // with no session in its place, and selecting one leaves Threads.
+        // A channel is selected on Messages with no session in its place,
+        // whatever was last kept for it, and the one left keeps neither;
+        // selecting one leaves Threads.
         const place = useTracyPlaceStore.getState();
         if (previous !== null) place.closeBot(previous);
+        if (botId !== null) place.closeBot(botId);
         place.setThreadsShown(false);
         set({ botId });
+      },
+      showChannel: () => {
+        const { botId } = get();
+        const place = useTracyPlaceStore.getState();
+        if (botId !== null) place.closeBot(botId);
+        place.setThreadsShown(false);
       },
       rebind: (hostId) => {
         const state = get();

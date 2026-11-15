@@ -64,7 +64,7 @@ function MemoryStageBody(props: {
       return (
         <OnboardingHostUnavailableNotice
           picker={hostPicker}
-          refusal={`${hostPicker.scope.hostLabel} can't turn on Traycer memories`}
+          refusal={`${hostPicker.scope.hostLabel} can't turn on common memory for agents`}
         />
       );
     case "checking":
@@ -99,10 +99,11 @@ function MemoryChoiceCards(props: {
             id="onboarding-memory-use-title"
             className="text-ui-lg font-medium"
           >
-            Use Traycer memories
+            Use common memory
           </h2>
           <p className="text-ui-sm text-muted-foreground">
-            Your agents can use and update shared memories in Traycer.
+            Your agents can use and update common memory, what all your bots and
+            agents here can remember and use.
           </p>
         </div>
         <Button
@@ -113,9 +114,7 @@ function MemoryChoiceCards(props: {
         >
           {/* Already on, there is nothing to turn on: what this card still
               offers is the provider switches, which start off. */}
-          {memory.alreadyOn
-            ? "Set up provider memories"
-            : "Use Traycer memories"}
+          {memory.alreadyOn ? "Set up provider memories" : "Use common memory"}
         </Button>
       </section>
       <section
@@ -134,7 +133,7 @@ function MemoryChoiceCards(props: {
                 card makes none - so with the setting already on, the line has
                 to say it stays on. */}
             {memory.alreadyOn
-              ? "Traycer memories stay on, and your provider memory settings stay as they are."
+              ? "Agents keep using common memory, and your provider memory settings stay as they are."
               : "You can enable this later in Settings. Your provider memory settings stay as they are."}
           </p>
         </div>
@@ -165,11 +164,11 @@ function MemoryChoices(props: {
       <div className="onboarding-memory-list">
         <MemorySwitchRow
           testId="onboarding-memory-traycer"
-          title="Use Traycer memories"
+          title="Let agents use and update common memory"
           description={traycerDescription(memory)}
           checked={memory.chosen === true}
           disabled={memory.traycerLocked || memory.saving}
-          ariaLabel="Use Traycer memories"
+          ariaLabel="Let agents use and update common memory"
           problem={null}
           onCheckedChange={memory.setTraycer}
         />
@@ -185,7 +184,7 @@ function MemoryChoices(props: {
 
 function traycerDescription(memory: OnboardingAgentMemories): string {
   if (!memory.traycerLocked)
-    return "Agents can read, add, update and remove shared memories.";
+    return "What all your bots and agents here can remember and use.";
   return memory.traycerStanding === "on"
     ? "On. Turn it off later in Settings → Memories."
     : "Waiting for your configuration. Change this later in Settings → Memories.";
@@ -243,8 +242,8 @@ function ProviderMemories(props: {
           Your providers&apos; memories
         </h2>
         <p className="text-ui-sm text-muted-foreground">
-          Start with these off to keep memories together in Traycer. You can
-          keep a provider&apos;s memories on.
+          Start with these off so agents keep what they learn in common memory.
+          You can keep a provider&apos;s memories on.
         </p>
       </div>
       <div className="onboarding-memory-list">
@@ -345,14 +344,14 @@ function saveReportLines(
 
 /** Traycer memories in the configuration the host serves now. */
 function traycerReportLine(standing: TraycerStanding | null): string {
-  if (standing === "on") return "Traycer memories are on.";
+  if (standing === "on") return "Agents now use common memory.";
   if (standing === "held")
-    return "Traycer memories are waiting to reach your configuration and aren't on yet. This computer sends the change when it's online.";
+    return "Common memory for agents is waiting to reach your configuration and isn't on yet. This computer sends the change when it's online.";
   if (standing === "unconfirmed")
-    return "Traycer memories are saved to your configuration but haven't reached this computer yet.";
+    return "Common memory for agents is saved to your configuration but hasn't reached this computer yet.";
   if (standing === "refused")
-    return "Your configuration turned this change away, so Traycer memories aren't on.";
-  return "Couldn't turn on Traycer memories.";
+    return "Your configuration turned this change away, so agents don't use common memory.";
+  return "Couldn't turn on common memory for agents.";
 }
 
 function providerReportLines(
