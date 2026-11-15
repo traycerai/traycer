@@ -684,22 +684,24 @@ describe("<HostOverviewSettingsCard />", () => {
 
   it("keeps the running-chat count unknown when the computer does not serve the method", async () => {
     const calls = giveCalls();
-    const handlers = giveHandlers(
-      calls,
-      () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
-      null,
-    );
-    handlers["environment.previewLocalFacts"] = (request) => {
-      calls.localFacts.push(
-        environmentPreviewLocalFactsRequestSchema.parse(request),
-      );
-      throw new HostRpcError({
-        code: "E_HOST_UNSUPPORTED",
-        message: "unknown method",
-        requestId: "local-facts-unsupported",
-        method: "environment.previewLocalFacts",
-        fatalDetails: null,
-      });
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      ...giveHandlers(
+        calls,
+        () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
+        null,
+      ),
+      "environment.previewLocalFacts": (request) => {
+        calls.localFacts.push(
+          environmentPreviewLocalFactsRequestSchema.parse(request),
+        );
+        throw new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "unknown method",
+          requestId: "local-facts-unsupported",
+          method: "environment.previewLocalFacts",
+          fatalDetails: null,
+        });
+      },
     };
     await openAdminGiveDialog(handlers, true);
 
