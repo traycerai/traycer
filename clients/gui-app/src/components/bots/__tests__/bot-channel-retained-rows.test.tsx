@@ -28,7 +28,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type {
@@ -585,6 +585,92 @@ describe("<BotChannelView /> rows another account fetched", () => {
       await timers.fireBackoff();
       await waitFor(() => expect(queryClient.isFetching()).toBe(0));
       await flushObservers();
+      await failAfterRetry();
+
+      expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+      expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+      expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+    });
+
+    /** The channel's read, and the answer object it holds now. */
+    function channelRead(): { query: Query; answer: unknown } {
+      const [query] = queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CHANNEL_READ),
+      });
+      return { query, answer: query.state.data };
+    }
+
+    /** The first account's, then another's, then the first's again, inside the one backoff. */
+    function switchAndBack(): void {
+      act(() => signInAs("user-b"));
+      act(() => signInAs("user-a"));
+    }
+
+    async function retryAnswers(): Promise<void> {
+      await timers.fireBackoff();
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      await flushObservers();
+    }
+
+    it("withholds the rows when the retry answers the same list the cache already holds, and a failure follows", async () => {
+      signInAs("user-a");
+      mountRetrying({ openThread: null, tiles: null });
+      await screen.findByText(POST_FIRST_LINE);
+      const { query, answer } = channelRead();
+      await refetchIntoBackoff();
+      switchAndBack();
+      script.conversationList = () =>
+        Promise.resolve(structuredClone(CHANNEL_LIST));
+
+      await retryAnswers();
+
+      // Structural sharing keeps the object the first answer marked.
+      expect(query.state.data).toBe(answer);
+      await failAfterRetry();
+      expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+      expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+      expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+    });
+
+    it("keeps the rows under the stale line when the store changes without the account changing during the backoff", async () => {
+      signInAs("user-a");
+      mountRetrying({ openThread: null, tiles: null });
+      await screen.findByText(POST_FIRST_LINE);
+      await refetchIntoBackoff();
+
+      act(() => {
+        useAuthStore.setState({
+          contextMetadata: { userId: "user-a", username: "renamed" },
+        });
+      });
+      script.conversationList = () => Promise.resolve(RENAMED);
+      await retryAnswers();
+      await failAfterRetry();
+
+      expect(screen.getByTestId("bot-channel-stale")).toBeDefined();
+      expect(screen.getByText(POST_FIRST_LINE)).toBeDefined();
+      expect(screen.queryByTestId("bot-channel-error")).toBeNull();
+    });
+
+    it("withholds the rows of the earlier answer a cache write puts back after the retry answered another list, and a failure follows", async () => {
+      signInAs("user-a");
+      mountRetrying({ openThread: null, tiles: null });
+      await screen.findByText(POST_FIRST_LINE);
+      const { query, answer } = channelRead();
+      await refetchIntoBackoff();
+      switchAndBack();
+      script.conversationList = () => Promise.resolve(RENAMED);
+      await retryAnswers();
+      expect(query.state.data).not.toBe(answer);
+      // A reset leaves the read no data, so the write keeps the object it is given.
+      act(() => {
+        query.reset();
+      });
+      act(() => {
+        queryClient.setQueryData(query.queryKey, answer);
+      });
+      expect(query.state.data).toBe(answer);
+
       await failAfterRetry();
 
       expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();

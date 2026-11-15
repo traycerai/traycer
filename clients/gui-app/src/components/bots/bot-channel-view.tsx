@@ -1615,10 +1615,6 @@ function useDisplayed(element: HTMLElement | null): boolean {
   return element !== null && displayed;
 }
 
-/**
- * The channel's read failing, said in place: the line over its rows, or the
- * state in their place. Nothing while the read is not failing.
- */
 interface ThreadsRetriedWithChannel {
   readonly refetch: () => Promise<unknown>;
   readonly fetching: boolean;
@@ -1642,6 +1638,10 @@ function threadsRetriedWithChannel(args: {
   return { refetch: args.refetch, fetching: args.fetching };
 }
 
+/**
+ * The channel's read failing, said in place: the line over its rows, or the
+ * state in their place. Nothing while the read is not failing.
+ */
 function ChannelReadNotice(props: {
   readonly view: BotReadView;
   readonly read: UseQueryResult<unknown, HostRpcError>;
