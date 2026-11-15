@@ -161,7 +161,11 @@ describe("readHostOwnershipViaHttp", () => {
     ).resolves.toEqual({ kind: "unauthorized" });
   });
 
-  it.each(["location-bearing 302", "opaque redirect"] as const)(
+  it.each([
+    "location-bearing 302",
+    "location-bearing 307 with the host list",
+    "opaque redirect",
+  ] as const)(
     "does not follow an authn %s and sends the bearer once",
     async (redirectKind) => {
       const redirectTarget = "https://redirect.example.test/collect";
@@ -181,6 +185,12 @@ describe("readHostOwnershipViaHttp", () => {
           if (redirectKind === "location-bearing 302") {
             return new Response(null, {
               status: 302,
+              headers: { location: redirectTarget },
+            });
+          }
+          if (redirectKind === "location-bearing 307 with the host list") {
+            return new Response(JSON.stringify({ hosts: [localHost({})] }), {
+              status: 307,
               headers: { location: redirectTarget },
             });
           }

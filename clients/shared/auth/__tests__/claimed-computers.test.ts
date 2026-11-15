@@ -75,6 +75,23 @@ describe("fetchClaimedComputers", () => {
     ).resolves.toEqual(result);
   });
 
+  it("reads a 307 whose body is a valid claims list as failed, never as the claims", async () => {
+    const fetchMock = stubFetch(
+      async () =>
+        new Response(JSON.stringify({ claims: [CLAIM] }), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    );
+
+    await expect(
+      fetchClaimedComputers(BASE, TOKEN, ENVIRONMENT_ID, null),
+    ).resolves.toEqual({ kind: "failed" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+  });
+
   it.each([
     ["missing claims", {}],
     [

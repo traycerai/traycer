@@ -94,6 +94,29 @@ describe("authn environment person read", () => {
     await expect(readPerson(null)).resolves.toEqual({ kind: "not-found" });
   });
 
+  it("does not accept a 307 whose body is the requested person", async () => {
+    const requests = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            userId: USER_ID,
+            name: "Riya",
+            handle: "riya-handle",
+            avatarUrl: null,
+          }),
+          {
+            status: 307,
+            headers: { location: "https://elsewhere.test/collect" },
+          },
+        ),
+    );
+
+    await expect(readPerson(null)).rejects.toThrow();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.init?.redirect).toBe("manual");
+  });
+
   it("does not follow or accept a browser's opaque redirect", async () => {
     const requests = stubFetch(() => createOpaqueRedirectResponse());
 
