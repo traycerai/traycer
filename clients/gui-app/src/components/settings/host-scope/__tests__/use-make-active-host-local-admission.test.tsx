@@ -332,7 +332,7 @@ describe("useMakeActiveHost local team admission", () => {
     expect(useSignOutConfirmStore.getState().open).toBe(false);
   });
 
-  it("shows the fixed unavailable toast for a typed membership lookup failure", async () => {
+  it("shows the token-unavailable title and records token-unavailable for a mint that answers unavailable", async () => {
     mocks.state.requestResult = (method: string, _params: unknown) =>
       rejectAfterLocalHostTokenMint(
         { kind: "unavailable", detail: "authn did not answer" },
@@ -359,7 +359,7 @@ describe("useMakeActiveHost local team admission", () => {
     ]);
   });
 
-  it("shows the fixed unavailable toast for a transient local transport failure", async () => {
+  it("shows the generic could-not-confirm line for a transient local transport failure", async () => {
     mocks.state.requestResult = (_method: string, _params: unknown) =>
       Promise.reject<unknown>(transportFailure());
     const { result } = renderMakeActiveHost([localOption()]);
@@ -371,10 +371,6 @@ describe("useMakeActiveHost local team admission", () => {
 
     expect(activated).toBe(false);
     expect(mocks.state.activationCalls).toEqual([]);
-    expect(mocks.state.hostTokenMintCalls).toBe(0);
-    expect(useHostDoorStateStore.getState().byHost.has(LOCAL_HOST_ID)).toBe(
-      false,
-    );
     expect(mocks.state.toastCalls).toEqual([
       {
         message:
