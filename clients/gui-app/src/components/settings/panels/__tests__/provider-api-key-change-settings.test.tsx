@@ -141,8 +141,13 @@ interface Rig {
   readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
 }
 
+interface MutationObserverReference {
+  readonly options: unknown;
+}
+
 const rigs: Rig[] = [];
 const queryClients: QueryClient[] = [];
+const mutationCacheUnsubscribers: Array<() => void> = [];
 let authQueryClient: QueryClient | null = null;
 let activeSignInFetch: SignInRequestFetchHarness | null = null;
 
@@ -170,14 +175,20 @@ function makeRig(
     | "dropped"
     | "unavailable",
   beginError: HostRpcError | null,
+  settleError: HostRpcError | null,
 ): Rig {
   const handlers: MockHandlerMap<typeof hostRpcRegistry> = {
     "providers.beginApiKeyChange": () => {
       if (beginError !== null) throw beginError;
       return BEGIN_RESPONSE;
     },
-    "providers.settleApiKeyChange": () =>
-      providersSettleApiKeyChangeResponseSchema.parse({ result, state: STATE }),
+    "providers.settleApiKeyChange": () => {
+      if (settleError !== null) throw settleError;
+      return providersSettleApiKeyChangeResponseSchema.parse({
+        result,
+        state: STATE,
+      });
+    },
     "providers.setApiKey": () =>
       providersSetApiKeyResponseSchema.parse({ state: STATE }),
     "providers.clearApiKey": () =>
@@ -258,6 +269,32 @@ function clearKeyInput(input: { current: string | null }): () => void {
   };
 }
 
+function captureMutationObservers(
+  queryClient: QueryClient,
+): MutationObserverReference[] {
+  const observers: MutationObserverReference[] = [];
+  const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+    if (event.type === "observerAdded") observers.push(event.observer);
+  });
+  mutationCacheUnsubscribers.push(unsubscribe);
+  return observers;
+}
+
+function mutationCacheContainsKey(
+  queryClient: QueryClient,
+  observers: readonly MutationObserverReference[],
+): boolean {
+  const mutations = queryClient.getMutationCache().getAll();
+  return (
+    mutations.some(
+      (mutation) =>
+        retainedObjectContainsKey(mutation.state) ||
+        retainedObjectContainsKey(mutation.options.meta),
+    ) ||
+    observers.some((observer) => retainedObjectContainsKey(observer.options))
+  );
+}
+
 function mutationStatesContainKey(queryClient: QueryClient): boolean {
   return queryClient
     .getMutationCache()
@@ -267,6 +304,68 @@ function mutationStatesContainKey(queryClient: QueryClient): boolean {
 
 function hostMethodCalls(rig: Rig, method: string): number {
   return rig.messenger.calls.filter((call) => call.method === method).length;
+}
+
+function expectRetainedMutationSurfacesClear(
+  queryClient: QueryClient,
+  observers: readonly MutationObserverReference[],
+  hookResult: unknown,
+): void {
+  const mutations = queryClient.getMutationCache().getAll();
+  expect(
+    mutations.length > 0 &&
+      observers.length > 0 &&
+      !mutationCacheContainsKey(queryClient, observers) &&
+      !retainedObjectContainsKey(hookResult),
+  ).toBe(true);
+}
+
+interface MutationReaderReplayProof {
+  readonly queryClient: QueryClient;
+  readonly rig: Rig;
+  readonly input: { current: string | null };
+  readonly observers: readonly MutationObserverReference[];
+  readonly hookResult: unknown;
+}
+
+async function expectRetainedMutationReaderSpent(
+  proof: MutationReaderReplayProof,
+): Promise<void> {
+  const { queryClient, rig, input, observers, hookResult } = proof;
+  const retainedMutation = queryClient.getMutationCache().getAll().at(-1);
+  if (retainedMutation === undefined)
+    throw new Error("Provider key mutation was not retained");
+  const mutationFn = retainedMutation.options.mutationFn;
+  if (mutationFn === undefined)
+    throw new Error("Provider key mutation has no mutation function");
+  const beginCount = hostMethodCalls(rig, "providers.beginApiKeyChange");
+  const httpCount = teamProviderKeyHttpBoundary.calls.length;
+  let inputUnavailable = false;
+  try {
+    await mutationFn(
+      { providerId: "cursor" },
+      {
+        client: queryClient,
+        meta: retainedMutation.options.meta,
+        mutationKey: retainedMutation.options.mutationKey ?? [],
+      },
+    );
+  } catch (error) {
+    inputUnavailable =
+      error instanceof Error &&
+      error.message === "Provider key input is unavailable";
+  }
+  expect(
+    inputUnavailable &&
+      input.current === null &&
+      hostMethodCalls(rig, "providers.beginApiKeyChange") === beginCount &&
+      teamProviderKeyHttpBoundary.calls.length === httpCount &&
+      teamProviderKeyHttpBoundary.calls.every(
+        (call) => call.keyMatches === true,
+      ) &&
+      !mutationCacheContainsKey(queryClient, observers) &&
+      !retainedObjectContainsKey(hookResult),
+  ).toBe(true);
 }
 
 function withQueryClient(queryClient: QueryClient) {
@@ -334,6 +433,16 @@ function updateRequiredError(): HostRpcError {
   });
 }
 
+function settleRequiredError(): HostRpcError {
+  return new HostRpcError({
+    code: "update-required",
+    message: "Update required",
+    requestId: "request-synthetic",
+    method: "providers.settleApiKeyChange",
+    fatalDetails: null,
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -345,6 +454,7 @@ afterEach(() => {
   activeSignInFetch?.restore();
   activeSignInFetch = null;
   authQueryClient = null;
+  for (const unsubscribe of mutationCacheUnsubscribers.splice(0)) unsubscribe();
   for (const rig of rigs.splice(0)) {
     rig.context.release();
     rig.client.dispose();
@@ -354,16 +464,40 @@ afterEach(() => {
 
 describe("provider API-key change Settings flow", () => {
   it.each([
-    [200, "success"],
-    [403, "error"],
+    {
+      name: "HTTP accepted and settlement installed",
+      httpStatus: 200,
+      expectedStatus: "success",
+      rejectsSettlement: false,
+      settleCalls: 1,
+    },
+    {
+      name: "HTTP refused",
+      httpStatus: 403,
+      expectedStatus: "error",
+      rejectsSettlement: false,
+      settleCalls: 0,
+    },
+    {
+      name: "HTTP accepted and settlement rejected",
+      httpStatus: 200,
+      expectedStatus: "error",
+      rejectsSettlement: true,
+      settleCalls: 1,
+    },
   ] as const)(
-    "uses the real authenticated HTTP boundary and retains no key after %s",
-    async (status, expectedMutationStatus) => {
-      const rig = makeRig("installed", null);
+    "retains no key after $name",
+    async ({ httpStatus, expectedStatus, rejectsSettlement, settleCalls }) => {
+      const rig = makeRig(
+        "installed",
+        null,
+        rejectsSettlement ? settleRequiredError() : null,
+      );
       const queryClient = authQueryClient;
       if (queryClient === null) throw new Error("Query client was not created");
-      teamProviderKeyHttpBoundary.status = status;
+      teamProviderKeyHttpBoundary.status = httpStatus;
       const input: { current: string | null } = { current: API_KEY };
+      const observers = captureMutationObservers(queryClient);
       const { result } = renderHook(
         () =>
           useProvidersSetApiKey(
@@ -376,54 +510,31 @@ describe("provider API-key change Settings flow", () => {
 
       act(() => result.current.mutate({ providerId: "cursor" }));
 
-      await waitFor(() =>
-        expect(result.current.status).toBe(expectedMutationStatus),
+      await waitFor(() => expect(result.current.status).toBe(expectedStatus));
+      expectRetainedMutationSurfacesClear(
+        queryClient,
+        observers,
+        result.current,
       );
-      expect(hasProviderKeyRequest("set", true)).toBe(true);
-      const mutations = queryClient.getMutationCache().getAll();
-      const retainedMutation = mutations.at(-1);
-      if (retainedMutation === undefined)
-        throw new Error("Provider key mutation was not retained");
-      const mutationFn = retainedMutation.options.mutationFn;
-      if (mutationFn === undefined)
-        throw new Error("Provider key mutation has no mutation function");
       expect(
-        mutations.length > 0 &&
-          !mutationStatesContainKey(queryClient) &&
-          !retainedObjectContainsKey(result.current),
+        hasProviderKeyRequest("set", true) &&
+          hostMethodCalls(rig, "providers.beginApiKeyChange") === 1 &&
+          hostMethodCalls(rig, "providers.settleApiKeyChange") ===
+            settleCalls &&
+          input.current === null,
       ).toBe(true);
-      expect(input.current === null).toBe(true);
-
-      const beginCount = hostMethodCalls(rig, "providers.beginApiKeyChange");
-      const httpCount = teamProviderKeyHttpBoundary.calls.length;
-      let emptiedInputRefused = false;
-      try {
-        await mutationFn(
-          { providerId: "cursor" },
-          {
-            client: queryClient,
-            meta: retainedMutation.options.meta,
-            mutationKey: retainedMutation.options.mutationKey ?? [],
-          },
-        );
-      } catch (error) {
-        emptiedInputRefused =
-          error instanceof Error &&
-          error.message === "Provider key input is unavailable";
-      }
-      expect(
-        emptiedInputRefused &&
-          hostMethodCalls(rig, "providers.beginApiKeyChange") === beginCount &&
-          teamProviderKeyHttpBoundary.calls.length === httpCount &&
-          teamProviderKeyHttpBoundary.calls.every(
-            (call) => call.keyMatches === true,
-          ),
-      ).toBe(true);
+      await expectRetainedMutationReaderSpent({
+        queryClient,
+        rig,
+        input,
+        observers,
+        hookResult: result.current,
+      });
     },
   );
 
   it("keeps a failed draft and creates a fresh authenticated request on repress", async () => {
-    makeRig("installed", null);
+    makeRig("installed", null, null);
     teamProviderKeyHttpBoundary.status = 403;
     const queryClient = renderSettings(false, ENVIRONMENT_ID, "Personal");
 
@@ -458,7 +569,7 @@ describe("provider API-key change Settings flow", () => {
   it.each(["installed", "unchanged"] as const)(
     "keeps %s silent and clears the submitted draft",
     async (result) => {
-      makeRig(result, null);
+      makeRig(result, null, null);
       mocks.mobileApp = false;
       renderSettings(false, ENVIRONMENT_ID, "Personal");
 
@@ -480,7 +591,7 @@ describe("provider API-key change Settings flow", () => {
   ] as const)(
     "shows the set notice for %s and clears the draft",
     async (result, message) => {
-      makeRig(result, null);
+      makeRig(result, null, null);
       mocks.mobileApp = false;
       renderSettings(false, ENVIRONMENT_ID, "Personal");
 
@@ -505,7 +616,7 @@ describe("provider API-key change Settings flow", () => {
       "The API key was removed, but this computer may not have changed.",
     ],
   ] as const)("shows the clear notice for %s", async (result, message) => {
-    makeRig(result, null);
+    makeRig(result, null, null);
     mocks.mobileApp = false;
     renderSettings(true, ENVIRONMENT_ID, "Personal");
 
@@ -526,7 +637,7 @@ describe("provider API-key change Settings flow", () => {
       method: "providers.beginApiKeyChange",
       fatalDetails: null,
     });
-    makeRig("installed", forbidden);
+    makeRig("installed", forbidden, null);
     mocks.mobileApp = false;
     renderSettings(false, ENVIRONMENT_ID, "Personal");
 
@@ -544,7 +655,7 @@ describe("provider API-key change Settings flow", () => {
   });
 
   it("keeps the draft on environment drift and invalidates the host list and status", async () => {
-    const rig = makeRig("installed", null);
+    const rig = makeRig("installed", null, null);
     const queryClient = renderSettings(false, EXPECTED_ENVIRONMENT_ID, "Team");
     const hostId = mockLocalHostEntry.hostId;
     const plan = readProcessHostRpcTierPlan();
@@ -580,7 +691,7 @@ describe("provider API-key change Settings flow", () => {
   });
 
   it("offers the desktop app release action for update-required", async () => {
-    makeRig("installed", updateRequiredError());
+    makeRig("installed", updateRequiredError(), null);
     mocks.mobileApp = false;
     renderSettings(false, ENVIRONMENT_ID, "Personal");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -614,7 +725,7 @@ describe("provider API-key change Settings flow", () => {
   ] as const)(
     "shows the %s store instruction without an action",
     async (platform, note) => {
-      makeRig("installed", updateRequiredError());
+      makeRig("installed", updateRequiredError(), null);
       mocks.mobileApp = true;
       mocks.mobilePlatform = platform;
       renderSettings(false, ENVIRONMENT_ID, "Personal");
