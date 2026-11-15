@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -7,7 +8,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * whose request fetched it.
  *
  * Only a fetch's own answer is marked, for the account the app read as when
- * that fetch started, and only when the account has not changed since. A
+ * that fetch started, and only in the bot lifetime it started in
+ * (`currentBotLifetime()`): no change of account since, A, B, A included. A
  * fetch's retry sends its request again later, under whichever account is
  * signed in then, so an answer that settles after an account change, its
  * retry's wait included, is marked for no one, and its rows are withheld
@@ -27,27 +29,18 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const readableBy = new WeakMap<object, string | null>();
 /** Per read: its marked answer. */
 const markedAnswer = new WeakMap<object, object>();
-/** Who started a read's fetch in flight: the account, and the account change it started after. */
+/**
+ * Who started a read's fetch in flight: the account, and the bot lifetime it
+ * started in. The request context and the store change in one synchronous
+ * step (`AuthService`), so a fetch records the account its request goes out
+ * as.
+ */
 interface Requester {
   readonly viewer: string | null;
-  readonly change: number;
+  readonly lifetime: number;
 }
 /** Per read: who started its fetch in flight. */
 const requestedBy = new WeakMap<object, Requester>();
-
-/**
- * How many times the account the app reads as has changed. One listener for
- * the module, holding no client, so a client it served can be released. The
- * request context and the store change in one synchronous step
- * (`AuthService`), so no attempt is sent between the two.
- */
-let accountChanges = 0;
-useAuthStore.subscribe((state, previous) => {
-  const viewer = state.contextMetadata?.userId ?? null;
-  if (viewer !== (previous.contextMetadata?.userId ?? null)) {
-    accountChanges += 1;
-  }
-});
 
 /** The account the app reads as now; `null` signed out. */
 function currentViewer(): string | null {
@@ -85,7 +78,7 @@ export function installBotReadReadability(client: QueryClient): void {
     if (action.type === "fetch") {
       requestedBy.set(query, {
         viewer: currentViewer(),
-        change: accountChanges,
+        lifetime: currentBotLifetime(),
       });
       return;
     }
@@ -105,7 +98,7 @@ export function installBotReadReadability(client: QueryClient): void {
       typeof data !== "object" ||
       data === null ||
       requester === undefined ||
-      requester.change !== accountChanges
+      requester.lifetime !== currentBotLifetime()
     ) {
       return;
     }
