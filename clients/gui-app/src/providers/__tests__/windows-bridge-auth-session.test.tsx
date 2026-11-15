@@ -973,7 +973,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       expect(harness.set).toHaveBeenCalledTimes(handedOver);
     });
 
-    it("ends signed out when authn rejects the session", async () => {
+    it("hands main the sign-out when the service signs the held session out", async () => {
       const harness = await startOffline({});
       harness.answerSetWith(refused("expired"));
       harness.revalidate.mockImplementation(() => {
@@ -994,6 +994,32 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       const handedOver = harness.set.mock.calls.length;
       await tick(RESEND_MS * 5);
       expect(harness.set).toHaveBeenCalledTimes(handedOver);
+    });
+
+    it("asks for the local restore and hands over no more when authn rejects the held session and the service demotes it to unverified", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("bad-signature"));
+      // What the service projects when authn refuses the refresh: the session
+      // stays as the local plane's identity (`unverified`), not a sign-out.
+      harness.revalidate.mockImplementation(() => {
+        harness.setCurrentSession(UNVERIFIED_SNAPSHOT);
+        harness.emitOutbound(UNVERIFIED_SNAPSHOT);
+        return Promise.resolve(null);
+      });
+
+      await tick(RESEND_MS);
+      await settle();
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
+      const handedOver = harness.set.mock.calls.length;
+
+      await tick(RESEND_MS * 5);
+
+      expect(harness.set).toHaveBeenCalledTimes(handedOver);
+      expect(harness.set).not.toHaveBeenCalledWith({
+        status: "signed-out",
+        token: null,
+        profile: null,
+      });
     });
 
     it("hands the same session over on the next tick when authn accepts it", async () => {
