@@ -423,3 +423,28 @@ export async function requireCliHostSession(
 export async function forgetCliHostTokens(userId: string): Promise<void> {
   await createSource(null).forgetUser(userId);
 }
+
+/**
+ * Drops the one host-only token held for `hostId` by `userId`, and no other
+ * host's or person's, so the next call mints afresh. For a computer whose
+ * owner just changed: the token held was minted for the previous owner.
+ */
+export async function forgetCliHostToken(
+  userId: string,
+  hostId: string,
+): Promise<void> {
+  await createHostTokenFilePersistence({
+    environment: config.environment,
+    lockWaitMs: CREDENTIALS_LOCK_WAIT_MS,
+    lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
+  }).update((table) => {
+    const forUser = table.get(userId);
+    if (forUser === undefined || !forUser.has(hostId)) return table;
+    const nextForUser = new Map(forUser);
+    nextForUser.delete(hostId);
+    const next = new Map(table);
+    if (nextForUser.size === 0) next.delete(userId);
+    else next.set(userId, nextForUser);
+    return next;
+  });
+}

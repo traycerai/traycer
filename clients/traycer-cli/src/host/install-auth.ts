@@ -31,6 +31,7 @@ import {
   readHostPidMetadata,
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { forgetCliHostToken } from "../internal/cli-host-tokens";
 import {
   readSignInEnvironments,
   type SignInEnvironment,
@@ -605,7 +606,19 @@ export async function useInstalledHostTeam(
     totalBytes: null,
     workUnits: null,
   });
-  return transferInstalledHostTeam(endpoint, auth, target, dispatch, true);
+  const binding = await transferInstalledHostTeam(
+    endpoint,
+    auth,
+    target,
+    dispatch,
+    true,
+  );
+  // The computer's owner changed, so the host-only token held for it was
+  // minted for the previous owner: dropped, the next call mints for the new
+  // one instead of meeting the door's refusal first. Best effort: a busy
+  // lock leaves it to that refusal and its one fresh token, as before.
+  await forgetCliHostToken(auth.userId, endpoint.hostId).catch(() => undefined);
+  return binding;
 }
 
 async function transferInstalledHostTeam(
