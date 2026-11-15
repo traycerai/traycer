@@ -316,6 +316,7 @@ async function mintAttachGrantWithSignal(
             ? { role: "client", purpose: "local" }
             : { role: "client" },
         ),
+        redirect: "manual",
         signal,
       }),
       signal,
@@ -659,6 +660,7 @@ async function postHostRoute(
                   Accept: "application/json",
                 },
           ...(body === null ? {} : { body }),
+          redirect: "manual",
           signal: abort.signal,
         }),
         abort.signal,
