@@ -666,7 +666,6 @@ describe("hostDoctorCommand asks a host that answers not yet", () => {
   it.each([
     { form: "a retryable error on a request", pick: "notYetOnRequest" },
     { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
-    { form: "a post-open request timeout", pick: "requestTimeout" },
   ] as const)(
     "prints the local verdict and the local-only notice when the host still answers $form after five seconds",
     async ({ pick }) => {
@@ -733,6 +732,10 @@ describe("hostDoctorCommand asks a host that answers not yet", () => {
   it.each([
     { name: "does not answer", pick: "silent" },
     { name: "refuses for good", pick: "unauthorized" },
+    {
+      name: "times out after the open, as a current host says it",
+      pick: "requestTimeout",
+    },
     {
       name: "times out after the open as a host through 1.1.9 says it",
       pick: "legacyRequestTimeout",

@@ -378,7 +378,6 @@ describe("runDoctor against a host that answers not yet", () => {
   it.each([
     { form: "a retryable error on a request", pick: "notYetOnRequest" },
     { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
-    { form: "a post-open request timeout", pick: "requestTimeout" },
   ] as const)(
     "stops asking five seconds after the first attempt when the host still answers $form, and raises no issue for the probe",
     async ({ pick }) => {
@@ -419,6 +418,10 @@ describe("runDoctor against a host that answers not yet", () => {
 
   it.each([
     { name: "did not answer", pick: "silent" },
+    {
+      name: "timed out after the open, as a current host says it",
+      pick: "requestTimeout",
+    },
     {
       name: "timed out after the open as a host through 1.1.9 says it",
       pick: "legacyRequestTimeout",
