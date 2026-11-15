@@ -5888,9 +5888,7 @@ describe("WorktreesList status-aware delete safety", () => {
       screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
     ).toBe("review");
     screen.getByText("unreadable");
-    screen.getByText(
-      "Git can't read this worktree — its main repository is missing or was moved",
-    );
+    screen.getByText("Git can't read this worktree or one of its submodules");
     fireEvent.click(
       screen.getByRole("button", { name: "Delete worktree unreadable" }),
     );
