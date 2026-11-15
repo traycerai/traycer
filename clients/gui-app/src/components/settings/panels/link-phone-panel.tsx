@@ -604,7 +604,6 @@ export function LinkPhonePanel() {
   const [decidedElsewhere, setDecidedElsewhere] = useState<
     "approved" | "rejected" | null
   >(null);
-  const respond = useRespondLinkLoginMutation();
   const {
     claim: watchedClaim,
     code,
@@ -627,6 +626,10 @@ export function LinkPhonePanel() {
     watchedClaim !== null && watchedClaim.code === decidedCode
       ? null
       : watchedClaim;
+  const respond = useRespondLinkLoginMutation(() => {
+    if (claim === null) throw new Error("Link claim input is unavailable.");
+    return claim.code;
+  });
   const minted = code.data ?? null;
   // `claim-pending` is a state, not an error: the user's single live claim
   // is awaiting the decision on ANOTHER surface. Rendered only when this
@@ -676,7 +679,7 @@ export function LinkPhonePanel() {
     setDecidedElsewhere(null);
     const decidedOn = claim.code;
     respond.mutate(
-      { code: decidedOn, approve },
+      { approve },
       {
         onSuccess: (outcome) => {
           if (approve && outcome === "ok") {
