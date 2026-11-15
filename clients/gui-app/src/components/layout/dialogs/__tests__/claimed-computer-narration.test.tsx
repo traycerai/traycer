@@ -588,7 +588,7 @@ describe("claimed-computer narration consumers", () => {
   });
 
   it("keeps today's cover when a claims read fails", async () => {
-    queueClaimPlan(ENVIRONMENT_ID, new Error("claims unavailable"));
+    queueClaimPlan(ENVIRONMENT_ID, CLAIMED_COMPUTERS_RESULTS.failed);
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
     ]);
@@ -840,7 +840,7 @@ describe("claimed-computer narration consumers", () => {
     expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
-  it("does not retry a failed team read during rerender, team change or remount", async () => {
+  it("does not retry a team read that throws during rerender, team change or remount", async () => {
     queueClaimPlan("team-acme", new Error("Acme claims unavailable"));
     const harness = createClaimHarness([
       organizationEnvironment("team-acme", "Acme"),
@@ -1226,11 +1226,10 @@ describe("claimed-computer narration consumers", () => {
     expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
-  it("keeps today's cover when an outside replacement for a cached claim fails", async () => {
+  it("keeps today's cover when an outside replacement for a cached claim answers failed", async () => {
     const initialRead = deferredClaimRead();
     queueClaimPlan(ENVIRONMENT_ID, initialRead);
-    queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
-    queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
+    queueClaimPlan(ENVIRONMENT_ID, CLAIMED_COMPUTERS_RESULTS.failed);
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
     ]);
@@ -1261,9 +1260,7 @@ describe("claimed-computer narration consumers", () => {
     });
     await waitFor(() => expect(initialRead.signalAborted).toBe(true));
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-    expect(await replacementOutcome).toEqual(
-      new Error("replacement claims failed"),
-    );
+    expect(await replacementOutcome).toBe("answered");
     const readsAfterFailure = claimCallCount(ENVIRONMENT_ID);
     harness.show(true, []);
 
@@ -1439,7 +1436,7 @@ describe("claimed-computer narration consumers", () => {
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
 
     act(() => {
-      newerRead.reject(new Error("team B claims unavailable"));
+      newerRead.resolve(CLAIMED_COMPUTERS_RESULTS.failed);
     });
     await screen.findByText("Priya claimed this computer");
     assertWindowClaim("Priya", "A");
