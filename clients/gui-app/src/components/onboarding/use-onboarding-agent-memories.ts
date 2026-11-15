@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -272,8 +273,8 @@ export function useOnboardingAgentMemories(input: {
           if (answer.state !== "queued")
             trackSettingChanged("agent-memories", "useTraycerMemories");
           return answer;
-        } catch {
-          return null;
+        } catch (error) {
+          return reportedSaveFailure(error) === null ? "unsent" : null;
         }
       },
       writeProvider: (row) => writeProvider(target, row),
@@ -328,7 +329,11 @@ export function useOnboardingAgentMemories(input: {
     // without a catch, and would leave this whole hook unmemoized.
     return runMemorySave(saveIo(target), rows)
       .then((result) => {
-        if (result !== "moved" && result !== "undiscovered")
+        if (
+          result !== "moved" &&
+          result !== "undiscovered" &&
+          result !== "unsent"
+        )
           record(target.hostId, (current) => ({
             ...current,
             traycerUnreached: result === "unreached",
