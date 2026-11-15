@@ -19,10 +19,10 @@ import type { EnvironmentCloud } from "@traycer-clients/shared/environment/envir
 import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
-  sendFollowedSave,
   useSettingsSave,
   type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
+import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,

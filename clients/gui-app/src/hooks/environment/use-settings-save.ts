@@ -8,7 +8,6 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type {
   EnvironmentCloud,
@@ -33,24 +32,10 @@ import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import type { PendingSettingsSave } from "@/lib/environment/settings-save-follow";
 import { environmentQueryKeys } from "@/lib/query-keys";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
-
-/** One save about to be sent to a host, as the coordinator follows it. */
-export type PendingSettingsSave =
-  | {
-      readonly kind: "send";
-      /** The host answered the save. */
-      readonly answered: () => void;
-      /** The save failed, or nothing answered it. */
-      readonly failed: () => void;
-    }
-  /**
-   * The account changed while the save was prepared: it is not sent, and
-   * ends as an aborted request, which no notice reports.
-   */
-  | { readonly kind: "abandoned"; readonly method: string };
 
 /**
  * Called just before a save is sent, with the host it is sent on and the
@@ -66,30 +51,6 @@ export type PrepareSettingsSave = (
   sentOn: string | null,
   pressedOn: EnvironmentCloud | null,
 ) => Promise<PendingSettingsSave>;
-
-/** Sends a followed save and tells `pending` whether the host answered it. */
-export async function sendFollowedSave<T>(
-  pending: PendingSettingsSave,
-  send: () => Promise<T>,
-): Promise<T> {
-  if (pending.kind === "abandoned") {
-    throw new HostRequestAbortedError({
-      message: "The account changed before the save was sent",
-      requestId: crypto.randomUUID(),
-      method: pending.method,
-      mayHaveDispatched: false,
-    });
-  }
-  let answer: T;
-  try {
-    answer = await send();
-  } catch (cause) {
-    pending.failed();
-    throw cause;
-  }
-  pending.answered();
-  return answer;
-}
 
 /** Who is signed in now, as {@link useCloudChatViewerId} names them. */
 function signedInViewer(): string {

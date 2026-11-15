@@ -31,12 +31,14 @@ import { queryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
-import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentCloudSource,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import {
   sendFollowedSave,
   type PendingSettingsSave,
-} from "@/hooks/environment/use-settings-save";
+} from "@/lib/environment/settings-save-follow";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
@@ -444,7 +446,7 @@ export interface UseHostMutationOptions<
    * will propose (`useSettingsSave`). Told whether the host answered.
    */
   readonly followSettingsSave?:
-    | FollowSettingsSave<Registry, Method>
+    | SettingsSaveFollow<Registry, Method>
     | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
@@ -528,7 +530,7 @@ export interface UseHostMutationOptions<
 }
 
 /**
- * {@link UseHostMutationOptions.followSettingsSave}; `pressedOn` is the
+ * {@link SettingsSaveFollow.follow}; `pressedOn` is the
  * sign-in the person acted on, as `useSettingsSave`'s preparation takes it.
  */
 type FollowSettingsSave<
@@ -539,6 +541,19 @@ type FollowSettingsSave<
   client: HostRequester<Registry>,
   pressedOn: EnvironmentCloud | null,
 ) => Promise<PendingSettingsSave>;
+
+/**
+ * {@link UseHostMutationOptions.followSettingsSave}: `source` is the window's
+ * session service (`useEnvironmentCloud()`), asked for the sign-in as the
+ * person acts. The caller passes it in, so this module reaches no hook module.
+ */
+export interface SettingsSaveFollow<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly source: EnvironmentCloudSource | null;
+  readonly follow: FollowSettingsSave<Registry, Method>;
+}
 
 /** A followed save as the person pressed it: the render's follow, on the sign-in then. */
 interface PressedSettingsSave<
@@ -580,7 +595,6 @@ export function useHostMutation<
         PressedSettingsSave<Registry, Method>
       >(),
   );
-  const cloudSource = useEnvironmentCloud();
   const follow = args.followSettingsSave;
   const { onMutate } = args.options ?? {};
   const baseOptions =
@@ -593,8 +607,8 @@ export function useHostMutation<
             context: MutationFunctionContext,
           ) => {
             pressedIn.set(context, {
-              follow,
-              pressedOn: cloudSource === null ? null : cloudSource(),
+              follow: follow.follow,
+              pressedOn: follow.source === null ? null : follow.source(),
             });
             return onMutate(variables, context);
           },
