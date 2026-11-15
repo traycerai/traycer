@@ -13,6 +13,70 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => hostMock.hostId,
 }));
 
+const cloudReads = vi.hoisted(() => ({
+  environmentId: "env-personal",
+  resolved: true,
+  secrets: [] as EnvironmentSecretV12[],
+  calls: [] as Array<{
+    method: string;
+    params: unknown;
+    enabled: boolean;
+    poll: boolean | undefined;
+  }>,
+}));
+
+vi.mock("@/hooks/environment/use-host-own-environment", () => ({
+  useHostOwnEnvironment: (
+    client: unknown,
+    hostId: string | null,
+    enabled: boolean,
+  ) => {
+    const resolved =
+      enabled && client !== null && hostId !== null && cloudReads.resolved;
+    return {
+      environmentId: resolved ? cloudReads.environmentId : null,
+      resolved,
+    };
+  },
+}));
+
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  return {
+    ...actual,
+    useEnvironmentCloudQuery: (args: {
+      method: string;
+      params: unknown;
+      enabled: boolean;
+      poll: boolean | undefined;
+    }) => {
+      const read = {
+        method: args.method,
+        params: args.params,
+        enabled: args.enabled,
+        poll: args.poll,
+      };
+      const alreadyRecorded = cloudReads.calls.some(
+        (current) =>
+          current.method === read.method &&
+          JSON.stringify(current.params) === JSON.stringify(read.params) &&
+          current.enabled === read.enabled &&
+          current.poll === read.poll,
+      );
+      if (!alreadyRecorded) cloudReads.calls.push(read);
+      return {
+        data: args.enabled
+          ? { secrets: [...cloudReads.secrets], removed: [] }
+          : undefined,
+        isError: false,
+      };
+    },
+  };
+});
+
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateMock,
@@ -150,6 +214,11 @@ function renderGroup(
       return facts.status;
     },
   };
+  cloudReads.environmentId =
+    facts.status.principal?.kind === "team" ? "env-team" : "env-personal";
+  cloudReads.resolved = facts.methods.includes("environment.status");
+  cloudReads.secrets = [...facts.secrets];
+  cloudReads.calls = [];
   const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
   recordNegotiatedHostMethods(HOST_ID, facts.methods);
   hostMock.client = client;
@@ -180,6 +249,17 @@ function marks(): string[] {
 
 function progress(): string {
   return screen.getByTestId("set-up-personal-progress").textContent;
+}
+
+function enabledSecretReads(): Array<{
+  method: string;
+  params: unknown;
+  enabled: boolean;
+  poll: boolean | undefined;
+}> {
+  return cloudReads.calls.filter(
+    (call) => call.method === "environment.secrets.list" && call.enabled,
+  );
 }
 
 /** Lets everything a NEGATIVE assertion depends on happen first. */
@@ -238,7 +318,7 @@ describe("<SetUpPersonalGroup />", () => {
 
     await waitFor(() => {
       expect(calls.providers).toBeGreaterThan(0);
-      expect(calls.secrets).toBeGreaterThan(0);
+      expect(enabledSecretReads().length).toBeGreaterThan(0);
       expect(calls.status).toBeGreaterThan(0);
     });
     await settle();
@@ -246,8 +326,8 @@ describe("<SetUpPersonalGroup />", () => {
     expect(progress()).toBe("0 of 3 done");
   });
 
-  it("checks every step off from the host's reads alone, as when each was done in the dashboard", async () => {
-    renderGroup(
+  it("checks each step from its Personal secret list and the host's other reads", async () => {
+    const calls = renderGroup(
       {
         ...NOTHING,
         providers: [managedLinked()],
@@ -259,7 +339,14 @@ describe("<SetUpPersonalGroup />", () => {
 
     await waitFor(() => {
       expect(progress()).toBe("Done");
+      expect(enabledSecretReads()).toHaveLength(1);
     });
+    expect(calls.secrets).toBe(0);
+    expect(enabledSecretReads()).toEqual([
+      expect.objectContaining({
+        params: { environmentId: "env-personal" },
+      }),
+    ]);
     expect(marks()).toEqual(["provider=true", "secret=true", "agents=true"]);
     // A done step says so to assistive technology.
     expect(screen.getAllByLabelText("Done")).toHaveLength(3);
@@ -305,14 +392,14 @@ describe("<SetUpPersonalGroup />", () => {
 
     await waitFor(() => {
       expect(calls.providers).toBeGreaterThan(0);
-      expect(calls.secrets).toBeGreaterThan(0);
+      expect(enabledSecretReads().length).toBeGreaterThan(0);
     });
     await settle();
     expect(marks()).toEqual(["provider=false", "secret=false", "agents=false"]);
     expect(progress()).toBe("0 of 3 done");
   });
 
-  it("does not read secrets from a host that does not have environment.secrets.list", async () => {
+  it("reads the host's own secrets through authn when it does not serve environment.secrets.list", async () => {
     const calls = renderGroup(
       {
         ...NOTHING,
@@ -324,11 +411,40 @@ describe("<SetUpPersonalGroup />", () => {
     );
 
     await waitFor(() => {
-      expect(progress()).toBe("1 of 3 done");
+      expect(progress()).toBe("2 of 3 done");
+      expect(enabledSecretReads()).toHaveLength(1);
     });
-    await settle();
     expect(calls.secrets).toBe(0);
-    expect(marks()).toEqual(["provider=true", "secret=false", "agents=false"]);
+    expect(enabledSecretReads()).toEqual([
+      expect.objectContaining({
+        params: { environmentId: "env-personal" },
+      }),
+    ]);
+    expect(marks()).toEqual(["provider=true", "secret=true", "agents=false"]);
+  });
+
+  it("names the host's own team environment in the onboarding authn read", async () => {
+    const calls = renderGroup(
+      {
+        ...NOTHING,
+        secrets: [secret({})],
+        status: environmentStatusFixture({
+          principal: { kind: "team", teamName: "Acme" },
+        }),
+      },
+      "settings",
+    );
+
+    await waitFor(() => {
+      expect(progress()).toBe("1 of 3 done");
+      expect(enabledSecretReads()).toHaveLength(1);
+    });
+    expect(calls.secrets).toBe(0);
+    expect(enabledSecretReads()).toEqual([
+      expect.objectContaining({
+        params: { environmentId: "env-team" },
+      }),
+    ]);
   });
 
   it("keeps the agents step open on a host that cannot answer environment.status", async () => {
@@ -347,6 +463,7 @@ describe("<SetUpPersonalGroup />", () => {
     });
     await settle();
     expect(calls.status).toBe(0);
+    expect(enabledSecretReads()).toEqual([]);
     expect(marks()).toEqual(["provider=true", "secret=false", "agents=false"]);
   });
 
@@ -371,7 +488,7 @@ describe("<SetUpPersonalGroup />", () => {
 
       await waitFor(() => {
         expect(calls.status).toBeGreaterThan(0);
-        expect(calls.secrets).toBeGreaterThan(0);
+        expect(enabledSecretReads().length).toBeGreaterThan(0);
         expect(calls.providers).toBeGreaterThan(0);
       });
       await waitFor(() => {
@@ -386,6 +503,7 @@ describe("<SetUpPersonalGroup />", () => {
         appliedRevision: 2,
       });
       facts.secrets = [secret({})];
+      cloudReads.secrets = [...facts.secrets];
       facts.providers = [storedKey()];
 
       await act(async () => {

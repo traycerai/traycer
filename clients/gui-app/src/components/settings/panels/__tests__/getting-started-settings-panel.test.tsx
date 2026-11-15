@@ -16,6 +16,15 @@ import {
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+const secretRoute = vi.hoisted(() => ({
+  calls: [] as Array<{
+    method: string;
+    params: unknown;
+    enabled: boolean;
+  }>,
+  hostReads: [] as string[],
+}));
+
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
   secrets: [] as EnvironmentSecretV12[],
@@ -43,8 +52,61 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: { secrets: mocks.secrets } }),
+  useHostQuery: (args: { method: string }) => {
+    if (args.method === "environment.secrets.list") {
+      secretRoute.hostReads.push(args.method);
+    }
+    return { data: { secrets: mocks.secrets } };
+  },
 }));
+
+vi.mock("@/hooks/environment/use-host-own-environment", () => ({
+  useHostOwnEnvironment: (
+    client: unknown,
+    hostId: string | null,
+    enabled: boolean,
+  ) => {
+    const resolved = enabled && client !== null && hostId !== null;
+    return {
+      environmentId: resolved ? "env-personal" : null,
+      resolved,
+    };
+  },
+}));
+
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  return {
+    ...actual,
+    useEnvironmentCloudQuery: (args: {
+      method: string;
+      params: unknown;
+      enabled: boolean;
+    }) => {
+      const read = {
+        method: args.method,
+        params: args.params,
+        enabled: args.enabled,
+      };
+      const alreadyRecorded = secretRoute.calls.some(
+        (current) =>
+          current.method === read.method &&
+          JSON.stringify(current.params) === JSON.stringify(read.params) &&
+          current.enabled === read.enabled,
+      );
+      if (!alreadyRecorded) secretRoute.calls.push(read);
+      return {
+        data: args.enabled
+          ? { secrets: [...mocks.secrets], removed: [] }
+          : undefined,
+        isError: false,
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
@@ -221,6 +283,8 @@ describe("GettingStartedSettingsPanel", () => {
     };
     mocks.thisComputersMove = "unknown";
     mocks.openLink.mockClear();
+    secretRoute.calls = [];
+    secretRoute.hostReads = [];
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
@@ -311,6 +375,27 @@ describe("GettingStartedSettingsPanel", () => {
     expect(
       screen.getByTestId("getting-started-card-credits").textContent,
     ).toContain("Credits pay for your sandboxes.");
+  });
+
+  it("checks the secret card from Personal's authn list", () => {
+    mocks.secrets = [secret()];
+    render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Add a secret if agents need one, Complete",
+      }),
+    ).toBeTruthy();
+    expect(
+      secretRoute.calls.filter(
+        (call) => call.method === "environment.secrets.list" && call.enabled,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        params: { environmentId: "env-personal" },
+      }),
+    ]);
+    expect(secretRoute.hostReads).toEqual([]);
   });
 
   it("completes a step by the fact it names, never by a click", () => {

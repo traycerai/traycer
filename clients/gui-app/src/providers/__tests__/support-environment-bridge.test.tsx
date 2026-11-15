@@ -8,6 +8,63 @@ interface BridgeHarness {
   client: HostClient<HostRpcRegistry> | null;
 }
 
+const cloudReads = vi.hoisted(() => ({
+  environmentId: "env-window-host",
+  calls: [] as Array<{
+    method: string;
+    params: unknown;
+    enabled: boolean;
+    poll: boolean | undefined;
+  }>,
+  responses: new Map<string, unknown>(),
+}));
+
+vi.mock("@/hooks/environment/use-host-own-environment", () => ({
+  useHostOwnEnvironment: (
+    _client: unknown,
+    _hostId: string | null,
+    enabled: boolean,
+  ) => ({
+    environmentId: enabled ? cloudReads.environmentId : null,
+    resolved: enabled,
+  }),
+}));
+
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  return {
+    ...actual,
+    useEnvironmentCloudQuery: (args: {
+      method: string;
+      params: unknown;
+      enabled: boolean;
+      poll: boolean | undefined;
+    }) => {
+      const read = {
+        method: args.method,
+        params: args.params,
+        enabled: args.enabled,
+        poll: args.poll,
+      };
+      const alreadyRecorded = cloudReads.calls.some(
+        (current) =>
+          current.method === read.method &&
+          JSON.stringify(current.params) === JSON.stringify(read.params) &&
+          current.enabled === read.enabled &&
+          current.poll === read.poll,
+      );
+      if (!alreadyRecorded) cloudReads.calls.push(read);
+      return {
+        data: args.enabled ? cloudReads.responses.get(args.method) : undefined,
+        isError: false,
+      };
+    },
+  };
+});
+
 const harness = vi.hoisted((): BridgeHarness => ({
   hostId: "host-env",
   methods: new Set<string>(),
@@ -130,6 +187,12 @@ function renderBridge(client: HostClient<HostRpcRegistry>): void {
 beforeEach(() => {
   harness.methods.clear();
   harness.client = null;
+  cloudReads.environmentId = "env-window-host";
+  cloudReads.calls = [];
+  cloudReads.responses = new Map([
+    ["environment.secrets.list", { removed: [], secrets: [SECRET] }],
+    ["environment.secrets.rotation", { rotation: ROTATION, lastVerify: null }],
+  ]);
 });
 
 afterEach(() => {
@@ -154,6 +217,11 @@ describe("SupportEnvironmentBridge", () => {
         status: "unavailable",
       });
     });
+    expect(
+      cloudReads.calls.filter(
+        (call) => call.method === "environment.secrets.list" && call.enabled,
+      ),
+    ).toEqual([]);
   });
 
   it("writes a known section carrying the listed secret's name and its producers", async () => {
@@ -164,6 +232,7 @@ describe("SupportEnvironmentBridge", () => {
     ]) {
       harness.methods.add(method);
     }
+    const hostSecretReads: string[] = [];
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
@@ -173,11 +242,14 @@ describe("SupportEnvironmentBridge", () => {
             reachability: "connected",
           }),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ removed: [], secrets: [SECRET] }),
-        "environment.secrets.rotation": () => ({
-          rotation: ROTATION,
-          lastVerify: null,
-        }),
+        "environment.secrets.list": () => {
+          hostSecretReads.push("list");
+          return { removed: [], secrets: [SECRET] };
+        },
+        "environment.secrets.rotation": () => {
+          hostSecretReads.push("rotation");
+          return { rotation: ROTATION, lastVerify: null };
+        },
       },
     });
 
@@ -219,8 +291,54 @@ describe("SupportEnvironmentBridge", () => {
         ],
       },
     ]);
+    expect(hostSecretReads).toEqual([]);
+    expect(
+      cloudReads.calls
+        .filter((call) => call.enabled)
+        .map((call) => [call.method, call.params]),
+    ).toEqual([
+      ["environment.secrets.list", { environmentId: "env-window-host" }],
+      [
+        "environment.secrets.rotation",
+        { secretId: "sec-1", environmentId: "env-window-host" },
+      ],
+    ]);
+    expect(
+      cloudReads.calls
+        .filter((call) => call.method === "environment.secrets.rotation")
+        .map((call) => call.poll),
+    ).toEqual([true, false]);
     // The team travels as a category; its name does not.
     expect(JSON.stringify(section)).not.toContain(TEAM_NAME);
+  });
+
+  it("keeps the environment.secrets.list support gate for this support report", async () => {
+    harness.methods.add("environment.status");
+    harness.methods.add("environment.setup.attempts");
+    const hostSecretReads: string[] = [];
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () => environmentStatusFixture({}),
+        "environment.setup.attempts": () => ({ attempts: [] }),
+        "environment.secrets.list": () => {
+          hostSecretReads.push("list");
+          return { removed: [], secrets: [SECRET] };
+        },
+      },
+    });
+
+    renderBridge(client);
+
+    await waitFor(() => {
+      expect(getSupportEnvironmentSection().status).toBe("known");
+    });
+    expect(
+      cloudReads.calls.filter(
+        (call) => call.method === "environment.secrets.list" && call.enabled,
+      ),
+    ).toEqual([]);
+    expect(hostSecretReads).toEqual([]);
   });
 
   it("carries the host's reach denials and served task when it serves environment.reachDiagnostics", async () => {
