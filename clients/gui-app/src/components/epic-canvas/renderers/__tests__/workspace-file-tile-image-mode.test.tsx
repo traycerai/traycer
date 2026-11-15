@@ -237,6 +237,12 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
+// The tile's only edge into the host-error toast is the update line a press
+// shows on a host below the minimum; no case here presses one.
+vi.mock("@/lib/host-error-toast", () => ({
+  showHostUpdateNeededForGesture: vi.fn(),
+}));
+
 vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
   DEFAULT_ANIMATION_MS: 200,
   ImagePreview: (props: {
