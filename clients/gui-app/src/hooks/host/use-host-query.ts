@@ -553,6 +553,8 @@ export interface SettingsSaveFollow<
 > {
   readonly source: EnvironmentCloudSource | null;
   readonly follow: FollowSettingsSave<Registry, Method>;
+  /** Whether the host's answer proposes the save (`sendFollowedSave`). */
+  readonly proposes: (response: ResponseOfMethod<Registry, Method>) => boolean;
 }
 
 /** A followed save as the person pressed it: the render's follow, on the sign-in then. */
@@ -684,6 +686,7 @@ export function useHostMutation<
                   ? { kind: "abandoned", method: args.method }
                   : await pressed.follow(params, client, pressed.pressedOn),
                 mappedDispatch,
+                follow.proposes,
               );
         // Between the dispatch and `onResponse`, so a substituted response is
         // what every arm below sees - including the caller's `onSuccess` and

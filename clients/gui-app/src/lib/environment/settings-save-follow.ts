@@ -21,10 +21,16 @@ export type PendingSettingsSave =
    */
   | { readonly kind: "abandoned"; readonly method: string };
 
-/** Sends a followed save and tells `pending` whether the host answered it. */
+/**
+ * Sends a followed save and tells `pending` whether the host proposed it:
+ * `proposes` reads the host's answer, and an answer that proposes nothing (a
+ * save completed on a computer bound to no environment) settles the save as
+ * not proposed, so nothing is applied for it.
+ */
 export async function sendFollowedSave<T>(
   pending: PendingSettingsSave,
   send: () => Promise<T>,
+  proposes: (answer: T) => boolean,
 ): Promise<T> {
   if (pending.kind === "abandoned") {
     throw new HostRequestAbortedError({
@@ -41,8 +47,14 @@ export async function sendFollowedSave<T>(
     pending.failed();
     throw cause;
   }
-  pending.answered();
+  if (proposes(answer)) pending.answered();
+  else pending.failed();
   return answer;
+}
+
+/** `proposes` for a method none of whose answers is a local-only save. */
+export function everyAnswerProposes(): boolean {
+  return true;
 }
 
 /**

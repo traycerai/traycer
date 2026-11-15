@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
@@ -122,6 +123,7 @@ function AgentBrowserAccessRow(): ReactNode {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
   });
 

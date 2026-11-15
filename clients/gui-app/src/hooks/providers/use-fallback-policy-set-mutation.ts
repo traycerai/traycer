@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   ProvidersFallbackPolicyGetResponse,
@@ -63,6 +64,7 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     options: {
       mutationKey: providersMutationKeys.setFallbackPolicy(),
