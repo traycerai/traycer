@@ -388,6 +388,17 @@ function renderTabOnTheWindowsComputer(): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  // The window is attached to this computer, which no lease serves.
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: TAB_HOST_ID,
+      effectiveHostId: TAB_HOST_ID,
+      leases: [],
+      selectionRevision: 1,
+    });
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -505,13 +516,19 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     await screen.findByTestId("epic-repoint-failure");
     const attemptsAtFailure = [...seams.openAttempts];
 
+    // The ladder's first rung would fall due after a minute; the card is still
+    // the answer then, and no transport was opened for it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    expect(seams.openAttempts).toEqual(attemptsAtFailure);
+    expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
+
+    // No later rung opens one either, up to and past the ladder's longest wait.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60_000);
     });
-
-    // No rung of the ladder opens another transport, however long it waits.
     expect(seams.openAttempts).toEqual(attemptsAtFailure);
-    expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
   });
 
   it("acquires once and shows the task again when the row rises back to the floor", async () => {
