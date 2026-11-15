@@ -125,6 +125,20 @@ export async function withTeamTokenInstall<T>(
       exitCode: 1,
     });
   }
+  return withStagedTeamToken(environment, token, environmentId, run);
+}
+
+/**
+ * Stages a token this command minted on the person's sign-in, bound to the
+ * environment id authn resolved the slug to, so the receipt is checked
+ * against the team the host actually enrols with.
+ */
+export async function withStagedTeamToken<T>(
+  environment: Environment,
+  token: string,
+  environmentId: string,
+  run: (prepared: PreparedTeamTokenInstall) => Promise<T>,
+): Promise<T> {
   const operationLock = await acquireInstallLock(
     `${hostTeamInstallTokenPath(environment)}.operation.lock`,
     "team-install-operation",

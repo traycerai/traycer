@@ -1,5 +1,7 @@
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
+import { access } from "node:fs/promises";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import { mintTeamComputerInstallTokenBySlugViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import {
   HostTransportFailureError,
@@ -17,8 +19,15 @@ import {
   readCredentialsFile,
   type StoredCredentials,
 } from "@traycer/protocol/config/credentials";
-import { cliCredentialsPath } from "../store/paths";
-import { HOST_OWNERSHIP_UNCONFIRMED_MESSAGE } from "../internal/host-door-words";
+import { cliCredentialsPath, hostEnrollmentRecordPath } from "../store/paths";
+import type { Environment } from "../runner/environment";
+import {
+  AUTHN_UNREACHABLE_MESSAGE,
+  HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+  signedOutCliError,
+  storedCredentialRejectedCliError,
+  UNWORDED_MINT_REFUSAL_MESSAGE,
+} from "../internal/host-door-words";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import {
@@ -96,9 +105,11 @@ import { probeHostHealth } from "../service/health-probe";
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
 // warns and continues, and so does a declined or failed sign-in. A later
 // `traycer login` can authorize the installed host without a reinstall.
-// An attended team install requires sign-in before staging: signing in later cannot
-// complete the transfer the person requested. A piped install token instead
-// authorizes the host directly, without reading the CLI sign-in.
+// An attended team install requires sign-in before staging. On a machine with
+// no host identity the sign-in mints the team's install token, which is staged
+// before the service starts so the host's first start is as the team's; on a
+// machine whose host is registered it authorizes the give. A piped install
+// token instead authorizes the host directly, without reading the CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a
 // short-lived stream connection carrying the CLI mint flow
@@ -449,7 +460,7 @@ export interface TeamInstallAuthSession {
   readonly inlineSignInToken: string | null;
 }
 
-export async function runTeamInstallAuthPreflight(
+async function runTeamInstallAuthPreflight(
   ctx: CommandContext,
 ): Promise<TeamInstallAuthSession> {
   let inlineSignInToken: string | null = null;
@@ -494,6 +505,132 @@ export async function warnIfTeamInstallSignInRemains(
   );
 }
 
+/** A team is named by its slug; `team/<slug>` is accepted as typed elsewhere. */
+function teamSlugFromSelector(team: string): string {
+  return team.startsWith("team/") ? team.slice(5) : team;
+}
+
+const NOT_A_TEAM_YOU_BELONG_TO =
+  "Enter the slug of a team you belong to, as shown in its dashboard address.";
+
+/** Printed once a new computer has enrolled as the team's. */
+export function teamEnrolmentConfirmation(slug: string): string {
+  return `This computer belongs to ${slug}.`;
+}
+
+/**
+ * An attended `--team` run, after its sign-in. A machine with no host identity
+ * yet enrols as the team's with a token this run mints; a machine whose host
+ * is already registered takes the give, because authn refuses a token for a
+ * host it knows and the token path carries no consent.
+ */
+export type AttendedTeamInstall =
+  | {
+      readonly kind: "enrol";
+      readonly session: TeamInstallAuthSession;
+      readonly slug: string;
+      /** Kept only in the command; never included in its result or logs. */
+      readonly token: string;
+      readonly environmentId: string;
+    }
+  | { readonly kind: "give"; readonly session: TeamInstallAuthSession };
+
+export async function beginAttendedTeamInstall(
+  ctx: CommandContext,
+  team: string,
+): Promise<AttendedTeamInstall> {
+  const session = await runTeamInstallAuthPreflight(ctx);
+  try {
+    return await attendedTeamInstallAfterSignIn(ctx, team, session);
+  } catch (error) {
+    // Stopped before anything was installed: a sign-in this command made is
+    // still on the computer.
+    await warnIfTeamInstallSignInRemains(ctx, session);
+    throw error;
+  }
+}
+
+async function attendedTeamInstallAfterSignIn(
+  ctx: CommandContext,
+  team: string,
+  session: TeamInstallAuthSession,
+): Promise<AttendedTeamInstall> {
+  // Checked against the sign-in's own teams before anything is staged, on
+  // either road: a slug that names none of them installs nothing.
+  const target = await resolveSignInTeam(team);
+  if (await hostIdentityMayExist(ctx.runtime.environment)) {
+    return { kind: "give", session };
+  }
+  const slug = target.label;
+  const auth = await resolveHostAuthOrNull(ctx, "preflight");
+  if (auth === null) throw signedOutCliError();
+  const minted = await mintTeamComputerInstallTokenBySlugViaHttp(
+    auth.authnBaseUrl,
+    auth.token,
+    slug,
+  );
+  ctx.runtime.logger.info("Team install token request settled", {
+    environment: ctx.runtime.environment,
+    outcome: minted.kind,
+    code: minted.kind === "refused" ? minted.code : null,
+  });
+  // Each failure is the sign-in read's own answer for the same cause.
+  switch (minted.kind) {
+    case "ok":
+      return {
+        kind: "enrol",
+        session,
+        slug,
+        token: minted.token,
+        environmentId: minted.environmentId,
+      };
+    case "unauthorized":
+      throw storedCredentialRejectedCliError();
+    case "refused":
+      if (minted.code === "environment_not_found")
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: NOT_A_TEAM_YOU_BELONG_TO,
+          details: null,
+          exitCode: 1,
+        });
+      throw cliError({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: UNWORDED_MINT_REFUSAL_MESSAGE,
+        details: null,
+        exitCode: 1,
+      });
+    case "network-error":
+      throw cliError({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: AUTHN_UNREACHABLE_MESSAGE,
+        details: null,
+        exitCode: 1,
+      });
+  }
+}
+
+/**
+ * The enrolment record is written once the host has registered, as a
+ * person's or a team's. Only its proven absence picks the token path: an
+ * unreadable record takes the give, which asks for consent, rather than a
+ * token authn would refuse for a known host.
+ */
+async function hostIdentityMayExist(
+  environment: Environment,
+): Promise<boolean> {
+  try {
+    await access(hostEnrollmentRecordPath(environment));
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    );
+  }
+}
+
 /**
  * The team `team` names among the sign-in's own teams: by environment id,
  * else by slug, with or without a `team/` prefix, and exactly one. Reads the
@@ -503,7 +640,7 @@ export async function warnIfTeamInstallSignInRemains(
 export async function resolveSignInTeam(
   team: string,
 ): Promise<SignInEnvironment> {
-  const selector = team.startsWith("team/") ? team.slice(5) : team;
+  const selector = teamSlugFromSelector(team);
   // The teams the sign-in's own record lists, labelled by slug.
   const teams = (await readSignInEnvironments()).filter(
     (environment) => environment.ownerKind === "organization",
@@ -518,8 +655,7 @@ export async function resolveSignInTeam(
   if (matches.length !== 1) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message:
-        "Enter the slug of a team you belong to, as shown in its dashboard address.",
+      message: NOT_A_TEAM_YOU_BELONG_TO,
       details: null,
       exitCode: 1,
     });
