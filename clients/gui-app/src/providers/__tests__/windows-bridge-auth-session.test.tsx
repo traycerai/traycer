@@ -801,7 +801,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     await settle();
 
     expect(toast.warning).toHaveBeenCalledTimes(1);
-    expect(toast.warning).toHaveBeenCalledWith(READ_FAILED_TOAST);
+    expect(toast.warning.mock.calls[0]?.[0]).toBe(READ_FAILED_TOAST);
     await tick(RESEND_MS * 3);
     expect(harness.set).toHaveBeenCalledTimes(1);
   });
@@ -813,7 +813,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     await settle();
 
     expect(toast.warning).toHaveBeenCalledTimes(1);
-    expect(toast.warning).toHaveBeenCalledWith(RESTORE_FAILED_TOAST);
+    expect(toast.warning.mock.calls[0]?.[0]).toBe(RESTORE_FAILED_TOAST);
     await tick(RESEND_MS * 3);
     expect(harness.set).toHaveBeenCalledTimes(1);
   });
@@ -967,10 +967,11 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     it("ends with main verified after authn refreshes the session, with no act by the person", async () => {
       const harness = await startOffline({});
       harness.answerSetWith(refused("expired"));
-      harness.revalidate.mockImplementation(async () => {
+      harness.revalidate.mockImplementation(() => {
         harness.setCurrentSession(FRESH_SNAPSHOT);
         harness.answerSetWith(ACCEPTED);
         harness.emitOutbound(FRESH_SNAPSHOT);
+        return Promise.resolve(null);
       });
 
       await tick(RESEND_MS);
@@ -989,10 +990,11 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     it("ends signed out when authn rejects the session", async () => {
       const harness = await startOffline({});
       harness.answerSetWith(refused("expired"));
-      harness.revalidate.mockImplementation(async () => {
+      harness.revalidate.mockImplementation(() => {
         harness.setCurrentSession(SIGNED_OUT_SNAPSHOT);
         harness.answerSetWith(ACCEPTED);
         harness.emitOutbound(SIGNED_OUT_SNAPSHOT);
+        return Promise.resolve(null);
       });
 
       await tick(RESEND_MS);
