@@ -322,10 +322,10 @@ function renderPage(host: AccessHost, options: FrameOptions): AuthnLog {
     listEnvironments: () =>
       Promise.resolve({
         kind: "ok" as const,
-        list: { environments: host.state.environments },
+        list: { environments: PERSONAL_ENVIRONMENTS },
       }),
     transport: createFakeEnvironmentCloudTransport({
-      environments: () => host.state.environments,
+      environments: () => PERSONAL_ENVIRONMENTS,
       onRequest: (request) => {
         log.requests.push(request);
         return (
@@ -435,7 +435,6 @@ function hostWith(
 ): AccessHost {
   return buildAccessHost({
     status: environmentStatusFixture(status),
-    environments: PERSONAL_ENVIRONMENTS,
     ...rest,
   });
 }
