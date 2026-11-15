@@ -119,19 +119,17 @@ export function useEnvironmentInvitationAcceptMutation() {
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
+  // Only the sign-in that accepted: an account switched while the call was
+  // out tells the new account nothing.
+  const acceptedHere = (context: RequestContext | null): boolean =>
+    context !== null &&
+    !context.abortSignal.aborted &&
+    auth?.getRequestContextProvider().current() === context;
   // The team's computers join the person's host list now, not at the next
-  // picker open or poll; and only for the sign-in that accepted: an account
-  // switched while the call was out tells the new account nothing.
+  // picker open or poll.
   const afterAccepted = (captured: {
-    readonly context: RequestContext | null;
     readonly localHostId: string | null;
   }): void => {
-    if (
-      captured.context === null ||
-      captured.context.abortSignal.aborted ||
-      auth?.getRequestContextProvider().current() !== captured.context
-    )
-      return;
     if (captured.localHostId !== null)
       noteHostMembershipChanged(captured.localHostId);
     void queryClient.invalidateQueries({
@@ -153,14 +151,25 @@ export function useEnvironmentInvitationAcceptMutation() {
       localHostId: readLocalHostIdSnapshot(),
     }),
     onSuccess: async (answer, _request, captured) => {
-      if (answer.outcome === "accepted") afterAccepted(captured);
+      const accepted =
+        answer.outcome === "accepted" && acceptedHere(captured.context);
+      if (accepted) afterAccepted(captured);
+      const invitations = queryClient.invalidateQueries({
+        queryKey: authQueryKeys.environmentInvitations(
+          captured.auth,
+          captured.viewerUserId,
+        ),
+      });
+      // The list joins each team's row to the account's teams, so the
+      // account is read again first and the team just joined is among them.
+      // A read that fails leaves the teams as they were; the list is read
+      // again all the same.
+      if (accepted && captured.auth !== null)
+        await captured.auth
+          .revalidateCurrentContextAfterInvalidation()
+          .catch(() => null);
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: authQueryKeys.environmentInvitations(
-            captured.auth,
-            captured.viewerUserId,
-          ),
-        }),
+        invitations,
         queryClient.invalidateQueries({
           predicate: (query) =>
             hostQueryKeys.matchesMethodOnAnyHost(
