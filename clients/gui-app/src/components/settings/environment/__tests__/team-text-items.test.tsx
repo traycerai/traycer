@@ -761,7 +761,7 @@ describe("TeamTextItems accepted writes", () => {
     expect(rejectedRequests[0]?.method).toBe("PUT");
     expect(rejectedRequests[0]?.body).toMatchObject({
       key: "NODE_ENV",
-      revision: 1,
+      revision: 2,
       value: { value: "submitted!" },
     });
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
