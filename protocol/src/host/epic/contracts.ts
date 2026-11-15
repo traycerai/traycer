@@ -215,6 +215,7 @@ import {
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
+  listChatRecordsResponseV15Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -2040,6 +2041,31 @@ export const epicListChatRecordsUpgradeV13ToV14 = defineUpgradePath<
           ...response,
           chats: response.chats.map((row) => ({ ...row, evicted: false })),
         },
+});
+
+// `@1.5` says on each row who started the chat (`starterUserId`). Request
+// unchanged from `@1.3`; the row gains one optional key, which an older peer's
+// schema strips.
+export const epicListChatRecordsV15 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV15Schema,
+});
+
+/**
+ * REQUEST and RESPONSE: the identity. A `@1.4` host's rows carry no
+ * `starterUserId`, and absent is the honest answer for it: the key is
+ * optional, and no value can be stated for that peer.
+ */
+export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicListChatRecordsV14,
+  typeof epicListChatRecordsV15
+>({
+  from: epicListChatRecordsV14.schemaVersion,
+  to: epicListChatRecordsV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Brings an evicted chat's records back onto its host before a message is

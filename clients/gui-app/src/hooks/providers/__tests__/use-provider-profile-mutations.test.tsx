@@ -49,6 +49,12 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: mocks.useHostMutation,
 }));
 
+// The settings-save memory is not what these wrappers' tests check.
+vi.mock("@/hooks/environment/use-settings-save", () => ({
+  useSettingsSave: () => vi.fn(),
+  useSettingsItemExists: () => vi.fn(),
+}));
+
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
@@ -62,7 +68,7 @@ function wrapper({ children }: { readonly children: ReactNode }) {
 }
 
 describe("provider profile mutation wrappers", () => {
-  it("maps rename to providers.setEnabled profileAction", () => {
+  it("maps rename of a disabled profile to providers.setEnabled, keeping it disabled", () => {
     let captured: CapturedRenameMutation | null = null;
     const getCaptured = (): CapturedRenameMutation => {
       if (captured === null) throw new Error("Mutation was not captured.");
@@ -80,14 +86,17 @@ describe("provider profile mutation wrappers", () => {
         providerId: "codex",
         profileId: "profile-1",
         label: "Work",
+        enabled: false,
+        environmentProfileId: "env-profile-1",
       }),
     ).toEqual({
       providerId: "codex",
-      enabled: true,
+      enabled: false,
       profileAction: {
         type: "rename",
         profileId: "profile-1",
         label: "Work",
+        environmentProfileId: "env-profile-1",
       },
     });
   });
@@ -140,6 +149,8 @@ describe("provider profile mutation wrappers", () => {
         providerId: "codex",
         profileId: "profile-1",
         accentColor: "#14b8a6",
+        enabled: true,
+        environmentProfileId: null,
       }),
     ).toEqual({
       providerId: "codex",
@@ -148,6 +159,7 @@ describe("provider profile mutation wrappers", () => {
         type: "recolor",
         profileId: "profile-1",
         accentColor: "#14b8a6",
+        environmentProfileId: null,
       },
     });
   });
