@@ -623,7 +623,7 @@ describe("useProvidersPromoteToPersonal", () => {
         );
       });
 
-      expect(outcome).toMatchObject({
+      expect(outcome!).toMatchObject({
         kind: "refused",
         refreshLists: false,
       });
@@ -659,7 +659,7 @@ describe("useProvidersPromoteToPersonal", () => {
       outcome = await result.rendered.result.current.mutateAsync(result.input);
     });
 
-    expect(outcome).toMatchObject({
+    expect(outcome!).toMatchObject({
       kind: "refused",
       text: "The host's refusal text.",
       refreshLists: false,
