@@ -616,7 +616,7 @@ describe("<HostOverviewSettingsCard />", () => {
       );
 
       expect(
-        await screen.findByTestId("team-give-not-finished").textContent,
+        (await screen.findByTestId("team-give-not-finished")).textContent,
       ).toBe("Giving this computer to Admin team was not finished.");
     },
   );
