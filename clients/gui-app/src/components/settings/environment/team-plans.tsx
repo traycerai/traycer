@@ -21,6 +21,7 @@ import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { TeamReadFailed } from "./team-read-failed";
 
@@ -160,7 +161,7 @@ function TeamPlanUnlink(props: {
         activeHostName={
           preview.data.localHostId === null
             ? null
-            : (scope.hosts.data?.hosts.find(
+            : (environmentReadData(scope.hosts)?.hosts.find(
                 (host) => host.hostId === preview.data.localHostId,
               )?.hostLabel ?? "the serving host")
         }
