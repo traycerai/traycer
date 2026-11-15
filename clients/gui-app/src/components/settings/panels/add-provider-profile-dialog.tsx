@@ -647,6 +647,8 @@ function dialogShowsCloseButton(
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "waiting-for-profile" ||
+    (flowState.kind === "target-outcome" &&
+      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }
