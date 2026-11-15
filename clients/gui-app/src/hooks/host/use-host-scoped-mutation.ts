@@ -19,6 +19,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import type { PendingSettingsSave } from "@/hooks/environment/use-settings-save";
 import {
   agentMutationKeys,
   hostQueryKeys,
@@ -144,6 +145,13 @@ interface UseHostScopedMutationArgs<
    * serializes unrelated calls that happen to use the same hook.
    */
   readonly scope?: MutationScope | undefined;
+  /** See `UseHostMutationOptions.followSettingsSave`. */
+  readonly followSettingsSave?:
+    | ((
+        request: RequestOfMethod<HostRpcRegistry, Method>,
+        client: HostRequester<HostRpcRegistry>,
+      ) => Promise<PendingSettingsSave>)
+    | undefined;
   /**
    * Completes the request at dispatch: the executable-write grant
    * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
@@ -200,6 +208,7 @@ export function useHostScopedMutationForClient<
     requiredHostMethodVersion: args.requiredHostMethodVersion,
     mapVariables: (variables) => variables,
     prepareRequest: args.prepareRequest,
+    followSettingsSave: args.followSettingsSave,
     options: {
       mutationKey: args.mutationKey,
       scope: args.scope,

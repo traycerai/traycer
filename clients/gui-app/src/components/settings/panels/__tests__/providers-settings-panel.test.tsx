@@ -5219,6 +5219,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       label: "Default",
+      enabled: true,
+      environmentProfileId: null,
     });
     act(() => renameOptions.onSuccess());
 
@@ -5227,6 +5229,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       accentColor,
+      enabled: true,
+      environmentProfileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
@@ -9173,6 +9177,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       label: "Personal",
+      enabled: true,
+      environmentProfileId: null,
     });
     expect(typeof renameOptions.onSuccess).toBe("function");
     act(() => renameOptions.onSuccess());
@@ -9300,6 +9306,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       accentColor: selectedColor,
+      enabled: true,
+      environmentProfileId: null,
     });
 
     // Identity is a real committed render before the finalize effect settles.
