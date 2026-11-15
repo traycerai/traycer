@@ -4906,6 +4906,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     return sandboxSummaryFixture({
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
+      environmentId: "env-team",
       state,
       guestConfigured: true,
     });

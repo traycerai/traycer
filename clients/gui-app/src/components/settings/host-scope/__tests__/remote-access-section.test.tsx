@@ -191,7 +191,9 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       { wrapper: harness.Wrapper },
     );
 
-    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    expect(await shownState()).toBe(
+      "Off. Team members and agents can't reach this computer.",
+    );
     await waitFor(() => {
       expect(
         harness.cloudRequests.some((request) => {
@@ -240,42 +242,69 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       environmentId: "another-team",
       effectiveRole: "admin" as const,
     };
-    host.state.environments = [otherTeam];
+    let environments = [otherTeam];
+    let failEnvironmentList = false;
+    let pendingEnvironmentList: Promise<EnvironmentListResponseV11> | null =
+      null;
     const roleRead = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = roleRead.promise;
-    const queryClient = renderTab(host, ACCESS_METHODS, false);
+    pendingEnvironmentList = roleRead.promise;
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.list": () => {
+        if (failEnvironmentList) throw new Error("directory refused");
+        const pending = pendingEnvironmentList;
+        pendingEnvironmentList = null;
+        return pending ?? { environments };
+      },
+    });
+    hostMock.binding = { auth: harness.auth };
+    recordNegotiatedHostMethods(ACCESS_HOST_ID, ACCESS_METHODS);
+    useHostAccessPromptsStore.setState({
+      remoteAccessAnswered: {},
+      movedNoticeDismissed: {},
+    });
+    render(
+      <HostOverviewAccessTab
+        client={host.client}
+        hostId={ACCESS_HOST_ID}
+        hostName={ACCESS_HOST_NAME}
+        connecting={false}
+        usable
+      />,
+      { wrapper: harness.Wrapper },
+    );
     await shownState();
-    await waitFor(() => expect(host.reads.environments).toBeGreaterThan(0));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list")).toHaveLength(1);
+    });
     // The role read has started but is held, so it cannot authorize a switch.
     noSwitch();
     await act(async () => {
-      host.state.environmentListRead = null;
-      roleRead.resolve({ environments: host.state.environments });
+      roleRead.resolve({ environments });
       await roleRead.promise;
     });
-    await rereadStatus(queryClient, host);
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     noSwitch();
 
     for (const effectiveRole of ["admin", "editor"] as const) {
-      host.state.environments = [
-        otherTeam,
-        { ...TEAM_ENVIRONMENT, effectiveRole },
-      ];
-      await rereadStatus(queryClient, host);
+      environments = [otherTeam, { ...TEAM_ENVIRONMENT, effectiveRole }];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
       const control = await screen.findByRole("button", { name: "Turn on" });
       expect(control.closest("[inert]")).toBeNull();
     }
     const refreshedRole = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = refreshedRole.promise;
-    const beforeRefresh = host.reads.environments;
-    const refreshing = queryClient.invalidateQueries();
+    pendingEnvironmentList = refreshedRole.promise;
+    const beforeRefresh = harness.paramsOf("environment.list").length;
+    const refreshing = harness.queryClient.invalidateQueries();
     await waitFor(() => {
-      expect(host.reads.environments).toBeGreaterThan(beforeRefresh);
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
+        beforeRefresh,
+      );
       noSwitch();
     });
     await act(async () => {
-      host.state.environmentListRead = null;
-      refreshedRole.resolve({ environments: host.state.environments });
+      refreshedRole.resolve({ environments });
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
@@ -298,17 +327,23 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       {},
     );
 
-    host.state.environments = environmentListUpgradeV10ToV11.upgradeResponse({
+    environments = environmentListUpgradeV10ToV11.upgradeResponse({
       environments: [TEAM_ENVIRONMENT],
     }).environments;
-    await rereadStatus(queryClient, host);
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
     noSwitch();
 
-    host.state.environments = [TEAM_ENVIRONMENT];
-    await rereadStatus(queryClient, host);
+    environments = [TEAM_ENVIRONMENT];
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
     await screen.findByRole("button", { name: "Turn on" });
-    host.state.failEnvironmentList = true;
-    await rereadStatus(queryClient, host);
+    failEnvironmentList = true;
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
     noSwitch();
   });
 

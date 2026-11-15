@@ -674,20 +674,20 @@ describe("HomeBotsSection what each group is told", () => {
     );
   });
 
-  it("holds the machine-list reads off on a host without environment.host.list", () => {
+  it("reads team machine lists from the cloud without environment.host.list support", () => {
     mocks.state.hostListSupport = false;
     resolveBothQueries();
     mountSection();
 
-    expect(mocks.useHostMethodSupport).toHaveBeenCalledWith(
+    expect(mocks.useHostMethodSupport).not.toHaveBeenCalledWith(
       "host-1",
       "environment.host.list",
     );
     expect(mocks.useEnvironmentHostLists).toHaveBeenLastCalledWith(
       ["env-team"],
-      false,
+      true,
     );
-    expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
+    expect(latestGroupProps("env-team").environmentHostIds).toEqual(new Set());
   });
 
   it("holds the machine-list reads off while the bots band itself is unsupported", () => {

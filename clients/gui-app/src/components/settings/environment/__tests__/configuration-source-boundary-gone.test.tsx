@@ -380,13 +380,18 @@ async function expectOwnershipConsumers(options: {
 }): Promise<void> {
   const personal = await screen.findByTestId("personal-ownership-probe");
   const teamPage = await screen.findByTestId("team-ownership-probe");
-  const planLink = await screen.findByRole("button", { name: "Link a plan" });
 
   expect(personal.getAttribute("data-can-edit")).toBe(
     String(options.personalEditable),
   );
   expect(teamPage.getAttribute("data-can-edit")).toBe("true");
-  expect(planLink.matches(":disabled")).toBe(!options.planLinkEnabled);
+  if (options.planLinkEnabled) {
+    expect(
+      await screen.findByRole("button", { name: "Link a plan" }),
+    ).toBeTruthy();
+  } else {
+    expect(screen.queryByRole("button", { name: "Link a plan" })).toBeNull();
+  }
   const readOnlyLine = screen.queryByText(
     "You can see Personal's settings but not change them.",
   );
