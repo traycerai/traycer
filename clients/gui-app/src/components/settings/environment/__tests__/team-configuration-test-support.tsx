@@ -209,9 +209,11 @@ function descriptorFromEnvironmentList(
 ): EnvironmentDescriptorV11 {
   const parsed = environmentDescriptorSchemaV11.safeParse(environment);
   if (parsed.success) return parsed.data;
-  const upgraded = environmentListUpgradeV10ToV11.upgradeResponse({
-    environments: [environment],
-  }).environments[0];
+  const upgraded = environmentListUpgradeV10ToV11
+    .upgradeResponse({
+      environments: [environment],
+    })
+    .environments.at(0);
   if (upgraded === undefined) {
     throw new Error("the environment list upgrade returned no row");
   }

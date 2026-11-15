@@ -7,7 +7,7 @@ it("maps a member's identity and redacts a blank email", async () => {
     authnBaseUrl: "https://authn.example/",
     bearer: { kind: "cloud", getBearerToken: () => "test-token" },
     onOriginSignIn: () => true,
-    transport: async () => ({
+    transport: () => ({
       status: 200,
       text: JSON.stringify({
         members: [
