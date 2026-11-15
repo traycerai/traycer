@@ -19,6 +19,7 @@ import {
   useEnvironmentCloud,
 } from "@/hooks/environment/use-environment-cloud";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { compareAscending } from "@/lib/home-focus/focus-identity";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -64,9 +65,16 @@ export function useEnvironmentListQuery(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // What the read uses of each team (its id and slug), in a stable order: a
+  // new or changed set of teams reads the list again, the same set written
+  // again does not.
+  const teamsRead = [...teams]
+    .sort((a, b) => compareAscending(a.teamId, b.teamId))
+    .map((team) => [team.teamId, team.slug]);
   return useQuery<EnvironmentListResponseV11, HostRpcError>(
-    // `auth`, `cloud` and `teams` are the session of the viewer the key
-    // already names; adding them would refetch on their identity alone.
+    // `auth` and `cloud` are the session of the viewer the key already names;
+    // adding them would refetch on their identity alone. The teams are in the
+    // key as `teamsRead`.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
     queryOptions<EnvironmentListResponseV11, HostRpcError>({
       queryKey: [
@@ -76,6 +84,7 @@ export function useEnvironmentListQuery(
           EMPTY_PARAMS,
         ),
         viewerId,
+        teamsRead,
       ],
       meta: stampHostRpcMethod(undefined, METHOD),
       queryFn: () =>

@@ -421,8 +421,11 @@ describe("Memories ▸ the host row's write", () => {
         state === "queued"
           ? queuedAnswer(UPLOAD)
           : {
-              ...savedAnswer({ enabled: true, revision: 6 }),
+              enabled: true,
               state,
+              revision: 6,
+              environmentId: ENV,
+              uploadId: null,
             };
       script.reads = [read(false, 5), read(true, 6)];
       script.statuses = [

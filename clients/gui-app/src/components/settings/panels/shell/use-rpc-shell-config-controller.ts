@@ -37,6 +37,7 @@ import {
   type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
 import {
+  everyAnswerProposes,
   sendFollowedSave,
   type PendingSettingsSave,
 } from "@/lib/environment/settings-save-follow";
@@ -123,6 +124,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.shellSet(),
     errorMessage: "Couldn't update the shell configuration",
@@ -138,6 +140,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.shellReset(),
     errorMessage: "Couldn't use the system default shell",
@@ -153,6 +156,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.shellAdd(),
     errorMessage: "Couldn't add that shell",
@@ -168,6 +172,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.shellRemove(),
     errorMessage: "Couldn't remove that shell",
@@ -183,6 +188,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.shellRevertArgs(),
     errorMessage: "Couldn't restore the default flags",
@@ -199,6 +205,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
@@ -214,6 +221,7 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the variable",
@@ -271,12 +279,14 @@ export function useRpcShellConfigController(props: {
       await sendFollowedSave(
         await prepare({ method: "config.env.set", request: set }),
         () => client.request("config.env.set", set),
+        everyAnswerProposes,
       );
       if (rename.oldKey.length === 0) return;
       const remove = { key: rename.oldKey };
       await sendFollowedSave(
         await prepare({ method: "config.env.delete", request: remove }),
         () => client.request("config.env.delete", remove),
+        everyAnswerProposes,
       );
     },
     onMutate: (_rename, mutationContext) => {

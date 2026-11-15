@@ -181,6 +181,7 @@ export function useOnboardingAgentMemories(input: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: (answer) => answer.state !== "local_only",
     },
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.

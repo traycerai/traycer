@@ -5,13 +5,35 @@ import {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 
-const AUTHORITY_REFUSALS = new Set([
+/**
+ * The codes that say a person's standing is gone: the host's own, and
+ * authn's as the app's own reads code them (`HOST_CODE_OF`), which are a 401
+ * as `UNAUTHORIZED` and an environment authn says is not theirs to read
+ * (`not_readable`: its 404 `environment_not_found` or its 403
+ * `environment_action_forbidden`) as `E_ENVIRONMENT_NOT_A_MEMBER`. A
+ * malformed request (`E_INVALID_ARGUMENT`) and a 403 without authn's code
+ * (`E_ROLE_FORBIDDEN`) are none of these. Typed as the error's own code, so a
+ * code no error can carry fails the compile here.
+ */
+const RPC_AUTHORITY_REFUSALS: ReadonlySet<HostRpcError["code"]> = new Set<
+  HostRpcError["code"]
+>([
   "UNAUTHORIZED",
   "FORBIDDEN",
-  "NOT_FOUND",
-  "TEAM_MEMBERSHIP_REQUIRED",
   "E_ENVIRONMENT_NOT_A_MEMBER",
   "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+]);
+
+/**
+ * Those, and the session-fatal codes a refusal's fatal details carry that are
+ * no RPC error code. Typed as that field's own code.
+ */
+const AUTHORITY_REFUSALS: ReadonlySet<
+  NonNullable<HostRpcError["fatalDetails"]>["code"]
+> = new Set([
+  ...RPC_AUTHORITY_REFUSALS,
+  "NOT_FOUND",
+  "TEAM_MEMBERSHIP_REQUIRED",
 ]);
 
 /**

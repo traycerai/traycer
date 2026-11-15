@@ -147,6 +147,7 @@ function SetupScriptEditor(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: (answer) => answer.outcome !== "local_only",
     },
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",
