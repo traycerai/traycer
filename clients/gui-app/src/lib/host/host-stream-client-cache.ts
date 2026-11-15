@@ -1,6 +1,5 @@
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { RemoteOpenAuth } from "@traycer-clients/shared/host-transport/remote/open-auth";
 
 /**
  * Get-or-create cache for a host's STREAM CLIENT OBJECT, so two surfaces
@@ -165,8 +164,6 @@ export interface HostStreamClientIdentity {
   readonly authnBaseUrl: string;
   /** `auth === null` is a deliberate one-shot and never shares. */
   readonly authRecovery: "revalidate" | "terminal";
-  /** A bearer client must never satisfy a newly team-owned target's acquire. */
-  readonly openAuth: RemoteOpenAuth | null;
 }
 
 /**
@@ -200,7 +197,6 @@ export function hostStreamClientCacheKey(
     identity.publicKey,
     identity.authnBaseUrl,
     identity.authRecovery,
-    identity.openAuth ?? "",
   ].join(KEY_SEPARATOR);
 }
 

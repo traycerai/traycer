@@ -16,6 +16,7 @@ import {
 } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { inertHostTokenSource } from "../../../../../../__tests__/create-fake-runner-host";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import { toast } from "sonner";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -277,6 +278,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     mintHostCredential: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    hostTokens: inertHostTokenSource(),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>

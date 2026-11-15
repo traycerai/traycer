@@ -1,4 +1,10 @@
-import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
+import {
+  appHostDoorObserver,
+  noteHostTokenRefusal,
+} from "@/lib/host/host-door-observer";
+import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import { v4 as uuidv4 } from "uuid";
 import type {
   BearerSourceProvider,
@@ -23,7 +29,6 @@ import {
 import {
   createPoolHostTransport,
   createRemoteHostTransport,
-  remoteOpenAuthFor,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -33,7 +38,6 @@ import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-trans
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
-import { mintAppMemberCredential } from "@/lib/auth/host-credential-provisioning";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -108,6 +112,8 @@ export interface BuildRawHostMessengerForTargetParams<
    */
   readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
+  /** The person's host-only tokens: the only credential any host is sent. */
+  readonly hostTokens: HostTokenSource;
   readonly requestId: RequestIdProvider;
   /** The signed-in user this messenger is built for (S1 cache key). */
   readonly userId: string;
@@ -168,7 +174,9 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
-      openAuth: remoteOpenAuthFor(params.target),
+      hostTokens: params.hostTokens,
+      door: appHostDoorObserver(params.target.hostId),
+      onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
       // MUST match what `buildHostStreamClient` passes, and this is not a
@@ -189,7 +197,6 @@ export function buildRawHostMessengerForTarget<
       // reconnect replay could double-execute. Messenger-only bindings are in
       // fact a case the process-wide sweep exists to reach.
       proactiveWakeEligible: true,
-      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     return {
@@ -220,7 +227,11 @@ export function buildRawHostMessengerForTarget<
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
+      doorFor: appHostDoorObserver,
+      hostBearerFor: hostTokenBearerFor(
+        localDoorHostTokens(params.hostTokens),
+        noteHostTokenRefusal,
+      ),
     }),
     remoteTransport: null,
   };
@@ -260,6 +271,7 @@ export interface BuildRuntimeHostMessengerParams<
    */
   readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
+  readonly hostTokens: HostTokenSource;
   readonly requestId: RequestIdProvider;
   /**
    * Ready-boundary evidence for the runtime binding's remote session, keyed
@@ -325,6 +337,7 @@ class RuntimeHostMessenger<
   private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
+  private readonly hostTokens: HostTokenSource;
   private readonly requestId: RequestIdProvider;
   private readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
   private readonly onRemoteSessionTerminal: (
@@ -411,6 +424,7 @@ class RuntimeHostMessenger<
     this.resolveTarget = params.resolveTarget;
     this.auth = params.auth;
     this.authnBaseUrl = params.authnBaseUrl;
+    this.hostTokens = params.hostTokens;
     this.requestId = params.requestId;
     this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
     this.onRemoteSessionTerminal = params.onRemoteSessionTerminal;
@@ -424,7 +438,11 @@ class RuntimeHostMessenger<
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
+      doorFor: appHostDoorObserver,
+      hostBearerFor: hostTokenBearerFor(
+        localDoorHostTokens(params.hostTokens),
+        noteHostTokenRefusal,
+      ),
     });
   }
 
@@ -616,6 +634,7 @@ class RuntimeHostMessenger<
         authorizesCloudCapability(useAuthStore.getState().status),
       auth: this.auth,
       authnBaseUrl: this.authnBaseUrl,
+      hostTokens: this.hostTokens,
       requestId: this.requestId,
     });
     if (built === null || built.remoteTransport === null) {
@@ -977,15 +996,11 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
-  // What `OPEN` presents IS included: a sandbox first projected as a personal
-  // host (a list read before the sandbox facts arrived) must rebuild once the
-  // entry is corrected, or its RPCs keep riding a user-bearer session.
   return [
     entry.hostId,
     entry.websocketUrl,
     entry.version ?? "",
     entry.publicKey,
-    remoteOpenAuthFor(entry),
   ].join(TRANSPORT_KEY_SEPARATOR);
 }
 

@@ -93,6 +93,13 @@ export class HostRpcError extends Error {
    * omitted it, or when it failed schema parse.
    */
   readonly staleWrite: EnvironmentStaleWrite | null;
+  /**
+   * A persistent session's refusal of this one request at or after its token
+   * step (the answer's `doorReason`), in the shape a door refusal takes, so
+   * recovery reads it the way it reads {@link fatalDetails}. `null` on every
+   * other answer: the socket stays up and nothing here is fatal.
+   */
+  readonly doorRefusal: FatalErrorDetails | null;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -103,6 +110,7 @@ export class HostRpcError extends Error {
     holders?: readonly WorktreeBusyHolder[] | null;
     holdersRevision?: string | null;
     staleWrite?: EnvironmentStaleWrite | null;
+    doorRefusal?: FatalErrorDetails | null;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -120,6 +128,7 @@ export class HostRpcError extends Error {
       details.code === ENVIRONMENT_WRITE_STALE_CODE
         ? (details.staleWrite ?? null)
         : null;
+    this.doorRefusal = details.doorRefusal ?? null;
   }
 
   static fromErrorDetails(
@@ -149,10 +158,13 @@ export class HostRpcError extends Error {
       readonly holders?: unknown;
       readonly holdersRevision?: unknown;
       readonly staleWrite?: unknown;
+      readonly retryable?: boolean;
+      readonly doorReason?: string;
     },
     requestId: string,
     method: string,
   ): HostRpcError {
+    const doorReason = error.doorReason;
     return new HostRpcError({
       code: isRpcErrorCode(error.code) ? error.code : "RPC_ERROR",
       message: error.message,
@@ -165,6 +177,17 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
       staleWrite: staleWriteForCode(error.code, error.staleWrite),
+      doorRefusal:
+        doorReason === undefined
+          ? null
+          : {
+              code: error.code,
+              reason: error.message,
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+              ...(error.retryable === true ? { retryable: true } : {}),
+              doorReason,
+            },
     });
   }
 }
@@ -250,6 +273,7 @@ export class HostTransportFailureError extends HostRpcError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
   }) {
     super(details);
     this.name = "HostTransportFailureError";
@@ -280,6 +304,7 @@ export class RetryableTransportError extends HostTransportFailureError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
     replaySafetyFromKey: boolean;
   }) {
     super(details);
