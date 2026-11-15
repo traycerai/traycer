@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -59,6 +59,10 @@ import {
   typeIntoEditor,
 } from "@/components/comments/__tests__/comment-submit-test-support";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
+import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
+import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { HtmlArtifactCommentSurface } from "../html-artifact-comment-surface";
 import { HtmlArtifactFrame } from "../html-artifact-frame";
 import { HtmlArtifactVersionPicker } from "../html-artifact-version-picker";
@@ -912,5 +916,232 @@ describe("a first comment whose stamp moves the artifact past the page on show",
     });
     expect(pendingSaves).toHaveLength(1);
     expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toBeUndefined();
+  });
+});
+
+describe("a card whose draft a blocker has parked", () => {
+  const FIRST_TILE = "00000000-0000-4000-8000-0000000000a1";
+  const SECOND_TILE = "00000000-0000-4000-8000-0000000000b2";
+  const DISCARD_QUESTION =
+    "Discard this comment draft? Unsaved text will be lost.";
+
+  function card(artifactId: string, title: string): ReactNode {
+    return (
+      <HtmlArtifactCommentSurface
+        epicId="epic-1"
+        artifactId={artifactId}
+        artifactTitle={title}
+        hostId="host-1"
+        viewTabId="tab-1"
+        source={sourceNamed(artifactId)}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        toolbarControls={null}
+        menuItems={undefined}
+        raiseToComment
+        commentable
+      />
+    );
+  }
+
+  function pane(second: ReactNode): ReactNode {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+          {second}
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  /**
+   * The first card is raised, a draft opened on it and typed into, and a
+   * blocker lowers it: the draft is parked, answering no Escape or press.
+   */
+  function parkFirstCardsDraft(text: string | null, second: ReactNode): void {
+    const randomUUID = vi.spyOn(crypto, "randomUUID");
+    randomUUID.mockReturnValue(FIRST_TILE);
+    const view = render(
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+        </SurfacePresentationBoundary>
+      </Providers>,
+    );
+    randomUUID.mockReturnValue(SECOND_TILE);
+    view.rerender(pane(second));
+    const [firstExpand] = screen.getAllByRole("button", { name: "Expand" });
+    fireEvent.click(firstExpand);
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "First" })).getByRole(
+        "button",
+        { name: "Comments" },
+      ),
+    );
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-a",
+        tileId: FIRST_TILE,
+        artifactId: "html-a",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    if (text !== null) typeIntoEditor(composerEditorAt(0), text);
+    let release = (): void => undefined;
+    act(() => {
+      release = holdFullscreenBlocker();
+    });
+    act(() => release());
+  }
+
+  describe("a second card starting a comment while the first card's draft is parked", () => {
+    /** The second card's pick, through the opener its provider calls. */
+    async function startSecondCardsComment(): Promise<void> {
+      await act(async () => {
+        await openFrameCommentDraft({
+          epicId: "epic-1",
+          tileId: SECOND_TILE,
+          artifactType: "html",
+          selection: {
+            ...textSelection(null, { tid: "b-el", marker: 1 }),
+            artifactId: "html-b",
+            boardPath: "index.html",
+          },
+          bridge: realBridge(),
+          frame: document.createElement("iframe"),
+          source: null,
+          queryClient: new QueryClient(),
+          isCurrent: () => true,
+        });
+      });
+    }
+
+    function openDraftId(): string | undefined {
+      return useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId;
+    }
+
+    it("asks before dropping the parked draft's text, and keeps the draft and its text when the reader says no", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      parkFirstCardsDraft("unsent words", card("html-b", "Second"));
+      const editor = composerEditorAt(0);
+
+      await startSecondCardsComment();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-a");
+      expect(composerEditorAt(0)).toBe(editor);
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("opens the second card's draft in its place when the reader agrees to discard", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      parkFirstCardsDraft("unsent words", card("html-b", "Second"));
+
+      await startSecondCardsComment();
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "html-b",
+        },
+      );
+    });
+
+    it("replaces an empty parked draft without asking", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      parkFirstCardsDraft(null, card("html-b", "Second"));
+
+      await startSecondCardsComment();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "html-b",
+        },
+      );
+    });
+  });
+
+  describe("a canvas pane pin while a card's draft is parked", () => {
+    const pin: { events: CanvasFrameEvents | null } = { events: null };
+
+    function PinHost() {
+      const events = useContext(CanvasFrameEventsContext);
+      useEffect(() => {
+        pin.events = events;
+      }, [events]);
+      return null;
+    }
+
+    function paneCommentHandler(): CanvasFrameEvents["onPaneComment"] {
+      return pin.events?.onPaneComment;
+    }
+
+    function parkCardDraftAndPin(): void {
+      pin.events = null;
+      parkFirstCardsDraft(
+        "unsent words",
+        <CanvasSelectionProvider
+          epicId="epic-1"
+          artifactId="canvas-1"
+          artifactTitle="Board"
+          artifactType="canvas"
+          hostId="host-1"
+          viewTabId="tab-1"
+        >
+          <PinHost />
+        </CanvasSelectionProvider>,
+      );
+      const onPaneComment = paneCommentHandler();
+      if (onPaneComment === undefined)
+        throw new Error("no pane comment handler");
+      act(() =>
+        onPaneComment({
+          screen: { x: 300, y: 200 },
+          canvas: { x: 40, y: -12 },
+          page: "flow",
+        }),
+      );
+    }
+
+    it("keeps the parked card draft and its text, opening no pin, when the reader declines to discard it", () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      parkCardDraftAndPin();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          draftId: "draft-a",
+          anchor: { kind: "artifact" },
+        },
+      );
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("pins the comment in its place when the reader agrees to discard the parked draft", () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+
+      parkCardDraftAndPin();
+
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "canvas-1",
+          anchor: { kind: "canvas-point", page: "flow", x: 40, y: -12 },
+        },
+      );
+    });
   });
 });

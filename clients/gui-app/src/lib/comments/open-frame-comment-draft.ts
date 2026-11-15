@@ -11,13 +11,16 @@ import {
   frameCommentScreenRect,
   literalCommentSelection,
 } from "./frame-comment-anchor";
-import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import {
+  useAnchoredDraftStore,
+  yieldOpenDraft,
+} from "@/stores/comments/anchored-draft-store";
 
 function matchesDraft(
   current: AnchoredCommentDraft | undefined,
   tileId: string,
   selection: CanvasSelection,
-): boolean {
+): current is AnchoredCommentDraft {
   return (
     current !== undefined &&
     current.tileId === tileId &&
@@ -88,12 +91,11 @@ export async function openFrameCommentDraft(args: {
   const store = useAnchoredDraftStore.getState();
   const current = store.byEpicId[args.epicId];
   if (current?.submitting === true) return null;
-  const sameDraft = matchesDraft(current, args.tileId, selection);
+  if (!yieldOpenDraft(args.epicId, args.tileId)) return null;
   const draft = {
-    draftId:
-      sameDraft && current !== undefined
-        ? current.draftId
-        : crypto.randomUUID(),
+    draftId: matchesDraft(current, args.tileId, selection)
+      ? current.draftId
+      : crypto.randomUUID(),
     tileId: args.tileId,
     artifactId: selection.artifactId,
     artifactType: args.artifactType,

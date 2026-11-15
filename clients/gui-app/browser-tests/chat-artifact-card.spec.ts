@@ -193,12 +193,11 @@ async function elementCenter(
   };
 }
 
-/** Pick an element of the raised card's page and type into its draft. */
-async function openDraft(
+/** Pick an element of the raised card's page, which opens its comment draft. */
+async function pickElement(
   page: Page,
   title: string,
   selector: string,
-  words: string,
 ): Promise<void> {
   const center = await elementCenter(page, title, selector);
   await page.mouse.move(center.x, center.y);
@@ -206,9 +205,66 @@ async function openDraft(
     page.locator("[data-canvas-selection-outline]:not(.ring-1)").first(),
   ).toBeVisible();
   await page.mouse.click(center.x, center.y);
+}
+
+/** Pick an element of the raised card's page and type into its draft. */
+async function openDraft(
+  page: Page,
+  title: string,
+  selector: string,
+  words: string,
+): Promise<void> {
+  await pickElement(page, title, selector);
   await expect(page.getByRole("dialog", { name: "New comment" })).toBeVisible();
   await draftText(page).fill(words);
   await expect(draftText(page)).toHaveText(words);
+}
+
+/** The raised card's draft box. */
+function draftIn(page: Page, title: string): Locator {
+  return raisedCard(page, title).locator(
+    '[data-slot="anchored-draft-popover"]',
+  );
+}
+
+async function closeCard(page: Page, title: string): Promise<void> {
+  const close = raisedCard(page, title).getByRole("button", {
+    name: "Close",
+    exact: true,
+  });
+  await close.focus();
+  await page.keyboard.press("Enter");
+  await expect(raisedCard(page, title)).toHaveCount(0);
+}
+
+/** `window.confirm` questions, answered as `accept` says at the time. */
+function answerConfirms(page: Page): { asked: string[]; accept: boolean } {
+  const state = { asked: [] as string[], accept: false };
+  page.on("dialog", (dialog) => {
+    state.asked.push(dialog.message());
+    void (state.accept ? dialog.accept() : dialog.dismiss());
+  });
+  return state;
+}
+
+/**
+ * Card A's draft is parked: a blocker lowered A while the draft held `words`
+ * (none when empty), and then went away.
+ */
+async function parkDraftInA(page: Page, words: string): Promise<void> {
+  await bringIntoView(page, CARD_A);
+  await raiseCard(page, CARD_A);
+  if (words === "") {
+    await pickElement(page, CARD_A, "#known");
+    await expect(
+      page.getByRole("dialog", { name: "New comment" }),
+    ).toBeVisible();
+  } else {
+    await openDraft(page, CARD_A, "#known", words);
+  }
+  await callProbe(page, "holdBlocker");
+  await expect(raisedCard(page, CARD_A)).toHaveCount(0);
+  await callProbe(page, "releaseBlocker");
 }
 
 /** The toggle's place when the card shows an older version: disabled, with why. */
@@ -353,4 +409,62 @@ test("a create that fails after the comment id was written keeps the draft, and 
 
   await expect(page.locator("body")).toHaveAttribute("data-creates", "1");
   await expect(draft).toHaveCount(0);
+});
+
+test("starting a comment in another card asks before it replaces a parked draft, and declining keeps it", async ({
+  page,
+}) => {
+  const answers = answerConfirms(page);
+  await open(page);
+  await parkDraftInA(page, "unsent words");
+
+  await bringIntoView(page, CARD_B);
+  await raiseCard(page, CARD_B);
+  await pickElement(page, CARD_B, "#known");
+
+  await expect.poll(() => answers.asked.length).toBe(1);
+  expect(answers.asked[0]).toContain(DISCARD_QUESTION);
+  await expect(draftIn(page, CARD_B)).toHaveCount(0);
+  await closeCard(page, CARD_B);
+  await expandCard(page, CARD_A);
+  await expect(draftIn(page, CARD_A)).toHaveCount(1);
+  await expect(draftText(page)).toHaveText("unsent words");
+});
+
+test("accepting the question replaces the parked draft with the new one", async ({
+  page,
+}) => {
+  const answers = answerConfirms(page);
+  answers.accept = true;
+  await open(page);
+  await parkDraftInA(page, "unsent words");
+
+  await bringIntoView(page, CARD_B);
+  await raiseCard(page, CARD_B);
+  await pickElement(page, CARD_B, "#known");
+
+  await expect.poll(() => answers.asked.length).toBe(1);
+  expect(answers.asked[0]).toContain(DISCARD_QUESTION);
+  await expect(draftIn(page, CARD_B)).toHaveCount(1);
+  await closeCard(page, CARD_B);
+  await expandCard(page, CARD_A);
+  await expect(draftIn(page, CARD_A)).toHaveCount(0);
+});
+
+test("an empty parked draft is replaced without a question", async ({
+  page,
+}) => {
+  const answers = answerConfirms(page);
+  await open(page);
+  await parkDraftInA(page, "");
+
+  await bringIntoView(page, CARD_B);
+  await raiseCard(page, CARD_B);
+  await pickElement(page, CARD_B, "#known");
+
+  await expect(draftIn(page, CARD_B)).toHaveCount(1);
+  expect(answers.asked).toEqual([]);
+  await closeCard(page, CARD_B);
+  await expandCard(page, CARD_A);
+  await expect(draftIn(page, CARD_A)).toHaveCount(0);
 });

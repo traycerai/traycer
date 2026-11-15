@@ -35,6 +35,7 @@ import {
 import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
 import { useArtboardEdit } from "@/components/canvas-artifact/use-artboard-edit";
 import {
+  registerOpenDraftDiscard,
   useAnchoredDraftStore,
   type AnchoredCommentDraft,
 } from "@/stores/comments/anchored-draft-store";
@@ -60,6 +61,24 @@ export interface AnchoredDraftTidInsertion {
     readonly end: number;
     readonly replacement: string;
   }[];
+}
+
+/**
+ * Another view starting a comment would replace this draft, and while out of
+ * sight the draft answers no press outside it: it answers through the same
+ * discard, which asks before dropping typed text.
+ */
+function useDiscardForAnotherDraft(
+  epicId: string,
+  draft: AnchoredCommentDraft | null,
+  dismiss: () => boolean,
+): void {
+  const discard = useEffectEvent((): boolean => dismiss());
+  const draftId = draft?.draftId ?? null;
+  useEffect(() => {
+    if (draftId === null) return;
+    return registerOpenDraftDiscard(epicId, draftId, () => discard());
+  }, [epicId, draftId]);
 }
 
 export function AnchoredDraftPopover(props: {
@@ -152,6 +171,7 @@ export function AnchoredDraftPopover(props: {
     }
   });
   const hasDraft = draft !== null;
+  useDiscardForAnotherDraft(epicId, draft, dismiss);
   // The composer below is the only copy of what the reader typed, so a
   // transcript row the draft lives in stays mounted while it is open, raised
   // or not: a list that virtualized the row away would take the text with it.

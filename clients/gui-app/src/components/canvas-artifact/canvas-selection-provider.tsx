@@ -7,7 +7,10 @@ import {
 } from "@/components/comments/anchored-draft-popover";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
-import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import {
+  useAnchoredDraftStore,
+  yieldOpenDraft,
+} from "@/stores/comments/anchored-draft-store";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import { fullscreenSurface } from "@/lib/sandbox/overlay-owner";
@@ -295,7 +298,7 @@ export function CanvasSelectionProvider(
         parent?.onCanvasView?.(view);
       },
       onPaneComment: (point) => {
-        if (!commentsEnabled) return;
+        if (!commentsEnabled || !yieldOpenDraft(epicId, draftOwner)) return;
         useCommentThreadsStore.getState().setActiveThread(epicId, null);
         useAnchoredDraftStore.getState().setDraft(epicId, {
           draftId: crypto.randomUUID(),
