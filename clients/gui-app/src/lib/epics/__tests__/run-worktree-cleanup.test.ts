@@ -177,7 +177,13 @@ function status(
   continuity: StreamContinuity,
   startSent: boolean,
 ): WorktreeDeleteBatchConnectionStatus {
-  return { status: value, reason: null, retryCause: null, continuity, startSent };
+  return {
+    status: value,
+    reason: null,
+    retryCause: null,
+    continuity,
+    startSent,
+  };
 }
 
 /** Drives the command past the send of its start request. */

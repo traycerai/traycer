@@ -219,7 +219,11 @@ describe("SessionImportRunClient reconnects", () => {
     // The host is idle now: an empty run, started and completed at once.
     fake.sessions[1]?.emit(started("run-empty", false, 0), null);
     fake.sessions[1]?.emit(
-      complete("run-empty", { imported: 0, skippedAlreadyImported: 0, failed: 0 }),
+      complete("run-empty", {
+        imported: 0,
+        skippedAlreadyImported: 0,
+        failed: 0,
+      }),
       null,
     );
 
@@ -237,7 +241,11 @@ describe("SessionImportRunClient reconnects", () => {
     fake.sessions[0]?.emitContinuityStatus("reconnecting", null);
     fake.sessions[1]?.emit(started("run-empty", false, 0), null);
     fake.sessions[1]?.emit(
-      complete("run-empty", { imported: 0, skippedAlreadyImported: 0, failed: 0 }),
+      complete("run-empty", {
+        imported: 0,
+        skippedAlreadyImported: 0,
+        failed: 0,
+      }),
       null,
     );
 

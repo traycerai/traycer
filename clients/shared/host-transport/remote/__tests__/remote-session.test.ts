@@ -11763,7 +11763,9 @@ describe("RemoteSession: a start request sent and never answered", () => {
    * every other frame through the real seal.
    */
   function interceptFirstSubscribeSeal(
-    sealFirstSubscribe: (seal: () => Promise<Uint8Array>) => Promise<Uint8Array>,
+    sealFirstSubscribe: (
+      seal: () => Promise<Uint8Array>,
+    ) => Promise<Uint8Array>,
   ): { readonly intercepted: () => boolean; readonly restore: () => void } {
     const seal = NoiseChannel.prototype.encrypt;
     let intercepted = false;
@@ -11827,7 +11829,10 @@ describe("RemoteSession: a start request sent and never answered", () => {
           worktreePath: "/wt/after-drop",
           scripts: null,
           stopOwners: false,
-          callbacks: { ...deleteCallbacks, onDroppedAfterStart: () => undefined },
+          callbacks: {
+            ...deleteCallbacks,
+            onDroppedAfterStart: () => undefined,
+          },
         });
         try {
           await vi.waitFor(
@@ -11924,7 +11929,10 @@ describe("RemoteSession: a start request sent and never answered", () => {
             },
           ]);
           expect(onConnectionStatus).toHaveBeenCalledWith(
-            expect.objectContaining({ status: "reconnecting", startSent: true }),
+            expect.objectContaining({
+              status: "reconnecting",
+              startSent: true,
+            }),
           );
         } finally {
           sentinel.close();
