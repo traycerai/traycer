@@ -38,6 +38,8 @@ import {
 import { useOpenHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { useIsDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
 import {
   useArrangementValue,
@@ -308,11 +310,19 @@ function EpicRepointFailureCard(props: {
 }) {
   const targetHostId = props.presentation.targetHostId;
   const targetEntry = useHostDirectoryEntry(targetHostId);
+  const windowHostId = useSelectionAuthorityStore(
+    (state) => state.effectiveHostId ?? state.targetHostId,
+  );
+  const windowCoverDrawn = useIsDoorCoverDrawn(
+    targetHostId === windowHostId ? targetHostId : null,
+  );
   if (
     targetHostId !== null &&
     targetEntry !== null &&
     hostDirectoryEntryNeedsUpdate(targetEntry, MINIMUM_HOST_VERSION)
   ) {
+    // The window's own older-host cover already says this for its host.
+    if (windowCoverDrawn) return null;
     return (
       <EpicOlderHostCard
         hostId={targetHostId}
