@@ -1,4 +1,9 @@
-import type { Query, UseMutationResult } from "@tanstack/react-query";
+import { useState } from "react";
+import type {
+  MutationFunctionContext,
+  Query,
+  UseMutationResult,
+} from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -13,6 +18,7 @@ import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-writ
 import {
   sendFollowedSave,
   useSettingsSave,
+  type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -104,6 +110,12 @@ export function useProvidersMcpMutate(): UseMutationResult<
   // no longer reads it on a remove or a tool toggle, which are sent without.
   const grant = useExecutableWriteGrant();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  // The save is prepared by the editor of the render the person acted in,
+  // which `onMutate` sees and the function, run with a newer render's options,
+  // does not (see `useHostMutation`).
+  const [prepareMadeIn] = useState(
+    () => new WeakMap<MutationFunctionContext, PrepareSettingsSave>(),
+  );
   return useMutation<
     McpMutateResult,
     HostRpcError,
@@ -113,8 +125,12 @@ export function useProvidersMcpMutate(): UseMutationResult<
     // Settings mounts this hook under a host-keyed subtree with a pinned
     // requester. Keep the observer attached while that host's readiness changes.
     mutationKey: providersMutationKeys.mcpMutate(),
-    onMutate: () => ({ hostId: client.getActiveHostId() }),
-    mutationFn: async (variables) => {
+    onMutate: (_variables, context) => {
+      prepareMadeIn.set(context, prepareSave);
+      return { hostId: client.getActiveHostId() };
+    },
+    mutationFn: async (variables, context) => {
+      const prepare = prepareMadeIn.get(context) ?? prepareSave;
       const hostId = client.getActiveHostId();
       const listParams = {
         providerId: variables.providerId,
@@ -154,7 +170,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
           ? request
           : await grant(request, client);
       const response = await sendFollowedSave(
-        await prepareSave(
+        await prepare(
           { method: "providers.nativeMutate", request: sent },
           hostId,
         ),
