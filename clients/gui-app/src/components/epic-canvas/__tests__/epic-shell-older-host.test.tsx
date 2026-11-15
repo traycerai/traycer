@@ -21,6 +21,17 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
+import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { HostReadinessControllerContext } from "@/components/layout/host-readiness-controller-context";
+import type {
+  DefaultHostReadinessPresentation,
+  HostReadinessController,
+} from "@/components/layout/host-readiness-controller-context";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
@@ -48,6 +59,7 @@ const RELAY_URL = "wss://relay.test/attach";
 
 const seams = vi.hoisted(() => ({
   minimumHostVersion: "0.0.0",
+  effectiveHostId: "window-host",
   rows: new Map<string, unknown>(),
   openAttempts: [] as string[],
   carriedHostIds: [] as string[],
@@ -140,7 +152,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "window-host",
+  useEffectiveHostId: () => seams.effectiveHostId,
 }));
 
 vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
@@ -325,6 +337,59 @@ function installRows(): void {
   };
 }
 
+const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
+  targetKind: "unknown",
+  localBootIntent: false,
+  localHostState: "unknown",
+  stage: "loading",
+  progress: null,
+  lastProgress: null,
+  provisioningError: null,
+  ensureFailure: null,
+  provisioning: false,
+  removed: false,
+  hostBusy: false,
+  canManageHost: false,
+  retryProvisioning: () => undefined,
+  forceProvisioning: () => undefined,
+  reinstall: () => undefined,
+  configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openSettings: () => undefined,
+  compatibility: {
+    status: "compatible",
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
+  },
+};
+
+const READY_CONTROLLER: HostReadinessController = {
+  readinessFor: () => ({ kind: "ready" }),
+  defaultHostPresentation: EMPTY_PRESENTATION,
+  hasBeenDefaultHostReady: true,
+};
+
+/** The tab on the window's own computer, with the window's cover mounted. */
+function renderTabOnTheWindowsComputer(): void {
+  seams.effectiveHostId = TAB_HOST_ID;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <HostReadinessControllerContext.Provider value={READY_CONTROLLER}>
+          <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
+            <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+          </TestEpicSessionTab>
+          <WindowHostModalHost bypassed={false} />
+        </HostReadinessControllerContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
 function renderTabOnAnotherComputer(): void {
   // The tab's own computer, not the window's: the create-host seed names it.
   markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
@@ -391,6 +456,9 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     seams.minimumHostVersion = "0.0.0";
     vi.useRealTimers();
     useSelectionAuthorityStore.getState().reset();
+    useHostDoorStateStore.setState({ byHost: new Map() });
+    seams.effectiveHostId = WINDOW_HOST_ID;
+    setMobileApp(false);
   });
 
   it("shows Host update needed with one Update now and no Retry", async () => {
@@ -470,5 +538,43 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         hostId: null,
       },
     ]);
+  });
+  describe.each([
+    {
+      form: "the desktop's modal",
+      mobile: false,
+      cover: "window-host-modal",
+    },
+    {
+      form: "the phone's startup card",
+      mobile: true,
+      cover: "window-host-startup-card",
+    },
+  ])("when the tab's computer is the window's own, on $form", (testCase) => {
+    it("narrates in the window's cover and draws no task card", async () => {
+      setMobileApp(testCase.mobile);
+      installStreams();
+      publishTabRow("2.0.0");
+      renderTabOnTheWindowsComputer();
+      await waitForTaskShown();
+
+      act(() => {
+        noteHostDoorState({
+          hostId: TAB_HOST_ID,
+          kind: "older-host",
+          detail: null,
+        });
+      });
+      publishTabRow("1.5.4");
+
+      const cover = await screen.findByTestId(testCase.cover);
+      expect(within(cover).getByText("Host update needed")).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
+      });
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+      // An empty body, not the loading skeleton.
+      expect(screen.queryByTestId("tile-canvas-loading")).toBeNull();
+    });
   });
 });
