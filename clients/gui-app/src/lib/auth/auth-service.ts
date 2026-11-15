@@ -1,3 +1,15 @@
+import {
+  readProfileRecordsViaHttp,
+  signOutProfileRecordViaHttp,
+  removeProfileRecordViaHttp,
+  nameProfileRecordViaHttp,
+  profileRecordActionFailure,
+  type ProfileRecordClient,
+  type ProfileRecordListResult,
+  type ProfileRecordActionResult,
+  type ProfileRecordNameResult,
+  type ProfileRecordNameChange,
+} from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   setProfileRecordEnabledViaHttp,
@@ -634,7 +646,9 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService implements ProfileRecordEnablementClient {
+export class AuthService
+  implements ProfileRecordEnablementClient, ProfileRecordClient
+{
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -3589,6 +3603,78 @@ export class AuthService implements ProfileRecordEnablementClient {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  async readProfileRecords(
+    environmentId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordListResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return readProfileRecordsViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      callerSignal,
+    );
+  }
+
+  async signOutProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("sign-out", { kind: "unauthorized" });
+    return signOutProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async removeProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("remove", { kind: "unauthorized" });
+    return removeProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async nameProfileRecord(
+    environmentId: string,
+    providerId: string,
+    change: ProfileRecordNameChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordNameResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("name", { kind: "unauthorized" });
+    return nameProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      change.profileId,
+      change.name,
+      callerSignal,
+    );
   }
 
   async setProfileRecordEnabled(
