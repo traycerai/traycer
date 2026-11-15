@@ -115,7 +115,7 @@ function useAccountNotificationWrite<Request extends object>(
     onSettled: (_data, _error, request) => {
       const captured = origin.contextOf(request);
       if (!notificationWriteIsCurrent(captured)) {
-        mutation.reset();
+        origin.resetIfCurrent(captured, mutation.reset);
         return;
       }
       return queries.invalidateQueries({ queryKey: captured.queryKey });

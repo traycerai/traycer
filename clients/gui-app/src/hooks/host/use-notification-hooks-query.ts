@@ -197,7 +197,7 @@ export function useNotificationHooksSaveForClient(
     },
     onSettled: (_hostId, captured) => {
       if (!notificationWriteIsCurrent(captured)) {
-        mutation.reset();
+        origin.resetIfCurrent(captured, mutation.reset);
         return;
       }
       void queries.invalidateQueries({

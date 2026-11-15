@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { MutateOptions, UseMutationResult } from "@tanstack/react-query";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -49,6 +49,7 @@ export function useNotificationMutationOrigin<
   Captured extends NotificationWriteOrigin,
 >(capture: () => Captured) {
   const [origins] = useState(() => new WeakMap<object, Captured>());
+  const latest = useRef<Captured | null>(null);
   const contextOf = (variables: object): Captured => {
     const context = origins.get(variables);
     if (context === undefined)
@@ -59,7 +60,11 @@ export function useNotificationMutationOrigin<
     const pressed = { ...variables };
     const origin = capture();
     origins.set(pressed, origin);
+    latest.current = origin;
     return { pressed, origin };
+  };
+  const resetIfCurrent = (origin: Captured, reset: () => void) => {
+    if (latest.current === origin) reset();
   };
   function wrap<Data, Error, Variables extends object, Context>(
     mutation: UseMutationResult<Data, Error, Variables, Context>,
@@ -76,5 +81,5 @@ export function useNotificationMutationOrigin<
       },
     };
   }
-  return { contextOf, wrap };
+  return { contextOf, resetIfCurrent, wrap };
 }

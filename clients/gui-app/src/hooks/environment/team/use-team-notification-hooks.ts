@@ -104,7 +104,7 @@ export function useTeamNotificationHooks() {
     onSettled: (_data, _error, request) => {
       const captured = origin.contextOf(request);
       if (!notificationWriteIsCurrent(captured)) {
-        put.reset();
+        origin.resetIfCurrent(captured, put.reset);
         return;
       }
       const targetEnvironmentId = captured.environmentId;
