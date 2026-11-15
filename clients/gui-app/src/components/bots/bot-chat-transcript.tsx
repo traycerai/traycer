@@ -27,6 +27,8 @@ import { useBotSearchWordMarks } from "@/hooks/bots/use-bot-search-word-marks";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
+import { useHeldPendingSends } from "@/stores/bots/bot-pending-sends-store";
+import { usePendingSendRows } from "@/hooks/bots/use-pending-send-rows";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   botMemberName,
@@ -44,6 +46,7 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
+  ChatBotPendingSendsContext,
   ChatBotPresentationContext,
   ChatBotRepliesContext,
   type ChatBotFailedRequest,
@@ -467,12 +470,14 @@ function BotChatTranscriptBody(props: {
     landOn,
     flow,
   } = props;
+  const held = useHeldPendingSends(botId, chatId, hostId);
   const { state, messages } = useBotSessionMessages({
     handle,
     botId,
     chatId,
     viewTabId: instanceId,
     resolveMember,
+    held,
   });
   // A host that creates the channel chat only on its first post answers a
   // subscribe before it with CHAT_NOT_VISIBLE: the channel is empty, not
@@ -489,6 +494,7 @@ function BotChatTranscriptBody(props: {
   });
   const profile = useAuthStore((s) => s.profile);
   const tabClient = useTabHostClient();
+  const pendingSendOf = usePendingSendRows(botId, held, tabClient);
   const subagentDrillIn = useSubagentDrillIn(state.snapshotLoaded);
 
   // A landing names a MESSAGE id; the list lands by RENDERED ROW key, so the
@@ -732,46 +738,50 @@ function BotChatTranscriptBody(props: {
   return (
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
-        <ChatBotRepliesContext.Provider value={listReplies}>
-          <BotTranscriptRows
-            ref={transcriptRef}
-            flow={flow}
-            replies={repliesBase}
-            intro={intro}
-            header={listHeader}
-            instanceId={instanceId}
-            hostId={hostId}
-            messages={messages}
-            transcriptWindow={transcriptWindow}
-            reportVisibleRange={state.reportVisibleTranscriptRange}
-            list={
-              <ChatMessages
-                minimapEnabled={props.minimapEnabled}
-                taskTitle={title}
-                taskId={chatId}
-                epicId={botId}
-                hostId={hostId}
-                messages={messages}
-                transcriptWindow={transcriptWindow}
-                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-                onFindReadOrdinalChange={state.requestFindReadOrdinal}
-                baselineEpoch={state.transcriptBaselineEpoch}
-                hydrationSequence={state.transcriptHydrationSequence}
-                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-                backgroundItems={state.backgroundItems}
-                getMessageActions={getMessageActions}
-                nextStepActions={null}
-                instanceId={instanceId}
-                visible
-                systemOverlayActive={false}
-                scrollRequest={scrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                composerOverlayHeight={0}
-                subagentDrillIn={subagentDrillIn}
-              />
-            }
-          />
-        </ChatBotRepliesContext.Provider>
+        <ChatBotPendingSendsContext value={pendingSendOf}>
+          <ChatBotRepliesContext.Provider value={listReplies}>
+            <BotTranscriptRows
+              ref={transcriptRef}
+              flow={flow}
+              replies={repliesBase}
+              intro={intro}
+              header={listHeader}
+              instanceId={instanceId}
+              hostId={hostId}
+              messages={messages}
+              transcriptWindow={transcriptWindow}
+              reportVisibleRange={state.reportVisibleTranscriptRange}
+              list={
+                <ChatMessages
+                  minimapEnabled={props.minimapEnabled}
+                  taskTitle={title}
+                  taskId={chatId}
+                  epicId={botId}
+                  hostId={hostId}
+                  messages={messages}
+                  transcriptWindow={transcriptWindow}
+                  onVisibleOrdinalRangeChange={
+                    state.reportVisibleTranscriptRange
+                  }
+                  onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                  baselineEpoch={state.transcriptBaselineEpoch}
+                  hydrationSequence={state.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                  backgroundItems={state.backgroundItems}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={null}
+                  instanceId={instanceId}
+                  visible
+                  systemOverlayActive={false}
+                  scrollRequest={scrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  composerOverlayHeight={0}
+                  subagentDrillIn={subagentDrillIn}
+                />
+              }
+            />
+          </ChatBotRepliesContext.Provider>
+        </ChatBotPendingSendsContext>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>
   );

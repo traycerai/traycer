@@ -145,7 +145,12 @@ export function threadOriginRow(input: {
   return { row, loaded: false };
 }
 
-function loadedOriginRow(
+/**
+ * A stored message as the channel's row draws it, which is also how a
+ * member's own reply held before its thread is listed is drawn (T249): the
+ * held row has the stored row's shape.
+ */
+export function loadedOriginRow(
   post: OpenMessage,
   names: {
     readonly senderLabel: (senderUserId: string | null) => string;

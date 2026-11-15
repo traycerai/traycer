@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useContext,
   useEffect,
   useState,
   type ReactElement,
@@ -59,13 +60,15 @@ import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type {
-  ChatBotFailedRecovery,
-  ChatBotFailedRequest,
-  ChatBotPresentation,
-  ChatBotQuestions,
-  ChatBotThreadLine,
-  ChatBotTurnReceipt,
+import {
+  ChatBotPendingSendsContext,
+  type ChatBotFailedRecovery,
+  type ChatBotFailedRequest,
+  type ChatBotPendingSend,
+  type ChatBotPresentation,
+  type ChatBotQuestions,
+  type ChatBotThreadLine,
+  type ChatBotTurnReceipt,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
@@ -190,7 +193,9 @@ export function ChatBotMessage(props: {
 
 /**
  * A member's row: their message, why it went unanswered where it did, and
- * the line of its thread.
+ * the line of its thread. While it is the member's own send drawn before the
+ * host's row of it (T249), it offers nothing until stored, and says when the
+ * send is not confirmed, with its Retry.
  */
 function MemberRow(props: {
   readonly message: ChatMessageModel;
@@ -200,8 +205,12 @@ function MemberRow(props: {
   readonly hoverActions: boolean;
   readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
+  const { message, sentAt, body, hoverActions, timeLink } = props;
   const name = message.senderLabel ?? "Member";
+  const { pending, presentation } = usePendingSendOf(
+    message,
+    props.presentation,
+  );
   const postId = message.persistentMessageId;
   const threadLine =
     postId === null || presentation.threadLine === null
@@ -250,6 +259,7 @@ function MemberRow(props: {
         browserAnnotations={message.browserAnnotations}
       />
       {body}
+      <UnconfirmedLine pending={pending} botTitle={presentation.botTitle} />
       {failed === null ? null : (
         <UnansweredLine failed={failed} recovery={recovery} />
       )}
@@ -277,6 +287,79 @@ function MemberRow(props: {
         />
       )}
     </BotMessageFrame>
+  );
+}
+
+/**
+ * The member's own send `message` is while it is drawn before the host's row
+ * of it, and what its row is offered then; the row's own presentation once
+ * it is stored.
+ */
+function usePendingSendOf(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): {
+  readonly pending: ChatBotPendingSend | null;
+  readonly presentation: ChatBotPresentation;
+} {
+  const pendingOf = useContext(ChatBotPendingSendsContext);
+  const pending =
+    pendingOf === null || message.persistentMessageId === null
+      ? null
+      : pendingOf(message.persistentMessageId);
+  return {
+    pending,
+    presentation: pending === null ? presentation : storedOnly(presentation),
+  };
+}
+
+/**
+ * What a pending row is offered: nothing a stored row is, since there is no
+ * stored message yet to reply to, open a thread under or send again as
+ * failed.
+ */
+function storedOnly(presentation: ChatBotPresentation): ChatBotPresentation {
+  return {
+    ...presentation,
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    reply: null,
+    failedRequest: null,
+    failedRecovery: null,
+    requestReceipt: null,
+  };
+}
+
+/**
+ * Under a member's own send the host has not confirmed (T249): it may or may
+ * not have reached the bot, and Retry sends it again as it was, which the
+ * host takes once whichever way it went.
+ */
+function UnconfirmedLine(props: {
+  /** The send; `null`, or one still sending, draws nothing. */
+  readonly pending: ChatBotPendingSend | null;
+  readonly botTitle: string;
+}): ReactElement | null {
+  if (props.pending?.state !== "unconfirmed") return null;
+  const { retry } = props.pending;
+  return (
+    <p
+      data-testid="bot-message-unconfirmed"
+      className="text-ui-xs break-words whitespace-pre-wrap text-warning-foreground"
+    >
+      {`Not confirmed: this may not have reached ${props.botTitle}`}
+      <span aria-hidden="true">{" · "}</span>
+      <button
+        type="button"
+        data-testid="bot-message-unconfirmed-retry"
+        disabled={retry === null}
+        onClick={retry ?? undefined}
+        className="rounded-sm font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+      >
+        Retry
+      </button>
+    </p>
   );
 }
 

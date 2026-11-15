@@ -419,6 +419,7 @@ function Channel(
               boundHostEpoch={1}
               tiles={null}
               botTitle="Release Bot"
+              replyMode="direct"
               directive={null}
               appConversationChatId={CHANNEL_ID}
               trunkChatId={TRUNK_ID}

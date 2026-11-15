@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import { queuedPromptMessageIds } from "@/components/chat/chat-queue-utils";
 import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -34,6 +35,10 @@ import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
+import {
+  storedPendingSends,
+  type BotPendingSend,
+} from "@/stores/bots/bot-pending-sends-store";
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
@@ -72,6 +77,11 @@ type BotSessionState = Pick<
  * One of a bot's chats as the transcript renders its rows: the session's
  * state and its rendered messages, named and pictured as the bot's surfaces
  * name its members and labelled with the tab host's model catalog.
+ *
+ * The member's own sends still held for the chat (`held`, T249) are drawn
+ * after the session's rows, each until its stored row is among them: that
+ * row has the same id and takes its place, never beside it, and the send is
+ * done for good.
  */
 export function useBotSessionMessages(input: {
   readonly handle: ChatSessionStoreHandle;
@@ -79,11 +89,12 @@ export function useBotSessionMessages(input: {
   readonly chatId: string;
   readonly viewTabId: string;
   readonly resolveMember: BotMemberResolver;
+  readonly held: ReadonlyArray<BotPendingSend>;
 }): {
   readonly state: BotSessionState;
   readonly messages: ReadonlyArray<ChatMessage>;
 } {
-  const { handle, botId, chatId, viewTabId, resolveMember } = input;
+  const { handle, botId, chatId, viewTabId, resolveMember, held } = input;
   const state = useStore(
     handle.store,
     useShallow((s): BotSessionState => ({
@@ -154,6 +165,13 @@ export function useBotSessionMessages(input: {
     }),
     [displayContext, resolveMember],
   );
+  const { rows, stored } = useMemo(
+    () => withPendingRows(state.messages, held),
+    [held, state.messages],
+  );
+  useEffect(() => {
+    if (stored.length > 0) storedPendingSends(stored);
+  }, [stored]);
   const queuedPromptIds = useMemo(
     () => queuedPromptMessageIds(state.queue.items),
     [state.queue.items],
@@ -164,7 +182,7 @@ export function useBotSessionMessages(input: {
   );
   const messages = useRenderedMessages(
     {
-      messages: state.messages,
+      messages: rows,
       events: state.events,
       rowContext: state.transcriptRowContext,
       setupCardWindows:
@@ -187,4 +205,32 @@ export function useBotSessionMessages(input: {
     renderedDisplayContext,
   );
   return { state, messages };
+}
+
+const NO_IDS: ReadonlyArray<string> = [];
+
+/**
+ * The session's rows with `held`'s after them, and the held sends whose
+ * stored row is among the session's.
+ */
+function withPendingRows(
+  messages: ReadonlyArray<OpenMessage>,
+  held: ReadonlyArray<BotPendingSend>,
+): {
+  readonly rows: ReadonlyArray<OpenMessage>;
+  readonly stored: ReadonlyArray<string>;
+} {
+  if (held.length === 0) return { rows: messages, stored: NO_IDS };
+  const ids = new Set(messages.map((message) => message.messageId));
+  const stored = held
+    .filter((send) => ids.has(send.row.messageId))
+    .map((send) => send.row.messageId);
+  const drawn = held.filter((send) => !ids.has(send.row.messageId));
+  return {
+    rows:
+      drawn.length === 0
+        ? messages
+        : [...messages, ...drawn.map((send) => send.row)],
+    stored: stored.length === 0 ? NO_IDS : stored,
+  };
 }

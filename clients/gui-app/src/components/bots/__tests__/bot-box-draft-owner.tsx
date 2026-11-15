@@ -38,6 +38,7 @@ function Box(props: {
   return (
     <BotTestRunnerHost>
       <BotMessageComposer
+        pending={null}
         key={props.conversation}
         botId={BOT_ID}
         botTitle="Tracy"

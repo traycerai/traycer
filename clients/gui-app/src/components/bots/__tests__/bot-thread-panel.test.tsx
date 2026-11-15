@@ -1371,6 +1371,7 @@ describe("<BotThreadPanel /> the anchor", () => {
       senderUserId: null,
       sentAt: 1_000,
       delivery: "written",
+      provisional: false,
     };
     mountPanel(listed("user-teammate"), []);
     const pending = within(screen.getByTestId("bot-thread-anchor"));

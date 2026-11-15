@@ -46,6 +46,13 @@ export interface BotSentPost {
   readonly sentAt: number;
   /** `queued`: it waits for the bot's host, and the panel says so under it. */
   readonly delivery: BotConversationSendDelivery;
+  /**
+   * Opened at Send, before the host answered (T249): `threadId` is the one
+   * the post's id derives, and the send's receipt or refusal settles it
+   * (`settleSentThread`). `false` once settled, and for a thread opened as a
+   * send was accepted.
+   */
+  readonly provisional: boolean;
 }
 
 /**
@@ -226,4 +233,74 @@ export function useBotRail(botId: string): BotRail | null {
   return useBotOpenThreadStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
+}
+
+/**
+ * Shows, at Send, the thread a first reply under `anchorMessageId` opens
+ * (T249), in `botId`'s rail while it still shows that anchor's box; the
+ * reply's receipt or refusal settles it (`settleSentThread`).
+ */
+export function openSentThread(
+  botId: string,
+  anchorMessageId: string,
+  sent: BotSentPost,
+): void {
+  const { byBotId, setRail } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  if (rail?.kind !== "thread" || rail.anchorMessageId !== anchorMessageId) {
+    return;
+  }
+  setRail(botId, { ...rail, sent });
+}
+
+/** How a send that opened its thread at Send ended: the host's answer, or a refusal that wrote nothing. */
+export type BotSentThreadSettlement =
+  | {
+      readonly kind: "answered";
+      /** The thread the post went into; `null` where the bot answered it in the channel. */
+      readonly threadId: string | null;
+      readonly delivery: BotConversationSendDelivery;
+    }
+  | { readonly kind: "refused" };
+
+/**
+ * Settles the thread `botId`'s rail opened at Send for the send `requestId`
+ * (T249). The host's answer is what holds: the thread it names, or none
+ * where the bot answered in the channel, and a refusal opened none. Only a
+ * rail still showing that send's thread moves; one the person closed or left
+ * since stays as it is. Answers whether the rail still shows the thread, so
+ * its panel says the send's delivery.
+ */
+export function settleSentThread(
+  botId: string,
+  requestId: string,
+  settlement: BotSentThreadSettlement,
+): boolean {
+  const { byBotId, setRail } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  if (
+    rail?.kind !== "thread" ||
+    rail.sent === null ||
+    !rail.sent.provisional ||
+    rail.sent.requestId !== requestId
+  ) {
+    return false;
+  }
+  const threadId = settlement.kind === "answered" ? settlement.threadId : null;
+  if (settlement.kind === "refused" || threadId === null) {
+    // An announcement's box stays open to start its thread; a post's own
+    // thread was never opened.
+    setRail(botId, rail.announcement ? { ...rail, sent: null } : null);
+    return false;
+  }
+  setRail(botId, {
+    ...rail,
+    sent: {
+      ...rail.sent,
+      threadId,
+      delivery: settlement.delivery,
+      provisional: false,
+    },
+  });
+  return true;
 }

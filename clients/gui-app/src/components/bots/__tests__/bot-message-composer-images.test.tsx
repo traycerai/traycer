@@ -179,6 +179,7 @@ function Box(props: {
   return (
     <RunnerHostContext value={RUNNER_HOST}>
       <BotMessageComposer
+        pending={null}
         botId="bot-1"
         botTitle="Tracy"
         conversationId={CHANNEL}

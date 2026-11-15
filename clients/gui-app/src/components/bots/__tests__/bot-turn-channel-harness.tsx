@@ -49,6 +49,7 @@ function Channel(): ReactNode {
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
+      replyMode="direct"
       tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}

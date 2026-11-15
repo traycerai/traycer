@@ -111,6 +111,7 @@ function Harness(props: {
     <BotIdentityContext value={{ botId: BOT, title: "Tracy", owner: TEAM }}>
       <BotTestRunnerHost>
         <BotMessageComposer
+          pending={null}
           botId={BOT}
           botTitle="Tracy"
           conversationId={CONVERSATION}

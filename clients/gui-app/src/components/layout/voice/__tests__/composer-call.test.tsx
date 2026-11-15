@@ -172,6 +172,7 @@ function placeCall(
 function box(kind: BoxKind): ReactNode {
   return (
     <BotMessageComposer
+      pending={null}
       key={kind.testId}
       botId={BOT_ID}
       botTitle="Tracy"

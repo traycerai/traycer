@@ -3155,6 +3155,7 @@ describe("a call dialled from a message box", () => {
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
           <BotMessageComposer
+            pending={null}
             botId={BOT_ID}
             botTitle={BOT_TITLE}
             conversationId={CHANNEL_ID}

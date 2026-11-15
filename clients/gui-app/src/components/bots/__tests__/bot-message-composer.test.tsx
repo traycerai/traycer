@@ -144,6 +144,7 @@ function composer(
   return (
     <BotTestRunnerHost>
       <BotMessageComposer
+        pending={null}
         botId="bot-1"
         botTitle="Tracy"
         conversationId="conversation-channel"
@@ -194,6 +195,7 @@ function Harness(props: {
         Reopen
       </button>
       <BotMessageComposer
+        pending={null}
         key={boxGeneration}
         botId="bot-1"
         botTitle="Tracy"

@@ -345,6 +345,7 @@ const sentPost: BotSentPost | null =
         senderUserId: null,
         sentAt: 1_000,
         delivery: "written",
+        provisional: false,
       };
 
 export function SignedInFixture(props: {

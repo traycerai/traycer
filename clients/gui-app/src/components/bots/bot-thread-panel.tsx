@@ -7,9 +7,15 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { ChatBotThreadOpening } from "@/components/chat/chat-bot-presentation-context";
+import {
+  ChatBotPendingSendsContext,
+  type ChatBotThreadOpening,
+} from "@/components/chat/chat-bot-presentation-context";
 import { X } from "lucide-react";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendResponse,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -72,7 +78,13 @@ import {
   botMemberAvatarUrl,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
+import {
+  loadedOriginRow,
+  threadOriginRow,
+  type ThreadOriginRow,
+} from "@/lib/bots/reply-row";
+import { useHeldPendingSends } from "@/stores/bots/bot-pending-sends-store";
+import { usePendingSendRows } from "@/hooks/bots/use-pending-send-rows";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import { useBotDraftActions } from "@/stores/bots/bot-drafts-store";
@@ -80,7 +92,13 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import {
+  openSentThread,
+  settleSentThread,
+  type BotSentPost,
+} from "@/stores/bots/bot-open-thread-store";
+import { useBotComposerPending } from "@/hooks/bots/use-bot-composer-pending";
+import type { BotPendingSendStart } from "@/lib/bots/bot-pending-send";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 import {
@@ -768,6 +786,53 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           },
     [botId, edit, originMessageId, replyReach, setReplyTarget],
   );
+  // A reply is drawn in the thread at Send (T249). The first reply under a
+  // row nobody has replied under opens its thread then, drawn under the row,
+  // and its receipt or refusal settles it.
+  const openRepliedThread = useCallback(
+    (start: BotPendingSendStart) => {
+      if (
+        start.threadId === null ||
+        (start.request.announcementId ?? null) === null
+      ) {
+        return;
+      }
+      openSentThread(botId, originMessageId, {
+        threadId: start.threadId,
+        requestId: start.requestId,
+        text: start.text,
+        content: start.content,
+        senderUserId: start.senderUserId,
+        sentAt: start.sentAt,
+        // Nothing is said under the row until the host answers.
+        delivery: "written",
+        provisional: true,
+      });
+    },
+    [botId, originMessageId],
+  );
+  const closeRepliedThread = useCallback(
+    (start: BotPendingSendStart) => {
+      settleSentThread(botId, start.requestId, { kind: "refused" });
+    },
+    [botId],
+  );
+  const settleRepliedThread = useCallback(
+    (response: BotConversationSendResponse): boolean => {
+      settleSentThread(botId, response.requestId, {
+        kind: "answered",
+        threadId: response.threadId,
+        delivery: response.delivery,
+      });
+      return keepOpenThread();
+    },
+    [botId],
+  );
+  const pending = useBotComposerPending({
+    hostId: props.hostId,
+    onStart: openRepliedThread,
+    onRefused: closeRepliedThread,
+  });
   if (thread.kind === "pending" || thread.kind === "failed") {
     return (
       <UnlistedThread
@@ -827,10 +892,73 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         reply={{ reach: replyReach, chosen: replyChosen }}
         moved={moved}
         notice={notice}
-        onSent={keepOpenThread}
+        onSent={settleRepliedThread}
+        pending={pending}
       />
     </>
   );
+}
+
+/**
+ * The member's own replies held for a thread the list does not have yet
+ * (T249): an announcement's first reply, or a reply under a post whose
+ * thread opened at Send. Drawn under the post as the thread's list will draw
+ * them, saying when one is not confirmed, until the list has the thread and
+ * its transcript draws them in their place.
+ */
+function UnlistedThreadReplies(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string;
+  readonly botTitle: string;
+  readonly senderLabel: (senderUserId: string | null) => string;
+  readonly resolveMember: BotMemberResolver;
+}): ReactNode {
+  const { botId, hostId, threadId, botTitle, senderLabel, resolveMember } =
+    props;
+  const held = useHeldPendingSends(botId, threadId, hostId);
+  const pendingSendOf = usePendingSendRows(botId, held, useTabHostClient());
+  const viewer = useAuthStore((s) => s.profile);
+  if (held.length === 0) return null;
+  const names = {
+    senderLabel,
+    senderAvatarUrl: (senderUserId: string) =>
+      botMemberAvatarUrl(senderUserId, viewer, resolveMember),
+  };
+  const presentation = heldReplyPresentation(botTitle);
+  return (
+    <ChatBotPendingSendsContext value={pendingSendOf}>
+      <div className="flex flex-col px-2" data-testid="bot-thread-held-replies">
+        {held.map((send) => (
+          <ChatBotMessage
+            key={send.row.messageId}
+            message={loadedOriginRow(send.row, names)}
+            presentation={presentation}
+            hoverActions={false}
+            timeLink={null}
+          />
+        ))}
+      </div>
+    </ChatBotPendingSendsContext>
+  );
+}
+
+/** A held reply's row offers nothing until it is stored. */
+function heldReplyPresentation(botTitle: string): ChatBotPresentation {
+  return {
+    botTitle,
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    threadAnchorKinds: [],
+    chooseOption: null,
+    reply: null,
+    questions: null,
+    failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
+  };
 }
 
 /**
@@ -1122,7 +1250,16 @@ function KnownThread(
         <ThreadPostScroll layout={layout}>{origin}</ThreadPostScroll>
       )}
       <ThreadListReadFailure retry={retry} />
-      {listed === null ? null : (
+      {listed === null ? (
+        <UnlistedThreadReplies
+          botId={botId}
+          hostId={hostId}
+          threadId={threadId}
+          botTitle={botTitle}
+          senderLabel={props.anchorSenderLabel}
+          resolveMember={resolveMember}
+        />
+      ) : (
         <div
           className={cn(
             "flex flex-col",

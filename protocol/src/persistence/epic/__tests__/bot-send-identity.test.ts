@@ -41,11 +41,17 @@ describe("botSendRequestId", () => {
     );
   });
 
-  it("tells apart two tuples a colon-joined string would make one", () => {
+  it("names another request when a colon moves between two adjacent fields", () => {
     expect(
-      botSendRequestId({ ...TUPLE, conversationId: "a:b", threadId: null }),
+      botSendRequestId({ ...TUPLE, conversationId: "a:b", threadId: "c" }),
     ).not.toBe(
-      botSendRequestId({ ...TUPLE, conversationId: "a", threadId: "b" }),
+      botSendRequestId({ ...TUPLE, conversationId: "a", threadId: "b:c" }),
+    );
+  });
+
+  it("is the id the app and the host have always derived for a fixed identity: a change of namespace, tuple order or encoding moves it", () => {
+    expect(botSendRequestId(TUPLE)).toBe(
+      "cb64741c-8ccd-55ba-81fc-c806793ba1b0",
     );
   });
 

@@ -310,3 +310,24 @@ export interface ChatBotThreadOpening {
 }
 
 export const ChatBotRepliesContext = createContext<ChatBotReplies | null>(null);
+
+/**
+ * A member's own message drawn as they sent it, before the host's row of it
+ * (Tracy Bots T249): `sending` until that row takes its place, `unconfirmed`
+ * once an attempt ended without saying whether the host has it.
+ */
+export interface ChatBotPendingSend {
+  readonly state: "sending" | "unconfirmed";
+  /** Sends it again exactly as it was; `null` while an attempt is out. */
+  readonly retry: (() => void) | null;
+}
+
+/**
+ * The message drawn as `messageId` while it is a pending send, else `null`.
+ * A bot's channel and thread lists provide it; a pending row offers nothing
+ * a stored row does until it is stored: no Reply, no thread, no Retry or Edit
+ * of a failed message.
+ */
+export const ChatBotPendingSendsContext = createContext<
+  ((messageId: string) => ChatBotPendingSend | null) | null
+>(null);

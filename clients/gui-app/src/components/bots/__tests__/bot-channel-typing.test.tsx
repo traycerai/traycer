@@ -538,6 +538,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       boundHostId={HOST_ID}
       boundHostEpoch={1}
       botTitle="Tracy"
+      replyMode="direct"
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"

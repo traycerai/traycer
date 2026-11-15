@@ -34,6 +34,7 @@ import {
   BOT_CONVERSATION_ANSWER_SET_VERSION,
   BOT_CONVERSATION_ANSWER_VERSION,
   BOT_CONVERSATION_CALL_VERSION,
+  BOT_CONVERSATION_NONCE_VERSION,
   BOT_CONVERSATION_REPLY_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
@@ -217,8 +218,11 @@ interface BotConversationSendContext {
  * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
  * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, a card's answers sent
  * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, a
- * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, and a
- * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION}.
+ * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, a
+ * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION},
+ * and a send that carries its nonce by one below
+ * {@link BOT_CONVERSATION_NONCE_VERSION}: the check is on the connection that
+ * dispatches it, so the nonce is never dropped for an older host.
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through. So is a card's answers sent together, or a
@@ -335,10 +339,16 @@ export function useBotCallSendMutation(): UseMutationResult<
   });
 }
 
-/** The send line a request needs: a retry, an answer, a call's words, a card's answers together and a reply came later. */
+/** The send line a request needs: a retry, an answer, a call's words, a card's answers together, a reply and a nonce came later. */
 function conversationSendVersion(
   variables: BotConversationSendRequest,
 ): RequiredHostMethodVersion | null {
+  if (variables.sendNonce !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_NONCE_VERSION,
+    };
+  }
   if (variables.replyTo !== undefined) {
     return {
       method: "bot.conversation.send",

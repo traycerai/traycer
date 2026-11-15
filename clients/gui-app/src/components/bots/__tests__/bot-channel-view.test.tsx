@@ -595,6 +595,7 @@ function mount(options: MountOptions): {
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={mountTiles}
                 botId={BOT_ID}
                 hostId={HOST_ID}
@@ -2535,6 +2536,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       senderUserId: null,
       sentAt: 5_000,
       delivery: "written",
+      provisional: false,
     },
   };
 

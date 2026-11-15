@@ -110,6 +110,7 @@ function Box(props: {
   return (
     <BotTestRunnerHost>
       <BotMessageComposer
+        pending={null}
         botId={BOT_ID}
         botTitle="Tracy"
         conversationId={CHANNEL}

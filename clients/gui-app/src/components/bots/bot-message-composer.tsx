@@ -17,6 +17,7 @@ import {
   BOT_CONVERSATION_IMAGES_ONLY_TEXT,
   type BotConversationAttachment,
   type BotConversationSendDelivery,
+  type BotConversationSendRequest,
   type BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -39,6 +40,12 @@ import type {
 } from "@/hooks/bots/use-bot-send-version";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
+import { botSendAttemptOutcome } from "@/lib/bots/bot-send-attempt-outcome";
+import {
+  startPendingSend,
+  type BotPendingSendStart,
+} from "@/lib/bots/bot-pending-send";
+import { settlePendingSend } from "@/stores/bots/bot-pending-sends-store";
 import type {
   BotBoxNotice,
   BotCarriedBlock,
@@ -81,6 +88,7 @@ import {
 } from "@/lib/bots/bot-box-content";
 import {
   collectImageAtoms,
+  collectImageAttachmentNodes,
   type ComposerImageAtom,
 } from "@/lib/composer/image-atoms";
 import { cn } from "@/lib/utils";
@@ -348,6 +356,12 @@ export function BotMessageComposer(props: {
     text: string,
     content: JsonContent,
   ) => boolean;
+  /**
+   * Draws the box's send in its chat at Send (T249); `null` sends as before,
+   * drawn once the host's row arrives. An edit's send is never drawn: it
+   * replaces a row the chat already has.
+   */
+  readonly pending: BotComposerPending | null;
 }): ReactNode {
   const {
     botId,
@@ -371,6 +385,7 @@ export function BotMessageComposer(props: {
     moved,
     notice,
     onSent,
+    pending,
   } = props;
   const client = useTabHostClient();
   const call = useComposerCall(botId, threadId, announcementId);
@@ -486,10 +501,28 @@ export function BotMessageComposer(props: {
       sessionThreadId: edit?.sessionThreadId,
       replyTo: edit === null ? replying.kept : null,
     };
-    const replyTo = replying.sentTo;
+    const request = boxSendRequest({
+      botId,
+      conversationId,
+      threadId,
+      announcementId,
+      wire,
+      supersedes: unsent.supersedes,
+      attachments: carried,
+      replyTo: replying.sentTo,
+    });
     // The send carries the moves the box holds: the store keeps them, added
     // to no box, until the send went or failed.
     keptDraft?.carry(held, "out");
+    // Drawn in its chat in the same render the box empties in, under the id
+    // its stored row will have; from here the row holds what was sent until
+    // the host's row takes its place or the host wrote nothing.
+    const started = startDrawnSend({
+      pending,
+      request,
+      unsent,
+      release: () => keptDraft?.carry(unsent.held, "went"),
+    });
     // The box empties as the send starts, which drops the draft kept outside
     // it and the message it replies to, and the edit it held ends: the row
     // the host writes reaches the list before the host answers.
@@ -499,56 +532,55 @@ export function BotMessageComposer(props: {
     if (unsent.supersedes !== null) onEditEnd();
     // Settled through the promise, not `mutate`'s callbacks, which do not
     // run once the box is gone.
-    send
-      .mutateAsync({
-        botId,
-        conversationId,
-        text: wire.length === 0 ? BOT_CONVERSATION_IMAGES_ONLY_TEXT : wire,
-        threadId,
-        announcementId,
-        redeliver: null,
-        supersedes: unsent.supersedes,
-        answer: null,
-        ...(carried.length === 0 ? {} : { attachments: [...carried] }),
-        ...(replyTo === null ? {} : { replyTo }),
-      })
-      .then(
-        (response) => {
-          keptDraft?.carry(unsent.held, "went");
-          // The send went, so it is reported whatever the box did meanwhile,
-          // unless the box is gone; the delivery is said under the box only
-          // while it is still empty.
-          if (!mountedRef.current) return;
-          const deliverySaid = onSent(response, text, unsent.content);
-          if (!emptyRef.current) return;
-          setLastDelivery(deliverySaid ? null : response.delivery);
-        },
-        () => {
-          // Back where the draft is, while nothing newer is there: the box,
-          // or the draft kept outside a box that is gone. Else offered back,
-          // beside the draft kept outside the box where there is one. A box
-          // that is gone leaves its owner's failure alone where its draft is
-          // kept outside it: the owner may show another conversation's box
-          // now, and the kept draft says it for this one.
-          if (mountedRef.current && emptyRef.current) {
-            putBack(unsent);
-            failure.fail(null);
-          } else if (keptDraft === null) {
-            failure.fail(unsent);
-          } else if (mountedRef.current) {
-            keptDraft.offer(unsent);
-            failure.fail(null);
-          } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
-            keptDraft.keep(unsent.text, unsent.content, unsent.held);
-            keptDraft.setReplyTo(unsent.replyTo);
-          } else {
-            keptDraft.offer(unsent);
-          }
-          // Its moves are the store's again: held by what holds the message
-          // now, else added back to the box.
-          keptDraft?.carry(unsent.held, "failed");
-        },
-      );
+    send.mutateAsync(started === null ? request : started.request).then(
+      (response) => {
+        if (started === null) keptDraft?.carry(unsent.held, "went");
+        else settlePendingSend(started.messageId, "accepted");
+        // The send went, so it is reported whatever the box did meanwhile,
+        // unless the box is gone; the delivery is said under the box only
+        // while it is still empty.
+        if (!mountedRef.current) return;
+        const deliverySaid = onSent(response, text, unsent.content);
+        if (!emptyRef.current) return;
+        setLastDelivery(deliverySaid ? null : response.delivery);
+      },
+      (error: unknown) => {
+        if (started !== null) {
+          // Only a send the host wrote nothing of comes back: one whose
+          // row arrived is done, one that may have been written keeps its
+          // row and Retry, and one whose account signed out is gone.
+          const fate = settlePendingSend(
+            started.messageId,
+            botSendAttemptOutcome(error),
+          );
+          if (fate !== "refused") return;
+          pending?.onRefused(started);
+        }
+        // Back where the draft is, while nothing newer is there: the box,
+        // or the draft kept outside a box that is gone. Else offered back,
+        // beside the draft kept outside the box where there is one. A box
+        // that is gone leaves its owner's failure alone where its draft is
+        // kept outside it: the owner may show another conversation's box
+        // now, and the kept draft says it for this one.
+        if (mountedRef.current && emptyRef.current) {
+          putBack(unsent);
+          failure.fail(null);
+        } else if (keptDraft === null) {
+          failure.fail(unsent);
+        } else if (mountedRef.current) {
+          keptDraft.offer(unsent);
+          failure.fail(null);
+        } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
+          keptDraft.keep(unsent.text, unsent.content, unsent.held);
+          keptDraft.setReplyTo(unsent.replyTo);
+        } else {
+          keptDraft.offer(unsent);
+        }
+        // Its moves are the store's again: held by what holds the message
+        // now, else added back to the box.
+        keptDraft?.carry(unsent.held, "failed");
+      },
+    );
   };
   // The box's drop target, for a host that takes images.
   const dropTarget = takesImages
@@ -1320,6 +1352,77 @@ export type BotComposerReply = {
   readonly reach: BotReplyReach;
   /** How many times the member chose Reply for this box: each takes the focus to it. */
   readonly chosen: number;
+};
+
+/** What the box sends: its wire text, or the floor of a message of images alone, and what rides with it. */
+function boxSendRequest(input: {
+  readonly botId: string;
+  readonly conversationId: string;
+  readonly threadId: string | null;
+  readonly announcementId: string | null;
+  readonly wire: string;
+  readonly supersedes: string | null;
+  readonly attachments: ReadonlyArray<BotConversationAttachment>;
+  /** The message the send replies to (T166), where the bot's host takes it. */
+  readonly replyTo: string | null;
+}): BotConversationSendRequest {
+  const { wire, attachments, replyTo } = input;
+  return {
+    botId: input.botId,
+    conversationId: input.conversationId,
+    text: wire.length === 0 ? BOT_CONVERSATION_IMAGES_ONLY_TEXT : wire,
+    threadId: input.threadId,
+    announcementId: input.announcementId,
+    redeliver: null,
+    supersedes: input.supersedes,
+    answer: null,
+    ...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
+    ...(replyTo === null ? {} : { replyTo }),
+  };
+}
+
+/**
+ * The box's send drawn at Send (T249), where its owner draws one; `null`
+ * otherwise, and for an edit's send, which replaces a row the chat has.
+ */
+function startDrawnSend(input: {
+  readonly pending: BotComposerPending | null;
+  readonly request: BotConversationSendRequest;
+  readonly unsent: BotUnsentMessage;
+  readonly release: () => void;
+}): BotPendingSendStart | null {
+  const { pending, request, unsent } = input;
+  if (pending === null || unsent.supersedes !== null) return null;
+  const started = startPendingSend({
+    request,
+    hostId: pending.hostId,
+    senderUserId: pending.senderUserId,
+    text: unsent.text,
+    content: unsent.content,
+    images:
+      request.attachments === undefined
+        ? []
+        : collectImageAttachmentNodes(unsent.content),
+    release: input.release,
+  });
+  pending.onStart(started);
+  return started;
+}
+
+/**
+ * A box whose send is drawn at Send (T249): where the host serving the tab
+ * takes a send's nonce and someone is signed in. The owner hears the send
+ * start (`onStart`), with the ids its row and any thread it opens will have,
+ * and hears that the host wrote nothing of it (`onRefused`) as its text goes
+ * back to the box.
+ */
+export type BotComposerPending = {
+  /** The host serving the tab, which takes the send. */
+  readonly hostId: string;
+  /** Who is signed in, the send's author. */
+  readonly senderUserId: string;
+  readonly onStart: (start: BotPendingSendStart) => void;
+  readonly onRefused: (start: BotPendingSendStart) => void;
 };
 
 /** Quotes of selections, for the box to add to what it shows. */

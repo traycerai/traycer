@@ -195,6 +195,7 @@ export function Pane(): ReactElement {
       >
         <TabHostContext.Provider value={HOST_ID}>
           <BotMessageComposer
+            pending={null}
             botId={BOT_ID}
             botTitle={BOT_TITLE}
             conversationId="channel-1"
