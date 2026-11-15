@@ -258,7 +258,15 @@ async function callWithSignal(
   let response: Response;
   try {
     response = await untilAborted(
-      fetch(url, { method: init.method, headers, body: init.body, signal }),
+      fetch(url, {
+        method: init.method,
+        headers,
+        body: init.body,
+        signal,
+        // The bearer rides in a header: a redirect is answered here, as a
+        // failure, and never followed with it.
+        redirect: "manual",
+      }),
       signal,
     );
   } catch (error: unknown) {
