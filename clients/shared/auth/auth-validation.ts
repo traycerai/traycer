@@ -559,6 +559,7 @@ async function fetchUserRouteOnce(
             }
           : {}),
       },
+      redirect: "manual",
       signal,
     });
   } catch {

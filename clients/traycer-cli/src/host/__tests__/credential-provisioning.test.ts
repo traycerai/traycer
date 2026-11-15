@@ -1321,6 +1321,235 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  it("waits for an in-flight refused sign-in refresh before settling a with-budget exit", async () => {
+    const deadlineMs = 5_000;
+    const refresh = createDeferred<"rotated" | "rejected" | "network-error">();
+    const refreshStarted = createDeferred<void>();
+    const recoverySettled = createDeferred<void>();
+    const events: string[] = [];
+    let orchestrationError: unknown = null;
+
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockResolvedValueOnce({
+      kind: "sign-in-rejected",
+    });
+    mocks.revalidateCurrentContextMock.mockImplementationOnce(() => {
+      refreshStarted.resolve(undefined);
+      return refresh.promise;
+    });
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      if (lapIndex !== 1) {
+        return;
+      }
+      const options = capturedClientOptions();
+      const auth = options.auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        const recovery = auth.revalidateForReconnect();
+        void recovery.then(
+          () => {
+            events.push("recovery-settled");
+            recoverySettled.resolve(undefined);
+          },
+          () => {
+            events.push("recovery-rejected");
+            recoverySettled.resolve(undefined);
+          },
+        );
+        const exitAfterRefreshStarts = async (): Promise<void> => {
+          await refreshStarted.promise;
+          events.push("refresh-started");
+          options.onHostCredentialState("host-1", "missing");
+          events.push("lap-exit");
+          setTimeout(() => {
+            events.push("refresh-refused");
+            refresh.resolve("rejected");
+          }, 20);
+        };
+        void exitAfterRefreshStarts().catch((error: unknown) => {
+          orchestrationError = error;
+          recoverySettled.resolve(undefined);
+        });
+      }, 0);
+    };
+
+    const startedAt = Date.now();
+    const command = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs, progress: vi.fn() }),
+    );
+    const observedCommand = command.then(
+      (outcome) => ({ status: "resolved" as const, outcome }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const settled = await observedCommand;
+    if (mocks.revalidateCurrentContextMock.mock.calls.length === 1) {
+      await recoverySettled.promise;
+    }
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(orchestrationError).toBeNull();
+    expect(settled).toEqual({
+      status: "resolved",
+      outcome: { kind: "unauthorized" },
+    });
+    expect(events.indexOf("lap-exit")).toBeLessThan(
+      events.indexOf("refresh-refused"),
+    );
+    expect(events).toContain("recovery-settled");
+    expect(elapsedMs).toBeLessThan(deadlineMs);
+    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
+    expect(mocks.revalidateCurrentContextMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  }, 10_000);
+
+  it("reports unauthorized when a fatal close follows the host-token judge refusing sign-in", async () => {
+    const recoverySettled = createDeferred<void>();
+    const events: string[] = [];
+    let orchestrationError: unknown = null;
+
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockResolvedValueOnce({
+      kind: "sign-in-rejected",
+    });
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (session, lapIndex): void => {
+      if (lapIndex !== 1) {
+        return;
+      }
+      const auth = capturedClientOptions().auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        const recovery = auth.revalidateForReconnect();
+        void recovery.then(
+          () => {
+            events.push("recovery-settled");
+            session.emitStatus(
+              "closed",
+              fatalReason(
+                "host closed after the token judge refused sign-in",
+                "UNAUTHORIZED",
+              ),
+              null,
+            );
+            events.push("fatal-close");
+            recoverySettled.resolve(undefined);
+          },
+          (error: unknown) => {
+            orchestrationError = error;
+            session.emitStatus(
+              "closed",
+              fatalReason(
+                "host closed after the token judge refused sign-in",
+                "UNAUTHORIZED",
+              ),
+              null,
+            );
+            events.push("fatal-close");
+            recoverySettled.resolve(undefined);
+          },
+        );
+      }, 0);
+    };
+
+    const command = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+    const observedCommand = command.then(
+      (outcome) => ({ status: "resolved" as const, outcome }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const [settled] = await Promise.all([
+      observedCommand,
+      recoverySettled.promise,
+    ]);
+
+    expect(orchestrationError).toBeNull();
+    expect(events).toEqual(["recovery-settled", "fatal-close"]);
+    expect(settled).toEqual({
+      status: "resolved",
+      outcome: { kind: "unauthorized" },
+    });
+    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
+    expect(mocks.revalidateCurrentContextMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  }, 10_000);
+
+  it("reports a refused mint when a fatal close follows it", async () => {
+    const mint = createDeferred<{
+      readonly kind: "not-a-member";
+    }>();
+    const recoverySettled = createDeferred<void>();
+    const events: string[] = [];
+    let orchestrationError: unknown = null;
+
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockImplementationOnce(() => mint.promise);
+    mocks.onSessionCreated = (session, lapIndex): void => {
+      if (lapIndex !== 1) {
+        return;
+      }
+      const auth = capturedClientOptions().auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        const recovery = auth.revalidateForReconnect();
+        void recovery.then(
+          () => {
+            events.push("recovery-settled");
+            recoverySettled.resolve(undefined);
+          },
+          (error: unknown) => {
+            orchestrationError = error;
+            recoverySettled.resolve(undefined);
+          },
+        );
+        session.emitStatus(
+          "closed",
+          fatalReason(
+            "host closed while the token mint was pending",
+            "UNAUTHORIZED",
+          ),
+          null,
+        );
+        events.push("fatal-close");
+        setTimeout(() => {
+          events.push("mint-refused");
+          mint.resolve({ kind: "not-a-member" });
+        }, 20);
+      }, 0);
+    };
+
+    const command = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+    const observedCommand = command.then(
+      (outcome) => ({ status: "resolved" as const, outcome }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const settled = await observedCommand;
+    if (mocks.hostTokenMintMock.mock.calls.length === 1) {
+      await recoverySettled.promise;
+    }
+
+    expect(orchestrationError).toBeNull();
+    expect(events.indexOf("fatal-close")).toBeLessThan(
+      events.indexOf("mint-refused"),
+    );
+    expect(events).toContain("recovery-settled");
+    expect(settled).toEqual({
+      status: "resolved",
+      outcome: { kind: "mint-unavailable" },
+    });
+    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
+    expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+    expectCleanTeardown();
+  }, 10_000);
+
   it("reports unsupported on a fatal close whose code is INCOMPATIBLE, before any state was observed", async () => {
     // This method failed the host's version-compatibility check on the
     // handshake itself (no state ever rode an ack), which is a capability gap
