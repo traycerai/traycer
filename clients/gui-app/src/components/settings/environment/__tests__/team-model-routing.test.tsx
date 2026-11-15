@@ -109,7 +109,7 @@ const NATIVE_ROUTING_WRITES = [
 ] as const;
 
 describe("TeamModelRouting", () => {
-  it("reads the team's routing from the pool's fallback_policy item", async () => {
+  it("reads the team's routing from its cloud fallback_policy item", async () => {
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({ items: [routing(true, 9)] }),
     });

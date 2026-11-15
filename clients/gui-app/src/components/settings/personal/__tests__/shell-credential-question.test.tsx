@@ -117,6 +117,8 @@ import {
   createFakeEnvironmentCloudTransport,
   jsonEnvironmentAnswer,
 } from "../../../../../__tests__/create-fake-runner-host";
+import { authnSecretsList } from "@/components/settings/environment/__tests__/team-environment-cloud-handlers";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
@@ -141,6 +143,7 @@ const MANIFEST_MINORS: ReadonlyMap<string, number> = new Map([
 const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
 
 beforeEach(() => {
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
   useAuthStore.setState({ status: "signed-in" });
 });
 
@@ -300,7 +303,13 @@ function renderShellPage(options: {
     transport: createFakeEnvironmentCloudTransport({
       environments: () => [personalEnvironment],
       onRequest: (request) => {
-        if (!new URL(request.url).pathname.endsWith("/review")) return null;
+        const pathname = new URL(request.url).pathname;
+        if (request.method === "GET" && pathname.endsWith("/secrets")) {
+          return jsonEnvironmentAnswer(
+            authnSecretsList({ secrets: [...options.secrets], removed: [] }),
+          );
+        }
+        if (!pathname.endsWith("/review")) return null;
         const needsYou = options.review.map((entry) => ({
           type: "held",
           heldId: entry.entryId,
@@ -696,36 +705,37 @@ describe("the Variables empty state", () => {
 });
 
 describe("a variable held for the person on a Personal page", () => {
-  const heldEntry = (
-    reason: string,
-    key: string,
-    entryId: string,
-  ): EnvironmentReviewEntry => ({
-    entryId,
-    reason,
-    kind: "variable",
-    key,
-    os: "any",
-    hostId: null,
-    heldAt: 1,
-  });
-
-  it("keeps an editable row for a variable the review names, and its Review opens Secrets", async () => {
+  it("keeps a held variable editable and opens its computer's retrospective sheet from Review", async () => {
     renderShellPage({
       ...READY_HOST,
       existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
-      review: [heldEntry("needs_grant", "SHELL_INIT", "entry-2")],
+      review: [
+        {
+          entryId: "entry-2",
+          reason: "executable_entry",
+          kind: "variable",
+          key: "SHELL_INIT",
+          os: "any",
+          hostId: null,
+          heldAt: 1,
+        },
+      ],
     });
 
     const banner = await screen.findByTestId("personal-review-row");
-    expect(banner.textContent).toContain(
-      "SHELL_INIT is waiting for you: was changed without your confirmation.",
-    );
+    expect(
+      within(banner).getByText(
+        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+      ),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Value for SHELL_INIT")).toBeTruthy();
     expect(screen.queryByTestId("env-held-row")).toBeNull();
 
     fireEvent.click(within(banner).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      open: true,
+      target: { hostId: HOST_ID, hostName: "host-a" },
+    });
   });
 });
 

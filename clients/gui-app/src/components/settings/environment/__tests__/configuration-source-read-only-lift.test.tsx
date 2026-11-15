@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -50,26 +50,28 @@ const PERSONAL: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-function team(role: string): EnvironmentDescriptorV11 {
+function team(
+  role: EnvironmentDescriptorV11["effectiveRole"] | null,
+): EnvironmentDescriptorV11 {
   return {
     environmentId: "env-team",
     ownerKind: "organization",
     ownerId: "team-a",
     roomId: "room-team",
     label: "Acme",
-    effectiveRole: role as EnvironmentDescriptorV11["effectiveRole"],
+    effectiveRole: role ?? "viewer",
     kind: "team",
     hostCount: 1,
-    providerHandle: "acme",
+    providerHandle: role === null ? null : "acme",
   };
 }
 
-const TEAM_COMPUTER: HostDirectoryEntry = {
+const TEAM_COMPUTER: RemoteHostDirectoryEntry = {
   ...remoteEntry("host-team", null),
   owner: { kind: "team", id: "team-a", name: "Acme" },
 };
 
-const OTHER_COMPUTER: HostDirectoryEntry = {
+const OTHER_COMPUTER: RemoteHostDirectoryEntry = {
   ...remoteEntry("host-personal", null),
   owner: { kind: "user", id: "user-me" },
 };
@@ -140,7 +142,7 @@ function PermissionProbe() {
 function mountBoundary(options: {
   readonly target: CloudConfigurationTarget;
   readonly environments: readonly EnvironmentDescriptorV11[];
-  readonly activeHost: HostDirectoryEntry;
+  readonly activeHost: RemoteHostDirectoryEntry;
 }): void {
   negotiateMethodsOn(options.activeHost.hostId, {
     "environment.configuration.guide.set": VERSION_1,
@@ -188,7 +190,7 @@ describe("named team settings read the authn role on either selected computer", 
     async ({ role, canEdit, activeHost }) => {
       mountBoundary({
         target: { kind: "team", environmentId: "env-team" },
-        environments: [PERSONAL, team(role)],
+        environments: [PERSONAL, team(role === "unknown-role" ? null : role)],
         activeHost,
       });
 
