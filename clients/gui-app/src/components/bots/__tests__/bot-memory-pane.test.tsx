@@ -560,11 +560,13 @@ describe("what the bot knows, in the rail", () => {
     render(<MountedKnowingChannel />);
     const pane = await openPane(user, MEMORY);
 
-    expect(within(pane).getByRole("meter").getAttribute("aria-valuenow")).toBe(
-      "4",
-    );
+    expect(
+      within(pane)
+        .getByRole("meter", { name: "Release Bot's memory" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("4");
     expect(within(pane).getByTestId("bot-memory-meter-line").textContent).toBe(
-      "Release Bot's own memories: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
+      "Release Bot's memory: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
     );
 
     sendMemory({
@@ -573,13 +575,15 @@ describe("what the bot knows, in the rail", () => {
     });
     await waitFor(() =>
       expect(
-        within(pane).getByRole("meter").getAttribute("aria-valuenow"),
+        within(pane)
+          .getByRole("meter", { name: "Release Bot's memory" })
+          .getAttribute("aria-valuenow"),
       ).toBe("45"),
     );
     expect(
       within(pane).getByTestId("bot-memory-meter-line").textContent,
     ).toMatch(
-      /^Release Bot's own memories: 3, about half full \(3,600 of 8,000 characters\)\. /,
+      /^Release Bot's memory: 3, about half full \(3,600 of 8,000 characters\)\. /,
     );
   });
 

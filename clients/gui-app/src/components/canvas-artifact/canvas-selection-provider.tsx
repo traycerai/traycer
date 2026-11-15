@@ -7,9 +7,13 @@ import {
 } from "@/components/comments/anchored-draft-popover";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
-import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import {
+  useAnchoredDraftStore,
+  yieldOpenDraft,
+} from "@/stores/comments/anchored-draft-store";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import { fullscreenSurface } from "@/lib/sandbox/overlay-owner";
 import {
   CanvasCommentIndex,
   CanvasCommentPins,
@@ -53,6 +57,15 @@ import {
 import { CanvasBoardPanel } from "./canvas-board-panel";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
 import { frameLocator } from "./canvas-structure-identity";
+
+/**
+ * The selection owners whose pane has focus. Every one of them hears each
+ * Escape, and the one that made the window's selection is the one to clear it.
+ * Each owner is in it only while its Escape listener is attached with its pane
+ * focused: the listener's effect removes it when the pane loses focus and when
+ * the provider unmounts.
+ */
+const focusedSelectionOwners = new Set<symbol>();
 
 function sameSelectedBoard(
   selection: CanvasSelection | null,
@@ -262,13 +275,22 @@ export function CanvasSelectionProvider(
   const escapeSelection = useCallback((): void => {
     registry.view?.setCommenting(false);
     requestSequence.current += 1;
+    // Another view of the same artifact (a tile beside a chat card) keeps the
+    // selection it made; a selection nobody owns, such as a revealed comment's
+    // element, is this view's to clear.
     const state = useCanvasSelectionStore.getState();
     const hadElement =
-      state.selection?.artifactId === artifactId ||
+      (state.selection?.artifactId === artifactId &&
+        (state.selectionOwner === selectionOwner ||
+          state.selectionOwner === null)) ||
       state.pendingPick?.owner === selectionOwner;
     state.retire(selectionOwner, null);
-    if (useCanvasSelectionStore.getState().selection?.artifactId === artifactId)
-      useCanvasSelectionStore.getState().clear();
+    const left = useCanvasSelectionStore.getState();
+    if (
+      left.selection?.artifactId === artifactId &&
+      left.selectionOwner === null
+    )
+      left.clear();
     if (!hadElement) {
       registry.view?.clearNodeSelection();
       registry.selectBoard(null);
@@ -285,7 +307,7 @@ export function CanvasSelectionProvider(
         parent?.onCanvasView?.(view);
       },
       onPaneComment: (point) => {
-        if (!commentsEnabled) return;
+        if (!commentsEnabled || !yieldOpenDraft(epicId, false)) return;
         useCommentThreadsStore.getState().setActiveThread(epicId, null);
         useAnchoredDraftStore.getState().setDraft(epicId, {
           draftId: crypto.randomUUID(),
@@ -600,6 +622,7 @@ export function CanvasSelectionProvider(
         void registry.get(previousPath).bridge?.setTextSelectionTarget(null);
     };
   }, [artifactId, registry]);
+  const root = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const escape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || event.defaultPrevented || !paneFocused)
@@ -608,11 +631,27 @@ export function CanvasSelectionProvider(
         useAnchoredDraftStore.getState().byEpicId[epicId]?.tileId === draftOwner
       )
         return;
+      // A surface raised over the task owns the key, its draft included: a
+      // view behind it, even one in the same pane, must not consume it first.
+      const raised = fullscreenSurface();
+      if (raised !== null && root.current?.contains(raised) !== true) return;
+      // A view that keeps another's selection must not take the key from the
+      // view that made it, when both hear it from one pane.
+      const holder = useCanvasSelectionStore.getState().selectionOwner;
+      if (
+        raised === null &&
+        holder !== null &&
+        holder !== selectionOwner &&
+        focusedSelectionOwners.has(holder)
+      )
+        return;
       escapeSelection();
       event.preventDefault();
     };
+    if (paneFocused) focusedSelectionOwners.add(selectionOwner);
     window.addEventListener("keydown", escape);
     return () => {
+      focusedSelectionOwners.delete(selectionOwner);
       requestSequence.current += 1;
       window.removeEventListener("keydown", escape);
       useCanvasSelectionStore.getState().retire(selectionOwner, null);
@@ -620,7 +659,7 @@ export function CanvasSelectionProvider(
   }, [selectionOwner, paneFocused, escapeSelection, epicId, draftOwner]);
   return (
     <CanvasFrameEventsContext value={events}>
-      <div className="relative h-full w-full">
+      <div ref={root} className="relative h-full w-full">
         {props.viewOnly === true || artifactType !== "canvas" ? (
           // Paste edits boards; an html page has none, so it takes no
           // clipboard boundary.
