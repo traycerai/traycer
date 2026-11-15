@@ -213,6 +213,7 @@ interface TeamAuthRuntime {
 
 const activeTeamAuthRuntimes: TeamAuthRuntime[] = [];
 let restoreTeamFetch: (() => void) | null = null;
+let teamIntentsFetch: typeof fetch | null = null;
 
 function installTeamFetch(): void {
   if (restoreTeamFetch !== null) return;
@@ -299,6 +300,11 @@ function teamFetch(
   init: RequestInit | undefined,
 ): Promise<Response> {
   const url = teamFetchUrl(input);
+  if (url.pathname.endsWith("/profile-records/intents")) {
+    return teamIntentsFetch === null
+      ? Promise.resolve(new Response(null, { status: 500 }))
+      : teamIntentsFetch(input, init);
+  }
   const method = init?.method ?? "GET";
   const headers = new Headers(init?.headers);
   const body = typeof init?.body === "string" ? init.body : null;
@@ -445,6 +451,17 @@ async function startVerifiedTeamAuth(harness: TeamAuthRuntime): Promise<void> {
     },
   );
   await harness.auth.start();
+}
+
+export async function createVerifiedTeamAuthService(
+  queryClient: QueryClient,
+  intentsFetch: typeof fetch | null,
+): Promise<AuthService> {
+  teamIntentsFetch = intentsFetch;
+  installTeamFetch();
+  const harness = buildTeamAuthRuntime(queryClient);
+  await startVerifiedTeamAuth(harness);
+  return harness.auth;
 }
 
 export function mountTeamPage(
@@ -621,6 +638,7 @@ export function resetTeamPageHarness(): void {
   }
   restoreTeamFetch?.();
   restoreTeamFetch = null;
+  teamIntentsFetch = null;
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;

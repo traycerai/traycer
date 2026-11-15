@@ -1,14 +1,17 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import {
   cleanup,
+  act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import type { ExternalToast } from "sonner";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -32,9 +35,8 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
-import { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
@@ -47,6 +49,17 @@ import {
   apiKeyState,
   storedApiKeyState,
 } from "./provider-api-key-section-fixture";
+import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
+import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
+import {
+  createVerifiedTeamAuthService,
+  resetTeamPageHarness,
+  teamProviderKeyHttpBoundary,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import {
+  installSignInRequestFetchHarness,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 type ToastErrorCall = (
   message: ReactNode,
@@ -101,9 +114,8 @@ vi.mock("@/lib/analytics", async (importOriginal) => {
 });
 
 const API_KEY = "synthetic-provider-key";
-const ENVIRONMENT_ID = "env-synthetic";
+const ENVIRONMENT_ID = "env-a";
 const EXPECTED_ENVIRONMENT_ID = "env-expected";
-const PROFILE_ID = "profile-synthetic";
 const STATE = providerMutationCliStateSchemaV21.parse({
   ...hostV115MutationV20Fixtures.minimalStatesByProviderId.codex,
   profiles: [],
@@ -117,13 +129,28 @@ const BEGIN_RESPONSE = providersBeginApiKeyChangeResponseSchema.parse({
 interface Rig {
   readonly client: HostClient<typeof hostRpcRegistry>;
   readonly context: RequestContext;
-  readonly authService: AuthService;
   readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
-  readonly recordActions: string[];
 }
 
 const rigs: Rig[] = [];
 const queryClients: QueryClient[] = [];
+let authQueryClient: QueryClient | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+beforeEach(async () => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authQueryClient = createAppQueryClient();
+  queryClients.push(authQueryClient);
+  const signInFetch = activeSignInFetch;
+  const authService = await createVerifiedTeamAuthService(
+    authQueryClient,
+    signInFetch.fetchMock,
+  );
+  mocks.authService.mockReturnValue(authService);
+  teamProviderKeyHttpBoundary.matchesKey = (key) => key === API_KEY;
+  teamProviderKeyHttpBoundary.status = 200;
+  teamProviderKeyHttpBoundary.calls.length = 0;
+});
 
 function makeRig(
   result:
@@ -177,39 +204,66 @@ function makeRig(
   client.setRequestContext(context);
   const requester = client.createRequesterForHostId(mockLocalHostEntry.hostId);
   mocks.hostClient.mockReturnValue(requester);
-  const authService = new AuthService({
-    runnerHost: new MockRunnerHost({
-      signInUrl:
-        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    }),
-  });
-  const recordActions: string[] = [];
-  vi.spyOn(authService, "changeProviderKeyRecord").mockImplementation(
-    (_environmentId, providerId, change) => {
-      recordActions.push(change.action);
-      return Promise.resolve({
-        kind: "record",
-        record: {
-          profileId: PROFILE_ID,
-          providerId,
-          state: change.action === "set" ? "live" : "removed",
-          signInNumber: "3",
-          recordRevision: "5",
-          personIntentNumber: "2",
-        },
-      });
-    },
-  );
-  mocks.authService.mockReturnValue(authService);
-  const rig = { client, context, authService, messenger, recordActions };
+  const rig = { client, context, messenger };
   rigs.push(rig);
   return rig;
+}
+
+function hasProviderKeyRequest(
+  action: "set" | "clear",
+  keyMatches: boolean | null,
+): boolean {
+  const request = teamProviderKeyHttpBoundary.calls.at(0);
+  return (
+    teamProviderKeyHttpBoundary.calls.length === 1 &&
+    request !== undefined &&
+    request.action === action &&
+    request.routeMatches &&
+    request.authorized &&
+    request.keyMatches === keyMatches
+  );
+}
+
+function retainedObjectContainsKey(value: unknown): boolean {
+  const seen = new WeakSet<object>();
+  function contains(current: unknown): boolean {
+    if (typeof current === "string") return current.includes(API_KEY);
+    if (typeof current !== "object" || current === null) return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    let values: readonly unknown[] = [];
+    if (Array.isArray(current)) values = current;
+    else if (isRecord(current)) values = Object.values(current);
+    return values.some(contains);
+  }
+  return contains(value);
+}
+
+function keyInputReader(input: { current: string | null }): () => string {
+  return () => takeProviderApiKeyInput(input);
+}
+
+function clearKeyInput(input: { current: string | null }): () => void {
+  return () => {
+    input.current = null;
+  };
+}
+
+function mutationStatesContainKey(queryClient: QueryClient): boolean {
+  return queryClient
+    .getMutationCache()
+    .getAll()
+    .some((mutation) => retainedObjectContainsKey(mutation.state));
+}
+
+function hostMethodCalls(rig: Rig, method: string): number {
+  return rig.messenger.calls.filter((call) => call.method === method).length;
+}
+
+function withQueryClient(queryClient: QueryClient) {
+  return ({ children }: { readonly children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
 }
 
 function SettingsHarness(props: {
@@ -234,9 +288,7 @@ function renderSettings(
   expectedEnvironmentId: string | null,
   environmentName: string | null,
 ): QueryClient {
-  const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
-  });
+  const queryClient = createAppQueryClient();
   queryClients.push(queryClient);
   render(
     <SettingsHarness
@@ -280,8 +332,11 @@ afterEach(() => {
   __resetAppLocalNotificationsStoreForTests();
   mocks.mobileApp = false;
   mocks.mobilePlatform = "ios";
+  resetTeamPageHarness();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authQueryClient = null;
   for (const rig of rigs.splice(0)) {
-    rig.authService.dispose();
     rig.context.release();
     rig.client.dispose();
   }
@@ -289,6 +344,108 @@ afterEach(() => {
 });
 
 describe("provider API-key change Settings flow", () => {
+  it.each([
+    [200, "success"],
+    [403, "error"],
+  ] as const)(
+    "uses the real authenticated HTTP boundary and retains no key after %s",
+    async (status, expectedMutationStatus) => {
+      const rig = makeRig("installed", null);
+      const queryClient = authQueryClient;
+      if (queryClient === null) throw new Error("Query client was not created");
+      teamProviderKeyHttpBoundary.status = status;
+      const input: { current: string | null } = { current: API_KEY };
+      const { result } = renderHook(
+        () =>
+          useProvidersSetApiKey(
+            null,
+            keyInputReader(input),
+            clearKeyInput(input),
+          ),
+        { wrapper: withQueryClient(queryClient) },
+      );
+
+      act(() => result.current.mutate({ providerId: "cursor" }));
+
+      await waitFor(() =>
+        expect(result.current.status).toBe(expectedMutationStatus),
+      );
+      expect(hasProviderKeyRequest("set", true)).toBe(true);
+      const mutations = queryClient.getMutationCache().getAll();
+      const retainedMutation = mutations.at(-1);
+      if (retainedMutation === undefined)
+        throw new Error("Provider key mutation was not retained");
+      const mutationFn = retainedMutation.options.mutationFn;
+      if (mutationFn === undefined)
+        throw new Error("Provider key mutation has no mutation function");
+      expect(
+        mutations.length > 0 &&
+          !mutationStatesContainKey(queryClient) &&
+          !retainedObjectContainsKey(result.current),
+      ).toBe(true);
+      expect(input.current === null).toBe(true);
+
+      const beginCount = hostMethodCalls(rig, "providers.beginApiKeyChange");
+      const httpCount = teamProviderKeyHttpBoundary.calls.length;
+      let emptiedInputRefused = false;
+      try {
+        await mutationFn(
+          { providerId: "cursor" },
+          {
+            client: queryClient,
+            meta: retainedMutation.options.meta,
+            mutationKey: retainedMutation.options.mutationKey ?? [],
+          },
+        );
+      } catch (error) {
+        emptiedInputRefused =
+          error instanceof Error &&
+          error.message === "Provider key input is unavailable";
+      }
+      expect(
+        emptiedInputRefused &&
+          hostMethodCalls(rig, "providers.beginApiKeyChange") === beginCount &&
+          teamProviderKeyHttpBoundary.calls.length === httpCount &&
+          teamProviderKeyHttpBoundary.calls.every(
+            (call) => call.keyMatches === true,
+          ),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps a failed draft and creates a fresh authenticated request on repress", async () => {
+    makeRig("installed", null);
+    teamProviderKeyHttpBoundary.status = 403;
+    const queryClient = renderSettings(false, ENVIRONMENT_ID, "Personal");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(apiKeyDraft() === API_KEY).toBe(true);
+      expect(teamProviderKeyHttpBoundary.calls.length).toBe(1);
+    });
+    const failedMutations = queryClient.getMutationCache().getAll();
+    const failedMutation = failedMutations.at(-1);
+    if (failedMutation === undefined)
+      throw new Error("Failed provider key mutation was not retained");
+    expect(
+      failedMutations.length > 0 &&
+        !mutationStatesContainKey(queryClient) &&
+        !retainedObjectContainsKey(failedMutation.state),
+    ).toBe(true);
+
+    teamProviderKeyHttpBoundary.status = 200;
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(apiKeyDraft()).toBe(""));
+    expect(
+      teamProviderKeyHttpBoundary.calls.length === 2 &&
+        teamProviderKeyHttpBoundary.calls.every(
+          (call) => call.action === "set" && call.keyMatches === true,
+        ),
+    ).toBe(true);
+  });
+
   it.each(["installed", "unchanged"] as const)(
     "keeps %s silent and clears the submitted draft",
     async (result) => {
@@ -406,7 +563,7 @@ describe("provider API-key change Settings flow", () => {
       ).toBe(true);
     });
     expect(apiKeyDraft() === API_KEY).toBe(true);
-    expect(rig.recordActions.length === 0).toBe(true);
+    expect(teamProviderKeyHttpBoundary.calls.length === 0).toBe(true);
     expect(
       rig.messenger.calls.map((call) => call.method).join(",") ===
         "providers.beginApiKeyChange",
