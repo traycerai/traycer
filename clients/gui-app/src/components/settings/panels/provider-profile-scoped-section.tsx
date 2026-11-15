@@ -424,7 +424,7 @@ export function ProviderProfileScopedSection(
                       state.enabled,
                       providerLabel,
                       profile,
-                      { profiles, offersSignIns },
+                      profiles,
                     ),
                   onSetEnabled: onSetProfileEnabled,
                 }

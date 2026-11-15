@@ -28,7 +28,13 @@ import type {
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import type { ProfileRecordEnablementResult } from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -179,6 +185,12 @@ type SetEnabledVariables = RequestOfMethod<
   "providers.setEnabled"
 >;
 type SetEnabledMutate = (variables: SetEnabledVariables) => void;
+type SetProfileRecordEnabled = (
+  environmentId: string,
+  harnessId: string,
+  request: { readonly profileId: string; readonly enabled: boolean },
+  callerSignal: AbortSignal | null,
+) => Promise<ProfileRecordEnablementResult>;
 
 type CancelLoginVariables = RequestOfMethod<
   HostRpcRegistry,
@@ -248,6 +260,7 @@ const providerMocks = vi.hoisted(() => {
     },
     liveList: false,
     liveClient: null as HostClient<HostRpcRegistry> | null,
+    useRealProfileEnablementMutation: false,
     realStartLogin: false,
     signInRecordingService: {
       recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
@@ -257,6 +270,9 @@ const providerMocks = vi.hoisted(() => {
     removeCustomPathMutate: vi.fn(),
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
     setProfileEnabledMutate: vi.fn(),
+    setProfileRecordEnabled: vi.fn<SetProfileRecordEnabled>(() =>
+      Promise.resolve({ kind: "ok" }),
+    ),
     refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
     setApiKeyMutate: vi.fn(),
     clearApiKeyMutate: vi.fn(),
@@ -540,16 +556,35 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   }),
 }));
 
-// The panel's profile controls use a host-scoped TanStack mutation in
-// production. Keep this suite focused on rendering and the existing provider
-// mutations while the dedicated hook suite covers cache behavior.
-vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
-  useProvidersSetProfileEnabledForClient: () => ({
-    mutate: providerMocks.setProfileEnabledMutate,
-    isPending: false,
-  }),
-  useProviderProfileEnablementPending: () => () => false,
-}));
+// Most panel cases stub the local mutation. Account-record integration cases
+// opt into its real host request against the fake computer below.
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-set-profile-enabled-mutation")
+      >();
+    return {
+      useProvidersSetProfileEnabledForClient: (
+        client: HostClient<HostRpcRegistry> | null,
+        providerId: string | null,
+      ) => {
+        const mutation = actual.useProvidersSetProfileEnabledForClient(
+          client,
+          providerId,
+        );
+        return providerMocks.useRealProfileEnablementMutation
+          ? mutation
+          : {
+              mutate: providerMocks.setProfileEnabledMutate,
+              isPending: false,
+            };
+      },
+      useProviderProfileEnablementPending: () => () => false,
+    };
+  },
+);
 
 vi.mock(
   "@/hooks/providers/use-providers-refresh-profile-status-mutation",
@@ -931,7 +966,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useHostClient: () => providerMocks.liveClient,
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
-    useAuthService: () => providerMocks.signInRecordingService,
+    useAuthService: () => ({
+      ...providerMocks.signInRecordingService,
+      setProfileRecordEnabled: providerMocks.setProfileRecordEnabled,
+    }),
   };
 });
 
@@ -1260,6 +1298,7 @@ import {
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import { toast } from "sonner";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -1481,6 +1520,148 @@ function profileWithAccent(
     duplicateOfProfileId: input.duplicateOfProfileId,
     ambientDriftNotice: input.ambientDriftNotice,
     accentColor,
+  };
+}
+
+interface AccountEnablementPageOptions {
+  readonly hostId: string;
+  readonly providerEnabled: boolean;
+  readonly profile: ProviderProfile;
+  readonly additionalProfiles: readonly ProviderProfile[];
+  readonly offersSignIns: boolean | undefined;
+  readonly providersListMinor: number;
+  readonly statusVersion: {
+    readonly major: number;
+    readonly minor: number;
+  } | null;
+  readonly status: () => Promise<EnvironmentStatusResponseV12>;
+  readonly binding: () => Promise<EnvironmentHostReadResponseV11>;
+}
+
+function accountProfile(
+  profileId: string,
+  label: string,
+  enabled: boolean,
+  aliases: readonly string[] | undefined,
+): ProviderProfile {
+  const base = profile({
+    profileId,
+    kind: "managed",
+    label,
+    email: "work@example.test",
+    tier: "Pro",
+    authStatus: "authenticated",
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+  });
+  return aliases === undefined
+    ? { ...base, enabled }
+    : { ...base, enabled, aliases: [...aliases] };
+}
+
+function accountEnablementBinding(
+  hostId: string,
+  environmentId: string,
+): EnvironmentHostReadResponseV11 {
+  return {
+    hostId,
+    environment: {
+      environmentId,
+      ownerKind: "user",
+      ownerId: "test-owner",
+      roomId: "test-room",
+      label: "Personal",
+    },
+    explicit: false,
+    enrolledByUserId: null,
+    canUnbind: false,
+    sharingGeneration: null,
+  };
+}
+
+function renderAccountEnablementPage(options: AccountEnablementPageOptions) {
+  let listCalls = 0;
+  const bindingQueryKey = hostQueryKeys.method<
+    HostRpcRegistry,
+    "environment.host.read"
+  >(options.hostId, "environment.host.read", {});
+  const statusQueryKey = hostQueryKeys.method<
+    HostRpcRegistry,
+    "environment.status"
+  >(options.hostId, "environment.status", {});
+  const provider = providerState({
+    providerId: "claude-code",
+    selected: { kind: "bundled" },
+    candidates: [],
+    envOverrides: [],
+    nativeCapabilities: FULL_TABS,
+    profiles: [options.profile, ...options.additionalProfiles],
+  });
+  const scopedProvider = options.providerEnabled
+    ? provider
+    : { ...provider, enabled: false };
+  const { client, messenger } = buildEnvironmentClient({
+    hostId: options.hostId,
+    handlers: {
+      "providers.list": () => {
+        listCalls += 1;
+        return {
+          providers: [scopedProvider],
+          native: null,
+          ...(options.offersSignIns === undefined
+            ? {}
+            : { offersSignIns: options.offersSignIns }),
+        };
+      },
+      "environment.status": options.status,
+      "environment.host.read": options.binding,
+      "providers.setProfileEnabled": (request) => ({
+        profileId: request.profileId,
+        enabled: request.enabled,
+      }),
+    },
+  });
+  providerMocks.liveList = true;
+  providerMocks.liveClient = client;
+  hostScopeMocks.hostId = options.hostId;
+  hostScopeMocks.client = { getActiveHostId: () => options.hostId };
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: options.hostId, hostName: "dev-box" },
+  });
+  recordNegotiatedHostManifest(
+    options.hostId,
+    options.statusVersion === null
+      ? {
+          "providers.list": { major: 10, minor: options.providersListMinor },
+          "providers.setProfileEnabled": { major: 1, minor: 0 },
+          "environment.host.read": { major: 1, minor: 1 },
+        }
+      : {
+          "providers.list": { major: 10, minor: options.providersListMinor },
+          "providers.setProfileEnabled": { major: 1, minor: 0 },
+          "environment.status": options.statusVersion,
+          "environment.host.read": { major: 1, minor: 1 },
+        },
+  );
+  const pageQueryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  rtlRender(
+    <QueryClientProvider client={pageQueryClient}>
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  return {
+    messenger,
+    pageQueryClient,
+    bindingQueryKey,
+    statusQueryKey,
+    listCalls: () => listCalls,
   };
 }
 
@@ -1765,6 +1946,12 @@ function openProfilesTab(): void {
   selectTab("Profiles & Limits");
 }
 
+function expectProfileEnablementToast(message: string): void {
+  expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toContain(
+    message,
+  );
+}
+
 /**
  * The provider header and tab rail are PINNED rows; only the active tab's body
  * scrolls.
@@ -1945,6 +2132,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 beforeEach(() => {
   providerMocks.liveList = false;
   providerMocks.liveClient = null;
+  providerMocks.useRealProfileEnablementMutation = false;
   providerMocks.realStartLogin = false;
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
@@ -1958,6 +2146,504 @@ afterEach(() => {
 });
 
 describe("<ProvidersSettingsPanel />", () => {
+  it("routes the picker trigger and row switches for a last-enabled record through the person's session", async () => {
+    const recordProfile = accountProfile("record-profile", "Work", true, []);
+    const fixture = renderAccountEnablementPage({
+      hostId: "record-settings-host",
+      providerEnabled: true,
+      profile: recordProfile,
+      additionalProfiles: [],
+      offersSignIns: true,
+      providersListMinor: 12,
+      statusVersion: { major: 1, minor: 1 },
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding(
+            "record-settings-host",
+            "record-environment",
+          ),
+        ),
+    });
+    const triggerButton = await screen.findByRole("button", {
+      name: "Claude Code profile: Work",
+    });
+    const triggerContainer = triggerButton.parentElement;
+    if (triggerContainer === null) {
+      throw new Error(
+        "Expected the profile picker to contain its trigger switch.",
+      );
+    }
+    const triggerSwitch = within(triggerContainer).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    const rowSwitch = within(
+      screen.getByRole("group", { name: "Work profile controls" }),
+    ).getByRole("switch", { name: "Allow agents to use Work" });
+    expect(triggerSwitch).toHaveProperty("disabled", false);
+    expect(triggerSwitch.getAttribute("aria-disabled")).toBeNull();
+    await waitFor(() =>
+      expect(
+        fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)?.status,
+      ).toBe("success"),
+    );
+    expect(
+      fixture.pageQueryClient.getQueryData(fixture.bindingQueryKey),
+    ).toEqual(
+      accountEnablementBinding("record-settings-host", "record-environment"),
+    );
+
+    fireEvent.click(triggerSwitch);
+    await waitFor(() =>
+      expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() => expect(fixture.listCalls()).toBe(2));
+    expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledWith(
+      "record-environment",
+      "claude",
+      { profileId: "record-profile", enabled: false },
+      expect.any(AbortSignal),
+    );
+
+    expect(rowSwitch).toHaveProperty("disabled", false);
+    expect(rowSwitch.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(rowSwitch);
+    await waitFor(() =>
+      expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(fixture.listCalls()).toBe(3));
+    expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "providers.setProfileEnabled",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("routes the Manage switch for a record through the person's session", async () => {
+    const fixture = renderAccountEnablementPage({
+      hostId: "record-manage-host",
+      providerEnabled: true,
+      profile: accountProfile("record-profile", "Work", true, []),
+      additionalProfiles: [],
+      offersSignIns: true,
+      providersListMinor: 12,
+      statusVersion: { major: 1, minor: 1 },
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding("record-manage-host", "record-environment"),
+        ),
+    });
+    await waitFor(() =>
+      expect(
+        fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)?.status,
+      ).toBe("success"),
+    );
+    expect(
+      fixture.pageQueryClient.getQueryData(fixture.bindingQueryKey),
+    ).toEqual(
+      accountEnablementBinding("record-manage-host", "record-environment"),
+    );
+    await screen.findByRole("button", { name: "Manage profile" });
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit profile" });
+    const manageSwitch = within(dialog).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(manageSwitch).toHaveProperty("disabled", false);
+    expect(manageSwitch.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(manageSwitch);
+
+    await waitFor(() =>
+      expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledWith(
+        "record-environment",
+        "claude",
+        { profileId: "record-profile", enabled: false },
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() => expect(fixture.listCalls()).toBe(2));
+    expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a no-alias profile on the existing host profile write", async () => {
+    providerMocks.useRealProfileEnablementMutation = true;
+    const fixture = renderAccountEnablementPage({
+      hostId: "local-profile-host",
+      providerEnabled: true,
+      profile: accountProfile("record-profile", "Work", true, undefined),
+      additionalProfiles: [
+        accountProfile("other-enabled-profile", "Other", true, undefined),
+      ],
+      offersSignIns: true,
+      providersListMinor: 12,
+      statusVersion: null,
+      status: () =>
+        Promise.reject(new Error("Unexpected environment status request")),
+      binding: () =>
+        Promise.reject(new Error("Unexpected environment binding request")),
+    });
+    const triggerButton = await screen.findByRole("button", {
+      name: "Claude Code profile: Work",
+    });
+    const triggerContainer = triggerButton.parentElement;
+    if (triggerContainer === null) {
+      throw new Error(
+        "Expected the profile picker to contain its trigger switch.",
+      );
+    }
+    const triggerSwitch = within(triggerContainer).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    fireEvent.click(triggerSwitch);
+
+    await waitFor(() =>
+      expect(
+        fixture.messenger.calls.filter(
+          (call) => call.method === "providers.setProfileEnabled",
+        ),
+      ).toHaveLength(1),
+    );
+    const hostWrite = fixture.messenger.calls.find(
+      (call) => call.method === "providers.setProfileEnabled",
+    );
+    expect(hostWrite?.params).toEqual({
+      providerId: "claude-code",
+      profileId: "record-profile",
+      enabled: false,
+    });
+    expect(providerMocks.liveClient?.getActiveHostId()).toBe(
+      "local-profile-host",
+    );
+    expect(providerMocks.setProfileRecordEnabled).not.toHaveBeenCalled();
+    expect(
+      fixture.messenger.calls.filter(
+        (call) =>
+          call.method === "environment.status" ||
+          call.method === "environment.host.read",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("routes an aliases row on a 10.11 computer through the person's session", async () => {
+    const fixture = renderAccountEnablementPage({
+      hostId: "record-legacy-host",
+      providerEnabled: true,
+      profile: accountProfile("record-profile", "Work", true, []),
+      additionalProfiles: [],
+      offersSignIns: undefined,
+      providersListMinor: 11,
+      statusVersion: { major: 1, minor: 1 },
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding("record-legacy-host", "record-environment"),
+        ),
+    });
+    const triggerButton = await screen.findByRole("button", {
+      name: "Claude Code profile: Work",
+    });
+    const triggerContainer = triggerButton.parentElement;
+    if (triggerContainer === null) {
+      throw new Error(
+        "Expected the profile picker to contain its trigger switch.",
+      );
+    }
+    const triggerSwitch = within(triggerContainer).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    await waitFor(() =>
+      expect(
+        fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)?.status,
+      ).toBe("success"),
+    );
+    expect(
+      fixture.pageQueryClient.getQueryData(fixture.bindingQueryKey),
+    ).toEqual(
+      accountEnablementBinding("record-legacy-host", "record-environment"),
+    );
+    fireEvent.click(triggerSwitch);
+
+    await waitFor(() =>
+      expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledWith(
+        "record-environment",
+        "claude",
+        { profileId: "record-profile", enabled: false },
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() => expect(fixture.listCalls()).toBe(2));
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "providers.setProfileEnabled",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("keeps an enabled record switch held with the provider-off hint", async () => {
+    const fixture = renderAccountEnablementPage({
+      hostId: "record-provider-off-host",
+      providerEnabled: false,
+      profile: accountProfile("record-profile", "Work", true, []),
+      additionalProfiles: [],
+      offersSignIns: true,
+      providersListMinor: 12,
+      statusVersion: { major: 1, minor: 1 },
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding(
+            "record-provider-off-host",
+            "record-environment",
+          ),
+        ),
+    });
+    const triggerButton = await screen.findByRole("button", {
+      name: "Claude Code profile: Work",
+    });
+    const triggerContainer = triggerButton.parentElement;
+    if (triggerContainer === null) {
+      throw new Error(
+        "Expected the profile picker to contain its trigger switch.",
+      );
+    }
+    const triggerSwitch = within(triggerContainer).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    const rowSwitch = within(
+      screen.getByRole("group", { name: "Work profile controls" }),
+    ).getByRole("switch", { name: "Allow agents to use Work" });
+    await waitFor(() =>
+      expect(
+        fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)?.status,
+      ).toBe("success"),
+    );
+    for (const blockedSwitch of [triggerSwitch, rowSwitch]) {
+      expect(blockedSwitch.getAttribute("aria-disabled")).toBe("true");
+      expect(tooltipTextNear(blockedSwitch)).toBe(
+        "Claude Code is turned off. Turn it on to change its profiles.",
+      );
+      fireEvent.click(blockedSwitch);
+    }
+    expect(providerMocks.setProfileRecordEnabled).not.toHaveBeenCalled();
+    expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "providers.setProfileEnabled",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      kind: "forbidden" as const,
+      toast: "You don't have permission to do that.",
+    },
+    {
+      kind: "conflict" as const,
+      toast: "This connection changed. Refresh and try again.",
+    },
+  ])(
+    "shows the $kind toast and rereads once after the account write",
+    async ({ kind, toast: message }) => {
+      providerMocks.setProfileRecordEnabled.mockResolvedValue({ kind });
+      const fixture = renderAccountEnablementPage({
+        hostId: `record-${kind}-host`,
+        providerEnabled: true,
+        profile: accountProfile("record-profile", "Work", true, []),
+        additionalProfiles: [],
+        offersSignIns: true,
+        providersListMinor: 12,
+        statusVersion: { major: 1, minor: 1 },
+        status: () =>
+          Promise.resolve(
+            environmentStatusFixture({ principal: { kind: "personal" } }),
+          ),
+        binding: () =>
+          Promise.resolve(
+            accountEnablementBinding(
+              `record-${kind}-host`,
+              "record-environment",
+            ),
+          ),
+      });
+      const triggerButton = await screen.findByRole("button", {
+        name: "Claude Code profile: Work",
+      });
+      const triggerContainer = triggerButton.parentElement;
+      if (triggerContainer === null) {
+        throw new Error(
+          "Expected the profile picker to contain its trigger switch.",
+        );
+      }
+      const triggerSwitch = within(triggerContainer).getByRole("switch", {
+        name: "Allow agents to use Work",
+      });
+      await waitFor(() =>
+        expect(
+          fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)
+            ?.status,
+        ).toBe("success"),
+      );
+      expect(
+        fixture.pageQueryClient.getQueryData(fixture.bindingQueryKey),
+      ).toEqual(
+        accountEnablementBinding(`record-${kind}-host`, "record-environment"),
+      );
+      fireEvent.click(triggerSwitch);
+
+      await waitFor(() => expect(fixture.listCalls()).toBe(2));
+      await waitFor(() => expectProfileEnablementToast(message));
+      expect(providerMocks.setProfileRecordEnabled).toHaveBeenCalledTimes(1);
+      expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "unknown environment source",
+      statusVersion: null,
+      mode: "unknown" as const,
+    },
+    {
+      label: "own_settings",
+      statusVersion: { major: 1, minor: 1 },
+      mode: "own-settings" as const,
+    },
+    {
+      label: "pending status",
+      statusVersion: { major: 1, minor: 1 },
+      mode: "pending" as const,
+    },
+    {
+      label: "failed binding",
+      statusVersion: { major: 1, minor: 1 },
+      mode: "failed" as const,
+    },
+  ])(
+    "does not write and shows the generic toast for $label",
+    async ({ statusVersion, mode }) => {
+      let finishPendingStatus: () => void = () => {};
+      const pendingStatus = new Promise<EnvironmentStatusResponseV12>(
+        (resolve) => {
+          finishPendingStatus = () =>
+            resolve(
+              environmentStatusFixture({ principal: { kind: "personal" } }),
+            );
+        },
+      );
+      const fixture = renderAccountEnablementPage({
+        hostId: `record-${mode}-host`,
+        providerEnabled: true,
+        profile: accountProfile("record-profile", "Work", true, []),
+        additionalProfiles: [],
+        offersSignIns: true,
+        providersListMinor: 12,
+        statusVersion,
+        status: () => {
+          if (mode === "pending") return pendingStatus;
+          if (mode === "own-settings") {
+            return Promise.resolve(
+              environmentStatusFixture({
+                principal: null,
+                planes: {
+                  records: "local",
+                  broker: "local",
+                  room: "local",
+                },
+              }),
+            );
+          }
+          if (mode === "failed") {
+            return Promise.resolve(
+              environmentStatusFixture({ principal: { kind: "personal" } }),
+            );
+          }
+          return Promise.reject(
+            new Error("Environment status must not be requested"),
+          );
+        },
+        binding: () => {
+          if (mode === "failed") {
+            return Promise.reject(new Error("Environment binding unavailable"));
+          }
+          return Promise.resolve(
+            accountEnablementBinding(
+              `record-${mode}-host`,
+              "record-environment",
+            ),
+          );
+        },
+      });
+      const triggerButton = await screen.findByRole("button", {
+        name: "Claude Code profile: Work",
+      });
+      const triggerContainer = triggerButton.parentElement;
+      if (triggerContainer === null) {
+        throw new Error(
+          "Expected the profile picker to contain its trigger switch.",
+        );
+      }
+      const triggerSwitch = within(triggerContainer).getByRole("switch", {
+        name: "Allow agents to use Work",
+      });
+      if (mode === "own-settings") {
+        await waitFor(() =>
+          expect(
+            fixture.pageQueryClient.getQueryState(fixture.statusQueryKey)
+              ?.status,
+          ).toBe("success"),
+        );
+      }
+      if (mode === "failed") {
+        await waitFor(() =>
+          expect(
+            fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)
+              ?.status,
+          ).toBe("error"),
+        );
+      }
+      fireEvent.click(triggerSwitch);
+
+      await waitFor(() =>
+        expectProfileEnablementToast("Couldn't update profile availability."),
+      );
+      expect(providerMocks.setProfileRecordEnabled).not.toHaveBeenCalled();
+      expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
+      if (mode === "pending") {
+        await act(() => {
+          finishPendingStatus();
+          return pendingStatus;
+        });
+        await waitFor(() =>
+          expect(
+            fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)
+              ?.status,
+          ).toBe("success"),
+        );
+        expect(
+          fixture.pageQueryClient.getQueryData(fixture.bindingQueryKey),
+        ).toEqual(
+          accountEnablementBinding(`record-${mode}-host`, "record-environment"),
+        );
+        expect(providerMocks.setProfileRecordEnabled).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([true, false, "absent"] as const)(
     "refetches the Settings providers list once after providers.changed when offersSignIns is %s",
     async (offersSignIns) => {
@@ -2204,6 +2890,9 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.setSelectionMutate.mockClear();
     navigateToSettingsSectionMock.mockClear();
     providerMocks.setEnabledMutate.mockClear();
+    providerMocks.setProfileEnabledMutate.mockReset();
+    providerMocks.setProfileRecordEnabled.mockReset();
+    providerMocks.setProfileRecordEnabled.mockResolvedValue({ kind: "ok" });
     providerMocks.setEnvOverrideMutate.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
     providerMocks.startLoginMutate.mockReset();
@@ -2244,6 +2933,7 @@ describe("<ProvidersSettingsPanel />", () => {
     settingsFileMocks.resetMutate.mockReset();
     settingsFileMocks.resetProviderMutate.mockReset();
     vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
     hostScopeMocks.host = undefined;
