@@ -173,7 +173,14 @@ describe("accepting an invitation reads the account before the environment list"
     });
   });
 
-  it("draws the team just joined with its role, not as Read-only settings", async () => {
+  /**
+   * Mounts the accept button and the picker's team rows on an account that
+   * has, or has not yet, the team on it, and waits for the first list read.
+   */
+  async function mountAccept(accountHasTeam: boolean): Promise<{
+    readonly events: string[];
+    readonly joined: { current: boolean };
+  }> {
     const events: string[] = [];
     const joined = { current: false };
     const rows = (): EnvironmentDescriptorV11[] =>
@@ -190,9 +197,10 @@ describe("accepting an invitation reads the account before the environment list"
             events.push("reread");
             return Promise.resolve({
               kind: "valid",
-              user: joined.current
-                ? userWithTheTeam()
-                : createAuthenticatedUserFixture(undefined),
+              user:
+                joined.current || accountHasTeam
+                  ? userWithTheTeam()
+                  : createAuthenticatedUserFixture(undefined),
             });
           },
       },
@@ -208,7 +216,9 @@ describe("accepting an invitation reads the account before the environment list"
         email: "test@example.com",
         avatarUrl: null,
       },
-      user: createAuthenticatedUserFixture(undefined),
+      user: accountHasTeam
+        ? userWithTheTeam()
+        : createAuthenticatedUserFixture(undefined),
     });
     vi.spyOn(service, "listEnvironmentInvitations").mockResolvedValue({
       invitations: [],
@@ -244,6 +254,12 @@ describe("accepting an invitation reads the account before the environment list"
     });
     expect(screen.queryByTestId("environment-team-env-new")).toBeNull();
 
+    return { events, joined };
+  }
+
+  it("draws the team just joined with its role, not as Read-only settings", async () => {
+    const { events, joined } = await mountAccept(false);
+
     // The team is on the account once the invitation is accepted. What the
     // store holds, and when the list is asked, are watched from outside.
     events.length = 0;
@@ -257,6 +273,45 @@ describe("accepting an invitation reads the account before the environment list"
       const row = await screen.findByTestId("environment-team-env-new");
 
       expect(events).toEqual(["reread", "teams-in-store", "list-request"]);
+      expect(row.textContent).toContain("Acme New");
+      expect(row.textContent).toContain("You edit");
+      expect(row.textContent).not.toContain("Read-only settings");
+      const lists = queryClient.getQueriesData<EnvironmentListResponseV11>({
+        predicate: (query) =>
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            "environment.list",
+          ),
+      });
+      expect(
+        lists
+          .flatMap(([, data]) => data?.environments ?? [])
+          .find((environment) => environment.environmentId === "env-new"),
+      ).toMatchObject({ effectiveRole: "editor", providerHandle: "acme-new" });
+    } finally {
+      unsubscribe();
+    }
+    await act(async () => {
+      await queryClient.cancelQueries();
+    });
+  });
+
+  it("draws the team just joined when the account already carried it", async () => {
+    const { events, joined } = await mountAccept(true);
+
+    // The account already carries the team, so the accept changes nothing the
+    // list's key holds: only the explicit invalidation brings the new row.
+    events.length = 0;
+    joined.current = true;
+    const unsubscribe = useAuthStore.subscribe((state, previous) => {
+      if (state.shareableTeams.length > previous.shareableTeams.length)
+        events.push("teams-in-store");
+    });
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+      const row = await screen.findByTestId("environment-team-env-new");
+
+      expect(events).toEqual(["reread", "list-request"]);
       expect(row.textContent).toContain("Acme New");
       expect(row.textContent).toContain("You edit");
       expect(row.textContent).not.toContain("Read-only settings");
