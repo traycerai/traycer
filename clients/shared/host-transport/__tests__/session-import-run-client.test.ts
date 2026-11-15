@@ -163,7 +163,7 @@ function openRunClient(): {
   const client = new SessionImportRunClient({
     wsStreamClient: fake,
     selections: SELECTIONS,
-    permissionMode: "default",
+    permissionMode: "supervised",
     callbacks,
   });
   return { fake, client, recorded };
@@ -259,7 +259,7 @@ describe("SessionImportRunClient reconnects", () => {
     const client = new SessionImportRunClient({
       wsStreamClient: fake,
       selections: SELECTIONS,
-      permissionMode: "default",
+      permissionMode: "supervised",
       callbacks: {
         onStarted: () => undefined,
         onProgress: () => undefined,
@@ -291,7 +291,7 @@ describe("SessionImportRunClient over a real stream transport", () => {
     const client = new SessionImportRunClient({
       wsStreamClient: makeClient(factory),
       selections: SELECTIONS,
-      permissionMode: "default",
+      permissionMode: "supervised",
       callbacks: {
         onStarted: () => undefined,
         onProgress: () => undefined,
