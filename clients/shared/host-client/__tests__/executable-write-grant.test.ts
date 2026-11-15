@@ -3,6 +3,7 @@ import {
   EXECUTABLE_WRITE_GRANT_FETCH_TIMEOUT_MS,
   mintExecutableWriteGrantViaHttp,
 } from "../executable-write-grant";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN = "https://authn.example.invalid";
 const TOKEN = "bearer-token-1";
@@ -336,4 +337,44 @@ describe("mintExecutableWriteGrantViaHttp on a fetch that ignores its signal", (
     expect(settled).toBe(true);
     expect(await pending).toEqual(TIMED_OUT);
   });
+});
+
+describe("a redirect answered to an executable write grant request", () => {
+  it.each([
+    {
+      name: "a 307 with a Location",
+      answer: () =>
+        new Response(JSON.stringify({ environmentId: ENVIRONMENT_ID }), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ])(
+    "reads $name on the environment read as a network error, with the bearer sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer());
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintExecutableWriteGrantViaHttp(
+        AUTHN,
+        TOKEN,
+        HOST_ID,
+      );
+
+      expect(result).toMatchObject({ kind: "network-error" });
+      expect(JSON.stringify(result)).toContain(`HTTP ${status}`);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${TOKEN}`,
+      );
+    },
+  );
 });

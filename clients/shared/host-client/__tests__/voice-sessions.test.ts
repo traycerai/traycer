@@ -12,6 +12,7 @@ import {
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
 } from "../voice-sessions";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -297,4 +298,106 @@ describe("voiceSessionsMintViaHttp on a fetch that ignores its signal", () => {
     expect(settled).toBe(true);
     expect(await pending).toEqual(DID_NOT_COMPLETE);
   });
+});
+
+describe("a redirect answered to a voice request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the mint as a network error, with the offer and bearer sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer(MINTED));
+
+      const result = await voiceSessionsMintViaHttp(
+        BASE,
+        BEARER,
+        null,
+        REQUEST,
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the voice route answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        offerSdp: REQUEST.offerSdp,
+        input: REQUEST.input,
+      });
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the availability check as a network error, never as available",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer({ available: true }));
+
+      const result = await voiceSessionsAvailabilityViaHttp(
+        BASE,
+        BEARER,
+        "iap-token",
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the voice availability route answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+      expect(new Headers(init?.headers).get("proxy-authorization")).toBe(
+        "Bearer iap-token",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the end as a network error, never as a closed session",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () =>
+        answer({ closedAt: 1_791_000_000_000 }),
+      );
+
+      const result = await voiceSessionsEndViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "vs_123",
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the voice end route answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
 });
