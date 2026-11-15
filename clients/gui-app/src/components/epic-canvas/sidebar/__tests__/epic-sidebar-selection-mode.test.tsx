@@ -133,6 +133,8 @@ interface TestState {
    * states no number.
    */
   chatRecordListAuthoritative: boolean;
+  chatRecordListFailed: boolean;
+  readonly publicationTargetArgs: Mock;
   /** The terminal twin: `epic.listTuiAgents` has answered. */
   tuiAgentRecordListAuthoritative: boolean;
   /** Whether the session's host serves Deleted artifacts. */
@@ -261,6 +263,8 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionReady: true,
   snapshotLoaded: true,
   chatRecordListAuthoritative: true,
+  chatRecordListFailed: false,
+  publicationTargetArgs: vi.fn(),
   tuiAgentRecordListAuthoritative: true,
   deletedArtifactsAvailable: false,
   activeArtifactId: null,
@@ -756,7 +760,13 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 // (or an in-flight request) produces, so this suite exercises the degraded
 // path the fold is specified to tolerate.
 vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
-  useChatPublicationTargets: () => ({ data: undefined, isError: false }),
+  useChatPublicationTargets: (args: {
+    readonly chatIdsAuthoritative: boolean;
+    readonly chatRecordListFailed: boolean;
+  }) => {
+    testState.publicationTargetArgs(args);
+    return { data: undefined, isError: false };
+  },
   publicationTargetMap: () => new Map<string, string>(),
 }));
 
@@ -1209,6 +1219,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   // LOCAL tree, and the section hides itself when the cloud list has nothing
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
+  useEpicChatRecordListAuthoritative: () =>
+    testState.chatRecordListAuthoritative,
+  useEpicChatRecordListFailed: () => testState.chatRecordListFailed,
   useEpicChatIdsNamedByCloudRows: () => [],
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
@@ -1508,6 +1521,8 @@ describe("epic sidebar selection mode", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
+    testState.chatRecordListFailed = false;
+    testState.publicationTargetArgs.mockClear();
     testState.tuiAgentRecordListAuthoritative = true;
     testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
@@ -1583,6 +1598,39 @@ describe("epic sidebar selection mode", () => {
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();
+  });
+
+  it("forwards record-list readiness to the publication-target hook", () => {
+    testState.chatRecordListAuthoritative = false;
+    testState.chatRecordListFailed = false;
+    const rendered = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />,
+    );
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        chatIdsAuthoritative: false,
+        chatRecordListFailed: false,
+      }),
+    );
+
+    testState.chatRecordListFailed = true;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        chatIdsAuthoritative: false,
+        chatRecordListFailed: true,
+      }),
+    );
+
+    testState.chatRecordListAuthoritative = true;
+    testState.chatRecordListFailed = false;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+      }),
+    );
   });
 
   it("scrolls to and flash-highlights a requested artifact row", async () => {

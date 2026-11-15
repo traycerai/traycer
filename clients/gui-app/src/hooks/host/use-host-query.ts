@@ -104,9 +104,9 @@ export interface UseHostQueryWithResponseMapOptions<
    * `params` is both the query KEY and the payload everywhere else, and for
    * almost every method that identity is the right one: what you asked for is
    * what identifies the answer. One use is a REVISION THE CLIENT ALREADY
-   * HOLDS, which says nothing about which
-   * resource is being read and everything about how much of it needs to come
-   * back. The revision-gated record lists (`epic.listChatRecords@1.3`,
+   * HOLDS, which says nothing about which resource is being read and everything
+   * about how much of it needs to come back. The revision-gated record lists
+   * (`epic.listChatRecords@1.3`,
    * `epic.listTuiAgents@1.3`) send their last answer's list stamp this way:
    * putting it in `params` would mint a new cache entry on every poll tick -
    * so the 20s cadence would refetch from scratch forever and the gating would
@@ -115,9 +115,10 @@ export interface UseHostQueryWithResponseMapOptions<
    *
    * Publication targets also send their current local chat-id set here. The
    * initial read waits for the full record list (or refreshes once on recovery
-   * from a failed list). Later new chats use the fold's own-id fallback; only a
-   * fork decision mints a redirect, and its episode edge invalidates the task's
-   * cached map. Changing membership therefore does not require a new key.
+   * from a failed list). Later new chats use the fold's own-id fallback. The
+   * map refreshes whenever the cloud rows the fold reads contain a row it cannot
+   * explain; fork edges on the addressable host refresh it earlier. Local
+   * membership therefore does not require a new key.
    *
    * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
    * `captureRequestContext` - so the ordering fence stays the last thing read

@@ -139,10 +139,18 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     enabled: cloudReadsEnabled,
   });
   const localChatIds = projection?.chats.allIds ?? EMPTY_IDS;
+  const cloudChatIds = useMemo(
+    () =>
+      (cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS).map(
+        (chat) => chat.identity.chatId,
+      ),
+    [cloudChats.data],
+  );
   const publicationTargets = useChatPublicationTargets({
     client: sessionHostClient,
     epicId,
     chatIds: localChatIds,
+    cloudChatIds,
     chatIdsAuthoritative: projection?.chatRecordListAuthoritative ?? false,
     chatRecordListFailed: projection?.chatRecordListFailed ?? false,
     enabled: cloudReadsEnabled,

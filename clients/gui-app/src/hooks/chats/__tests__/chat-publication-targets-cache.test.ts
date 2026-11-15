@@ -9,21 +9,6 @@ const HOST = "host-a";
 const EPIC = "epic-a";
 
 describe("readCachedChatPublicationId", () => {
-  it("finds a redirect in the stable task-keyed cache entry", () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(
-      queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(HOST, METHOD, {
-        epicId: EPIC,
-        chatIds: [],
-      }),
-      { redirected: [{ chatId: "chat-1", publicationChatId: "clone-1" }] },
-    );
-
-    expect(readCachedChatPublicationId(queryClient, HOST, EPIC, "chat-1")).toBe(
-      "clone-1",
-    );
-  });
-
   it("isolates redirects by host and task independently", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(

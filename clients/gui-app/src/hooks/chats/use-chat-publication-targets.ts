@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { QueryClient, UseQueryResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import {
+  useHostQueryEntryHash,
+  useHostQueryWithResponseMap,
+} from "@/hooks/host/use-host-query";
 import { queryKeys } from "@/lib/query-keys";
 import { appLogger } from "@/lib/logger";
 
@@ -17,6 +24,7 @@ interface PublicationTargetsAnswer extends ResponseOfMethod<
   typeof PUBLICATION_TARGETS_METHOD
 > {
   readonly chatIdsAuthoritative: boolean;
+  readonly unexplainedCloudChatIdsKey: string;
 }
 
 /**
@@ -30,8 +38,8 @@ interface PublicationTargetsAnswer extends ResponseOfMethod<
  * be derived here. See `lib/chats/unified-chat-list.ts` for what the fold does
  * with it.
  *
- * App-wide (`useHostClient`), not tab-scoped: the redirect is a fact about this
- * device's own chats, not about any open tab's host.
+ * Scoped to the task's session host: redirects describe that host's local
+ * chats, the same source the sidebar and chat opener fold.
  *
  * Degradation is the whole reason this is a separate optional call rather than
  * a field on the cloud list: a host that predates it answers
@@ -48,6 +56,7 @@ export interface UseChatPublicationTargetsArgs {
    * The full current local id set, sent at dispatch rather than keyed.
    */
   readonly chatIds: readonly string[];
+  readonly cloudChatIds: readonly string[];
   readonly chatIdsAuthoritative: boolean;
   readonly chatRecordListFailed: boolean;
   readonly enabled: boolean;
@@ -155,26 +164,36 @@ function useChatPublicationTargetsQuery(
     () => ({ epicId: args.epicId, chatIds: [] }),
     [args.epicId],
   );
+  const queryClient = useQueryClient();
+  const entry = {
+    cacheKeyIdentity: undefined,
+    client: args.client,
+    method: PUBLICATION_TARGETS_METHOD,
+    params,
+  };
+  const queryHash = useHostQueryEntryHash(entry);
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     typeof PUBLICATION_TARGETS_METHOD,
     PublicationTargetsAnswer,
     boolean
   >({
-    cacheKeyIdentity: undefined,
-    client: args.client,
-    method: PUBLICATION_TARGETS_METHOD,
-    params,
-    // New chats publish under their own id (the fold's fallback). Only a fork
-    // decision mints a redirect, and its episode edge invalidates this key.
-    // Wait for the initial full list, except when its read has failed.
+    ...entry,
+    // New chats use the fold's own-id fallback. Unexplained cloud rows refresh
+    // the map on every host; addressable-host fork edges refresh it earlier.
     buildRequest: (base) => ({ ...base, chatIds: [...args.chatIds] }),
     captureRequestContext: () => args.chatIdsAuthoritative,
     mapResponse: ({ response, requestContext }) => ({
       ...response,
       chatIdsAuthoritative: requestContext === true,
+      unexplainedCloudChatIdsKey: unexplainedCloudChatIdsKey(
+        args.chatIds,
+        args.cloudChatIds,
+        response,
+      ),
     }),
     options: {
+      // Wait for the initial full list, except when its read has failed.
       enabled:
         args.enabled &&
         (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
@@ -188,16 +207,68 @@ function useChatPublicationTargetsQuery(
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
-  const { data, refetch } = query;
+  const { data, dataUpdatedAt, isEnabled, isFetching, refetch } = query;
+  const unexplainedKey = useMemo(
+    () => unexplainedCloudChatIdsKey(args.chatIds, args.cloudChatIds, data),
+    [args.chatIds, args.cloudChatIds, data],
+  );
+  const lastRefresh = useRef<string | null>(null);
   useEffect(() => {
-    if (!args.enabled || !args.chatIdsAuthoritative) return;
-    if (data?.chatIdsAuthoritative !== false) return;
-    // The error fallback may have covered only part of the list. Completeness
-    // travels with the cached answer so both callers (and remounts) agree;
-    // joining an in-flight refresh keeps their recovery to one request.
+    if (!isEnabled || isFetching || data === undefined) {
+      return;
+    }
+    const partial = args.chatIdsAuthoritative && !data.chatIdsAuthoritative;
+    if (!partial && unexplainedKey === data.unexplainedCloudChatIdsKey) return;
+    const cached = queryClient.getQueryCache().get(queryHash);
+    // Check the shared entry too: another observer's effect can start the
+    // refresh before this observer renders its fetching state. Failed refreshes
+    // wait for an external retry rather than looping over the retained answer.
+    if (
+      cached?.state.fetchStatus !== "idle" ||
+      cached.state.status === "error" ||
+      cached.state.dataUpdatedAt !== dataUpdatedAt
+    ) {
+      return;
+    }
+    const refreshKey = JSON.stringify([
+      queryHash,
+      dataUpdatedAt,
+      unexplainedKey,
+      partial,
+    ]);
+    if (lastRefresh.current === refreshKey) return;
+    lastRefresh.current = refreshKey;
+    // Settling an in-flight partial read re-arms this effect even when Query's
+    // structural sharing preserves `data`. Never join that read as recovery.
     void refetch({ cancelRefetch: false });
-  }, [args.enabled, args.chatIdsAuthoritative, data, refetch]);
+  }, [
+    args.chatIdsAuthoritative,
+    data,
+    dataUpdatedAt,
+    isEnabled,
+    isFetching,
+    queryClient,
+    queryHash,
+    refetch,
+    unexplainedKey,
+  ]);
   return query;
+}
+
+function unexplainedCloudChatIdsKey(
+  chatIds: readonly string[],
+  cloudChatIds: readonly string[],
+  data:
+    | ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
+    | undefined,
+): string {
+  const explained = new Set(chatIds);
+  for (const entry of data?.redirected ?? []) {
+    explained.add(entry.publicationChatId);
+  }
+  return JSON.stringify(
+    [...new Set(cloudChatIds)].filter((id) => !explained.has(id)).sort(),
+  );
 }
 
 /**

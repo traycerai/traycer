@@ -98,6 +98,7 @@ interface Harness {
     promise: Promise<void> | null;
     release: (() => void) | null;
   };
+  readonly targetGateIndex: { value: number };
 }
 
 afterEach(() => {
@@ -201,6 +202,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
           client: requireHostClient(),
           epicId: EPIC_ID,
           chatIds,
+          cloudChatIds: [],
           chatIdsAuthoritative: true,
           chatRecordListFailed: false,
           enabled: true,
@@ -265,6 +267,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
           client: requireHostClient(),
           epicId: EPIC_ID,
           chatIds: [CHAT_ID],
+          cloudChatIds: [],
           chatIdsAuthoritative: true,
           chatRecordListFailed: false,
           enabled: true,
@@ -308,6 +311,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         client: requireHostClient(),
         epicId: EPIC_ID,
         chatIds,
+        cloudChatIds: [],
         chatIdsAuthoritative: true,
         chatRecordListFailed: false,
         enabled: true,
@@ -335,7 +339,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     ).toHaveLength(1);
   });
 
-  it("joins a partial request in flight, then fetches the authoritative full list once", async () => {
+  it("waits for an in-flight partial answer before fetching the full list once", async () => {
     const harness = createHarness(null);
     const knownIds = ["chat-known"];
     const allIds = Array.from(
@@ -353,6 +357,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         client: requireHostClient(),
         epicId: EPIC_ID,
         chatIds: ids,
+        cloudChatIds: [],
         chatIdsAuthoritative: authoritative,
         chatRecordListFailed: failed,
         enabled: true,
@@ -394,48 +399,109 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toEqual([knownIds, allIds]);
   });
 
-  it("waits for authoritative IDs, then keeps the successful answer when IDs grow", async () => {
+  it("recovers an identical failed-latch answer with one authoritative refresh across observers", async () => {
     const harness = createHarness(null);
-    const initialIds = Array.from(
-      { length: 2_000 },
-      (_, index) => `chat-${String(index)}`,
-    );
+    const partialIds = ["chat-known"];
+    const allIds = ["chat-known", "chat-new"];
     let authoritative = false;
-    let chatIds = initialIds;
-    const { rerender, result } = renderHook(
-      () =>
-        useChatPublicationTargets({
-          client: requireHostClient(),
-          epicId: EPIC_ID,
-          chatIds,
-          chatIdsAuthoritative: authoritative,
-          chatRecordListFailed: false,
-          enabled: true,
-        }),
-      { wrapper: wrapperFor(harness.queryClient) },
+    let failed = true;
+    let ids: readonly string[] = partialIds;
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: ids,
+        cloudChatIds: [],
+        chatIdsAuthoritative: authoritative,
+        chatRecordListFailed: failed,
+        enabled: true,
+      });
+    const sidebar = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+
+    await waitFor(() => expect(harness.targetRequests).toEqual([partialIds]));
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+
+    harness.targetGateIndex.value = 2;
+    harness.targetGate.promise = new Promise<void>((resolve) => {
+      harness.targetGate.release = resolve;
+    });
+    act(() => {
+      void sidebar.result.current.refetch();
+    });
+    await waitFor(() =>
+      expect(harness.targetRequests).toEqual([partialIds, partialIds]),
     );
 
-    vi.useFakeTimers();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-    expect(harness.targetRequests).toHaveLength(0);
-    vi.useRealTimers();
-
+    ids = allIds;
     authoritative = true;
-    rerender();
-    await waitFor(() => expect(harness.targetRequests).toHaveLength(1));
-    await waitFor(() => expect(result.current.isFetching).toBe(false));
-    expect(harness.targetRequests).toEqual([initialIds]);
-
-    chatIds = [...initialIds, "chat-created-later"];
-    vi.useFakeTimers();
-    await act(async () => {
-      rerender();
-      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    failed = false;
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
     });
-    expect(harness.targetRequests).toEqual([initialIds]);
-    vi.useRealTimers();
+    expect(harness.targetRequests).toHaveLength(2);
+    harness.targetGate.release?.();
+
+    await waitFor(() => expect(harness.targetRequests).toHaveLength(3));
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    expect(harness.targetRequests).toEqual([partialIds, partialIds, allIds]);
+  });
+
+  it("does not restart recovery when the refreshed target answer is unsupported", async () => {
+    const harness = createHarness(null);
+    let authoritative = false;
+    let failed = true;
+    let ids: readonly string[] = [CHAT_ID];
+    let cloudChatIds: readonly string[] = [];
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: ids,
+        cloudChatIds,
+        chatIdsAuthoritative: authoritative,
+        chatRecordListFailed: failed,
+        enabled: true,
+      });
+    const first = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const second = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    await waitFor(() => expect(harness.targetRequests).toHaveLength(1));
+    await waitFor(() => expect(first.result.current.isFetching).toBe(false));
+
+    harness.targetFailure.value = "unsupported";
+    ids = [CHAT_ID, "chat-new"];
+    authoritative = true;
+    failed = false;
+    act(() => {
+      first.rerender();
+      second.rerender();
+    });
+    await waitFor(() => expect(harness.targetRequests).toHaveLength(2));
+    await waitFor(() => expect(first.result.current.isError).toBe(true));
+
+    vi.useFakeTimers();
+    try {
+      cloudChatIds = ["new-unexplained-cloud-row"];
+      act(() => {
+        first.rerender();
+        second.rerender();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      });
+      expect(harness.targetRequests).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("degrades unsupported hosts to an empty publication map without retrying", async () => {
@@ -447,6 +513,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
           client: requireHostClient(),
           epicId: EPIC_ID,
           chatIds: [CHAT_ID],
+          cloudChatIds: [],
           chatIdsAuthoritative: true,
           chatRecordListFailed: false,
           enabled: true,
@@ -467,6 +534,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
           client: requireHostClient(),
           epicId: EPIC_ID,
           chatIds: [CHAT_ID],
+          cloudChatIds: [],
           chatIdsAuthoritative: true,
           chatRecordListFailed: false,
           enabled: true,
@@ -505,6 +573,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
   const targetRequests: Array<readonly string[]> = [];
   const targetFailure = { value: null as "unsupported" | null };
   const targetGate: Harness["targetGate"] = { promise: null, release: null };
+  const targetGateIndex = { value: 1 };
   let requestId = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -531,7 +600,10 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
         "epic.listChatPublicationTargets": async (params) => {
           calls.push("epic.listChatPublicationTargets");
           targetRequests.push([...params.chatIds]);
-          if (targetRequests.length === 1 && targetGate.promise !== null) {
+          if (
+            targetRequests.length === targetGateIndex.value &&
+            targetGate.promise !== null
+          ) {
             await targetGate.promise;
           }
           if (targetFailure.value === "unsupported") {
@@ -576,6 +648,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
     targetRequests,
     targetFailure,
     targetGate,
+    targetGateIndex,
   };
 }
 

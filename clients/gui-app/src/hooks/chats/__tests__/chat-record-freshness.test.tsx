@@ -359,6 +359,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   fixture.handle.store.getState().dispose();
   runtime.client = null;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
@@ -391,6 +392,29 @@ async function settleFirstRead(): Promise<void> {
 }
 
 describe("record-list deletion authority", () => {
+  it("treats an unsupported initial list as authoritative doc-only data without retrying", async () => {
+    fixture.handle.store.getState().dispose();
+    fixture = createFixture("E_HOST_UNSUPPORTED");
+
+    renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(fixture.listCalls.value).toBe(1);
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+    });
+    expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+    expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
+
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fixture.listCalls.value).toBe(1);
+    vi.useRealTimers();
+  });
+
   it("clears the failure latch when an unsupported response becomes authoritative", async () => {
     fixture.handle.store.getState().dispose();
     fixture = createFixture("RPC_ERROR");

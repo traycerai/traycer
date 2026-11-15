@@ -852,10 +852,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     taskId: epicId,
     enabled: epicId.length > 0,
   });
+  const cloudChatIds = useMemo(
+    () =>
+      (cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS).map(
+        (chat) => chat.identity.chatId,
+      ),
+    [cloudChats.data],
+  );
   const publicationTargets = useChatPublicationTargets({
     client: sessionHostClient,
     epicId,
     chatIds: localChatIds,
+    cloudChatIds,
     chatIdsAuthoritative,
     chatRecordListFailed,
     enabled: epicId.length > 0,
