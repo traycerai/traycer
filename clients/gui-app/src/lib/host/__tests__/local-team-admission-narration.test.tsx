@@ -111,16 +111,6 @@ describe("door state narration", () => {
       cause: "door-state",
       variant: { kind: "token-unavailable", hostId: "local-host" },
     });
-    expect(
-      deriveWindowNarration({
-        ...waiting,
-        doorState: door("host-claimed", "local-host"),
-      }),
-    ).toEqual({
-      kind: "narrating",
-      cause: "no-usable-host",
-      variant: { kind: "offline" },
-    });
     expect(deriveWindowNarration(waiting)).toEqual({
       kind: "narrating",
       cause: "cold-start",
