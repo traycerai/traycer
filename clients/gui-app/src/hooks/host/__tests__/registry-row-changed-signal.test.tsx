@@ -74,14 +74,20 @@ const directoryRef = vi.hoisted(() => ({
   value: null as LateArrivingDirectory | null,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => {
+vi.mock("@/lib/host", () => {
+  const configuredDirectory = (): LateArrivingDirectory => {
     if (directoryRef.value === null) {
       throw new Error("test directory not configured");
     }
     return directoryRef.value;
-  },
-}));
+  };
+  return {
+    useHostDirectory: configuredDirectory,
+    // The one directory, as in the app: `useHostDirectoryEntry` reads it off the
+    // binding.
+    useHostBinding: () => ({ directory: configuredDirectory() }),
+  };
+});
 
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 
