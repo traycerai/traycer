@@ -180,15 +180,12 @@ export function passFor(
 /** Whether a failed try waits out TanStack's backoff and tries again. */
 export type RetryPolicy = "off" | "app";
 
-/** The tries the app's policy allows an attempt: the first and one retry. */
-const TRIES_UNDER: Record<RetryPolicy, number> = { off: 1, app: 2 };
-
 /**
  * The steps the tail of a sequence may take to answer every try and backoff
  * left. Fails loudly; measured maximum 6: across all 31,293 sequences of the
  * walk no tail uses more than 2, or 6 under the app's retry policy, whose
- * tries each add a backoff to end. A sweep that never stops asking runs past
- * it and fails the walk instead of being cut short.
+ * retried tries each add a backoff to end. A sweep that never stops asking
+ * runs past it and fails the walk instead of being cut short.
  */
 const SETTLE_STEPS = 24;
 
@@ -365,6 +362,14 @@ export class Rig {
     );
   }
 
+  /** The attempt each held backoff timer belongs to, -1 when it is not known. */
+  backoffOwners(): number[] {
+    return this.timers
+      .pending()
+      .filter((timer) => sourceOf(timer) === "backoff")
+      .map((timer) => this.backoffTimers.get(timer) ?? -1);
+  }
+
   private within(context: string, run: () => void): void {
     const outer = this.context;
     this.context = context;
@@ -445,29 +450,48 @@ export class Rig {
     held?.reject(new Error("the attempt was aborted"));
   }
 
-  /** Answers the try `attempt` has asked; a failed try before the last waits for its backoff. */
+  /**
+   * Whether TanStack retries a failed try of `attempt` after a backoff: the
+   * app client's own retry policy, asked as the retryer asks it. Never under
+   * `off`.
+   */
+  private retries(attempt: Attempt, error: Error): boolean {
+    if (this.retry === "off") return false;
+    const policy = this.client.getDefaultOptions().queries?.retry;
+    if (typeof policy !== "function") {
+      throw new Error("the app client has no retry function to ask");
+    }
+    return policy(attempt.tries - 1, error);
+  }
+
+  /** Answers the try `attempt` has asked; a failed try waits for a backoff when the app's retry policy retries it. */
   private settle(attempt: Attempt, kind: AnswerKind): void {
     const held = attempt.current;
     if (held === null) throw new Error("the attempt has no try waiting");
     attempt.current = null;
-    if (kind === "success" || attempt.tries >= TRIES_UNDER[this.retry]) {
+    if (kind === "success") {
       attempt.end = {
         kind,
         at: ++this.clock,
         context: this.context ?? "spend",
       };
-    } else {
+      held.resolve("ok");
+      return;
+    }
+    const error = hostFailure(
+      kind === "transient" ? "E_CLOUD_REQUEST_REFUSED" : "FORBIDDEN",
+      this.variant.method,
+    );
+    if (this.retries(attempt, error)) {
       attempt.backoff = true;
+    } else {
+      attempt.end = {
+        kind,
+        at: ++this.clock,
+        context: this.context ?? "spend",
+      };
     }
-    if (kind === "success") held.resolve("ok");
-    else {
-      held.reject(
-        hostFailure(
-          kind === "transient" ? "E_CLOUD_REQUEST_REFUSED" : "FORBIDDEN",
-          this.variant.method,
-        ),
-      );
-    }
+    held.reject(error);
   }
 
   private async barrier(): Promise<void> {

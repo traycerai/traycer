@@ -124,6 +124,37 @@ describe("the guards of the walk over the sweep's events", () => {
     });
   });
 
+  describe("a lasting refusal under the app's retry policy", () => {
+    it("ends its attempt with no backoff, so the backoff the next transient try holds is its own", async () => {
+      await onStrandedRig(APP, async (rig) => {
+        for (const event of [
+          "ring",
+          "ring",
+          "startInsideError",
+          "endNonTransient",
+        ] as const) {
+          await rig.run(event);
+          expect(checkAll(rig)).toBeNull();
+        }
+        // The app's policy surfaces a lasting refusal on its first answer.
+        const refused = rig.attempts.findLast((a) => a.context === "spend");
+        expect(refused?.end?.kind).toBe("nontransient");
+        expect(rig.backoffOwners()).toEqual([]);
+
+        await rig.run("endTransient");
+        expect(checkAll(rig)).toBeNull();
+        const own = rig.attempts.find(
+          (a) => a.context === "test:startInsideError",
+        );
+        if (own === undefined)
+          throw new Error("no attempt began inside the error");
+        expect(own.backoff).toBe(true);
+        expect(rig.backoffOwners()).toEqual([own.id]);
+        expect(await rig.settleAll(() => checkAll(rig))).toBeNull();
+      });
+    });
+  });
+
   describe("the invariants", () => {
     /** An attempt record, which the cases tamper a clean rig with. */
     const attempt = (overrides: Partial<Attempt>): Attempt => ({
