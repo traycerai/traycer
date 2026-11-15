@@ -2575,7 +2575,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(frozenRow.textContent).not.toContain("storage uses");
       expect(
         within(frozenRow).getByText(
-          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
         ),
       ).toBeTruthy();
       expect(within(frozenRow).queryByText(/Paid by/)).toBeNull();
