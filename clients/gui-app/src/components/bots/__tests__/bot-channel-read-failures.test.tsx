@@ -46,7 +46,9 @@ import {
 } from "@/components/bots/__tests__/bot-channel-cloud-test-support";
 import {
   noticeText,
+  flushObservers,
   refetchRead,
+  settleCursorAdvances,
   renderRealChannel,
 } from "@/components/bots/__tests__/bot-channel-cloud-harness";
 import {
@@ -456,6 +458,46 @@ describe("<BotChannelView /> when the thread list's read fails after it loaded",
     ).toBe("server");
   });
 
+  it("asks the thread list again with the channel line's Retry when both fail for one cause, so the thread has no line of its own once the channel recovers", async () => {
+    const { panel } = await mountWithThreadBox();
+    const answering = script.threadList;
+    script.conversationList = () =>
+      Promise.reject(hostFailure("RPC_ERROR", CHANNEL_READ));
+    script.threadList = () =>
+      Promise.reject(hostFailure("RPC_ERROR", THREAD_READ));
+    await refetchRead(queryClient, CHANNEL_READ);
+    await refetchRead(queryClient, THREAD_READ);
+    expect(
+      screen.getByTestId("bot-channel-stale").getAttribute("data-failure"),
+    ).toBe("server");
+    expect(within(panel).queryByTestId("bot-thread-stale")).toBeNull();
+    const channelAsks = script.conversationListCalls;
+    const threadAsks = script.threadListCalls;
+    // The host's thread list answers again; only the channel line's Retry asks it.
+    script.threadList = answering;
+
+    fireEvent.click(
+      within(screen.getByTestId("bot-channel-stale")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(script.conversationListCalls).toBe(channelAsks + 1);
+      expect(script.threadListCalls).toBe(threadAsks + 1);
+    });
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await flushObservers();
+    expect(screen.getByTestId("bot-channel-stale")).toBeDefined();
+
+    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
+    await refetchRead(queryClient, CHANNEL_READ);
+
+    expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+    expect(within(panel).queryByTestId("bot-thread-stale")).toBeNull();
+    expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
+  });
+
   it("replaces the thread with the refusal when the list is refused as forbidden, and leaves the channel", async () => {
     const { panel } = await mountWithThreadBox();
     script.threadList = () =>
@@ -489,7 +531,7 @@ describe("<BotChannelView /> read cursors behind a channel that failed", () => {
           .some((query) => query.state.status === "success"),
       ).toBe(true),
     );
-    await act(() => Promise.resolve());
+    await settleCursorAdvances(queryClient);
   }
 
   /** Mounts over a channel the host refuses; the cursors, read, say both conversations have unread rows. */
@@ -528,7 +570,7 @@ describe("<BotChannelView /> read cursors behind a channel that failed", () => {
         queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, "bot.readCursor.read"),
       });
     });
-    await act(() => Promise.resolve());
+    await settleCursorAdvances(queryClient);
     expect(script.advances).toHaveLength(1);
 
     await recoverChannel();

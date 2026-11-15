@@ -57,7 +57,11 @@ import {
   type HostScript,
 } from "@/components/bots/__tests__/bot-channel-cloud-test-support";
 import {
+  flushObservers,
+  holdQueryTimers,
+  type QueryTimers,
   refetchRead,
+  settleCursorAdvances,
   renderRealChannel,
 } from "@/components/bots/__tests__/bot-channel-cloud-harness";
 import {
@@ -77,6 +81,7 @@ import {
 } from "@/lib/host/test-support/cloud-failure-reads";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
+import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -256,6 +261,16 @@ const REFUSED =
 let script: HostScript;
 let queryClient: QueryClient;
 
+/** As {@link mount}, over the app's own client: a failed read is retried once, after its backoff. */
+function mountRetrying(args: {
+  readonly openThread: BotOpenThread | null;
+  readonly tiles: MobileTileCount | null;
+}): void {
+  queryClient = createAppQueryClient();
+  mocks.client = hostClientAnswering(script, queryClient);
+  renderRealChannel({ queryClient, ...args, extra: null });
+}
+
 function mount(args: {
   readonly openThread: BotOpenThread | null;
   readonly tiles: MobileTileCount | null;
@@ -386,7 +401,7 @@ describe("<BotChannelView /> rows after a refusal, then a failure that recovers"
           queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CURSOR_READ),
         });
       });
-      await act(() => Promise.resolve());
+      await settleCursorAdvances(queryClient);
       expect(
         script.advances
           .slice(asked)
@@ -503,6 +518,79 @@ describe("<BotChannelView /> rows another account fetched", () => {
     expect(
       screen.getByTestId("bot-channel-error").getAttribute("data-failure"),
     ).toBe("server");
+  });
+
+  describe("a read's retry, waiting in its backoff across an account change", () => {
+    let timers: QueryTimers;
+
+    beforeEach(() => {
+      timers = holdQueryTimers();
+    });
+
+    afterEach(() => {
+      timers.restore();
+    });
+
+    /** A different answer, so a mark set at its settling would show. */
+    const RENAMED = {
+      conversations: [{ ...CHANNEL_LIST.conversations[0], title: "Renamed" }],
+    };
+
+    /** Asks the channel's read; its first attempt fails and its retry waits in the backoff. */
+    async function refetchIntoBackoff(): Promise<void> {
+      script.conversationList = () =>
+        Promise.reject(hostFailure("RPC_ERROR", CHANNEL_READ));
+      void queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CHANNEL_READ),
+      });
+      await timers.backoffWaiting();
+    }
+
+    /** A recoverable failure, its own retry fired too. */
+    async function failAfterRetry(): Promise<void> {
+      await refetchIntoBackoff();
+      await timers.fireBackoff();
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      await flushObservers();
+    }
+
+    it("withholds the rows from the first account when the retry answers after a switch to another account and back, and a failure follows", async () => {
+      signInAs("user-a");
+      mountRetrying({ openThread: null, tiles: null });
+      await screen.findByText(POST_FIRST_LINE);
+      await refetchIntoBackoff();
+
+      act(() => signInAs("user-b"));
+      script.conversationList = () => Promise.resolve(RENAMED);
+      await timers.fireBackoff();
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      await flushObservers();
+      act(() => signInAs("user-a"));
+      await failAfterRetry();
+
+      expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+      expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+      expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+    });
+
+    it("withholds the rows when both account changes fall inside the one backoff, the retry answers, and a failure follows", async () => {
+      signInAs("user-a");
+      mountRetrying({ openThread: null, tiles: null });
+      await screen.findByText(POST_FIRST_LINE);
+      await refetchIntoBackoff();
+
+      act(() => signInAs("user-b"));
+      act(() => signInAs("user-a"));
+      script.conversationList = () => Promise.resolve(RENAMED);
+      await timers.fireBackoff();
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      await flushObservers();
+      await failAfterRetry();
+
+      expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+      expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+      expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+    });
   });
 
   it.each([RECOVERABLE[0], RECOVERABLE[1]])(

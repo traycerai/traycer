@@ -7,8 +7,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * whose request fetched it.
  *
  * Only a fetch's own answer is marked, for the account the app read as when
- * that request started, so an answer that settles after an account change is
- * never the new account's. A write to the cache (`setQueryData`, a patch, an
+ * that fetch started. A fetch's retry sends its request again later, under
+ * whichever account is signed in then, so an account change forgets who
+ * started every bot read still fetching, its retry's wait included: an
+ * answer that settles after an account change is marked for no one, and its
+ * rows are withheld under a later failure until a fetch started since
+ * answers. A write to the cache (`setQueryData`, a patch, an
  * optimistic write or its rollback) never marks: it does not re-authorize the
  * rows it carries over. A lasting refusal (signed out, no access, a host that
  * cannot serve the bot) takes the mark away, so a later recoverable failure -
@@ -23,7 +27,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const readableBy = new WeakMap<object, string | null>();
 /** Per read: its marked answer. */
 const markedAnswer = new WeakMap<object, object>();
-/** Per read: the account its fetch in flight started under. */
+/** Per read: the account its fetch in flight started under, until the account changes. */
 const requestedBy = new WeakMap<object, string | null>();
 
 /** The account the app reads as now; `null` signed out. */
@@ -53,7 +57,19 @@ function unmark(query: object): void {
  * drawn from an answer or a failure always sees its readability.
  */
 export function installBotReadReadability(client: QueryClient): void {
-  client.getQueryCache().subscribe((event) => {
+  const cache = client.getQueryCache();
+  // The request context and the store change in one synchronous step
+  // (`AuthService`), so no attempt is sent between the two.
+  useAuthStore.subscribe((state, previous) => {
+    const viewer = state.contextMetadata?.userId ?? null;
+    if (viewer === (previous.contextMetadata?.userId ?? null)) return;
+    for (const query of cache.getAll()) {
+      if (isBotRead(query.queryKey) && query.state.fetchStatus !== "idle") {
+        requestedBy.delete(query);
+      }
+    }
+  });
+  cache.subscribe((event) => {
     if (event.type !== "updated") return;
     const queryKey: unknown = event.query.queryKey;
     if (!isBotRead(queryKey)) return;

@@ -150,6 +150,7 @@ import {
   sendWaitsOn,
   staleFailureOf,
   type BotReadFailing,
+  type BotReadStaleKind,
   type BotReadView,
 } from "@/lib/bots/bot-read-view";
 import { useBotReadView } from "@/hooks/bots/use-bot-read-view";
@@ -850,6 +851,7 @@ export function BotChannelView(props: {
       <ChannelReadNotice
         view={channelRead}
         read={conversations}
+        threads={null}
         hostId={hostId}
         className="p-4"
       />
@@ -891,10 +893,17 @@ export function BotChannelView(props: {
           {/* Above the channel and the rail, not in either: on a narrow pane
               one covers the other, and a waiting box is never shown without
               the line saying why, with Retry. A thread's own line says only
-              a cause this one does not. */}
+              a cause this one does not, so where the thread list fails for
+              this one's cause, this one's Retry asks it again too. */}
           <ChannelReadNotice
             view={channelRead}
             read={conversations}
+            threads={threadsRetriedWithChannel({
+              threadRead,
+              channelStale,
+              refetch: refetchThreads,
+              fetching: threadsFetching,
+            })}
             hostId={hostId}
             className="shrink-0 px-4 pt-2"
           />
@@ -1610,22 +1619,50 @@ function useDisplayed(element: HTMLElement | null): boolean {
  * The channel's read failing, said in place: the line over its rows, or the
  * state in their place. Nothing while the read is not failing.
  */
+interface ThreadsRetriedWithChannel {
+  readonly refetch: () => Promise<unknown>;
+  readonly fetching: boolean;
+}
+
+/**
+ * The thread list, where it fails for the channel line's cause: the thread's
+ * own line leaves that cause to the channel's (`panelThread`), so the
+ * channel's Retry asks the list again too. `null` otherwise.
+ */
+function threadsRetriedWithChannel(args: {
+  readonly threadRead: BotReadView;
+  readonly channelStale: BotReadStaleKind | null;
+  readonly refetch: () => Promise<unknown>;
+  readonly fetching: boolean;
+}): ThreadsRetriedWithChannel | null {
+  const { threadRead, channelStale } = args;
+  if (threadRead.kind === "ok" || threadRead.failure !== channelStale) {
+    return null;
+  }
+  return { refetch: args.refetch, fetching: args.fetching };
+}
+
 function ChannelReadNotice(props: {
   readonly view: BotReadView;
   readonly read: UseQueryResult<unknown, HostRpcError>;
+  /** The thread list its Retry asks again too (`threadsRetriedWithChannel`). */
+  readonly threads: ThreadsRetriedWithChannel | null;
   readonly hostId: string;
   /** Where it sits: its box's spacing. */
   readonly className: string;
 }): ReactNode {
-  const { view, read } = props;
+  const { view, read, threads } = props;
   if (view.kind === "ok") return null;
   return (
     <div className={props.className}>
       <BotReadNoticeView
         notice={{
           view,
-          retry: () => void read.refetch(),
-          retrying: read.isFetching,
+          retry: () => {
+            void read.refetch();
+            if (threads !== null) void threads.refetch();
+          },
+          retrying: read.isFetching || (threads !== null && threads.fetching),
         }}
         surface="channel"
         hostId={props.hostId}
