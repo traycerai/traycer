@@ -308,19 +308,24 @@ async function takeStep(
           ? { kind: "held", uploadId: answer.uploadId }
           : { kind: "written", revision: answer.revision },
       );
-    // Saved on this computer, still bound to none as the read found it: the
-    // answer is this computer's own reading, and the next step rests on it.
-    // One that leaves the setting off is a failed write.
-    else if (step.environmentId === null) {
+    // Saved on this computer, bound to none: one that leaves the setting off
+    // is a failed write there.
+    else {
       if (!answer.enabled) file(io, null, { kind: "failed" });
-      return {
-        ...progress,
-        read: { enabled: answer.enabled, revision: null, environmentId: null },
-        sent: true,
-      };
+      // Still bound to none as the read found it: the answer is this
+      // computer's own reading, and the next step rests on it. A read that
+      // named a configuration is not answered by it: the next read decides.
+      if (step.environmentId === null)
+        return {
+          ...progress,
+          read: {
+            enabled: answer.enabled,
+            revision: null,
+            environmentId: null,
+          },
+          sent: true,
+        };
     }
-    // Otherwise the read named a configuration and the computer has been
-    // bound to none since: nothing is filed, and the next read decides.
     return { ...progress, read: null, sent: true };
   }
   const landed = await io.writeProvider(step.row);
