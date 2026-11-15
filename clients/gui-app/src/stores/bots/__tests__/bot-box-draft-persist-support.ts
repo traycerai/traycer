@@ -228,9 +228,11 @@ export async function pastTheDebounce(app: App): Promise<void> {
 
 /**
  * Lets queued tasks and promises run, the clock untouched, until `condition`
- * holds; the case's timeout bounds the wait. What it waits on can depend on the
- * machine (a digest settles on a thread pool, not on a turn of the event
- * loop), so it counts no turns.
+ * holds. What it waits on can depend on the machine (a digest settles on a
+ * thread pool, not on a turn of the event loop), so it counts no turns. The
+ * wait has no bound of its own: when the case's timeout expires the case
+ * fails, but the loop is not cancelled, and runs until its condition holds or
+ * the file's environment is reset, which clears its pending immediates.
  */
 export async function untilClockless(condition: () => boolean): Promise<void> {
   while (!condition()) {

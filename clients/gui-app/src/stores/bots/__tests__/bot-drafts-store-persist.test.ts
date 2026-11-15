@@ -57,6 +57,11 @@ const holds = vi.hoisted(() => ({
   /** While set, a write of image bytes answers only once this settles. */
   afterByteWrite: null as Promise<void> | null,
   byteWritten: (): void => undefined,
+  /** While set, a write of image bytes waits for this before the database takes it. */
+  beforeByteWrite: null as Promise<void> | null,
+  byteWriteAsked: (): void => undefined,
+  /** How many writes of image bytes reached the database. */
+  byteWrites: 0,
 }));
 
 // A write of image bytes is held after the database took it: the draft writer is
@@ -70,6 +75,14 @@ vi.mock("idb-keyval", async (importOriginal) => {
       value: unknown,
       store: UseStore | undefined,
     ): Promise<void> => {
+      if (value instanceof Uint8Array) {
+        const before = holds.beforeByteWrite;
+        if (before !== null) {
+          holds.byteWriteAsked();
+          await before;
+        }
+        holds.byteWrites += 1;
+      }
       await real.set(key, value, store);
       const gate = holds.afterByteWrite;
       if (gate !== null && value instanceof Uint8Array) {
@@ -1359,38 +1372,75 @@ describe("a page hide that left an image out of a draft, and the page stays", ()
   const IMAGE_STORE = "@/lib/composer/landing-image-store";
   const IMAGES_DB = "traycer-gui-app:default:landing-images";
 
-  /** Lets the held put end. */
+  /** Lets the held put write its bytes and end. */
   let releaseHeldPut = (): void => undefined;
+
+  beforeEach(() => {
+    holds.byteWrites = 0;
+  });
 
   afterEach(() => {
     releaseHeldPut();
-    holds.afterByteWrite = null;
-    holds.byteWritten = (): void => undefined;
+    holds.beforeByteWrite = null;
+    holds.byteWriteAsked = (): void => undefined;
+    holds.byteWrites = 0;
   });
 
   interface CountedPuts {
     readonly app: App;
+    /** How many puts of an image have been asked for. */
+    readonly asked: () => number;
+    /** How many digests had settled as each put was asked for, in order. */
+    readonly settledAtEntry: () => ReadonlyArray<number>;
     /** How many puts of an image have ended. */
     readonly ended: () => number;
   }
 
-  /** The app restarted with every put of an image counted when it ends; the puts themselves are the real ones. */
-  async function restartCountingPuts(): Promise<CountedPuts> {
+  /** The app restarted with every put of an image counted when it is asked for and when it ends; the puts themselves are the real ones. */
+  async function restartCountingPuts(
+    settledDigests: () => number,
+  ): Promise<CountedPuts> {
+    const settledAtEntry: number[] = [];
     let ended = 0;
     vi.doMock(IMAGE_STORE, async (importOriginal) => {
       const real = await importOriginal<typeof LandingImageStore>();
       return {
         ...real,
-        putImage: (bytes: ImageBytes): Promise<string> =>
-          real.putImage(bytes).finally(() => {
+        putImage: (bytes: ImageBytes): Promise<string> => {
+          settledAtEntry.push(settledDigests());
+          return real.putImage(bytes).finally(() => {
             ended += 1;
-          }),
+          });
+        },
       };
     });
     onTestFinished(() => {
       vi.doUnmock(IMAGE_STORE);
     });
-    return { app: await restart(), ended: () => ended };
+    return {
+      app: await restart(),
+      asked: () => settledAtEntry.length,
+      settledAtEntry: () => settledAtEntry,
+      ended: () => ended,
+    };
+  }
+
+  /**
+   * Counts the digests that have settled. Each put takes one inside
+   * `putImage` before it can look for a put of the same image in flight.
+   */
+  function countSettledDigests(): () => number {
+    const real = crypto.subtle.digest.bind(crypto.subtle);
+    let settled = 0;
+    const spy = vi
+      .spyOn(crypto.subtle, "digest")
+      .mockImplementation(async (algorithm, data) => {
+        const digest = await real(algorithm, data);
+        settled += 1;
+        return digest;
+      });
+    onTestFinished(() => spy.mockRestore());
+    return () => settled;
   }
 
   function typeImage(target: App, text: string): void {
@@ -1407,20 +1457,20 @@ describe("a page hide that left an image out of a draft, and the page stays", ()
 
   /**
    * The channel's draft of an image is being written, the image's put held
-   * inside the image store (the bytes are written, the put does not end), and
-   * a newer draft of the same image waits: the page hides, and the newer draft
-   * is written without the image.
+   * inside the image store before its bytes are written, and a newer draft of
+   * the same image waits: the page hides, and the newer draft is written
+   * without the image.
    */
   async function pageHidesOverAHeldPut(counted: CountedPuts): Promise<void> {
-    const byteWritten = new Promise<void>((resolve) => {
-      holds.byteWritten = resolve;
+    const asked = new Promise<void>((resolve) => {
+      holds.byteWriteAsked = resolve;
     });
-    holds.afterByteWrite = new Promise<void>((resolve) => {
+    holds.beforeByteWrite = new Promise<void>((resolve) => {
       releaseHeldPut = resolve;
     });
     typeImage(counted.app, "pic");
     await vi.advanceTimersByTimeAsync(300);
-    await byteWritten;
+    await asked;
     typeImage(counted.app, "pic again");
 
     window.dispatchEvent(new Event("pagehide"));
@@ -1428,33 +1478,45 @@ describe("a page hide that left an image out of a draft, and the page stays", ()
     expect(storedChannel(counted.app)).toContain("pic again");
     expect(storedChannel(counted.app)).not.toContain("imageAttachment");
   }
+
   /** The image's hash as the stored draft names it, once it does. */
   function namedHash(target: App): string | null {
     return /"hash":"([0-9a-f]{64})"/.exec(storedChannel(target))?.[1] ?? null;
   }
 
-  it("writes the image once the put that was holding it ends, with no further edit, when the page hide came first", async () => {
-    const counted = await restartCountingPuts();
+  it("writes the image from a put of its own, which finds the bytes the held put wrote, when the held put has ended first", async () => {
+    const counted = await restartCountingPuts(countSettledDigests());
     app = counted.app;
     await pageHidesOverAHeldPut(counted);
 
     releaseHeldPut();
     await untilClockless(() => counted.ended() === 1);
     await vi.advanceTimersByTimeAsync(300);
-    await untilClockless(() => namedHash(app) !== null);
+    await untilClockless(
+      () => counted.ended() === 2 && namedHash(app) !== null,
+    );
 
     const hash = namedHash(app) ?? "";
     expect(app.imageRoots().has(hash)).toBe(true);
     expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+    // Sequential puts: the second finds the first's bytes stored.
+    expect(holds.byteWrites).toBe(1);
   });
 
-  it("writes the image through the follow-up write whose put joins the put still held, and keeps the image's roots and bytes", async () => {
-    const counted = await restartCountingPuts();
+  it("writes the image through the follow-up write whose put joins the put still in flight: the bytes are written once, and the image keeps its roots and bytes", async () => {
+    const settledDigests = countSettledDigests();
+    const counted = await restartCountingPuts(settledDigests);
     app = counted.app;
     await pageHidesOverAHeldPut(counted);
-    // The follow-up asks for the image's put while the first is still open:
-    // the image store's own in-flight put and its reservation count join them.
+
     await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => counted.asked() === 2);
+    // The follow-up's put is in: the next digest to settle is its own, inside
+    // `putImage`, which comes just before it looks for a put of the image in
+    // flight. The first put, still waiting to write its bytes, is what it finds.
+    const entered = counted.settledAtEntry()[1];
+    await untilClockless(() => settledDigests() > entered);
+    expect(holds.byteWrites).toBe(0);
 
     releaseHeldPut();
     await untilClockless(() => counted.ended() === 2);
@@ -1463,5 +1525,7 @@ describe("a page hide that left an image out of a draft, and the page stays", ()
     const hash = namedHash(app) ?? "";
     expect(app.imageRoots().has(hash)).toBe(true);
     expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+    // One flight: a follow-up that did not join would write them again.
+    expect(holds.byteWrites).toBe(1);
   });
 });
