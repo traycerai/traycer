@@ -133,6 +133,8 @@ function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
 interface SessionHarness {
   readonly rerender: (open: boolean) => void;
   readonly requests: readonly CapturedReviewRequest[];
+  /** The base authn's requests are sent to, as the binding's sign-in has it. */
+  readonly authnBaseUrl: string;
   readonly resolveApply: (answer: EnvironmentTransportAnswer) => void;
 }
 
@@ -273,6 +275,7 @@ function renderSessionWith(
   return {
     rerender: (open) => view.rerender(ui(open)),
     requests,
+    authnBaseUrl: cloud.authnBaseUrl,
     resolveApply: (answer) => {
       if (applyResolver === null) throw new Error("Apply did not start");
       const resolve = applyResolver;
@@ -545,13 +548,13 @@ describe("<RetrospectiveSession /> an authn refusal for a held choice", () => {
     });
     expect(reviewReads(view.requests)[0]).toEqual({
       method: "GET",
-      url: "https://authn.example.test/api/v3/environments/env-personal/review?include=operation",
+      url: `${view.authnBaseUrl}/api/v3/environments/env-personal/review?include=operation`,
       body: null,
     });
     expect(applyRequests(view.requests)).toEqual([
       {
         method: "POST",
-        url: "https://authn.example.test/api/v3/environments/env-personal/review/held/hook-1/discard",
+        url: `${view.authnBaseUrl}/api/v3/environments/env-personal/review/held/hook-1/discard`,
         body: { revision: 8 },
       },
     ]);
@@ -594,7 +597,7 @@ describe("<RetrospectiveSession /> an authn refusal for a held choice", () => {
     expect(applyRequests(view.requests)).toEqual([
       {
         method: "POST",
-        url: "https://authn.example.test/api/v3/environments/env-personal/review/held/hook-1/apply",
+        url: `${view.authnBaseUrl}/api/v3/environments/env-personal/review/held/hook-1/apply`,
         body: { revision: 8, expectedLiveRevision: 3 },
       },
     ]);
@@ -751,7 +754,7 @@ describe("<RetrospectiveSession /> a held Approve that conflicts", () => {
     await waitFor(() => expect(applyRequests(view.requests)).toHaveLength(1));
     expect(applyRequests(view.requests)[0]).toMatchObject({
       method: "POST",
-      url: "https://authn.example.test/api/v3/environments/env-personal/review/held/hook-1/apply",
+      url: `${view.authnBaseUrl}/api/v3/environments/env-personal/review/held/hook-1/apply`,
       body: { revision: 1, expectedLiveRevision: 1 },
     });
     await waitFor(() => expect(approve.hasAttribute("disabled")).toBe(false));
