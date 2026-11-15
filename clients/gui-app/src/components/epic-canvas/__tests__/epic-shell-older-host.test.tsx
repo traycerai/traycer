@@ -123,15 +123,20 @@ const directory = vi.hoisted(() => ({
   getLocalHostId: (): string | null => null,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => hostClient,
-  useHostRuntimeClient: () => hostClient,
-  useHostBinding: () => ({ hostClient, directory }),
-  useHostDirectory: () => directory,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" }),
-  }),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => hostClient,
+    useHostRuntimeClient: () => hostClient,
+    useOptionalHostClient: () => hostClient,
+    useHostBinding: () => ({ hostClient, directory }),
+    useHostDirectory: () => directory,
+    useAuthService: () => ({
+      revalidateCurrentContext: () => Promise.resolve({ kind: "valid" }),
+    }),
+  };
+});
 
 // One client per host, answering the row the case published: the controller
 // reads the session host's floor off `getActiveHost()`.
@@ -482,11 +487,13 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
+    // The card's one action is Update now; "Open on original host" is the
+    // re-point's own way back, present because this tab has an original host.
     expect(
       within(card)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Update now"]);
+    ).toEqual(["Update now", "Open on original host"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
     expect(screen.queryByText(/Couldn't load this task/)).toBeNull();
     expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
@@ -500,14 +507,14 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     expect(seams.openAttempts).toEqual([TAB_HOST_ID]);
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
-    // The one failed construction: the opener was asked once more and refused.
-    expect(seams.openAttempts).toEqual([TAB_HOST_ID, TAB_HOST_ID]);
+    const attemptsAtFailure = [...seams.openAttempts];
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60_000);
     });
 
-    expect(seams.openAttempts).toEqual([TAB_HOST_ID, TAB_HOST_ID]);
+    // No rung of the ladder opens another transport, however long it waits.
+    expect(seams.openAttempts).toEqual(attemptsAtFailure);
     expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
   });
 
