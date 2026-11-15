@@ -299,6 +299,29 @@ describe("former members on a team host", () => {
     expect(harness.personReads).toHaveLength(1);
   });
 
+  it("keeps a read person for the session: a provider remounted under the same runtime asks authn nothing more", async () => {
+    const view = render(
+      harness.wrapKeyed(
+        <IdentityProbe userId={FORMER_USER_ID} />,
+        outerDirectory,
+        "first",
+      ),
+    );
+    expect(await screen.findByText("Former Member")).toBeTruthy();
+    expect(harness.personReads).toHaveLength(1);
+
+    view.rerender(
+      harness.wrapKeyed(
+        <IdentityProbe userId={FORMER_USER_ID} />,
+        outerDirectory,
+        "second",
+      ),
+    );
+
+    expect(await screen.findByText("Former Member")).toBeTruthy();
+    expect(harness.personReads).toHaveLength(1);
+  });
+
   it("does not read before all member pages answer, for a current member, the viewer, or system", async () => {
     render(
       wrapHarness(
