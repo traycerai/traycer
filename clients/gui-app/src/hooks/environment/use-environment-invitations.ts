@@ -163,7 +163,12 @@ export function useEnvironmentInvitationAcceptMutation() {
       // The list joins each team's row to the account's teams, so the
       // account is read again first and the team just joined is among them.
       // A read that fails leaves the teams as they were; the list is read
-      // again all the same.
+      // again all the same. The list's query function takes the teams from
+      // its render closure, so this relies on React committing the store's
+      // new teams before the list is invalidated: the store write queues
+      // React's sync flush (and its effects, which hand the query the new
+      // closure) ahead of this await's continuation. Once the list's key
+      // carries the team ids, it re-reads on the change of teams by itself.
       if (accepted && captured.auth !== null)
         await captured.auth
           .revalidateCurrentContextAfterInvalidation()
