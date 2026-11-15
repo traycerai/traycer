@@ -134,6 +134,8 @@ interface TestState {
    */
   chatRecordListAuthoritative: boolean;
   chatRecordListFailed: boolean;
+  chatPublicationRedirectRevision: string | null;
+  chatPublicationRedirectRevisionSupported: boolean | null;
   readonly publicationTargetArgs: Mock;
   /** The terminal twin: `epic.listTuiAgents` has answered. */
   tuiAgentRecordListAuthoritative: boolean;
@@ -264,6 +266,8 @@ const testState = vi.hoisted<TestState>(() => ({
   snapshotLoaded: true,
   chatRecordListAuthoritative: true,
   chatRecordListFailed: false,
+  chatPublicationRedirectRevision: null,
+  chatPublicationRedirectRevisionSupported: null,
   publicationTargetArgs: vi.fn(),
   tuiAgentRecordListAuthoritative: true,
   deletedArtifactsAvailable: false,
@@ -765,7 +769,7 @@ vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
     readonly chatIdsAuthoritative: boolean;
     readonly chatRecordListFailed: boolean;
     readonly publicationRedirectRevision: string | null;
-    readonly publicationRedirectRevisionSupported: boolean;
+    readonly publicationRedirectRevisionSupported: boolean | null;
     readonly recordListStore: unknown;
   }) => {
     testState.publicationTargetArgs(args);
@@ -1226,8 +1230,10 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
   useEpicChatRecordListFailed: () => testState.chatRecordListFailed,
-  useEpicChatPublicationRedirectRevision: () => null,
-  useEpicChatPublicationRedirectRevisionSupported: () => false,
+  useEpicChatPublicationRedirectRevision: () =>
+    testState.chatPublicationRedirectRevision,
+  useEpicChatPublicationRedirectRevisionSupported: () =>
+    testState.chatPublicationRedirectRevisionSupported,
   useEpicChatIdsNamedByCloudRows: () => [],
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
@@ -1288,8 +1294,9 @@ function fakeEpicStoreState() {
     // predates the delete disclosure's readiness read, which is the settled
     // state every count assertion here is about.
     chatRecordListAuthoritative: testState.chatRecordListAuthoritative,
-    chatPublicationRedirectRevision: null,
-    chatPublicationRedirectRevisionSupported: false,
+    chatPublicationRedirectRevision: testState.chatPublicationRedirectRevision,
+    chatPublicationRedirectRevisionSupported:
+      testState.chatPublicationRedirectRevisionSupported,
     chatPublicationTargetCoverage: [],
     chatRecordListAnswerSequence: 0,
     recordChatPublicationRedirectRevision: () => undefined,
@@ -1534,6 +1541,8 @@ describe("epic sidebar selection mode", () => {
     testState.chatRecordListAuthoritative = true;
     testState.chatRecordListFailed = false;
     testState.publicationTargetArgs.mockClear();
+    testState.chatPublicationRedirectRevision = null;
+    testState.chatPublicationRedirectRevisionSupported = null;
     testState.tuiAgentRecordListAuthoritative = true;
     testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
@@ -1611,7 +1620,7 @@ describe("epic sidebar selection mode", () => {
     ).toBeUndefined();
   });
 
-  it("forwards record-list readiness to the publication-target hook", () => {
+  it("forwards the redirect revision and record-list readiness to targets", () => {
     testState.chatRecordListAuthoritative = false;
     testState.chatRecordListFailed = false;
     const rendered = render(
@@ -1620,7 +1629,7 @@ describe("epic sidebar selection mode", () => {
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
         publicationRedirectRevision: null,
-        publicationRedirectRevisionSupported: false,
+        publicationRedirectRevisionSupported: null,
         chatIdsAuthoritative: false,
         chatRecordListFailed: false,
       }),
@@ -1631,7 +1640,7 @@ describe("epic sidebar selection mode", () => {
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
         publicationRedirectRevision: null,
-        publicationRedirectRevisionSupported: false,
+        publicationRedirectRevisionSupported: null,
         chatIdsAuthoritative: false,
         chatRecordListFailed: true,
       }),
@@ -1643,7 +1652,19 @@ describe("epic sidebar selection mode", () => {
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
         publicationRedirectRevision: null,
-        publicationRedirectRevisionSupported: false,
+        publicationRedirectRevisionSupported: null,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+      }),
+    );
+
+    testState.chatPublicationRedirectRevision = "redirect-r7";
+    testState.chatPublicationRedirectRevisionSupported = true;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationRedirectRevision: "redirect-r7",
+        publicationRedirectRevisionSupported: true,
         chatIdsAuthoritative: true,
         chatRecordListFailed: false,
       }),

@@ -95,6 +95,8 @@ const TARGETS_QUERY_KEY = queryKeys.hostMethod<
   epicId: EPIC_ID,
   chatIds: [],
 });
+const VIEWER_ID = "user-a";
+const VIEWER_TARGETS_QUERY_KEY = [...TARGETS_QUERY_KEY, VIEWER_ID] as const;
 
 interface Harness {
   readonly queryClient: QueryClient;
@@ -342,7 +344,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(
       harness.queryClient
         .getQueryCache()
-        .findAll({ queryKey: TARGETS_QUERY_KEY }),
+        .findAll({ queryKey: VIEWER_TARGETS_QUERY_KEY }),
     ).toHaveLength(1);
   });
 
@@ -394,8 +396,8 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests[0]).toEqual(knownIds);
 
     const writesBeforeRecovery =
-      harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount ??
-      0;
+      harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+        ?.dataUpdateCount ?? 0;
     ids = allIds;
     authoritative = true;
     failed = false;
@@ -408,7 +410,8 @@ describe("fork lifecycle notification-indicator refresh", () => {
 
     await waitFor(() =>
       expect(
-        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+        harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+          ?.dataUpdateCount,
       ).toBe(writesBeforeRecovery + 2),
     );
     await act(async () => {});
@@ -449,8 +452,8 @@ describe("fork lifecycle notification-indicator refresh", () => {
       harness.targetGate.release = resolve;
     });
     const writesBeforeRecovery =
-      harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount ??
-      0;
+      harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+        ?.dataUpdateCount ?? 0;
     act(() => {
       void sidebar.result.current.refetch();
     });
@@ -470,7 +473,8 @@ describe("fork lifecycle notification-indicator refresh", () => {
 
     await waitFor(() =>
       expect(
-        harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
+        harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+          ?.dataUpdateCount,
       ).toBe(writesBeforeRecovery + 2),
     );
     await act(async () => {});
@@ -556,7 +560,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         harness.queryClient,
         mockLocalHostEntry.hostId,
         EPIC_ID,
-        { chatId: CHAT_ID, chatIds: [CHAT_ID] },
+        { chatId: CHAT_ID, viewerUserId: VIEWER_ID },
       ),
     ).toBe("chat-1-forked");
   });
@@ -655,7 +659,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
     "epic.listChatRecords": { major: 1, minor: 5 },
   });
   useAuthStore.setState({
-    contextMetadata: { userId: "user-a", username: "user-a" },
+    contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
   });
   return {
     queryClient,

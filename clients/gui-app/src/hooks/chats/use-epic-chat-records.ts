@@ -33,7 +33,7 @@ import {
  */
 interface ChatRecordListAnswer {
   readonly publicationRedirectRevision: string | null;
-  readonly publicationRedirectRevisionSupported: boolean;
+  readonly publicationRedirectRevisionSupported: boolean | null;
   readonly answerSequence: number;
   /**
    * The `@1.4` row, NOT the base one and not an older minor's. A narrower row

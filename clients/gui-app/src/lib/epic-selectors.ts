@@ -883,7 +883,9 @@ export function useEpicChatPublicationRedirectRevision(): string | null {
   return useEpicStore((s) => s.chatPublicationRedirectRevision);
 }
 
-export function useEpicChatPublicationRedirectRevisionSupported(): boolean {
+export function useEpicChatPublicationRedirectRevisionSupported():
+  | boolean
+  | null {
   return useEpicStore((s) => s.chatPublicationRedirectRevisionSupported);
 }
 

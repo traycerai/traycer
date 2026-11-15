@@ -113,8 +113,8 @@ export interface UseHostQueryWithResponseMapOptions<
    * mount would be stale by the second tick.
    *
    * Publication targets on a revision-supporting host send the current full
-   * local chat-id set here while sharing one task cache slot. The first read
-   * waits for the full record list, or refreshes once after a partial failure.
+   * local chat-id set here while sharing one task/viewer cache slot. The first
+   * read waits for the full record list, or refreshes once after a partial failure.
    * Each answer records its dispatch revision; the session host's record-list
    * poll refreshes the map while its observed redirect revision differs. Fork
    * edges can also invalidate it. Older hosts retain the full chat-id-set key.

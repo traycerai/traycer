@@ -396,7 +396,7 @@ vi.mock(
         readonly chatIdsAuthoritative: boolean;
         readonly chatRecordListFailed: boolean;
         readonly publicationRedirectRevision: string | null;
-        readonly publicationRedirectRevisionSupported: boolean;
+        readonly publicationRedirectRevisionSupported: boolean | null;
         readonly recordListStore: unknown;
       }) => {
         spies.publicationTargetArgs(args);
@@ -840,6 +840,8 @@ describe("Agents opener sub-page", () => {
       ...FAKE_PROJECTION,
       chatRecordListAuthoritative: false,
       chatRecordListFailed: true,
+      chatPublicationRedirectRevision: "redirect-r8",
+      chatPublicationRedirectRevisionSupported: true,
     };
     cloudChatsMock.current = [
       cloudChat({
@@ -857,8 +859,8 @@ describe("Agents opener sub-page", () => {
       client: { mockHostId: "default-host" },
       epicId: "epic-1",
       chatIds: FAKE_PROJECTION.chats.allIds,
-      publicationRedirectRevision: null,
-      publicationRedirectRevisionSupported: false,
+      publicationRedirectRevision: "redirect-r8",
+      publicationRedirectRevisionSupported: true,
       recordListStore: null,
       chatIdsAuthoritative: false,
       chatRecordListFailed: true,

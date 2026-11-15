@@ -404,7 +404,8 @@ export interface OpenEpicState {
   readonly chatRecordListFailed: boolean;
   /** Opaque revision observed on this session host's latest record-list answer. */
   readonly chatPublicationRedirectRevision: string | null;
-  readonly chatPublicationRedirectRevisionSupported: boolean;
+  /** Null until this viewer's record list establishes host support. */
+  readonly chatPublicationRedirectRevisionSupported: boolean | null;
   /** Snapshot coverage includes rows whose worker projection is still in flight. */
   readonly chatPublicationTargetCoverage: readonly string[];
   /** Success sequence; only targets readers behind the host subscribe to it. */
@@ -769,7 +770,7 @@ export interface OpenEpicState {
   setChatRecordListFailed: (failed: boolean) => void;
   recordChatPublicationRedirectRevision: (
     revision: string | null,
-    supported: boolean,
+    supported: boolean | null,
     answerSequence: number,
     snapshotChatIds: readonly string[] | null,
   ) => void;
@@ -2092,7 +2093,7 @@ export function createOpenEpicStore(
           evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
           chatRecordListFailed: false,
           chatPublicationRedirectRevision: null,
-          chatPublicationRedirectRevisionSupported: false,
+          chatPublicationRedirectRevisionSupported: null,
           chatPublicationTargetCoverage: [],
           chatRecordListAnswerSequence: 0,
           tuiAgentRecordListFailed: false,
@@ -2767,7 +2768,7 @@ export function createOpenEpicStore(
     store.setState({
       chatRecordListFailed: false,
       chatPublicationRedirectRevision: null,
-      chatPublicationRedirectRevisionSupported: false,
+      chatPublicationRedirectRevisionSupported: null,
       chatPublicationTargetCoverage: [],
       chatRecordListAnswerSequence: 0,
       tuiAgentRecordListFailed: false,

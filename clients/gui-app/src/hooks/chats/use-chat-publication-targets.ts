@@ -10,6 +10,8 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   useHostQueryEntryHash,
   useHostQueryWithResponseMap,
@@ -37,22 +39,23 @@ export interface UseChatPublicationTargetsArgs {
   readonly chatIdsAuthoritative: boolean;
   readonly chatRecordListFailed: boolean;
   readonly publicationRedirectRevision: string | null;
-  readonly publicationRedirectRevisionSupported: boolean;
+  readonly publicationRedirectRevisionSupported: boolean | null;
   readonly recordListStore: OpenEpicStoreHandle["store"] | null;
   readonly enabled: boolean;
 }
 
-/** Whether this host actually serves the field, before response upgrades add null. */
+/** Null until the manifest is known; response upgrades alone cannot prove support. */
 export function hostSupportsPublicationRedirectRevision(
   hostId: string | null,
-): boolean {
+): boolean | null {
+  if (hostId === null || getNegotiatedHostMethods(hostId) === null) return null;
   const version = readHostMethodSchemaVersion(hostId, "epic.listChatRecords");
   return version !== null && version.major === 1 && version.minor >= 5;
 }
 
 /**
  * Publication identity for the session host's local chats. A supporting host
- * shares one task slot, with the dispatch revision recorded alongside its answer.
+ * shares one task/viewer slot, with the dispatch revision recorded alongside its answer.
  * Revision changes decide freshness rather than creating a cache entry per revision,
  * preserving the last good map through a failed refresh. Older hosts retain the
  * sorted chat-id-set key. Fork edges still invalidate the host's targets maps.
@@ -89,31 +92,39 @@ function publicationTargetsParams(
   return { epicId, chatIds: supportsRevision ? [] : [...chatIds].sort() };
 }
 
-/** Capture the publication identity from the current key before deleting the local row. */
+/** The newest answer naming this chat, within its host, task and viewer. */
 export function readCachedChatPublicationId(
   queryClient: QueryClient,
   hostId: string | null,
   epicId: string,
-  chat: { readonly chatId: string; readonly chatIds: readonly string[] },
+  chat: { readonly chatId: string; readonly viewerUserId: string | null },
 ): string | null {
-  if (hostId === null) return null;
-  const data = queryClient.getQueryData<
-    ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
-  >(
-    queryKeys.hostMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>(
-      hostId,
-      PUBLICATION_TARGETS_METHOD,
-      publicationTargetsParams(
-        epicId,
-        chat.chatIds,
-        hostSupportsPublicationRedirectRevision(hostId),
-      ),
-    ),
-  );
-  return (
-    data?.redirected.find((entry) => entry.chatId === chat.chatId)
-      ?.publicationChatId ?? null
-  );
+  if (
+    hostId === null ||
+    chat.viewerUserId === null ||
+    chat.viewerUserId.length === 0
+  )
+    return null;
+  const entries = queryClient.getQueryCache().findAll({
+    queryKey: [
+      ...queryKeys.hostMethodScope(hostId, PUBLICATION_TARGETS_METHOD),
+      { epicId },
+    ],
+    predicate: (entry) => entry.queryKey[4] === chat.viewerUserId,
+  });
+  let publicationChatId: string | null = null;
+  let newestAnswer = -1;
+  for (const entry of entries) {
+    if (entry.state.dataUpdatedAt < newestAnswer) continue;
+    const data = queryClient.getQueryData<
+      ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
+    >(entry.queryKey);
+    const redirect = data?.redirected.find((row) => row.chatId === chat.chatId);
+    if (redirect === undefined) continue;
+    newestAnswer = entry.state.dataUpdatedAt;
+    publicationChatId = redirect.publicationChatId;
+  }
+  return publicationChatId;
 }
 
 function useLogUnsupportedDegrade(
@@ -138,18 +149,19 @@ function useChatPublicationTargetsQuery(
   ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>,
   HostRpcError
 > {
+  const viewerUserId = useCloudChatViewerId();
   const params = useMemo(
     () =>
       publicationTargetsParams(
         args.epicId,
         args.chatIds,
-        args.publicationRedirectRevisionSupported,
+        args.publicationRedirectRevisionSupported === true,
       ),
     [args.epicId, args.chatIds, args.publicationRedirectRevisionSupported],
   );
   const queryClient = useQueryClient();
   const entry = {
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     client: args.client,
     method: PUBLICATION_TARGETS_METHOD,
     params,
@@ -192,6 +204,8 @@ function useChatPublicationTargetsQuery(
       // The first answer must cover the full record list, except on terminal failure.
       enabled:
         args.enabled &&
+        viewerUserId.length > 0 &&
+        args.publicationRedirectRevisionSupported !== null &&
         (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
         args.epicId.length > 0 &&
         args.chatIds.length > 0,
@@ -241,7 +255,7 @@ function useChatPublicationTargetsQuery(
       partial,
     ]);
     // Every observer remembers the same in-flight attempt, including on failure.
-    // A later poll or successful write changes the attempt, without shared claims.
+    // Only a later poll or successful write permits another attempt.
     if (isFetching || cached.state.fetchStatus !== "idle") {
       lastAttempt.current = attempt;
       return;

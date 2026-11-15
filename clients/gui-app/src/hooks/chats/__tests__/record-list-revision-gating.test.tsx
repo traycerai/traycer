@@ -10,9 +10,11 @@
  * records every dispatch's params in its `calls` array, which is how the
  * wire payload is asserted rather than inferred from store state.
  *
- * These cases drive dispatches through explicit invalidation
+ * Record-list transitions are driven through explicit invalidation
  * (`invalidateEpicChatRecords` / `invalidateEpicTuiAgentRecords`) rather than
- * the 20s poll interval, so no fake timers are needed. Each case asserts the
+ * waiting for the 20s poll interval. The target retry case advances a fake
+ * clock beyond its former retry budget to prove no timer retries between
+ * list answers. Each case asserts the
  * chat method's dispatches (the primary claim) and mirrors the same claim on
  * the terminal-agent method, since both hooks are mounted together and the
  * gating hook (`useRecordListStamp`) is shared code between them - a defect
@@ -270,6 +272,7 @@ interface Fixture {
     value: Array<{ chatId: string; publicationChatId: string }>;
   };
   readonly targetFailure: { value: boolean };
+  readonly targetUnsupported: { value: boolean };
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
@@ -349,6 +352,7 @@ function createFixture(queuedBridge: boolean): Fixture {
   const targetRequestProjectedIds: Array<readonly string[]> = [];
   const targetRedirects: Fixture["targetRedirects"] = { value: [] };
   const targetFailure = { value: false };
+  const targetUnsupported = { value: false };
   let sessionHandle: OpenedStoreForTest | null = null;
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -370,10 +374,12 @@ function createFixture(queuedBridge: boolean): Fixture {
         targetRequestProjectedIds.push(
           sessionHandle?.store.getState().chats.allIds ?? [],
         );
-        if (targetFailure.value) {
+        if (targetFailure.value || targetUnsupported.value) {
           throw new HostRpcError({
-            code: "RPC_ERROR",
-            message: "Temporary target read failure.",
+            code: targetUnsupported.value ? "E_HOST_UNSUPPORTED" : "RPC_ERROR",
+            message: targetUnsupported.value
+              ? "Publication targets are unsupported."
+              : "Temporary target read failure.",
             requestId: `req-${String(requestSeq.value)}`,
             method: "epic.listChatPublicationTargets",
             fatalDetails: null,
@@ -411,6 +417,7 @@ function createFixture(queuedBridge: boolean): Fixture {
     targetRequestProjectedIds,
     targetRedirects,
     targetFailure,
+    targetUnsupported,
     Wrapper: wrapperFor(queryClient, handle, client),
   };
 }
@@ -456,7 +463,13 @@ function useFixturePublicationTargets() {
 
 beforeEach(() => {
   useAuthStore.setState({
+    status: "signed-in",
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
+    profile: {
+      userId: VIEWER_ID,
+      userName: VIEWER_ID,
+      email: "viewer@example.com",
+    },
   });
   fixture = createFixture(false);
 });
@@ -501,6 +514,10 @@ describe("R1 - the first dispatch holds nothing, and a snapshot's stamp is sent 
     await waitFor(() => {
       expect(chatCalls(fixture.messenger)).toHaveLength(1);
       expect(tuiCalls(fixture.messenger)).toHaveLength(1);
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
     });
     expect(chatCalls(fixture.messenger)[0]?.knownRevision).toBeNull();
     expect(tuiCalls(fixture.messenger)[0]?.knownRevision).toBeNull();
@@ -791,6 +808,10 @@ describe("R5 - an epic reopen starts the new generation on knownRevision: null",
     await waitFor(() => {
       expect(chatCalls(fixture.messenger)).toHaveLength(1);
       expect(tuiCalls(fixture.messenger)).toHaveLength(1);
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
     });
     expect(chatCalls(fixture.messenger)[0]?.knownRevision).toBeNull();
     expect(tuiCalls(fixture.messenger)[0]?.knownRevision).toBeNull();
@@ -801,6 +822,10 @@ describe("R5 - an epic reopen starts the new generation on knownRevision: null",
 
     // Show: generation B, a brand-new session/store.
     const handleB = newSession(false);
+    expect(handleB.store.getState().chatPublicationRedirectRevision).toBeNull();
+    expect(
+      handleB.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBeNull();
     const WrapperB = wrapperFor(fixture.queryClient, handleB, fixture.client);
     renderHook(useBothRecordSyncHooks, { wrapper: WrapperB });
 
@@ -902,6 +927,10 @@ describe("R7 - a session-handle swap under a MOUNTED hook also resets to null", 
       expect(fixture.handle.store.getState().tuiAgents.allIds).toContain(
         "tui-a",
       );
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
     });
 
     // Re-point the SAME mounted hooks onto a brand-new store - no unmount,
@@ -910,6 +939,9 @@ describe("R7 - a session-handle swap under a MOUNTED hook also resets to null", 
     // exactly as generation B's first read in R5 needs no explicit
     // invalidation either.
     const newHandle = newSession(false);
+    expect(
+      newHandle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBeNull();
     handleBox.current = newHandle;
     view.rerender();
 
@@ -1755,6 +1787,186 @@ describe("publication targets follow the real chat-record revision", () => {
     visibleTargets.unmount();
   });
 
+  it("does not refetch across R1 to null to R1, then refetches once from null to R2", async () => {
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: "redirect-r1",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-r1" },
+    ];
+    const recordView = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(fixture.handle.store.getState().chats.allIds).toEqual(["chat-a"]);
+    });
+    const targetView = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-a"]]);
+      expect(targetView.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r1" },
+      ]);
+      expect(targetView.result.current.isFetching).toBe(false);
+    });
+
+    const pollRevision = async (revision: string | null): Promise<void> => {
+      const previousSequence =
+        fixture.handle.store.getState().chatRecordListAnswerSequence;
+      fixture.chatHandler.impl = () => ({
+        kind: "unchanged",
+        publicationRedirectRevision: revision,
+        listStamp: {
+          epoch: "publication-records",
+          revision: 3,
+          touchRevision: 0,
+        },
+        touched: [],
+      });
+      act(() => {
+        invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+      });
+      await waitFor(() => {
+        expect(
+          fixture.handle.store.getState().chatRecordListAnswerSequence,
+        ).toBeGreaterThan(previousSequence);
+        expect(
+          fixture.handle.store.getState().chatPublicationRedirectRevision,
+        ).toBe(revision);
+      });
+    };
+
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "not-read-at-null" },
+    ];
+    await pollRevision(null);
+    expect(fixture.targetRequests).toHaveLength(1);
+    await pollRevision("redirect-r1");
+    expect(fixture.targetRequests).toHaveLength(1);
+    expect(targetView.result.current.data?.redirected).toEqual([
+      { chatId: "chat-a", publicationChatId: "published-r1" },
+    ]);
+
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
+    expect(fixture.targetRequests).toHaveLength(1);
+    vi.useRealTimers();
+    await pollRevision("redirect-r1");
+    await act(async () => {});
+    expect(fixture.targetRequests).toHaveLength(1);
+
+    await pollRevision(null);
+    expect(fixture.targetRequests).toHaveLength(1);
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-r2" },
+    ];
+    await pollRevision("redirect-r2");
+    await waitFor(() => {
+      expect(fixture.targetRequests).toHaveLength(2);
+      expect(targetView.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r2" },
+      ]);
+      expect(targetView.result.current.isFetching).toBe(false);
+    });
+    recordView.unmount();
+    targetView.unmount();
+  });
+
+  it("makes one unsupported target attempt while newer record revisions arrive", async () => {
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: "redirect-r1",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+    const recordView = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(fixture.handle.store.getState().chats.allIds).toEqual(["chat-a"]);
+    });
+    fixture.targetUnsupported.value = true;
+    const targetView = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.targetRequests).toHaveLength(1);
+      expect(targetView.result.current.isFetching).toBe(false);
+      expect(targetView.result.current.error?.code).toBe("E_HOST_UNSUPPORTED");
+    });
+
+    const previousSequence =
+      fixture.handle.store.getState().chatRecordListAnswerSequence;
+    fixture.chatHandler.impl = () => ({
+      kind: "unchanged",
+      publicationRedirectRevision: "redirect-r2",
+      listStamp: {
+        epoch: "publication-records",
+        revision: 3,
+        touchRevision: 0,
+      },
+      touched: [],
+    });
+    act(() => {
+      invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    });
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chatRecordListAnswerSequence,
+      ).toBeGreaterThan(previousSequence);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r2");
+    });
+    expect(fixture.targetRequests).toHaveLength(1);
+
+    const revisionTwoSequence =
+      fixture.handle.store.getState().chatRecordListAnswerSequence;
+    fixture.chatHandler.impl = () => ({
+      kind: "unchanged",
+      publicationRedirectRevision: "redirect-r3",
+      listStamp: {
+        epoch: "publication-records",
+        revision: 3,
+        touchRevision: 0,
+      },
+      touched: [],
+    });
+    act(() => {
+      invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    });
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chatRecordListAnswerSequence,
+      ).toBeGreaterThan(revisionTwoSequence);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r3");
+    });
+    expect(fixture.targetRequests).toHaveLength(1);
+    recordView.unmount();
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
+    expect(fixture.targetRequests).toHaveLength(1);
+    expect(targetView.result.current.error?.code).toBe("E_HOST_UNSUPPORTED");
+    vi.useRealTimers();
+    targetView.unmount();
+  });
+
   it("infers an older host's missing revision and retains the sorted full-id query key", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
       "epic.listChatRecords": { major: 1, minor: 4 },
@@ -1782,13 +1994,16 @@ describe("publication targets follow the real chat-record revision", () => {
       );
       expect(fixture.targetRequests).toEqual([["chat-a"]]);
     });
-    const originalKey = queryKeys.hostMethod<
-      HostRpcRegistry,
-      "epic.listChatPublicationTargets"
-    >(HOST_ID, "epic.listChatPublicationTargets", {
-      epicId: EPIC_ID,
-      chatIds: ["chat-a"],
-    });
+    const originalKey = [
+      ...queryKeys.hostMethod<
+        HostRpcRegistry,
+        "epic.listChatPublicationTargets"
+      >(HOST_ID, "epic.listChatPublicationTargets", {
+        epicId: EPIC_ID,
+        chatIds: ["chat-a"],
+      }),
+      VIEWER_ID,
+    ] as const;
     expect(fixture.queryClient.getQueryData(originalKey)).toBeDefined();
 
     fixture.chatHandler.impl = () => ({
@@ -1811,13 +2026,16 @@ describe("publication targets follow the real chat-record revision", () => {
     await waitFor(() =>
       expect(targetView.result.current.isFetching).toBe(false),
     );
-    const grownKey = queryKeys.hostMethod<
-      HostRpcRegistry,
-      "epic.listChatPublicationTargets"
-    >(HOST_ID, "epic.listChatPublicationTargets", {
-      epicId: EPIC_ID,
-      chatIds: ["chat-a", "chat-b"],
-    });
+    const grownKey = [
+      ...queryKeys.hostMethod<
+        HostRpcRegistry,
+        "epic.listChatPublicationTargets"
+      >(HOST_ID, "epic.listChatPublicationTargets", {
+        epicId: EPIC_ID,
+        chatIds: ["chat-a", "chat-b"],
+      }),
+      VIEWER_ID,
+    ] as const;
     expect(fixture.queryClient.getQueryData(originalKey)).toBeDefined();
     expect(fixture.queryClient.getQueryData(grownKey)).toBeDefined();
     expect(targetView.result.current.data?.redirected).toEqual([]);
@@ -1825,7 +2043,7 @@ describe("publication targets follow the real chat-record revision", () => {
     targetView.unmount();
   });
 
-  it("shares bounded retries across observers, keeps the last good map, and retries only on the next list answer", async () => {
+  it("shares bounded retries, keeps the last good map, and waits for the next list answer past the old retry budget", async () => {
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
       publicationRedirectRevision: "redirect-r1",

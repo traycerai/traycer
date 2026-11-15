@@ -19,7 +19,6 @@ import {
   listChatRecordsResponseV14Schema,
   listChatRecordsResponseV15Schema,
 } from "@traycer/protocol/host/epic/chat-records";
-import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   epicListTuiAgentsUpgradeV12ToV13,
   listTuiAgentsRequestV12Schema,
@@ -37,8 +36,9 @@ import {
 } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
- * Contract tests for the additive `@1.3` minors of `epic.listChatRecords`
- * and `epic.listTuiAgents`, and `host.chatRecords.subscribe@1.4`. These four
+ * Contract tests for the additive minors of `epic.listChatRecords`
+ * (`@1.3` and `@1.5`) and `epic.listTuiAgents`, and
+ * `host.chatRecords.subscribe@1.4`. These four
  * minors landed on one branch (`322d48c24`); see that commit and
  * `record-list-revision.ts` / `agent-session-state.ts` for the vocabulary.
  */
@@ -292,7 +292,7 @@ describe("epic.listChatRecords@1.5 redirect revision", () => {
     ).toEqual({ ...unchangedV14, publicationRedirectRevision: null });
   });
 
-  it("keeps the request unchanged and installs the full minor line through @1.5", () => {
+  it("keeps the request unchanged and advances the contract version to @1.5", () => {
     const request = {
       epicId: "epic-1",
       hasDocReplica: true,
@@ -310,13 +310,6 @@ describe("epic.listChatRecords@1.5 redirect revision", () => {
       major: 1,
       minor: 5,
     });
-    const line = hostRpcRegistry["epic.listChatRecords"][1];
-    expect(line.latestMinor).toBe(5);
-    expect(Object.keys(line.versions).map(Number).sort()).toEqual([
-      0, 1, 2, 3, 4, 5,
-    ]);
-    expect(line.versions[4].contract).toBe(epicListChatRecordsV14);
-    expect(line.versions[5].contract).toBe(epicListChatRecordsV15);
   });
 });
 

@@ -148,7 +148,7 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     publicationRedirectRevision:
       projection?.chatPublicationRedirectRevision ?? null,
     publicationRedirectRevisionSupported:
-      projection?.chatPublicationRedirectRevisionSupported ?? false,
+      projection?.chatPublicationRedirectRevisionSupported ?? null,
     recordListStore,
     chatIdsAuthoritative: projection?.chatRecordListAuthoritative ?? false,
     chatRecordListFailed: projection?.chatRecordListFailed ?? false,

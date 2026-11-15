@@ -28,7 +28,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -63,6 +63,7 @@ import {
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   publicationTargetMap,
+  readCachedChatPublicationId,
   useChatPublicationTargets,
 } from "@/hooks/chats/use-chat-publication-targets";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
@@ -557,6 +558,9 @@ describe("cloud-chat deletion suppression", () => {
       expect(fixture.listCalls.value).toBe(1);
       expect(fixture.cloudListCalls.value).toBe(1);
     });
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBeNull();
     expect(fixture.targetRequests).toEqual([]);
 
     fixture.listGate.release?.();
@@ -564,6 +568,10 @@ describe("cloud-chat deletion suppression", () => {
       expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
         true,
       );
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
       expect(fixture.targetRequests).toEqual([["chat-1"]]);
     });
     await waitFor(() => {
@@ -616,6 +624,128 @@ describe("cloud-chat deletion suppression", () => {
       ]);
     });
     expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
+  });
+
+  it("fails closed during a viewer mismatch, then deletes from B's slot at the same revision", async () => {
+    fixture.targetRedirects.value = [
+      { chatId: "chat-1", publicationChatId: "published-viewer-a" },
+    ];
+    const rendered = renderChannel(true);
+    await settleFirstRead();
+    await waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-1"]]);
+      expect(
+        rendered.result.current.publicationTargets.data?.redirected,
+      ).toEqual([
+        { chatId: "chat-1", publicationChatId: "published-viewer-a" },
+      ]);
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+    });
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevision,
+    ).toBe("redirect-r1");
+
+    act(() => {
+      useAuthStore.setState({
+        profile: {
+          userId: OTHER_USER_ID,
+          userName: OTHER_USER_ID,
+          email: "viewer-b@example.com",
+        },
+      });
+    });
+
+    rendered.result.current.deleteChat.mutate({
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      hostId: HOST_ID,
+    });
+    await waitFor(() => {
+      expect(fixture.deleteGate.reject).not.toBeNull();
+      expect(useCloudChatDeletions.getState().pending.size).toBe(1);
+    });
+    const mismatchedViewerIdentity = [
+      ...useCloudChatDeletions.getState().pending.values(),
+    ].join(",");
+    expect(mismatchedViewerIdentity).toContain('"chat-1"');
+    expect(mismatchedViewerIdentity).not.toContain("published-viewer-a");
+    fixture.deleteGate.reject?.(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Reject the pending delete after its identity is captured.",
+        requestId: "delete-mismatch",
+        method: "epic.deleteChat",
+        fatalDetails: null,
+      }),
+    );
+    await waitFor(() => {
+      expect(rendered.result.current.deleteChat.isError).toBe(true);
+      expect(useCloudChatDeletions.getState().pending.size).toBe(0);
+    });
+
+    fixture.targetRedirects.value = [
+      { chatId: "chat-1", publicationChatId: "published-viewer-b" },
+    ];
+    act(() => {
+      useAuthStore.setState({
+        contextMetadata: {
+          userId: OTHER_USER_ID,
+          username: OTHER_USER_ID,
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
+      expect(
+        rendered.result.current.publicationTargets.data?.redirected,
+      ).toEqual([
+        { chatId: "chat-1", publicationChatId: "published-viewer-b" },
+      ]);
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r1");
+    });
+    expect(
+      readCachedChatPublicationId(fixture.queryClient, HOST_ID, EPIC_ID, {
+        chatId: "chat-1",
+        viewerUserId: OTHER_USER_ID,
+      }),
+    ).toBe("published-viewer-b");
+
+    const targetEntries = fixture.queryClient.getQueryCache().findAll({
+      queryKey: queryKeys.hostMethodScope(
+        HOST_ID,
+        "epic.listChatPublicationTargets",
+      ),
+      predicate: (entry) => entry.state.dataUpdateCount > 0,
+    });
+    expect(targetEntries.map((entry) => entry.queryKey[4]).sort()).toEqual(
+      [OTHER_USER_ID, VIEWER_ID].sort(),
+    );
+    expect(targetEntries.map((entry) => entry.queryKey[3])).toEqual([
+      { epicId: EPIC_ID, chatIds: [] },
+      { epicId: EPIC_ID, chatIds: [] },
+    ]);
+
+    rendered.result.current.deleteChat.mutate({
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      hostId: HOST_ID,
+    });
+    await waitFor(() => {
+      expect(fixture.deleteGate.resolve).not.toBeNull();
+      expect(useCloudChatDeletions.getState().pending.size).toBe(1);
+    });
+    const pendingIdentity = [
+      ...useCloudChatDeletions.getState().pending.values(),
+    ].join(",");
+    expect(pendingIdentity).toContain("published-viewer-b");
+    expect(pendingIdentity).not.toContain("published-viewer-a");
+    fixture.deleteGate.resolve?.(null);
+    await waitFor(() => {
+      expect(rendered.result.current.deleteChat.isSuccess).toBe(true);
+    });
   });
 
   it("hides the deleted row through the pending delete, the confirmed delete, and a refetch that still answers stale", async () => {
@@ -938,11 +1068,16 @@ describe("authoritative publication identity from the delete response", () => {
     // A stale (or simply wrong) cached publication-target answer for
     // "chat-1", seeded exactly as the real hook would have cached it.
     fixture.queryClient.setQueryData(
-      queryKeys.hostMethod<HostRpcRegistry, "epic.listChatPublicationTargets">(
-        HOST_ID,
-        "epic.listChatPublicationTargets",
-        { epicId: EPIC_ID, chatIds: [] },
-      ),
+      [
+        ...queryKeys.hostMethod<
+          HostRpcRegistry,
+          "epic.listChatPublicationTargets"
+        >(HOST_ID, "epic.listChatPublicationTargets", {
+          epicId: EPIC_ID,
+          chatIds: [],
+        }),
+        VIEWER_ID,
+      ],
       { redirected: [{ chatId: "chat-1", publicationChatId: STALE_GUESS_ID }] },
     );
 
