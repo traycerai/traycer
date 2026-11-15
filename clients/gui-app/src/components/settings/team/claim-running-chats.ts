@@ -34,6 +34,7 @@ export function useClaimRunningChats(
       environmentId: environmentId ?? "",
       subject: { kind: "computer" },
     },
+    cacheKeyIdentity: undefined,
     options: {
       enabled: asking,
       gcTime: 0,
@@ -42,6 +43,10 @@ export function useClaimRunningChats(
       refetchOnReconnect: false,
     },
   });
+  // TanStack keeps the last answer through a failed refetch and hands a
+  // cached one to a new observer before it has asked; neither is this open's
+  // count.
+  if (query.isError || !query.isFetchedAfterMount) return NOT_KNOWN;
   const activeTurns = query.data?.activeTurns ?? null;
   return activeTurns === null
     ? NOT_KNOWN

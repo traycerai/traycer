@@ -412,6 +412,32 @@ describe("TeamComputersSection", () => {
     expect(within(dialog).queryByText(/running and will stop/)).toBeNull();
   });
 
+  it("says running chats will stop when a read after a count of none fails", async () => {
+    previewLocalFacts.answer = () => ({ activeTurns: 0, terminals: 0 });
+    const { harness } = mountSection(
+      ENVIRONMENT_ID,
+      "editor",
+      `handle-${ENVIRONMENT_ID}`,
+    );
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+    const dialog = await openClaimDialog(user);
+    await waitFor(() =>
+      expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(1),
+    );
+    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
+
+    previewLocalFacts.answer = () => {
+      throw new Error("The computer did not answer.");
+    };
+    await harness.queryClient.invalidateQueries();
+
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(2);
+    expect(
+      await within(dialog).findByText("Running chats will stop."),
+    ).toBeTruthy();
+  });
+
   it.each([
     ["a Viewer", "viewer"],
     ["a role not known", null],
