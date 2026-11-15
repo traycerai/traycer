@@ -17,7 +17,11 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 // button pull in so this test only needs a QueryClient, not a bound host.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
+  };
 });
 // The stub above is not sufficient on its own: it replaces `@/lib/host`, but
 // the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
