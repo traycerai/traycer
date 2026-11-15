@@ -9,6 +9,7 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -140,9 +141,9 @@ async function post<T>(
       abort.signal,
     );
     status = response.status;
-    parsedBody = parseJsonOrNull(
-      await untilAborted(response.text(), abort.signal),
-    );
+    parsedBody = isRedirectAnswer(status)
+      ? null
+      : parseJsonOrNull(await untilAborted(response.text(), abort.signal));
   } catch (error: unknown) {
     return {
       kind: "network-error",

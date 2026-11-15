@@ -30,6 +30,7 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -271,6 +272,9 @@ async function callWithSignal(
     );
   } catch (error: unknown) {
     return neverCompleted(error);
+  }
+  if (isRedirectAnswer(response.status)) {
+    return { kind: "response", status: response.status, body: null };
   }
   let body: unknown = null;
   try {

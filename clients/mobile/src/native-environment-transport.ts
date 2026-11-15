@@ -27,25 +27,63 @@ import {
 export const nativeEnvironmentTransport: EnvironmentTransport = async (
   request,
 ) => {
-  let answer: { readonly status: number; readonly data: unknown };
+  let answer: NativeAnswer;
   try {
-    answer = await CapacitorHttp.request({
+    answer = await nativeRequest({
       url: request.url,
       method: request.method,
-      headers: { ...request.headers },
-      ...(request.body === null ? {} : { data: request.body }),
-      disableRedirects: true,
-      responseType: "text",
+      headers: request.headers,
+      data: request.body,
     });
   } catch {
     throw new Error("The request was not answered.");
   }
-  const text = textOf(answer.data);
+  const text = answer.text;
   const success = answer.status >= 200 && answer.status < 300;
   const overCap =
     !success &&
     new TextEncoder().encode(text).byteLength > MAX_FAILURE_BODY_BYTES;
   return { status: answer.status, text: overCap ? null : text };
+};
+
+/**
+ * One request as the native layer sends it: `data` is the body (a string, or
+ * a JSON value it serializes for `application/json`), or null for none.
+ */
+export interface NativeRequest {
+  readonly url: string;
+  readonly method: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly data: unknown;
+}
+
+/** The answer as received, its body as text. */
+export interface NativeAnswer {
+  readonly status: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly text: string;
+}
+
+export type NativeRequester = (request: NativeRequest) => Promise<NativeAnswer>;
+
+/**
+ * The phone's one native request: sent once, with redirects disabled, so a
+ * 3xx is the answer. It rejects when nothing answered.
+ */
+export const nativeRequest: NativeRequester = async (request) => {
+  const answer = await CapacitorHttp.request({
+    url: request.url,
+    method: request.method,
+    headers: { ...request.headers },
+    ...(request.data === null ? {} : { data: request.data }),
+    disableRedirects: true,
+    responseType: "text",
+  });
+  return {
+    status: answer.status,
+    headers: answer.headers,
+    text: textOf(answer.data),
+  };
 };
 
 /** The native layer parses a JSON answer whatever `responseType` asks; this undoes it. */
