@@ -27,6 +27,8 @@ export const simulatorPlatformAvailabilitySchema = lazySchema(() =>
     available: z.boolean(),
     /** User-facing reason when `available` is false; null when available. */
     reason: z.string().nullable(),
+    /** This platform/processor can support setup; missing on older hosts. */
+    setupSupported: z.boolean().optional(),
   }),
 );
 export type SimulatorPlatformAvailability = z.infer<
