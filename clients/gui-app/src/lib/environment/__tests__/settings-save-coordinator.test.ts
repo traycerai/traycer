@@ -13,6 +13,8 @@ import { settingValueDigest } from "@traycer-clients/shared/environment/environm
 import {
   createSettingsSaveCoordinator,
   type SettingsSaveContext,
+  type SettingsSaveCoordinator,
+  type SettingsSaveTicket,
 } from "@/lib/environment/settings-save-coordinator";
 import { settingsSaveMemoryKey } from "@/lib/persist";
 import { SettingsSaveMemoryPersistLifecycleBridge } from "@/providers/settings-save-memory-persist-lifecycle-bridge";
@@ -30,7 +32,7 @@ type Value = { readonly enabled: boolean };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let reject!: (reason: unknown) => void;
   const promise = new Promise<T>((yes, no) => {
     resolve = yes;
     reject = no;
@@ -38,18 +40,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function mapping(value: Value): SettingsSaveMapping {
+function mappingAtKey(value: Value, key: string): SettingsSaveMapping {
   return {
     kind: "proposal",
     edit: {
       kind: KIND,
-      key: KEY,
+      key,
       os: null,
       operation: "put",
       value,
       canonicalValue: JSON.stringify(value),
     },
   };
+}
+
+function mapping(value: Value): SettingsSaveMapping {
+  return mappingAtKey(value, KEY);
 }
 
 const context: SettingsSaveContext = {
@@ -146,9 +152,9 @@ function setSignedInAccount(userId: string): void {
 }
 
 async function beginTicket(
-  coordinator: ReturnType<typeof createSettingsSaveCoordinator>,
+  coordinator: SettingsSaveCoordinator,
   value: Value,
-): Promise<{ readonly id: string; readonly editId: string }> {
+): Promise<SettingsSaveTicket> {
   const beginning = await coordinator.begin(mapping(value), context);
   if (beginning.kind !== "remembered") {
     throw new Error(`Expected a remembered save, got ${beginning.kind}`);
@@ -277,28 +283,106 @@ describe("settings save edit fence", () => {
     );
   });
 
-  it("does not attach A's unanswered apply to B", async () => {
+  it("continues after A's unanswered apply when B replaced its row", async () => {
+    const otherKey = "memory-other";
     const applyStarted = deferred<void>();
     const applyAnswer = deferred<EnvironmentTransportAnswer>();
-    const retryCoordinator = createSettingsSaveCoordinator({
+    const proposalsForBoth: EnvironmentProposalsResponse = {
+      proposals: [
+        ...proposals().proposals,
+        {
+          proposal: {
+            environmentId: ENVIRONMENT_ID,
+            hostId: HOST_ID,
+            sharingGeneration: SHARING_GENERATION,
+            kind: KIND,
+            key: otherKey,
+            os: null,
+            operation: "put",
+            state: "proposed",
+          },
+          localOverride: false,
+          deliveredRevision: 7,
+        },
+      ],
+    };
+    const reviewForBoth: EnvironmentTransportAnswer = {
+      status: 200,
+      text: JSON.stringify({
+        review: {
+          hosts: [],
+          needsYou: [
+            {
+              type: "held",
+              heldId: "held-a",
+              revision: 2,
+              kind: KIND,
+              key: KEY,
+              os: null,
+              hostId: HOST_ID,
+              sharingGeneration: SHARING_GENERATION,
+              hostName: "Host",
+              heldAt: 100,
+              live: null,
+              op: "put",
+              value: { enabled: false },
+            },
+            {
+              type: "held",
+              heldId: "held-c",
+              revision: 3,
+              kind: KIND,
+              key: otherKey,
+              os: null,
+              hostId: HOST_ID,
+              sharingGeneration: SHARING_GENERATION,
+              hostName: "Host",
+              heldAt: 100,
+              live: null,
+              op: "put",
+              value: { enabled: true },
+            },
+          ],
+        },
+      }),
+    };
+    let applyCount = 0;
+    const coordinator = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,
       cloud: () =>
         makeCloud(async (request) => {
-          if (request.method === "GET") return review({ enabled: false });
-          applyStarted.resolve(undefined);
-          return applyAnswer.promise;
+          if (request.method === "GET") return reviewForBoth;
+          applyCount += 1;
+          if (applyCount === 1) {
+            applyStarted.resolve(undefined);
+            return applyAnswer.promise;
+          }
+          return { status: 200, text: "" };
         }),
-      readProposals: async () => proposals(),
+      readProposals: async () => proposalsForBoth,
       now: () => 100,
     });
-    await beginTicket(retryCoordinator, { enabled: false });
-    const retrying = retryCoordinator.reconcile(HOST_ID);
-    await applyStarted.promise;
-    await beginTicket(retryCoordinator, { enabled: true });
-    applyAnswer.reject(new Error("no answer"));
-    await retrying;
 
+    await beginTicket(coordinator, { enabled: false });
+    const otherBeginning = await coordinator.begin(
+      mappingAtKey({ enabled: true }, otherKey),
+      context,
+    );
+    expect(otherBeginning.kind).toBe("remembered");
+
+    const reconciling = coordinator.reconcile(HOST_ID);
+    await applyStarted.promise;
+    await beginTicket(coordinator, { enabled: true });
+    applyAnswer.reject(new Error("no answer"));
+    await reconciling;
+
+    expect(applyCount).toBe(2);
     expect(currentRecord()?.unanswered).toBeNull();
+    expect(
+      Object.values(useSettingsSaveMemoryStore.getState().records).some(
+        (record) => record.key === otherKey,
+      ),
+    ).toBe(false);
   });
 
   it("keeps B when A's unlisted proposal is forgotten after its grace", async () => {

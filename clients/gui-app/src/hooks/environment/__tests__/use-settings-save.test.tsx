@@ -13,6 +13,10 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type {
   EnvironmentCloud,
   EnvironmentTransportAnswer,
@@ -20,7 +24,9 @@ import type {
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
+import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigShellGetResponseV11 } from "@traycer/protocol/host/config/index";
+import { hostRpcRegistry } from "@traycer/protocol/host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import { harnessIdOfProvider } from "@traycer/protocol/host/environment/item-identity";
 import {
@@ -49,10 +55,15 @@ import {
 } from "@/hooks/environment/use-settings-save";
 import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
 import { HostRuntimeContext, type HostRpcRegistry } from "@/lib/host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
+  type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { settingsSaveMemoryKey } from "@/lib/persist";
 import {
@@ -61,6 +72,7 @@ import {
 } from "@/stores/settings/settings-save-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
+import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
@@ -97,6 +109,12 @@ vi.mock(
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
+const addressableHostMock = vi.hoisted((): { id: string } => ({
+  id: "host-a",
+}));
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => addressableHostMock.id,
+}));
 
 const ACCOUNT_A = "account-a";
 const ACCOUNT_B = "account-b";
@@ -106,22 +124,28 @@ const OTHER_HOST_ID = "host-b";
 const SHARING_GENERATION = 4;
 const PROVIDER_ID = "codex";
 const ITEM_KEY = `${PROVIDER_ID}:CODEX_API_KEY`;
+type SetEnvOverrideResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.setEnvOverride"
+>;
+type DeleteEnvOverrideResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.deleteEnvOverride"
+>;
+
 const MANAGED_PROFILE_KEY = `${harnessIdOfProvider("claude-code")}:p1`;
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
-  readonly reject: (reason?: unknown) => void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((yes, no) => {
+  const promise = new Promise<T>((yes) => {
     resolve = yes;
-    reject = no;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 function setAccount(userId: string): void {
@@ -136,7 +160,7 @@ function setAccount(userId: string): void {
 function row(
   os: AuthnItemRow["os"],
   value: string,
-  revision = 3,
+  revision: number,
 ): AuthnItemRow {
   return itemRow("env_override", ITEM_KEY, os, { value }, revision);
 }
@@ -146,7 +170,7 @@ function itemRow(
   key: string,
   os: AuthnItemRow["os"],
   value: AuthnItemRow["value"],
-  revision = 3,
+  revision: number,
 ): AuthnItemRow {
   return {
     kind,
@@ -250,8 +274,15 @@ interface MutableAuthnState {
   failSave: boolean;
   localHostId: string | null;
   readonly shellConfig: ConfigShellGetResponseV11;
-  readonly proposals: EnvironmentProposalsResponse;
-  readonly reviewAnswer: EnvironmentTransportAnswer;
+  proposals: EnvironmentProposalsResponse;
+  reviewAnswer: EnvironmentTransportAnswer;
+  reviewPostAnswer: EnvironmentTransportAnswer;
+  reviewPostGate: Deferred<EnvironmentTransportAnswer> | null;
+  itemReadGates: Deferred<EnvironmentTransportAnswer>[];
+  setupScripts: SetupScript[];
+  originSignInChecks: number;
+  revisionAfterApply: number | null;
+  valueAfterApply: string | null;
 }
 
 interface SavePayload {
@@ -260,7 +291,7 @@ interface SavePayload {
 }
 
 interface SaveHarness {
-  readonly client: ReturnType<typeof buildEnvironmentClient>["client"];
+  readonly client: EnvironmentClientFixture["client"];
   readonly queryClient: QueryClient;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly state: MutableAuthnState;
@@ -272,25 +303,24 @@ interface SaveHarness {
   readonly recordsAtSend: (SettingsSaveMemoryRecord | null)[];
   readonly cloud: EnvironmentCloud;
   readonly setLocalHostId: (hostId: string | null) => void;
+  readonly dispose: () => void;
 }
 
-function makeSaveHarness(
-  overrides: {
-    readonly rows?: readonly AuthnItemRow[];
-    readonly hostListed?: boolean;
-    readonly failHosts?: boolean;
-    readonly failItems?: boolean;
-    readonly itemsGate?: Deferred<EnvironmentTransportAnswer> | null;
-    readonly ownSettings?: boolean;
-    readonly rowsByKind?: Readonly<Record<string, readonly AuthnItemRow[]>>;
-    readonly localHostId?: string | null;
-    readonly proposals?: EnvironmentProposalsResponse;
-    readonly reviewAnswer?: EnvironmentTransportAnswer;
-  } = {},
-): SaveHarness {
+function makeSaveHarness(overrides: {
+  readonly rows?: readonly AuthnItemRow[];
+  readonly hostListed?: boolean;
+  readonly failHosts?: boolean;
+  readonly failItems?: boolean;
+  readonly itemsGate?: Deferred<EnvironmentTransportAnswer> | null;
+  readonly ownSettings?: boolean;
+  readonly rowsByKind?: Readonly<Record<string, readonly AuthnItemRow[]>>;
+  readonly localHostId?: string | null;
+  readonly proposals?: EnvironmentProposalsResponse;
+  readonly reviewAnswer?: EnvironmentTransportAnswer;
+}): SaveHarness {
   const listeners = new Set<() => void>();
   const state: MutableAuthnState = {
-    rows: overrides.rows ?? [row("macos", "old-value")],
+    rows: overrides.rows ?? [row("macos", "old-value", 3)],
     rowsByKind: overrides.rowsByKind ?? {},
     hostListed: overrides.hostListed ?? true,
     failHosts: overrides.failHosts ?? false,
@@ -311,6 +341,13 @@ function makeSaveHarness(
       status: 200,
       text: JSON.stringify({ review: { hosts: [], needsYou: [] } }),
     },
+    reviewPostAnswer: { status: 200, text: "" },
+    reviewPostGate: null,
+    itemReadGates: [],
+    setupScripts: [],
+    originSignInChecks: 0,
+    revisionAfterApply: null,
+    valueAfterApply: null,
   };
   const authnRequests: EnvironmentTransportRequest[] = [];
   const hostRequests: string[] = [];
@@ -330,7 +367,10 @@ function makeSaveHarness(
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.test/",
     bearer: { getBearerToken: () => "test-token" },
-    onOriginSignIn: () => true,
+    onOriginSignIn: () => {
+      state.originSignInChecks += 1;
+      return true;
+    },
     transport: async (request) => {
       authnRequests.push(request);
       if (request.url.includes("/hosts?include=binding")) {
@@ -357,6 +397,8 @@ function makeSaveHarness(
           if (state.itemsGate !== null) return state.itemsGate.promise;
           if (state.failItems) return { status: 503, text: "" };
         }
+        const readGate = state.itemReadGates.shift();
+        if (readGate !== undefined) return readGate.promise;
         const items =
           kind === "env_override"
             ? state.rows
@@ -367,7 +409,18 @@ function makeSaveHarness(
         return state.reviewAnswer;
       }
       if (request.method === "POST" && request.url.includes("/review/")) {
-        return { status: 200, text: "" };
+        if (state.reviewPostGate !== null) {
+          return state.reviewPostGate.promise;
+        }
+        if (
+          state.revisionAfterApply !== null &&
+          state.valueAfterApply !== null
+        ) {
+          state.rows = [
+            row("macos", state.valueAfterApply, state.revisionAfterApply),
+          ];
+        }
+        return state.reviewPostAnswer;
       }
       throw new Error(`Unexpected authn route: ${request.method}`);
     },
@@ -404,6 +457,18 @@ function makeSaveHarness(
         hostRequests.push("environment.proposals");
         hostEvents.push("read:environment.proposals");
         return state.proposals;
+      },
+      "environment.setup.get": () => {
+        hostRequests.push("environment.setup.get");
+        return { scripts: state.setupScripts };
+      },
+      "environment.setup.put": (request) => {
+        captureSave("environment.setup.put", request);
+        hostEvents.push("answer:environment.setup.put");
+        return {
+          outcome: "saved",
+          revision: (request.expectedRevision ?? 0) + 1,
+        };
       },
       "providers.setEnvOverride": (request) => {
         captureSave("providers.setEnvOverride", request);
@@ -465,6 +530,8 @@ function makeSaveHarness(
     "providers.setEnvOverride": { major: 2, minor: 2 },
     "providers.deleteEnvOverride": { major: 2, minor: 1 },
     "environment.proposals": { major: 1, minor: 0 },
+    "environment.setup.get": { major: 1, minor: 0 },
+    "environment.setup.put": { major: 1, minor: 0 },
     "config.shell.get": { major: 1, minor: 1 },
     "config.shell.listDetected": { major: 1, minor: 0 },
     "config.env.list": { major: 1, minor: 0 },
@@ -476,27 +543,64 @@ function makeSaveHarness(
     "providers.usePackVersion": { major: 1, minor: 2 },
     "providers.setEnabled": { major: 2, minor: 2 },
   });
-  const auth = { environmentCloud: () => cloud };
-  const directory = {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 60_000 },
+      mutations: { retry: false },
+    },
+  });
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.test/sign-in",
+    authnBaseUrl: "https://authn.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const authService = new AuthService({ runnerHost });
+  const auth = Object.assign(authService, {
+    environmentCloud: () => cloud,
+  });
+  const directoryService = createAuthBoundHostDirectory({
+    auth: authService,
+    runnerHost,
+    remoteFetcher: null,
+    localHostIdSeeder: () => Promise.resolve(state.localHostId),
+    onRegistryPollTick: null,
+  });
+  const directory = Object.assign(directoryService, {
     getLocalHostId: () => state.localHostId,
     onChange: (callback: () => void) => {
       listeners.add(callback);
       return { dispose: () => listeners.delete(callback) };
     },
-  };
-  const binding = {
-    runtime: null,
+  });
+  let requestSequence = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "settings-save-test-" + ++requestSequence,
+      handlers: {},
+    }),
+    requestContextProvider: authService.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => state.localHostId,
+    connectionRegistry: null,
+  });
+  const binding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
     hostClient: client,
     directory,
     auth,
     hostId: HOST_ID,
-  } as unknown as HostRuntimeBinding<HostRpcRegistry>;
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
-  });
+  };
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <HostRuntimeContext.Provider value={binding}>
@@ -506,7 +610,7 @@ function makeSaveHarness(
       </HostRuntimeContext.Provider>
     </QueryClientProvider>
   );
-  return {
+  const harness: SaveHarness = {
     client,
     queryClient,
     wrapper,
@@ -522,7 +626,15 @@ function makeSaveHarness(
       state.localHostId = hostId;
       for (const listener of listeners) listener();
     },
+    dispose: () => {
+      runtime.dispose();
+      directory.dispose();
+      authService.dispose();
+      queryClient.clear();
+    },
   };
+  activeHarnesses.push(harness);
+  return harness;
 }
 
 function setRequest(value: string) {
@@ -534,9 +646,135 @@ function setRequest(value: string) {
   } as const;
 }
 
+function proposalForEdit(proposalId: string): EnvironmentProposalsResponse {
+  return {
+    proposals: [
+      {
+        proposal: {
+          proposalId,
+          environmentId: ENVIRONMENT_ID,
+          hostId: HOST_ID,
+          sharingGeneration: SHARING_GENERATION,
+          kind: "env_override",
+          key: ITEM_KEY,
+          os: "macos",
+          operation: "put",
+          state: "proposed",
+        },
+        localOverride: false,
+        deliveredRevision: 3,
+      },
+    ],
+  };
+}
+
+function reviewAnswerForEdit(
+  heldId: string,
+  value: string,
+  liveRevision: number,
+  liveValue: string,
+): EnvironmentTransportAnswer {
+  return {
+    status: 200,
+    text: JSON.stringify({
+      review: {
+        hosts: [],
+        needsYou: [
+          {
+            type: "held",
+            heldId,
+            revision: 9,
+            kind: "env_override",
+            key: ITEM_KEY,
+            os: "macos",
+            hostId: HOST_ID,
+            sharingGeneration: SHARING_GENERATION,
+            hostName: "Local host",
+            heldAt: 2,
+            live: { revision: liveRevision, value: { value: liveValue } },
+            op: "put",
+            value: { value },
+          },
+        ],
+      },
+    }),
+  };
+}
+
+function setupProposalForEdit(
+  proposalId: string,
+): EnvironmentProposalsResponse {
+  return {
+    proposals: [
+      {
+        proposal: {
+          proposalId,
+          environmentId: ENVIRONMENT_ID,
+          hostId: HOST_ID,
+          sharingGeneration: SHARING_GENERATION,
+          kind: "setup_script",
+          key: "setup",
+          os: "macos",
+          operation: "put",
+          state: "proposed",
+        },
+        localOverride: false,
+        deliveredRevision: 9,
+      },
+    ],
+  };
+}
+
+function setupReviewAnswerForEdit(
+  heldId: string,
+  text: string,
+  liveRevision: number,
+  liveText: string,
+): EnvironmentTransportAnswer {
+  return {
+    status: 200,
+    text: JSON.stringify({
+      review: {
+        hosts: [],
+        needsYou: [
+          {
+            type: "held",
+            heldId,
+            revision: 9,
+            kind: "setup_script",
+            key: "setup",
+            os: "macos",
+            hostId: HOST_ID,
+            sharingGeneration: SHARING_GENERATION,
+            hostName: "Local host",
+            heldAt: 2,
+            live: { revision: liveRevision, value: { text: liveText } },
+            op: "put",
+            value: { text },
+          },
+        ],
+      },
+    }),
+  };
+}
+
+function reviewApplyRequests(
+  harness: SaveHarness,
+): readonly EnvironmentTransportRequest[] {
+  return harness.authnRequests.filter(
+    (request) => request.method === "POST" && request.url.includes("/review/"),
+  );
+}
+
+function requestBody(request: EnvironmentTransportRequest): unknown {
+  return typeof request.body === "string"
+    ? JSON.parse(request.body)
+    : request.body;
+}
+
 async function waitForPreparedReads(
   harness: SaveHarness,
-  kind = "env_override",
+  kind: string,
 ): Promise<void> {
   await waitFor(() => {
     expect(harness.hostRequests).toContain("environment.status");
@@ -554,6 +792,8 @@ async function waitForPreparedReads(
     expect(harness.queryClient.isFetching()).toBe(0);
   });
 }
+
+const activeHarnesses: SaveHarness[] = [];
 
 function records(): readonly SettingsSaveMemoryRecord[] {
   return Object.values(useSettingsSaveMemoryStore.getState().records);
@@ -584,6 +824,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  for (const harness of activeHarnesses.splice(0)) harness.dispose();
+  addressableHostMock.id = HOST_ID;
   vi.restoreAllMocks();
   resetNegotiatedManifests();
   useSettingsSaveMemoryStore.persist.clearStorage();
@@ -594,11 +836,11 @@ afterEach(() => {
 
 describe("settings-save callers", () => {
   it("remembers the env override before sending it on its host", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
 
     await act(async () => {
       await result.current.mutateAsync(setRequest("new-value"));
@@ -622,7 +864,7 @@ describe("settings-save callers", () => {
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     harness.state.rows = [row("macos", "newer-value", 4)];
 
     await act(async () => {
@@ -635,12 +877,12 @@ describe("settings-save callers", () => {
   it.each([
     {
       label: "falls back to the any row",
-      rows: [row("any", "old-any")],
+      rows: [row("any", "old-any", 3)],
       expectedOs: "any",
     },
     {
       label: "uses the macOS row when one exists",
-      rows: [row("any", "old-any"), row("macos", "old-macos")],
+      rows: [row("any", "old-any", 3), row("macos", "old-macos", 3)],
       expectedOs: "macos",
     },
   ])("$label", async ({ rows: itemRows, expectedOs }) => {
@@ -648,7 +890,7 @@ describe("settings-save callers", () => {
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
 
     await act(async () => {
       await result.current.mutateAsync(setRequest("new-value"));
@@ -660,7 +902,7 @@ describe("settings-save callers", () => {
   it.each([
     {
       label: "the value already matches authn",
-      overrides: { rows: [row("macos", "same-value")] },
+      overrides: { rows: [row("macos", "same-value", 3)] },
       value: "same-value",
     },
     {
@@ -688,7 +930,7 @@ describe("settings-save callers", () => {
         expect(harness.hostRequests).toContain("environment.status"),
       );
     } else {
-      await waitForPreparedReads(harness);
+      await waitForPreparedReads(harness, "env_override");
     }
 
     await act(async () => {
@@ -700,12 +942,12 @@ describe("settings-save callers", () => {
   });
 
   it("sends but does not follow a save sent on a different host", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     const { result } = renderHook(
       () => useSettingsSave(harness.client, ["env_override"]),
       { wrapper: harness.wrapper },
     );
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     const sent = vi.fn(async () => "host-answered");
 
     const pending = await result.current(
@@ -723,11 +965,11 @@ describe("settings-save callers", () => {
   });
 
   it("clears in-flight after the host answers and keeps its record", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
 
     await act(async () => {
       await result.current.mutateAsync(setRequest("new-value"));
@@ -741,13 +983,13 @@ describe("settings-save callers", () => {
   });
 
   it("clears in-flight on a failed save, reports the error, and toasts it", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     harness.state.failSave = true;
     const toastError = vi.spyOn(toast, "error");
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
 
     await act(async () => {
       await expect(
@@ -768,7 +1010,7 @@ describe("settings-save callers", () => {
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     const readsBeforeSave = harness.hostEvents.filter(
       (event) => event === "read:environment.proposals",
     ).length;
@@ -800,7 +1042,7 @@ describe("settings-save callers", () => {
   });
 
   it("aborts silently if the account switches while a put is hashed", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     const digest = deferred<string>();
     const digestSpy = vi
       .spyOn(environmentReview, "settingValueDigest")
@@ -809,9 +1051,9 @@ describe("settings-save callers", () => {
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     let caught: unknown;
-    let sending!: ReturnType<typeof result.current.mutateAsync>;
+    let sending!: Promise<SetEnvOverrideResponse>;
     act(() => {
       sending = result.current.mutateAsync(setRequest("new-value"));
     });
@@ -842,14 +1084,14 @@ describe("settings-save callers", () => {
   it("does not send a delete whose items read finishes after an account switch", async () => {
     const itemsGate = deferred<EnvironmentTransportAnswer>();
     const harness = makeSaveHarness({
-      rows: [row("macos", "old-value")],
+      rows: [row("macos", "old-value", 3)],
       itemsGate,
     });
     const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
       wrapper: harness.wrapper,
     });
     await harness.state.itemsStarted.promise;
-    let deleting!: ReturnType<typeof result.current.mutateAsync>;
+    let deleting!: Promise<DeleteEnvOverrideResponse>;
     act(() => {
       deleting = result.current.mutateAsync({
         providerId: PROVIDER_ID,
@@ -866,7 +1108,7 @@ describe("settings-save callers", () => {
     await act(async () => {
       itemsGate.resolve({
         status: 200,
-        text: JSON.stringify({ items: [row("macos", "old-value")] }),
+        text: JSON.stringify({ items: [row("macos", "old-value", 3)] }),
       });
       await deleting;
     });
@@ -879,14 +1121,14 @@ describe("settings-save callers", () => {
   it("does not send a save when an items read fails after an account switch", async () => {
     const itemsGate = deferred<EnvironmentTransportAnswer>();
     const harness = makeSaveHarness({
-      rows: [row("macos", "old-value")],
+      rows: [row("macos", "old-value", 3)],
       itemsGate,
     });
     const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
       wrapper: harness.wrapper,
     });
     await harness.state.itemsStarted.promise;
-    let deleting!: ReturnType<typeof result.current.mutateAsync>;
+    let deleting!: Promise<DeleteEnvOverrideResponse>;
     act(() => {
       deleting = result.current.mutateAsync({
         providerId: PROVIDER_ID,
@@ -911,11 +1153,11 @@ describe("settings-save callers", () => {
   });
 
   it("remembers and sends the save in the same account when no switch occurs", async () => {
-    const harness = makeSaveHarness();
+    const harness = makeSaveHarness({});
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
 
     await act(async () => {
       await result.current.mutateAsync(setRequest("new-value"));
@@ -932,10 +1174,16 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         shell: [
-          itemRow("shell", "shell", "macos", {
-            path: "/bin/zsh",
-            args: ["-l"],
-          }),
+          itemRow(
+            "shell",
+            "shell",
+            "macos",
+            {
+              path: "/bin/zsh",
+              args: ["-l"],
+            },
+            3,
+          ),
         ],
       },
     });
@@ -1019,10 +1267,16 @@ describe("settings-save callers", () => {
   });
 
   it("remembers the policy stated by pack policy callers", async () => {
-    const packRow = itemRow("pack_policy", "pack-a", null, {
-      pinnedVersion: "1.2.0",
-      autoDownload: true,
-    });
+    const packRow = itemRow(
+      "pack_policy",
+      "pack-a",
+      null,
+      {
+        pinnedVersion: "1.2.0",
+        autoDownload: true,
+      },
+      3,
+    );
     const harness = makeSaveHarness({
       rowsByKind: { pack_policy: [packRow] },
     });
@@ -1089,7 +1343,13 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         managed_profile: [
-          itemRow("managed_profile", MANAGED_PROFILE_KEY, null, profileValue),
+          itemRow(
+            "managed_profile",
+            MANAGED_PROFILE_KEY,
+            null,
+            profileValue,
+            3,
+          ),
         ],
       },
     });
@@ -1163,7 +1423,13 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         managed_profile: [
-          itemRow("managed_profile", MANAGED_PROFILE_KEY, null, profileValue),
+          itemRow(
+            "managed_profile",
+            MANAGED_PROFILE_KEY,
+            null,
+            profileValue,
+            3,
+          ),
         ],
       },
     });
@@ -1208,7 +1474,13 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         managed_profile: [
-          itemRow("managed_profile", MANAGED_PROFILE_KEY, null, profileValue),
+          itemRow(
+            "managed_profile",
+            MANAGED_PROFILE_KEY,
+            null,
+            profileValue,
+            3,
+          ),
         ],
       },
     });
@@ -1282,16 +1554,15 @@ describe("settings-save callers", () => {
     const firstEditor = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     expect(harness.hostRequests).not.toContain("environment.proposals");
     firstEditor.unmount();
 
     harness.state.rows = [row("macos", "advanced-live-value", 4)];
-    harness.queryClient.clear();
     const reopenedEditor = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await waitForPreparedReads(harness);
+    await waitForPreparedReads(harness, "env_override");
     expect(harness.hostRequests).not.toContain("environment.proposals");
 
     await act(async () => {
@@ -1331,5 +1602,542 @@ describe("settings-save callers", () => {
     await waitFor(() => expect(records()).toEqual([]));
     expect(toastError).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("reopens an editor at the revision written by its previous save", async () => {
+    const harness = makeSaveHarness({
+      rows: [row("macos", "old-value", 1)],
+      localHostId: HOST_ID,
+    });
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const firstEditor = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const readsAtFirstOpen = itemReadCount();
+    const firstOwnRowRead = deferred<EnvironmentTransportAnswer>();
+    harness.state.itemReadGates.push(firstOwnRowRead);
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000031",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-first-reopen-save",
+      "first-value",
+      1,
+      "old-value",
+    );
+    harness.state.revisionAfterApply = 2;
+    harness.state.valueAfterApply = "first-value";
+    await act(async () => {
+      await firstEditor.result.current.mutateAsync(setRequest("first-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(records()).toEqual([]);
+      expect(itemReadCount()).toBeGreaterThan(readsAtFirstOpen);
+    });
+    firstEditor.unmount();
+
+    const readsBeforeReopen = itemReadCount();
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000032",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-second-reopen-save",
+      "second-value",
+      2,
+      "first-value",
+    );
+    harness.state.revisionAfterApply = 3;
+    harness.state.valueAfterApply = "second-value";
+    const reopenedEditor = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    await waitFor(() => {
+      expect(itemReadCount()).toBeGreaterThan(readsBeforeReopen);
+    });
+
+    await act(async () => {
+      await reopenedEditor.result.current.mutateAsync(
+        setRequest("second-value"),
+      );
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(2);
+      expect(records()).toEqual([]);
+    });
+
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([1, 2]);
+    expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+      { revision: 9, expectedLiveRevision: 1 },
+      { revision: 9, expectedLiveRevision: 2 },
+    ]);
+    const checksBeforeEarlierRead = harness.state.originSignInChecks;
+    firstOwnRowRead.resolve({
+      status: 200,
+      text: JSON.stringify({
+        items: [row("macos", "first-value", 2)],
+      }),
+    });
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeEarlierRead,
+      );
+    });
+  });
+
+  async function runSetupConflict(
+    secondSaveWhileApplyHeld: boolean,
+  ): Promise<void> {
+    const initialRow = itemRow(
+      "setup_script",
+      "setup",
+      "macos",
+      { text: "original" },
+      1,
+    );
+    const harness = makeSaveHarness({
+      rowsByKind: { setup_script: [initialRow] },
+      localHostId: HOST_ID,
+    });
+    harness.state.setupScripts = [
+      { os: "macos", text: "original", revision: 1 },
+    ];
+    harness.state.proposals = setupProposalForEdit(
+      "00000000-0000-4000-8000-000000000041",
+    );
+    harness.state.reviewAnswer = setupReviewAnswerForEdit(
+      "held-script-a",
+      "script A",
+      1,
+      "original",
+    );
+    const applyAnswer = deferred<EnvironmentTransportAnswer>();
+    harness.state.reviewPostGate = applyAnswer;
+    harness.state.reviewPostAnswer = {
+      status: 409,
+      text: JSON.stringify({
+        code: "revision_conflict",
+        current: itemRow(
+          "setup_script",
+          "setup",
+          "macos",
+          { text: "teammate" },
+          2,
+        ),
+      }),
+    };
+
+    render(harness.wrapper({ children: <MachineSetupSettingsPanel /> }));
+    await waitFor(() => {
+      expect(harness.hostRequests).toContain("environment.setup.get");
+      expect(
+        harness.authnRequests.some((request) =>
+          request.url.includes("/items?kind=setup_script"),
+        ),
+      ).toBe(true);
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+
+    const scriptField = screen.getByRole("textbox", {
+      name: "macOS setup script",
+    });
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    fireEvent.change(scriptField, { target: { value: "script A" } });
+    fireEvent.click(saveButton);
+    await waitFor(() => {
+      expect(harness.saveRequests).toEqual(["environment.setup.put"]);
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+    });
+
+    fireEvent.change(scriptField, { target: { value: "script B" } });
+    harness.state.rowsByKind = {
+      ...harness.state.rowsByKind,
+      setup_script: [
+        itemRow("setup_script", "setup", "macos", { text: "teammate" }, 2),
+      ],
+    };
+
+    if (secondSaveWhileApplyHeld) {
+      harness.state.proposals = setupProposalForEdit(
+        "00000000-0000-4000-8000-000000000042",
+      );
+      harness.state.reviewAnswer = setupReviewAnswerForEdit(
+        "held-script-b",
+        "script B",
+        2,
+        "teammate",
+      );
+      await waitFor(() =>
+        expect(saveButton.hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(saveButton);
+      await waitFor(() => expect(harness.saveRequests).toHaveLength(2));
+      applyAnswer.resolve(harness.state.reviewPostAnswer);
+      await waitFor(() => {
+        expect(reviewApplyRequests(harness)).toHaveLength(2);
+      });
+    } else {
+      applyAnswer.resolve(harness.state.reviewPostAnswer);
+      await waitFor(() => expect(records()).toEqual([]));
+      harness.state.proposals = setupProposalForEdit(
+        "00000000-0000-4000-8000-000000000042",
+      );
+      harness.state.reviewAnswer = setupReviewAnswerForEdit(
+        "held-script-b",
+        "script B",
+        2,
+        "teammate",
+      );
+      await waitFor(() =>
+        expect(saveButton.hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(saveButton);
+      await waitFor(() => {
+        expect(harness.saveRequests).toHaveLength(2);
+        expect(reviewApplyRequests(harness)).toHaveLength(2);
+      });
+    }
+
+    await waitFor(() => expect(records()).toEqual([]));
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([1, 1]);
+    expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+      { expectedLiveRevision: 1 },
+      { expectedLiveRevision: 1 },
+    ]);
+  }
+
+  it("keeps a typed setup script on its original base when a teammate wins before apply", async () => {
+    await runSetupConflict(false);
+  });
+
+  it("keeps the original base when a second script save starts while the first apply is held", async () => {
+    await runSetupConflict(true);
+  });
+
+  it("uses the refreshed base for a second edit in the same editor", async () => {
+    const harness = makeSaveHarness({ localHostId: HOST_ID });
+    const { result } = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000011",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-first-edit",
+      "first-value",
+      3,
+      "old-value",
+    );
+    harness.state.revisionAfterApply = 4;
+    harness.state.valueAfterApply = "first-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("first-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(records()).toEqual([]);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000012",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-second-edit",
+      "second-value",
+      4,
+      "first-value",
+    );
+    harness.state.revisionAfterApply = 5;
+    harness.state.valueAfterApply = "second-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("second-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(2);
+      expect(records()).toEqual([]);
+    });
+
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([3, 4]);
+    expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+      { revision: 9, expectedLiveRevision: 3 },
+      { revision: 9, expectedLiveRevision: 4 },
+    ]);
+  });
+
+  it("keeps the opened base when a teammate changes the row before our own-row read", async () => {
+    const harness = makeSaveHarness({
+      rows: [row("macos", "old-value", 1)],
+      localHostId: HOST_ID,
+    });
+    const { result } = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+    const ownRowRead = deferred<EnvironmentTransportAnswer>();
+    harness.state.itemReadGates.push(ownRowRead);
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000051",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-own-edit-before-teammate",
+      "own-value",
+      1,
+      "old-value",
+    );
+    harness.state.revisionAfterApply = 2;
+    harness.state.valueAfterApply = "own-value";
+
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("own-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+
+    harness.state.rows = [row("macos", "teammate-value", 3)];
+    ownRowRead.resolve({
+      status: 200,
+      text: JSON.stringify({
+        items: [row("macos", "teammate-value", 3)],
+      }),
+    });
+    const checksBeforeReadCompleted = harness.state.originSignInChecks;
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeReadCompleted,
+      );
+    });
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000052",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-second-edit-after-teammate",
+      "second-value",
+      3,
+      "teammate-value",
+    );
+    harness.state.reviewPostAnswer = {
+      status: 409,
+      text: JSON.stringify({
+        code: "revision_conflict",
+        current: row("macos", "teammate-value", 3),
+      }),
+    };
+    harness.state.revisionAfterApply = null;
+    harness.state.valueAfterApply = null;
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("second-value"));
+    });
+    await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(2));
+
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([1, 1]);
+    expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+      { expectedLiveRevision: 1 },
+      { expectedLiveRevision: 1 },
+    ]);
+  });
+
+  it("does not let an older own-row read move the editor base back", async () => {
+    const harness = makeSaveHarness({
+      rows: [row("macos", "initial-value", 1)],
+      localHostId: HOST_ID,
+    });
+    const { result } = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+    const earlierRead = deferred<EnvironmentTransportAnswer>();
+    const laterRead = deferred<EnvironmentTransportAnswer>();
+    harness.state.itemReadGates.push(earlierRead, laterRead);
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000061",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-first-own-write",
+      "first-value",
+      1,
+      "initial-value",
+    );
+    harness.state.revisionAfterApply = 2;
+    harness.state.valueAfterApply = "first-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("first-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000062",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-second-own-write",
+      "second-value",
+      2,
+      "first-value",
+    );
+    harness.state.revisionAfterApply = 3;
+    harness.state.valueAfterApply = "second-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("second-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(2);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen + 1);
+    });
+    laterRead.resolve({
+      status: 200,
+      text: JSON.stringify({
+        items: [row("macos", "second-value", 3)],
+      }),
+    });
+    const checksBeforeLaterRead = harness.state.originSignInChecks;
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeLaterRead,
+      );
+    });
+
+    const checksBeforeEarlierRead = harness.state.originSignInChecks;
+    earlierRead.resolve({
+      status: 200,
+      text: JSON.stringify({
+        items: [row("macos", "first-value", 2)],
+      }),
+    });
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeEarlierRead,
+      );
+    });
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000063",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-third-own-write",
+      "third-value",
+      3,
+      "second-value",
+    );
+    harness.state.revisionAfterApply = 4;
+    harness.state.valueAfterApply = "third-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("third-value"));
+    });
+    await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(3));
+
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([1, 1, 3]);
+    expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+      { expectedLiveRevision: 1 },
+      { expectedLiveRevision: 1 },
+      { expectedLiveRevision: 3 },
+    ]);
+  });
+
+  it("keeps an external change visible to a second edit in the same editor", async () => {
+    const harness = makeSaveHarness({ localHostId: HOST_ID });
+    const { result } = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000021",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-own-edit",
+      "own-value",
+      3,
+      "old-value",
+    );
+    harness.state.revisionAfterApply = 4;
+    harness.state.valueAfterApply = "own-value";
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("own-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(records()).toEqual([]);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+
+    harness.state.rows = [row("macos", "other-device-value", 5)];
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000022",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-second-edit",
+      "second-value",
+      5,
+      "other-device-value",
+    );
+    harness.state.reviewPostAnswer = {
+      status: 409,
+      text: JSON.stringify({
+        code: "revision_conflict",
+        current: row("macos", "other-device-value", 5),
+      }),
+    };
+    harness.state.revisionAfterApply = null;
+    harness.state.valueAfterApply = null;
+    await act(async () => {
+      await result.current.mutateAsync(setRequest("second-value"));
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(2);
+      expect(records()).toEqual([]);
+    });
+
+    expect(
+      harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
+    ).toEqual([3, 4]);
+    expect(requestBody(reviewApplyRequests(harness)[1]!)).toMatchObject({
+      revision: 9,
+      expectedLiveRevision: 4,
+    });
   });
 });
