@@ -808,32 +808,38 @@ export function hostScopedMutationModule() {
   };
 }
 
+/** The write's sign-in, still current: the retry follows it. */
+const WRITE_SIGN_IN = { isCurrent: () => true };
+
 /**
  * `@/hooks/bots/use-bot-mutations`: the bot-row write a bot's chat sends
  * before its retry, recorded into the same `mutations` as the verbs so a
- * suite reads the order, and rejected with `botWriteRefusal` as the error's
- * message when set. Its promise settles whether or not the caller is still
+ * suite reads the order (with no client: it is the app's own call to the
+ * server), and rejected with `botWriteRefusal` as the error's message when
+ * set. Its promise settles whether or not the caller is still
  * mounted, as TanStack's `mutateAsync` does. `deferResponses` holds its
  * answer like theirs.
  */
 export function botMutationsModule<T extends object>(actual: T) {
   return {
     ...actual,
-    useBotUpdateRunSettingsMutation: (client: KitClient | null) => {
+    useBotUpdateRunSettingsMutation: () => {
       const [pending, setPending] = useState(false);
       return {
         mutateAsync: (variables: Record<string, unknown>) => {
           kit.mutations.push({
-            clientId: idOf(client),
+            clientId: null,
             method: "bot.updateRunSettings",
             variables,
           });
           setPending(true);
-          return new Promise<void>((resolve, reject) => {
+          return new Promise<{
+            readonly signIn: { readonly isCurrent: () => boolean };
+          }>((resolve, reject) => {
             const deliver = (): void => {
               setPending(false);
               const refusal = kit.botWriteRefusal;
-              if (refusal === null) resolve();
+              if (refusal === null) resolve({ signIn: WRITE_SIGN_IN });
               else reject(new Error(refusal));
             };
             if (kit.deferResponses) {

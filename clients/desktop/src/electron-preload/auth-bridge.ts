@@ -3,6 +3,15 @@ import type { TeamComputersResult } from "@traycer-clients/shared/host-client/te
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
@@ -250,6 +259,18 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -539,6 +560,27 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         request,
       ) as Promise<SlackAppWriteResult>,
+
+    updateBotRunSettings: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    deleteBot: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deleteBot,
+        bearerToken,
+        request,
+      ) as Promise<BotDeleteResult>,
 
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(

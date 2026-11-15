@@ -13,10 +13,15 @@ import { botSlackMutationKeys, botSlackQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotSlackPendingInstallStore } from "@/stores/bots/bot-slack-pending-install-store";
 import { BotSlackAppError } from "@/hooks/bots/bot-slack-app-error";
+import { pressSignIn } from "@/hooks/bots/bot-write-sign-in";
 
 const WRITE_FAILED_LINE = "Couldn't update Slack settings. Try again.";
 
 const SIGNED_OUT: SlackAppFailure = { kind: "unauthorized" };
+
+// Every write here answers `null` when the sign-in it was pressed under ended
+// before the server answered (`pressSignIn`): an abandoned write refreshes
+// nothing, starts no install wait and says nothing.
 
 /** The bot's app read, refreshed after a write: the panel renders from it, never from the write's answer. */
 function useInvalidateBotSlackApp(botId: string): () => Promise<void> {
@@ -39,7 +44,7 @@ function useInvalidateBotSlackApp(botId: string): () => Promise<void> {
  */
 export function useBotSlackRegisterMutation(
   botId: string,
-): UseMutationResult<SlackAppView, Error, SlackAppRegisterRequest> {
+): UseMutationResult<SlackAppView | null, Error, SlackAppRegisterRequest> {
   const binding = useHostBinding();
   const clear = useBotSlackPendingInstallStore((s) => s.clear);
   const invalidate = useInvalidateBotSlackApp(botId);
@@ -49,12 +54,15 @@ export function useBotSlackRegisterMutation(
       if (binding === null) {
         throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
       }
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.registerSlackApp(request);
+      if (!signIn.isCurrent()) return null;
       if (result.kind === "ok") return result.app;
       throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
     gcTime: 0,
-    onSuccess: async () => {
+    onSuccess: async (app) => {
+      if (app === null) return;
       // A new registration replaces the app's credentials, so an install URL
       // minted before it no longer leads anywhere.
       clear(botId);
@@ -77,7 +85,7 @@ export interface BotSlackInstallUrl {
 export function useBotSlackInstallUrlMutation(
   botId: string,
 ): UseMutationResult<
-  BotSlackInstallUrl,
+  BotSlackInstallUrl | null,
   Error,
   { readonly baselineInstalledAt: number | null }
 > {
@@ -89,13 +97,16 @@ export function useBotSlackInstallUrlMutation(
       if (binding === null) {
         throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
       }
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.mintSlackAppInstallUrl(botId);
+      if (!signIn.isCurrent()) return null;
       if (result.kind === "ok") {
         return { url: result.url, expiresAt: result.expiresAt };
       }
       throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
     onSuccess: (minted, variables) => {
+      if (minted === null) return;
       begin({
         botId,
         expiresAt: minted.expiresAt,
@@ -111,7 +122,7 @@ export function useBotSlackInstallUrlMutation(
  */
 export function useBotSlackDisconnectMutation(
   botId: string,
-): UseMutationResult<SlackAppView, Error, void> {
+): UseMutationResult<SlackAppView | null, Error, void> {
   const binding = useHostBinding();
   const clear = useBotSlackPendingInstallStore((s) => s.clear);
   const invalidate = useInvalidateBotSlackApp(botId);
@@ -121,11 +132,14 @@ export function useBotSlackDisconnectMutation(
       if (binding === null) {
         throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
       }
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.disconnectSlackApp(botId);
+      if (!signIn.isCurrent()) return null;
       if (result.kind === "ok") return result.app;
       throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-    onSuccess: async () => {
+    onSuccess: async (app) => {
+      if (app === null) return;
       clear(botId);
       await invalidate();
     },
@@ -135,7 +149,7 @@ export function useBotSlackDisconnectMutation(
 /** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
 export function useBotSlackDmsMutation(
   botId: string,
-): UseMutationResult<SlackAppView, Error, boolean> {
+): UseMutationResult<SlackAppView | null, Error, boolean> {
   const binding = useHostBinding();
   const invalidate = useInvalidateBotSlackApp(botId);
   return useMutation({
@@ -144,10 +158,12 @@ export function useBotSlackDmsMutation(
       if (binding === null) {
         throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
       }
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.setSlackAppDms({ botId, dmsEnabled });
+      if (!signIn.isCurrent()) return null;
       if (result.kind === "ok") return result.app;
       throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-    onSuccess: () => invalidate(),
+    onSuccess: (app) => (app === null ? undefined : invalidate()),
   });
 }

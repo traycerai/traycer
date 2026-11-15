@@ -125,6 +125,10 @@ export const RunnerHostInvoke = {
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
   setSlackAppDms: "runnerHost:slackApps:dms",
+  // A bot's settings (traycer-server `/api/bots/*`), for the same reason.
+  updateBotRunSettings: "runnerHost:bots:updateRunSettings",
+  updateBotReplyMode: "runnerHost:bots:updateReplyMode",
+  deleteBot: "runnerHost:bots:delete",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",

@@ -138,9 +138,10 @@ function authnTextOf(body: unknown): string | null {
  * authn's human message, printable and bounded; the generic words when there
  * is none, or when it holds any of `withheld`: what this request carried that
  * is never shown (its bearer, and a secret value it sent). It goes into the
- * error the person sees, which also reaches the app's log.
+ * error the person sees, which also reaches the app's log. A bot write's
+ * refusal from traycer-server takes the same words (`host-client/bot-setup.ts`).
  */
-function refusalMessageWithout(
+export function refusalMessageWithout(
   body: unknown,
   withheld: readonly string[],
 ): string {

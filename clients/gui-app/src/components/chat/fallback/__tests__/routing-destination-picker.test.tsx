@@ -1919,7 +1919,7 @@ describe("RoutingDestinationPicker", () => {
       },
     };
 
-    it("writes the picked tuple to the bot's row, and sends retry only once the host took it - never switch", async () => {
+    it("writes the picked tuple to the bot's row, and sends retry only once the server took it - never switch", async () => {
       kit.deferResponses = true;
       mountInBotTab({ botId: EPIC_ID, opener: null });
       await open();
@@ -1928,7 +1928,7 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(switchAndRetry());
 
       const write = {
-        clientId: TAB_CLIENT_ID,
+        clientId: null,
         method: "bot.updateRunSettings",
         variables: {
           botId: EPIC_ID,
@@ -1957,8 +1957,8 @@ describe("RoutingDestinationPicker", () => {
       });
     });
 
-    it("a refused write states the host's sentence under the footer and sends no retry", async () => {
-      const sentence = "This bot isn't served by this host.";
+    it("a refused write states the server's sentence under the footer and sends no retry", async () => {
+      const sentence = "Not found";
       kit.botWriteRefusal = sentence;
       mountInBotTab({ botId: EPIC_ID, opener: null });
       await open();
@@ -2026,7 +2026,7 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(switchAndRetry());
 
       expect(kit.mutations[0]).toEqual({
-        clientId: TAB_CLIENT_ID,
+        clientId: null,
         method: "bot.updateRunSettings",
         variables: {
           botId: EPIC_ID,

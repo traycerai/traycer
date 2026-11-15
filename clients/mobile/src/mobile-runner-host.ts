@@ -171,6 +171,18 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
+  type BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -1047,10 +1059,13 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     request: SlackAppRegisterRequest,
   ): Promise<SlackAppWriteResult> {
+    // The app's secrets ride in the body: through the native request that
+    // follows no redirect, not the patched `fetch`.
     return registerSlackAppViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
+      nativeEnvironmentTransport,
       request,
     );
   }
@@ -1087,6 +1102,47 @@ export class MobileRunnerHost implements IRunnerHost {
       this.serverBaseUrl,
       bearerToken,
       null,
+      request,
+    );
+  }
+
+  // A bot's settings: through the native request that follows no redirect,
+  // as the environment list goes.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
       request,
     );
   }

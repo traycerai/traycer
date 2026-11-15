@@ -74,6 +74,15 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
@@ -2114,9 +2123,10 @@ export class AuthService {
    * service is not disposed). Async credential tails capture the generation
    * before their first await and re-check through this after each one, so a
    * newer `signIn()` / `signOut()` / `dispose()` always wins over an
-   * already-started save/rotate/provision.
+   * already-started save/rotate/provision. A direct bot write's caller fences
+   * its own later steps the same way (`hooks/bots/bot-write-sign-in.ts`).
    */
-  private isIdentityCurrent(generation: number): boolean {
+  isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
   }
 
@@ -3535,6 +3545,33 @@ export class AuthService {
       environmentId,
       signal,
     );
+  }
+
+  /**
+   * A bot's settings on traycer-server with the person's bearer: the app's
+   * own call, with no host in the path. Signed out, it answers `no_response`
+   * without a request, as an environment call does.
+   */
+  async updateBotRunSettings(
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotRunSettings(bearer, request);
+  }
+
+  async updateBotReplyMode(
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotReplyMode(bearer, request);
+  }
+
+  async deleteBot(request: BotDeleteRequest): Promise<BotDeleteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.deleteBot(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
