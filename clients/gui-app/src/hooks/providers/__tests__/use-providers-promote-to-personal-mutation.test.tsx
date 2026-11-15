@@ -24,7 +24,9 @@ import {
   mountTeamPage,
   poolSource,
   requireTeamHostClient,
+  requireViewingHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const cloudHarness = vi.hoisted(() => ({
@@ -720,6 +722,60 @@ describe("useProvidersPromoteToPersonal", () => {
       text: "The host's refusal text.",
       refreshLists: false,
     });
+  });
+
+  it("rereads the upload's original host after its lost reply and a host switch", async () => {
+    const uploadStarted = deferred<void>();
+    const reply = deferred<void>();
+    const result = await runPromote({
+      cloud: null,
+      entryKind: "skills",
+      handlers: {
+        "providers.nativeMutate": () => {
+          uploadStarted.resolve();
+          return reply.promise.then(() => {
+            throw new Error("upload reply lost");
+          });
+        },
+      },
+    });
+    const nextClient = requireViewingHostClient();
+    const nextHostId = nextClient.getActiveHostId();
+    if (nextHostId === null) throw new Error("Expected the next fixture host.");
+    const hostKeys = (hostId: string) =>
+      ["providers.list", "environment.status"].map((method) => [
+        ...hostQueryKeys.methodScope(hostId, method),
+        {},
+      ]);
+    const originalKeys = hostKeys(WINDOW_HOST_ID);
+    const nextKeys = hostKeys(nextHostId);
+    for (const key of [...originalKeys, ...nextKeys])
+      result.host.queryClient.setQueryData(key, {});
+    let pending: Promise<PromoteToEnvironmentOutcome> | undefined;
+    await act(async () => {
+      pending = result.rendered.result.current.mutateAsync(result.input);
+      await uploadStarted.promise;
+    });
+    act(() => {
+      teamHostBoundary.client = nextClient;
+      result.rendered.rerender();
+    });
+
+    await act(async () => {
+      reply.resolve();
+      await expect(pending).rejects.toThrow();
+    });
+
+    for (const key of originalKeys) {
+      expect(result.host.queryClient.getQueryState(key)?.isInvalidated).toBe(
+        true,
+      );
+    }
+    for (const key of nextKeys) {
+      expect(result.host.queryClient.getQueryState(key)?.isInvalidated).toBe(
+        false,
+      );
+    }
   });
 
   it("toasts the environment-named failure line when the host request fails", async () => {
