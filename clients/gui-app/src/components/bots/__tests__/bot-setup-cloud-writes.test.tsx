@@ -308,6 +308,7 @@ function PanelFromSnapshot(props: {
   return (
     <BotChannelSettingsPanel
       bot={query.data.bot}
+      mayChange
       personal
       channelId={null}
       environmentBots={null}
