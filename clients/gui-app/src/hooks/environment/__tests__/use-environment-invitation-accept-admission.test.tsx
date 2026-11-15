@@ -196,9 +196,10 @@ describe("invitation acceptance clears the local host door state", () => {
     );
     const directoryRefresh = vi.fn(() => Promise.resolve([]));
     const order: string[] = [];
+    const reread = deferred<LiveRevalidationOutcome>();
     mocks.revalidate.mockImplementation(() => {
       order.push("revalidate");
-      return Promise.resolve({ kind: "superseded" });
+      return reread.promise;
     });
     installAuth(accept, context, directoryRefresh);
     const invalidateQueries = watchListInvalidation(queryClient, order);
@@ -207,8 +208,20 @@ describe("invitation acceptance clears the local host door state", () => {
       { wrapper: createWrapper(queryClient) },
     );
 
+    const mutation: { value: Promise<unknown> | null } = { value: null };
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
+      mutation.value = result.current.mutateAsync({ environmentId: "team-1" });
+      await vi.waitFor(() => expect(order).toEqual(["revalidate"]));
+    });
+    // The account read is held: a list invalidation made alongside it, and not
+    // after its answer, would already be in `order` and invalidated.
+    expect(listInvalidated(queryClient)).toBe(false);
+
+    await act(async () => {
+      reread.resolve({ kind: "superseded" });
+      if (mutation.value === null)
+        throw new Error("expected an invitation mutation");
+      await mutation.value;
     });
 
     expect(accept).toHaveBeenCalledWith("team-1");
@@ -218,9 +231,10 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(directoryRefresh).toHaveBeenCalledOnce();
     expect(mocks.refreshHostFleet).toHaveBeenCalledOnce();
-    // The list joins each row to the account's teams, so the account is read
-    // first and the list invalidated only after that read has answered.
+    // The list joins each row to the account's teams, so it is invalidated
+    // only after the account read has answered.
     expect(order).toEqual(["revalidate", "invalidate-list"]);
+    expect(listInvalidated(queryClient)).toBe(true);
   });
 
   it.each([
