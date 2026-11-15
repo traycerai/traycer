@@ -113,8 +113,9 @@ export interface SettingsSaveCoordinator {
     applied: () => void,
   ) => Promise<SettingsSaveBeginning>;
   /**
-   * The save's send is over: `hostAnswered` when the host answered it, false
-   * when it failed or nothing answered. An answered save's host is
+   * The save's send is over: `hostAnswered` when the host's answer proposed
+   * it, false when it was not proposed: it failed, nothing answered it, or
+   * the answer proposes nothing to a configuration. A proposed save's host is
    * reconciled, which finds its proposal in `environment.proposals`; no save
    * answer carries one.
    */

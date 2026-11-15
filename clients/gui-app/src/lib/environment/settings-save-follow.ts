@@ -9,9 +9,12 @@ import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/
 export type PendingSettingsSave =
   | {
       readonly kind: "send";
-      /** The host answered the save. */
+      /** The host's answer proposed the save to its configuration. */
       readonly answered: () => void;
-      /** The save failed, or nothing answered it. */
+      /**
+       * The save was not proposed: it failed, nothing answered it, or the
+       * host's answer proposes nothing to a configuration.
+       */
       readonly failed: () => void;
     }
   /**
