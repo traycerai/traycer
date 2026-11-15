@@ -71,6 +71,16 @@ export interface TeamPeopleHarness {
   readonly queryClient: QueryClient;
   readonly setPersonAnswer: (answer: unknown, status: number) => void;
   readonly wrap: (children: ReactNode, outer: BotMemberResolver) => ReactNode;
+  /**
+   * `wrap` with the provider's key given: a different key remounts
+   * `HostTeamPeopleProvider` under the same runtime, query client and sign-in,
+   * as a tile does when it closes and another opens.
+   */
+  readonly wrapKeyed: (
+    children: ReactNode,
+    outer: BotMemberResolver,
+    providerKey: string,
+  ) => ReactNode;
   readonly dispose: () => void;
 }
 
@@ -199,6 +209,30 @@ export async function createTeamPeopleHarness(
     });
   const remoteFetcher = (): Promise<RemoteHostFetchOutcome> =>
     Promise.resolve({ kind: "hosts", entries: [remoteHost] });
+  const wrapKeyed = (
+    children: ReactNode,
+    outer: BotMemberResolver,
+    providerKey: string,
+  ): ReactNode => (
+    <RunnerHostProvider runnerHost={runnerHost}>
+      {people.wrap(
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={messengerFactory}
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={remoteFetcher}
+          fallback={<div data-testid="team-runtime-fallback" />}
+        >
+          <PersonMembersContext.Provider value={outer}>
+            <HostTeamPeopleProvider key={providerKey} hostId={TEAM_HOST_ID}>
+              {children}
+            </HostTeamPeopleProvider>
+          </PersonMembersContext.Provider>
+        </HostRuntimeProvider>,
+      )}
+    </RunnerHostProvider>
+  );
   return {
     memberRequests,
     get environmentListRequests() {
@@ -211,26 +245,8 @@ export async function createTeamPeopleHarness(
       personAnswer = answer;
       personStatus = status;
     },
-    wrap: (children, outer) => (
-      <RunnerHostProvider runnerHost={runnerHost}>
-        {people.wrap(
-          <HostRuntimeProvider
-            registry={hostRpcRegistry}
-            messengerFactory={messengerFactory}
-            invalidator={null}
-            requestId={null}
-            remoteFetcher={remoteFetcher}
-            fallback={<div data-testid="team-runtime-fallback" />}
-          >
-            <PersonMembersContext.Provider value={outer}>
-              <HostTeamPeopleProvider hostId={TEAM_HOST_ID}>
-                {children}
-              </HostTeamPeopleProvider>
-            </PersonMembersContext.Provider>
-          </HostRuntimeProvider>,
-        )}
-      </RunnerHostProvider>
-    ),
+    wrap: (children, outer) => wrapKeyed(children, outer, "team-people"),
+    wrapKeyed,
     dispose: () => {
       people.dispose();
       resetNegotiatedManifests();
