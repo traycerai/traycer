@@ -875,8 +875,8 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
  * work stops, when a member claims a team's computer and when a person gives
  * their computer to a team. A count the computer cannot read is null (not
  * known), never zero. `terminals` is always null for a `plan` subject.
- * Defined and not registered: it registers with the host slice that serves
- * it and its first caller. Not an agent capability.
+ * Registered with the redesign's environment methods
+ * (`redesign-rpc-methods.ts`). Not an agent capability.
  */
 export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
   z.object({
