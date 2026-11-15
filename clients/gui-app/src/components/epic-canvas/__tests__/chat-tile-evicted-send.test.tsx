@@ -152,7 +152,10 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
