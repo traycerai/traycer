@@ -61,6 +61,11 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   advanceLegendListTime,
   installLegendListTestClock,
 } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -1305,6 +1310,34 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
     expect(set).not.toHaveBeenCalled();
     expect(cli.envOverrides).toEqual([]);
+  });
+
+  it("hides an abandoned shell-variable save but reports a transport failure", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    set.mockRejectedValueOnce(abandonedSaveError("config.env.set"));
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("NODE_ENV", "NODE_ENV", "production");
+
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Apply variable",
+        }).disabled,
+      ).toBe(false);
+    });
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("config.env.set");
+    set.mockRejectedValueOnce(transportFailure);
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    expect(await screen.findByText(transportFailure.message)).toBeTruthy();
   });
 
   it("still saves a plain value", async () => {

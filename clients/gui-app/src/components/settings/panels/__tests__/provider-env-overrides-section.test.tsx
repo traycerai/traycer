@@ -86,6 +86,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -795,6 +800,29 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
 
     expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("hides an abandoned provider-variable save but reports a transport failure", async () => {
+    mocks.setOverrideMutate.mockRejectedValueOnce(
+      abandonedSaveError("providers.setEnvOverride"),
+    );
+    renderProviderEnvTab("cursor", null, []);
+    await typeVariable("NODE_ENV", "production");
+
+    await waitFor(() => {
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Apply variable",
+        }).disabled,
+      ).toBe(false);
+    });
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("providers.setEnvOverride");
+    mocks.setOverrideMutate.mockRejectedValueOnce(transportFailure);
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    expect(await screen.findByText(transportFailure.message)).toBeTruthy();
   });
 
   it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {

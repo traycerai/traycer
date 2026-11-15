@@ -11,6 +11,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
 import type { ProviderMcpAuthWrite } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderMcpAddDialog } from "@/components/settings/panels/provider-mcp-add-dialog";
 import type { McpMutateVariables } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
@@ -474,6 +479,41 @@ describe("<ProviderMcpAddDialog />", () => {
       name: "Variable name",
     });
     expect(nameInput.value).toBe("GITHUB_TOKEN");
+  });
+
+  it("hides an abandoned MCP add but reports a transport failure", async () => {
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+      target: { value: "mcp-server" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com" } },
+    );
+
+    mcpMocks.mutate.mockImplementationOnce((_variables, options) => {
+      options.onError(abandonedSaveError("providers.mcp.mutate"));
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeTruthy();
+
+    const transportFailure = saveTransportFailure("providers.mcp.mutate");
+    mcpMocks.mutate.mockImplementationOnce((_variables, options) => {
+      options.onError(transportFailure);
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+    expect(
+      await within(dialog).findByText(transportFailure.message),
+    ).toBeTruthy();
   });
 
   it("enables Save changes only after an edit becomes dirty", async () => {
