@@ -49,8 +49,8 @@ import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRpcShellConfigController } from "@/components/settings/panels/shell/use-rpc-shell-config-controller";
+import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
 import {
-  sendFollowedSave,
   useSettingsSave,
   useSettingsItemExists,
 } from "@/hooks/environment/use-settings-save";
@@ -141,14 +141,17 @@ const MANAGED_PROFILE_KEY = `${harnessIdOfProvider("claude-code")}:p1`;
 interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
     resolve = yes;
+    reject = no;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function setAccount(userId: string): void {
@@ -378,7 +381,7 @@ function makeSaveHarness(overrides: {
   let bearerToken = "test-token";
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.test/",
-    bearer: { getBearerToken: () => bearerToken },
+    bearer: { kind: "cloud", getBearerToken: () => bearerToken },
     onOriginSignIn: () => true,
     transport: async (request) => {
       authnRequests.push(request);
@@ -1534,11 +1537,11 @@ describe("settings-save callers", () => {
     const bash = { path: "/bin/bash", args: ["-x"] };
     const fish = {
       path: "/bin/fish",
-      args: defaultShellArgs("/bin/fish"),
+      args: [...defaultShellArgs("/bin/fish")],
     };
     const zshDefault = {
       path: "/bin/zsh",
-      args: defaultShellArgs("/bin/zsh"),
+      args: [...defaultShellArgs("/bin/zsh")],
     };
     expect(harness.saveRequests).toEqual([
       "config.shell.set",

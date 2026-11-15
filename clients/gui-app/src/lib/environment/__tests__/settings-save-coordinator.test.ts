@@ -71,6 +71,7 @@ function proposals() {
     proposals: [
       {
         proposal: {
+          proposalId: "proposal-" + KEY,
           environmentId: ENVIRONMENT_ID,
           hostId: HOST_ID,
           sharingGeneration: SHARING_GENERATION,
@@ -122,7 +123,7 @@ function makeCloud(
 ): EnvironmentCloud {
   return {
     authnBaseUrl: "https://authn.example/",
-    bearer: { getBearerToken: () => "test-bearer" },
+    bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
     transport: send,
     onOriginSignIn: () => true,
   };
@@ -296,6 +297,7 @@ describe("settings save edit fence", () => {
         ...proposals().proposals,
         {
           proposal: {
+            proposalId: "proposal-" + otherKey,
             environmentId: ENVIRONMENT_ID,
             hostId: HOST_ID,
             sharingGeneration: SHARING_GENERATION,
