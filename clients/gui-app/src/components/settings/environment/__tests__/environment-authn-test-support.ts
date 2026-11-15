@@ -425,14 +425,14 @@ async function listMcpServers(
   return answer({ servers: authnServerRowsFromItems(listed.items) }, 200);
 }
 
-async function setMcpServerEnabled(
+function setMcpServerEnabled(
   environmentId: string,
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
   // This PATCH only keeps the current tool switches. The actual disable is
   // the revision-guarded DELETE of the mcp_server item that follows.
   context.mcpServerLists.delete(environmentId);
-  return answer({ outcome: "saved" }, 200);
+  return Promise.resolve(answer({ outcome: "saved" }, 200));
 }
 
 /**
