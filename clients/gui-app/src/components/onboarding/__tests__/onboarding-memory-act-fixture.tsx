@@ -580,8 +580,8 @@ export function invalidateAllQueries(): Promise<void> {
  */
 function signInWindow(runnerHost: MockRunnerHost): void {
   runnerHost.tokenStoreEntries.set("traycer.token", {
-    token: "memory-act-token",
-    refreshToken: "memory-act-refresh-token",
+    token: "t1",
+    refreshToken: "t2",
     savedAt: new Date().toISOString(),
     user: {
       id: SIGNED_IN_USER.user.id,
