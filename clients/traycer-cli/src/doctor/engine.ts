@@ -56,6 +56,7 @@ import {
   HostTransportFailureError,
 } from "../../../shared/host-transport/host-messenger";
 import { finalRefusalOf } from "../../../shared/host-transport/retrying-messenger";
+import { isHostNotYet, retryWhileHostNotYet } from "./host-not-yet";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import {
   readHostInstallRecord,
@@ -1708,9 +1709,15 @@ async function probeHostRpc(
     };
   }
   try {
-    const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
+    const status = await retryWhileHostNotYet(() =>
+      callHostRpcAtEndpoint("host.status", {}, endpoint),
+    );
     return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
+    // The host answered, still "not yet" at the bound: it is serving, so this
+    // probe has nothing to report. `host doctor` says the running host's own
+    // checks are missing.
+    if (isHostNotYet(caught)) return null;
     // Classified by the refusal that ended a retry episode, if one did.
     const err = finalRefusalOf(caught);
     if (err instanceof HostRpcError) {

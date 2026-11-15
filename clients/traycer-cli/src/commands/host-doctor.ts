@@ -9,6 +9,7 @@ import {
   type DoctorIssue,
   type DoctorResult,
 } from "../doctor";
+import { retryWhileHostNotYet } from "../doctor/host-not-yet";
 import { lifecycleSnapshotRows } from "../host/lifecycle-snapshot";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import {
@@ -145,15 +146,18 @@ async function readRunningHostIssues(): Promise<
       },
       () =>
         // Fail fast: one attempt, so a wedged host costs one response budget
-        // before the local verdict.
-        callHostRpcWithDispatch(
-          "host.doctor",
-          {},
-          {
-            ...PLAIN_DISPATCH,
-            responseTimeoutMs: HOST_DOCTOR_RESPONSE_BUDGET_MS,
-            failFast: true,
-          },
+        // before the local verdict. A host that answers "not yet" is asked
+        // again, inside a short bound of its own.
+        retryWhileHostNotYet(() =>
+          callHostRpcWithDispatch(
+            "host.doctor",
+            {},
+            {
+              ...PLAIN_DISPATCH,
+              responseTimeoutMs: HOST_DOCTOR_RESPONSE_BUDGET_MS,
+              failFast: true,
+            },
+          ),
         ),
     );
     if (leased.kind === "busy") return null;
