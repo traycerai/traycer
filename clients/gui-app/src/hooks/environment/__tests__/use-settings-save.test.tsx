@@ -2187,7 +2187,12 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         setup_script: [
-          itemRow("setup_script", "setup", "macos", { text: "original" }, 1),
+          itemRow(
+            { kind: "setup_script", key: "setup" },
+            "macos",
+            { text: "original" },
+            1,
+          ),
         ],
       },
       localHostId: HOST_ID,

@@ -591,8 +591,8 @@ function signInWindow(runnerHost: MockRunnerHost): void {
     savedAt: new Date().toISOString(),
     user: {
       id: SIGNED_IN_USER.user.id,
-      email: SIGNED_IN_USER.user.email,
-      name: SIGNED_IN_USER.user.name,
+      email: "person@example.test",
+      name: "Person",
     },
   });
   Object.assign(runnerHost, {
