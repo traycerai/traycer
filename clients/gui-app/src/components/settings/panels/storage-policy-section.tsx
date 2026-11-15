@@ -375,8 +375,8 @@ function confirmedBy(
  * a conflict, a refusal or a failed save shows the read as it did before.
  * Holds of an environment not shown are kept for when it is shown again. A
  * hold the read never confirms ends after {@link READ_BOUND_MS}: the item then
- * shows the read, and the hold's own environment's configuration reads are
- * marked stale, so they run again now if it is shown, or when it is next shown.
+ * shows the read, and the re-read the save asked for is asked again for the
+ * hold's own environment: now if it is shown, or when it is next shown.
  */
 function useHeldSaves(
   environmentId: string | null,
@@ -429,6 +429,7 @@ function useHeldSaves(
     const held = committed.current.find((candidate) => candidate.id === id);
     if (held === undefined) return;
     setHolds((current) => current.filter((candidate) => candidate.id !== id));
+    // The re-read a successful save asks for, asked once more.
     invalidateConfigurationReads(queries, held.environmentId, [
       "environment.configuration.items",
     ]);

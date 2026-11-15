@@ -6061,10 +6061,13 @@ wrap`). Each row names the account its first usable match runs on, the
     again. An older revision, no item or no data keeps the value. A hold
     is kept per environment, so picking another and coming back still shows
     it, and it lasts at most the configuration read bound (15 seconds). Then
-    the controls show the read, and the configuration reads of the hold's own
-    environment are marked stale, shown or not: they run again at once if it is
-    shown, or when it is next shown, and another environment's read is never
-    touched. A remount of the section forgets its holds. A
+    the controls show the read, and the section asks again for exactly the
+    re-read a successful save asks for (`invalidateConfigurationReads`, same
+    arguments), for the hold's own environment, shown or not: that
+    environment's items reads on every host, plus the environment list and
+    that environment's host list. They run again at once if it is shown, or
+    when it is next shown; another environment's items read is never touched.
+    A remount of the section forgets its holds. A
     refused write drops back to the value read, and the shared mutation's
     toast says why. A stale or refused outcome shows
     `ConfigurationWriteFeedback` under the groups. A viewer of a team
