@@ -7,16 +7,16 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-profile-api-key-form";
 import { WAITING_FOR_PROFILE_TEXT } from "@/components/providers/profile-sync-copy";
-import { appLogger } from "@/lib/logger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
   mountTeamPageThroughBoundary,
+  recordAppLoggerCalls,
   configurationItem,
   TEAM_PROFILE_KEY_CANARY,
   teamProfileRecord,
@@ -36,22 +36,6 @@ import {
   railButton,
   teamProviderProfile,
 } from "./team-providers-test-support";
-
-function recordAppLoggerCalls(): () => string {
-  const debug = vi.spyOn(appLogger, "debug");
-  const info = vi.spyOn(appLogger, "info");
-  const warn = vi.spyOn(appLogger, "warn");
-  const error = vi.spyOn(appLogger, "error");
-  const errorSummary = vi.spyOn(appLogger, "errorSummary");
-  return () =>
-    JSON.stringify({
-      debug: debug.mock.calls,
-      info: info.mock.calls,
-      warn: warn.mock.calls,
-      error: error.mock.calls,
-      errorSummary: errorSummary.mock.calls,
-    });
-}
 
 describe("Team Providers boundary and sign-in", () => {
   it.each([
@@ -566,6 +550,7 @@ describe("Team Providers boundary and sign-in", () => {
           within(dialog).getByRole("button", { name: "Done" }),
         ).toBeTruthy();
         expect(harness.paramsOf("providers.startLogin")).toEqual([]);
+        expect(teamProfileRecordReadCount()).toBe(1);
         return;
       }
       if (flow === "add") {
@@ -586,6 +571,7 @@ describe("Team Providers boundary and sign-in", () => {
         },
       ]);
       expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(1);
+      expect(teamProfileRecordReadCount()).toBe(2);
     },
   );
 
@@ -722,6 +708,7 @@ describe("Team Providers boundary and sign-in", () => {
       expect(awaitCalls).toHaveLength(1);
       expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
       expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+      expect(teamProfileRecordReadCount()).toBe(2);
       expect(
         teamProfileRecordHttpBoundary.calls.filter((call) =>
           call.url.endsWith(
@@ -792,7 +779,7 @@ describe("Team Providers boundary and sign-in", () => {
       await waitFor(() => {
         expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
       });
-      expect(teamProfileRecordReadCount()).toBe(1);
+      expect(teamProfileRecordReadCount()).toBe(2);
       const awaitRequests = harness.paramsOf("providers.awaitLogin");
       expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
       expect(awaitRequests[1]).toHaveProperty(
@@ -826,7 +813,7 @@ describe("Team Providers boundary and sign-in", () => {
           name: "Claude Code profile: Team account ready",
         }),
       ).toBeTruthy();
-      expect(teamProfileRecordReadCount()).toBe(2);
+      expect(teamProfileRecordReadCount()).toBe(3);
       expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
       expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
       expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { createHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -33,9 +34,11 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
 import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { appLogger } from "@/lib/logger";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
@@ -57,6 +60,27 @@ export const TEAM_PROFILE_KEY_CANARY = "synthetic-profile-key";
 export interface TeamProfileRecordHttpAnswer {
   readonly status: number;
   readonly body: unknown;
+}
+
+export interface DeferredTeamProfileRecordAnswer {
+  readonly promise: Promise<TeamProfileRecordHttpAnswer>;
+  readonly resolve: (answer: TeamProfileRecordHttpAnswer) => void;
+}
+
+export function deferTeamProfileRecordAnswer(): DeferredTeamProfileRecordAnswer {
+  let resolveAnswer: ((answer: TeamProfileRecordHttpAnswer) => void) | null =
+    null;
+  const promise = new Promise<TeamProfileRecordHttpAnswer>((resolve) => {
+    resolveAnswer = resolve;
+  });
+  return {
+    promise,
+    resolve: (answer) => {
+      if (resolveAnswer === null)
+        throw new Error("profile-record read was not initialized");
+      resolveAnswer(answer);
+    },
+  };
 }
 
 export interface TeamProfileRecordWireRow {
@@ -196,7 +220,8 @@ export function teamProfileRecordsBody(
 }
 
 export const teamProfileRecordHttpBoundary: {
-  list: TeamProfileRecordHttpAnswer & { body: TeamProfileRecordListBody };
+  list: TeamProfileRecordHttpAnswer;
+  nextListAnswer: DeferredTeamProfileRecordAnswer | null;
   items: TeamProfileRecordHttpAnswer;
   action: TeamProfileRecordHttpAnswer;
   keyAction: TeamProfileRecordHttpAnswer;
@@ -208,6 +233,7 @@ export const teamProfileRecordHttpBoundary: {
   calls: TeamProfileRecordHttpRequest[];
 } = {
   list: { status: 200, body: { enabled: false } },
+  nextListAnswer: null,
   items: { status: 200, body: { items: [] } },
   action: {
     status: 200,
@@ -357,6 +383,51 @@ export interface TeamPageHarness {
   readonly paramsOf: (method: string) => unknown[];
 }
 
+export type TeamPageRole = "owner" | "admin" | "editor" | "viewer";
+
+export interface TeamBoundaryPageHarness extends TeamPageHarness {
+  readonly environmentListState: { currentRole: TeamPageRole };
+  readonly rereadEnvironmentList: () => Promise<void>;
+}
+
+export function recordAppLoggerCalls(): () => string {
+  const debug = vi.spyOn(appLogger, "debug");
+  const info = vi.spyOn(appLogger, "info");
+  const warn = vi.spyOn(appLogger, "warn");
+  const error = vi.spyOn(appLogger, "error");
+  const errorSummary = vi.spyOn(appLogger, "errorSummary");
+  return () =>
+    JSON.stringify(
+      {
+        debug: debug.mock.calls,
+        info: info.mock.calls,
+        warn: warn.mock.calls,
+        error: error.mock.calls,
+        errorSummary: errorSummary.mock.calls,
+      },
+      (_key, value: unknown) =>
+        value instanceof Error
+          ? { name: value.name, message: value.message }
+          : value,
+    );
+}
+
+export function teamPageCachedErrorValues(harness: TeamPageHarness): string[] {
+  const errors = [
+    ...harness.queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.state.error),
+    ...harness.queryClient
+      .getMutationCache()
+      .getAll()
+      .map((mutation) => mutation.state.error),
+  ];
+  return errors.map((error) =>
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+  );
+}
+
 interface TeamAuthRuntime {
   readonly auth: AuthService;
   readonly directory: HostDirectoryService;
@@ -430,8 +501,13 @@ function teamRequestUrl(input: RequestInfo | URL): URL {
 function teamAuthnResponse(url: URL): Promise<Response> | null {
   if (url.pathname === "/api/v3/user/negotiated")
     return teamNegotiatedUserResponse();
-  if (url.pathname.endsWith("/profile-records"))
+  if (url.pathname.endsWith("/profile-records")) {
+    const nextListAnswer = teamProfileRecordHttpBoundary.nextListAnswer;
+    teamProfileRecordHttpBoundary.nextListAnswer = null;
+    if (nextListAnswer !== null)
+      return nextListAnswer.promise.then(teamHttpResponse);
     return teamHttpResponse(teamProfileRecordHttpBoundary.list);
+  }
   if (url.pathname.endsWith("/profile-records/intents"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.signInIntent);
   if (url.pathname.includes("/profile-records/"))
@@ -596,11 +672,40 @@ type TeamPageBoundaryTarget =
 
 /** Renders a team Providers surface through the real cloud boundary. */
 export function mountTeamPageThroughBoundary(
-  role: "owner" | "admin" | "editor" | "viewer",
+  role: TeamPageRole,
   handlers: MockHandlerMap<HostRpcRegistry>,
   section: SettingsSectionId,
-): TeamPageHarness {
-  const list: EnvironmentListResponseV11 = {
+): TeamBoundaryPageHarness {
+  const environmentListState = { currentRole: role };
+  const harness = buildTeamPage({
+    source: poolSource(role),
+    handlers: {
+      ...handlers,
+      "environment.list": () =>
+        teamEnvironmentList(environmentListState.currentRole),
+    },
+    negotiated: null,
+    withPool: false,
+    boundarySection: section,
+    boundaryTarget: { kind: "team", environmentId: "env-a" },
+    pinBoundaryWindowHost: true,
+  });
+  return {
+    ...harness,
+    environmentListState,
+    rereadEnvironmentList: async () => {
+      await harness.queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(
+          mockLocalHostEntry.hostId,
+          "environment.list",
+        ),
+      });
+    },
+  };
+}
+
+function teamEnvironmentList(role: TeamPageRole): EnvironmentListResponseV11 {
+  return {
     environments: [
       {
         environmentId: "env-a",
@@ -615,15 +720,6 @@ export function mountTeamPageThroughBoundary(
       },
     ],
   };
-  return buildTeamPage({
-    source: poolSource(role),
-    handlers: { ...handlers, "environment.list": () => list },
-    negotiated: null,
-    withPool: false,
-    boundarySection: section,
-    boundaryTarget: { kind: "team", environmentId: "env-a" },
-    pinBoundaryWindowHost: true,
-  });
 }
 
 export function mountPersonalProvidersThroughBoundary(
@@ -890,6 +986,7 @@ export function resetTeamPageHarness(): void {
     status: 200,
     body: { enabled: false },
   };
+  teamProfileRecordHttpBoundary.nextListAnswer = null;
   teamProfileRecordHttpBoundary.items = { status: 200, body: { items: [] } };
   teamProfileRecordHttpBoundary.action = {
     status: 200,
