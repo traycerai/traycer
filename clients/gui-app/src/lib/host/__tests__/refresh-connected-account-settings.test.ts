@@ -6,6 +6,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -277,10 +278,19 @@ describe("refreshConnectedAccountSettings", () => {
     const session = readyRemoteSession();
     const sendStarted = deferred<void>();
     const sendGate = deferred<void>();
-    const sendUnary: FakeRemoteSession["sendUnary"] = async () => {
+    const sendUnary: FakeRemoteSession["sendUnary"] = async <
+      Method extends keyof RefreshRpcRegistry & string,
+    >(
+      _method: Method,
+    ) => {
       sendStarted.resolve();
       await sendGate.promise;
-      return hostAccountSettingsRefreshV10.responseSchema.parse({});
+      // The fake registry has only the refresh method. Parsing its concrete
+      // response schema proves the value; TS does not reduce its generic
+      // ResponseOfMethod mapping even with that one-method registry.
+      return hostAccountSettingsRefreshV10.responseSchema.parse(
+        {},
+      ) as ResponseOfMethod<RefreshRpcRegistry, Method>;
     };
     const sendSpy = vi.fn(sendUnary);
     session.sendUnary = sendSpy;

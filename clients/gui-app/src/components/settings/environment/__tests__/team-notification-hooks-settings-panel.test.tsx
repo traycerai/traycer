@@ -121,6 +121,16 @@ function renderPage(role: "admin" | "editor" | "viewer" | "unknown") {
   return render(<TeamNotificationHooksSettingsPanel />, { wrapper: Wrapper });
 }
 
+function hookRow(manager: HTMLElement, name: string): HTMLElement {
+  let row: HTMLElement | null = within(manager).getByText(name);
+  while (row !== null && row !== manager) {
+    if (within(row).queryByRole("button", { name: "Edit" }) !== null)
+      return row;
+    row = row.parentElement;
+  }
+  throw new Error(`notification hook row for ${name} was not found`);
+}
+
 function requestBody(index: number): Record<string, unknown> {
   const body = fixtures.requests[index]?.body;
   if (typeof body !== "object" || body === null)
@@ -206,7 +216,11 @@ describe("team Notification hooks page", () => {
     renderPage("editor");
 
     const manager = screen.getByTestId("cloud-notification-hooks-manager");
-    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    fireEvent.click(
+      within(hookRow(manager, "Build alerts")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Build alerts revised" },

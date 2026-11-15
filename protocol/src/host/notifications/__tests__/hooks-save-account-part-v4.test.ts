@@ -189,18 +189,28 @@ describe("notification hook save account part @4.0", () => {
     });
     expect(requestFromV2).toEqual(requestFromV1);
 
-    expect(
+    const downgradedRequestV3 = requireDowngradeValue(
       downgradeRequestAcrossMajors(saveRegistry, 4, 3, saveRequestV4),
-    ).toEqual({
-      ok: true,
-      value: { ...saveRequestV4, executableWriteGrant: null },
+    );
+    const downgradedRequestV2 = requireDowngradeValue(
+      downgradeRequestAcrossMajors(saveRegistry, 4, 2, saveRequestV4),
+    );
+    expect(downgradedRequestV3).toEqual({
+      ...saveRequestV4,
+      executableWriteGrant: null,
     });
     expect(
-      downgradeRequestAcrossMajors(saveRegistry, 4, 2, saveRequestV4),
-    ).toEqual({
-      ok: true,
-      value: { hooks: [HTTP_HOOK], executableWriteGrant: null },
+      hostNotificationHooksSaveV30.requestSchema.safeParse(downgradedRequestV3)
+        .success,
+    ).toBe(true);
+    expect(downgradedRequestV2).toEqual({
+      hooks: [HTTP_HOOK],
+      executableWriteGrant: null,
     });
+    expect(
+      hostNotificationHooksSaveV20.requestSchema.safeParse(downgradedRequestV2)
+        .success,
+    ).toBe(true);
     expect(
       downgradeRequestAcrossMajors(saveRegistry, 4, 1, saveRequestV4),
     ).toEqual({ ok: true, value: { hooks: [HTTP_HOOK] } });
