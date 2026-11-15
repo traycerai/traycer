@@ -26,6 +26,7 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   withHostQueryErrorBoundary,
   withHostMutationErrorBoundary,
@@ -319,44 +320,56 @@ export function useHostQueryWithResponseMap<
   // Coordinator control flow deliberately remains TanStack cancellation.
   const request = ({ signal }: QueryFunctionContext): Promise<TData> =>
     withHostQueryErrorBoundary(method, async () => {
-      if (client === null) {
-        return Promise.reject<TData>(hostClientUnavailableError(method));
-      }
-      args.preflight?.();
-      // The payload, which is `params` unless a caller derives one per
-      // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
-      // that fence remains the last thing captured before the request leaves.
-      const buildRequest = args.buildRequest;
-      const payload =
-        buildRequest === undefined ? params : buildRequest(params);
-      const requirement = args.requiredHostMethodVersion?.() ?? null;
-      const requestContext = args.captureRequestContext?.();
-      const responseTimeoutMs = args.responseTimeoutMs;
-      let response: ResponseOfMethod<Registry, Method>;
-      if (responseTimeoutMs !== undefined) {
-        response = await client.requestWithOptions(method, payload, {
-          responseTimeoutMs,
-          idempotencyKey: null,
-          requiredHostMethodVersion: requirement,
+      try {
+        if (client === null) {
+          return Promise.reject<TData>(hostClientUnavailableError(method));
+        }
+        args.preflight?.();
+        // The payload, which is `params` unless a caller derives one per
+        // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
+        // that fence remains the last thing captured before the request leaves.
+        const buildRequest = args.buildRequest;
+        const payload =
+          buildRequest === undefined ? params : buildRequest(params);
+        const requirement = args.requiredHostMethodVersion?.() ?? null;
+        const requestContext = args.captureRequestContext?.();
+        const responseTimeoutMs = args.responseTimeoutMs;
+        let response: ResponseOfMethod<Registry, Method>;
+        if (responseTimeoutMs !== undefined) {
+          response = await client.requestWithOptions(method, payload, {
+            responseTimeoutMs,
+            idempotencyKey: null,
+            requiredHostMethodVersion: requirement,
+            signal,
+          });
+        } else if (requirement !== null) {
+          response = await client.requestWithSignalRequiringHostMethodVersion(
+            method,
+            payload,
+            signal,
+            requirement,
+          );
+        } else {
+          response = await client.requestWithSignal(method, payload, signal);
+        }
+        return mapResponse({
+          response,
+          queryClient,
+          queryKey,
+          requestContext,
           signal,
         });
-      } else if (requirement !== null) {
-        response = await client.requestWithSignalRequiringHostMethodVersion(
-          method,
-          payload,
-          signal,
-          requirement,
-        );
-      } else {
-        response = await client.requestWithSignal(method, payload, signal);
+      } catch (error) {
+        if (error instanceof HostBelowMinimumError) {
+          // Throwing a silent cancellation alone leaves an initial fetch in
+          // flight, where the recovery sweep deliberately does not reach it.
+          void queryClient.cancelQueries(
+            { queryKey, exact: true },
+            { revert: true, silent: true },
+          );
+        }
+        throw error;
       }
-      return mapResponse({
-        response,
-        queryClient,
-        queryKey,
-        requestContext,
-        signal,
-      });
     });
 
   return useQuery<TData, HostRpcError, TData>(

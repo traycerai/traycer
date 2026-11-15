@@ -642,6 +642,21 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         h.hostListChanged();
       });
 
+      expect(h.recovered).toEqual(
+        expect.arrayContaining([LOCAL_HOST_ID, REMOTE_HOST_ID]),
+      );
+      expect(h.recovered).toHaveLength(2);
+      const recoveredQueryScopes = queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.queryKey.slice(0, 2));
+      expect(recoveredQueryScopes).toEqual(
+        expect.arrayContaining([
+          ["host", LOCAL_HOST_ID],
+          ["host", REMOTE_HOST_ID],
+        ]),
+      );
+
       await waitFor(() => {
         expect(FakeNativeWebSocket.instances).toHaveLength(1);
       });
