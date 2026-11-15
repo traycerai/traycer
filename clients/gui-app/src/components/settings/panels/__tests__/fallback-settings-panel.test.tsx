@@ -5412,9 +5412,10 @@ describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
     fallbackMocks.queryData = respond(
       policy({ graceWindowSeconds: 15, maxWaitMinutes: 360 }),
     );
-    fallbackMocks.setMutateAsync.mockRejectedValueOnce(
+    const abandoned = Promise.reject<ProvidersFallbackPolicySetResponse>(
       abandonedSaveError("providers.fallbackPolicy.set"),
     );
+    fallbackMocks.setMutateAsync.mockReturnValueOnce(abandoned);
     fallbackMocks.setMutateAsync.mockResolvedValue({ policy: policy({}) });
     renderPanel();
 
@@ -5423,7 +5424,11 @@ describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
     await waitFor(() =>
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1),
     );
-    await flushHostReplies();
+    // The panel's own handler on the rejection was attached first, so it has
+    // run once this one does.
+    await act(async () => {
+      await abandoned.catch(() => undefined);
+    });
 
     expect(screen.queryByTestId("fallback-host-error")).toBeNull();
     expect(
@@ -5484,9 +5489,19 @@ describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
   it.each(unsentRestoreAndReset)(
     "draws no line for a $name that was never sent once the host's policy reads back",
     async ({ name, method }) => {
+      let readBack: Promise<FallbackRefetchResult> | null = null;
+      fallbackMocks.refetchMock.mockImplementation(() => {
+        readBack = Promise.resolve({
+          isSuccess: true,
+          data: fallbackMocks.queryData,
+        });
+        return readBack;
+      });
       pressUnsent(name, method);
       await waitFor(() => expect(fallbackMocks.refetchMock).toHaveBeenCalled());
-      await flushHostReplies();
+      await act(async () => {
+        await readBack;
+      });
 
       expect(screen.queryByTestId("fallback-host-error")).toBeNull();
     },

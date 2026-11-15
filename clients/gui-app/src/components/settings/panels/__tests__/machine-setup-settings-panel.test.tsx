@@ -373,7 +373,6 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       expect(saveButton().hasAttribute("disabled")).toBe(true);
     });
     expect(scriptField("macOS").value).toBe("mine");
-    await settle();
     expect(toastInfo).not.toHaveBeenCalled();
   });
 

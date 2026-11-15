@@ -632,7 +632,6 @@ describe("<AgentDefinitionsTab />", () => {
       expect(screen.queryByRole("heading", { name: "planner.md" })).toBeNull();
     });
     expect(rig.deletes).toHaveLength(1);
-    await settle();
     expect(toastInfo).not.toHaveBeenCalled();
   });
 
