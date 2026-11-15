@@ -285,9 +285,12 @@ export type EnvironmentMovePlanRequestV20 = z.infer<
 
 /**
  * `@1.2`'s answer without `itemChoices`: a `@2.0` host always honours a
- * `stays` choice on a `moves` row, so there is nothing to advertise. A new
- * major has no older sender, so no row list or flag defaults. Reading a plan
- * never stages, never ends an attempt and never touches a staged file.
+ * `stays` choice on a `moves` row, so there is nothing to advertise. Nor
+ * does it carry the two retired lists the released shapes still declare,
+ * `looksLikeAKey` and `sameNameInPersonal`: a variable is a value and is
+ * never judged as a credential. A new major has no older sender, so no row
+ * list or flag defaults. Reading a plan never stages, never ends an attempt
+ * and never touches a staged file.
  */
 export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
   z.object({
@@ -302,8 +305,6 @@ export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
       staysOnThisComputer: z.array(environmentMoveRowSchema),
       alreadyInPersonal: z.array(environmentMoveRowSchema),
       differsMasked: z.array(environmentMoveRowSchema),
-      looksLikeAKey: z.array(environmentMoveRowSchema),
-      sameNameInPersonal: z.array(environmentMoveRowSchema),
     }),
     guideDiffers: z.boolean(),
     personalHoldsSecrets: z.boolean(),
