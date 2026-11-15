@@ -93,6 +93,12 @@ export class HostRpcError extends Error {
    * omitted it, or when it failed schema parse.
    */
   readonly staleWrite: EnvironmentStaleWrite | null;
+  /**
+   * The host refused this attempt before writing anything (`not-written.ts`).
+   * `false` when the envelope omitted it, carried it malformed, or came from
+   * a host that never sets it.
+   */
+  readonly notWritten: boolean;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -103,6 +109,7 @@ export class HostRpcError extends Error {
     holders?: readonly WorktreeBusyHolder[] | null;
     holdersRevision?: string | null;
     staleWrite?: EnvironmentStaleWrite | null;
+    notWritten?: boolean;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -120,6 +127,7 @@ export class HostRpcError extends Error {
       details.code === ENVIRONMENT_WRITE_STALE_CODE
         ? (details.staleWrite ?? null)
         : null;
+    this.notWritten = details.notWritten === true;
   }
 
   static fromErrorDetails(
@@ -139,6 +147,7 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
       staleWrite: staleWriteForCode(error.code, error.staleWrite),
+      notWritten: error.notWritten === true,
     });
   }
 
@@ -149,6 +158,7 @@ export class HostRpcError extends Error {
       readonly holders?: unknown;
       readonly holdersRevision?: unknown;
       readonly staleWrite?: unknown;
+      readonly notWritten?: unknown;
     },
     requestId: string,
     method: string,
@@ -165,6 +175,7 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
       staleWrite: staleWriteForCode(error.code, error.staleWrite),
+      notWritten: error.notWritten === true,
     });
   }
 }

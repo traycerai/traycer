@@ -1,3 +1,4 @@
+import { v5 as uuidv5 } from "uuid";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
@@ -498,6 +499,62 @@ const CONVERSATION_REQUEST_MESSAGE_ID_PREFIX = "conversation-request:";
 
 export function conversationRequestMessageId(requestId: string): string {
   return `${CONVERSATION_REQUEST_MESSAGE_ID_PREFIX}${requestId}`;
+}
+
+/** Fixed namespace of a bot send's derived request ids; never change it. */
+const BOT_SEND_REQUEST_ID_NAMESPACE = "afd605ff-fb7e-450b-97d3-818fc0b5a19b";
+
+/** What a bot send's request id derives from: where it goes, who sent it, and its nonce. */
+export interface BotSendIdentity {
+  readonly botId: string;
+  readonly conversationId: string;
+  readonly threadId: string | null;
+  readonly announcementId: string | null;
+  /**
+   * The sender as authenticated where the send is accepted: the caller on the
+   * host that takes the RPC, the lane's user on a mailbox delivery.
+   */
+  readonly senderUserId: string;
+  readonly nonce: string;
+}
+
+/**
+ * A bot send's request id (`bot.conversation.send@1.7`): a UUID v5 of an
+ * unambiguous encoding of the send's destination, its sender and its nonce,
+ * an absent thread or announcement encoded as `null`. The client derives it
+ * before sending, so it knows the stored row's id
+ * (`conversationRequestMessageId`); the host derives it again from the sender
+ * it authenticated, so a nonce sent by another member, or into another
+ * conversation, thread or announcement, names another request.
+ */
+export function botSendRequestId(identity: BotSendIdentity): string {
+  return uuidv5(
+    JSON.stringify([
+      "bot-send",
+      identity.botId,
+      identity.conversationId,
+      identity.threadId,
+      identity.announcementId,
+      identity.senderUserId,
+      identity.nonce,
+    ]),
+    BOT_SEND_REQUEST_ID_NAMESPACE,
+  );
+}
+
+/** Fixed namespace of a bot's derived thread ids; never change it. */
+const BOT_THREAD_ID_NAMESPACE = "3f0d7a52-5a8e-4c41-9d0e-6f1b2c9a7e14";
+
+/**
+ * The id of the thread that hangs off `anchorMessageId` in a bot's channel: a
+ * function of the bot and that row, so the client names a post's thread
+ * before the host opens it.
+ */
+export function botThreadIdFor(botId: string, anchorMessageId: string): string {
+  return uuidv5(
+    `bot-thread:${botId}:${anchorMessageId}`,
+    BOT_THREAD_ID_NAMESPACE,
+  );
 }
 
 /**

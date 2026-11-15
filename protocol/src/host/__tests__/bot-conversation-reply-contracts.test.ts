@@ -18,8 +18,7 @@ const REQUEST = {
 };
 
 describe("bot.conversation.send@1.6", () => {
-  it("is the latest line, and upgrades a 1.5 request replying to no message", () => {
-    expect(send.latestMinor).toBe(6);
+  it("upgrades a 1.5 request replying to no message", () => {
     const parsed = sendV15.requestSchema.parse(REQUEST);
     const upgraded =
       send.versions[6].upgradeFromPreviousVersion.upgradeRequest(parsed);

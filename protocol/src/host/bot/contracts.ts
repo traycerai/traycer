@@ -64,6 +64,7 @@ import {
   botConversationSendRequestSchemaV13,
   botConversationSendRequestSchemaV14,
   botConversationSendRequestSchemaV15,
+  botConversationSendRequestSchemaV16,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -460,7 +461,7 @@ export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
 export const botConversationSendV16 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 6 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV16,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
@@ -469,6 +470,27 @@ export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
 >({
   from: botConversationSendV15.schemaVersion,
   to: botConversationSendV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.7` (T249): the send's nonce (`sendNonce`), from
+ * which the host derives the request id. A 1.6 request carries none, and the
+ * host mints its id.
+ */
+export const botConversationSendV17 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV16ToV17 = defineUpgradePath<
+  typeof botConversationSendV16,
+  typeof botConversationSendV17
+>({
+  from: botConversationSendV16.schemaVersion,
+  to: botConversationSendV17.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

@@ -722,6 +722,8 @@ import {
   botConversationSendUpgradeV14ToV15,
   botConversationSendV16,
   botConversationSendUpgradeV15ToV16,
+  botConversationSendV17,
+  botConversationSendUpgradeV16ToV17,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -9859,7 +9861,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9899,6 +9901,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         6: {
           contract: botConversationSendV16,
           upgradeFromPreviousVersion: botConversationSendUpgradeV15ToV16,
+        },
+        // @1.7 carries the send's nonce (`sendNonce`, T249), from which the
+        // host derives the request id the client already knows.
+        7: {
+          contract: botConversationSendV17,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV16ToV17,
         },
       },
       downgradePathsFromLatest: {},

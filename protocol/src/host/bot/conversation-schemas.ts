@@ -277,9 +277,25 @@ export const botConversationSendRequestSchemaV15 = lazySchema(() =>
  * never set with `answer`, `answers`, `redeliver` or `supersedes`, whose
  * message is already tied to the one it answers or replaces.
  */
-export const botConversationSendRequestSchema = lazySchema(() =>
+export const botConversationSendRequestSchemaV16 = lazySchema(() =>
   botConversationSendRequestSchemaV15.extend({
     replyTo: z.string().min(1).max(255).optional(),
+  }),
+);
+
+/**
+ * `bot.conversation.send@1.7`: the send's nonce (T249), a UUID the client
+ * mints once per message and sends again, unchanged, with every retry of
+ * it. The host derives the request id from the send's destination, its
+ * authenticated sender and this nonce (`botSendRequestId`), so the
+ * client knows the stored row's id before the host answers, and a retry that
+ * reaches a host which already wrote the row answers from that row. Absent
+ * for a send whose id the host mints; never set with `redeliver`, `answer`
+ * or `answers`, whose ids are already fixed.
+ */
+export const botConversationSendRequestSchema = lazySchema(() =>
+  botConversationSendRequestSchemaV16.extend({
+    sendNonce: z.uuid().optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<

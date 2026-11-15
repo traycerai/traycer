@@ -382,6 +382,8 @@ export type RpcErrorDetails = {
    * `ENVIRONMENT_WRITE_STALE` only. See `environment-stale-write.ts`.
    */
   staleWrite?: EnvironmentStaleWrite;
+  /** The host refused this attempt before writing anything. See `not-written.ts`. */
+  notWritten?: true;
 };
 
 export type RpcContract<

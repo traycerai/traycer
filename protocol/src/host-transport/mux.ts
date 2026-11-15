@@ -18,6 +18,7 @@ import {
   staleWriteWireFieldSchema,
   type EnvironmentStaleWrite,
 } from "../framework/environment-stale-write";
+import { notWrittenWireFieldSchema } from "../framework/not-written";
 import {
   clientHandshakeIdentitySchema,
   type ClientHandshakeIdentity,
@@ -382,6 +383,7 @@ export interface WireRpcErrorDetails {
   readonly holders?: readonly WorktreeBusyHolder[];
   readonly holdersRevision?: string;
   readonly staleWrite?: EnvironmentStaleWrite;
+  readonly notWritten?: true;
 }
 
 export interface UnaryResponsePayload {
@@ -517,6 +519,7 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
           holders: worktreeBusyHoldersWireFieldSchema,
           holdersRevision: holdersRevisionWireFieldSchema,
           staleWrite: staleWriteWireFieldSchema,
+          notWritten: notWrittenWireFieldSchema,
         })
         .nullable(),
     }),

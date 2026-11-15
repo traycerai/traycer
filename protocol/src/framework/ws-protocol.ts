@@ -15,6 +15,7 @@ import {
   staleWriteWireFieldSchema,
   type EnvironmentStaleWrite,
 } from "./environment-stale-write";
+import { notWrittenWireFieldSchema } from "./not-written";
 
 /**
  * Wire-level frame types for the local WebSocket RPC protocol.
@@ -382,6 +383,8 @@ export type HostResponseFrame = {
     readonly holders?: readonly WorktreeBusyHolder[];
     readonly holdersRevision?: string;
     readonly staleWrite?: EnvironmentStaleWrite;
+    /** The host refused this attempt before writing anything (`not-written.ts`). */
+    readonly notWritten?: true;
     /**
      * A persistent-session request whose bearer check failed transiently
      * (the validator's `NETWORK_ERROR`, the same class `fatalError.retryable`
@@ -583,6 +586,9 @@ export const hostResponseErrorSchema = z.object({
   holdersRevision: holdersRevisionWireFieldSchema,
   // `ENVIRONMENT_WRITE_STALE`'s detail; sanitized to absent like `holders`.
   staleWrite: staleWriteWireFieldSchema,
+  // The host refused this attempt before writing anything; sanitized to
+  // absent like `holders`.
+  notWritten: notWrittenWireFieldSchema,
   // A persistent-session request whose bearer check failed transiently
   // (the validator's `NETWORK_ERROR`, the same class `fatalError.retryable`
   // carries on the open frame). Absent on every other envelope, including

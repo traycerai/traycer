@@ -300,6 +300,7 @@ function restampHostRpcError(
     fatalDetails: cause.fatalDetails,
     holders: cause.holders,
     staleWrite: cause.staleWrite,
+    notWritten: cause.notWritten,
   };
   if (cause instanceof RetryableTransportError) {
     // Carried from the cause, not re-decided: the whole point of this restamp
