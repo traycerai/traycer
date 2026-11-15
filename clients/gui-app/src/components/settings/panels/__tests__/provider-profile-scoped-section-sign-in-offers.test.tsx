@@ -7,11 +7,19 @@ const clientMock = vi.hoisted(
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
+  };
 });
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
+  };
 });
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
