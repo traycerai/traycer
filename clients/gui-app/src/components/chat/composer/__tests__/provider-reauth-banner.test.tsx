@@ -24,7 +24,6 @@ import {
   providersAwaitLoginResponseSchema,
   type ProvidersAwaitLoginResponse,
   type ProviderCliState,
-  type ProviderId,
   type ProviderLoginCapability,
   type ProviderLoginRefusal,
   type ProvidersSettleApiKeyChangeResponse,
@@ -45,6 +44,7 @@ import {
   type SignInRequestFetchHarness,
 } from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+import { z } from "zod";
 
 // The banner shows only for web-login providers; it receives live provider
 // `state` as a prop (from the composer's re-auth gate). Reconnect methods are
@@ -106,6 +106,50 @@ type SubmitLoginCodeMutate = (
   variables: SubmitLoginCodeVariables,
   options: SubmitLoginCodeOptions,
 ) => void;
+
+const setApiKeyMutationVariablesSchema = z.strictObject({
+  providerId: z.string(),
+  apiKey: z.string(),
+});
+const setApiKeyMutationCallsSchema = z.array(
+  z.tuple([setApiKeyMutationVariablesSchema]).rest(z.unknown()),
+);
+const setEnvOverrideMutationVariablesSchema = z.strictObject({
+  providerId: z.string(),
+  key: z.string(),
+  value: z.string(),
+  executableWriteGrant: z.null(),
+});
+const setEnvOverrideMutationCallsSchema = z.array(
+  z.tuple([setEnvOverrideMutationVariablesSchema]).rest(z.unknown()),
+);
+
+function hasSingleSetApiKeyMutation(
+  calls: unknown,
+  providerId: string,
+  apiKey: string,
+): boolean {
+  const parsed = setApiKeyMutationCallsSchema.safeParse(calls);
+  if (!parsed.success || parsed.data.length !== 1) return false;
+  const variables = parsed.data.at(0)?.[0];
+  return variables?.providerId === providerId && variables.apiKey === apiKey;
+}
+
+function hasSingleSetEnvOverrideMutation(
+  calls: unknown,
+  providerId: string,
+  key: string,
+  value: string,
+): boolean {
+  const parsed = setEnvOverrideMutationCallsSchema.safeParse(calls);
+  if (!parsed.success || parsed.data.length !== 1) return false;
+  const variables = parsed.data.at(0)?.[0];
+  return (
+    variables?.providerId === providerId &&
+    variables.key === key &&
+    variables.value === value
+  );
+}
 
 const mocks = vi.hoisted(() => ({
   startLoginMutate: vi.fn(),
@@ -212,12 +256,11 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () =>
-    mocks.useRealKeyChange
-      ? mocks.hostClient
-      : mocks.useRealAwaitLogin
-        ? mocks.realAwaitClient
-        : mocks.tabClient,
+  useTabHostClient: () => {
+    if (mocks.useRealKeyChange) return mocks.hostClient;
+    if (mocks.useRealAwaitLogin) return mocks.realAwaitClient;
+    return mocks.tabClient;
+  },
 }));
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
@@ -1254,12 +1297,12 @@ describe("<ProviderReauthBanner />", () => {
     // Droid has an encrypted host-side key store, so the banner persists the key
     // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
     // rather than a plaintext env override.
-    const saveCall = mocks.setApiKeyMutate.mock.calls.at(0);
     expect(
-      mocks.setApiKeyMutate.mock.calls.length === 1 &&
-        saveCall !== undefined &&
-        saveCall[0].providerId === "droid" &&
-        saveCall[0].apiKey === "fk-droid-123",
+      hasSingleSetApiKeyMutation(
+        mocks.setApiKeyMutate.mock.calls,
+        "droid",
+        "fk-droid-123",
+      ),
     ).toBe(true);
     expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
   });
@@ -2049,14 +2092,13 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.change(input, { target: { value: "  sk-ant-123  " } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    const saveCall = mocks.setEnvOverrideMutate.mock.calls.at(0);
     expect(
-      mocks.setEnvOverrideMutate.mock.calls.length === 1 &&
-        saveCall !== undefined &&
-        saveCall[0].providerId === "claude-code" &&
-        saveCall[0].key === "ANTHROPIC_API_KEY" &&
-        saveCall[0].value === "sk-ant-123" &&
-        saveCall[0].executableWriteGrant === null,
+      hasSingleSetEnvOverrideMutation(
+        mocks.setEnvOverrideMutate.mock.calls,
+        "claude-code",
+        "ANTHROPIC_API_KEY",
+        "sk-ant-123",
+      ),
     ).toBe(true);
   });
 
@@ -2215,12 +2257,12 @@ describe("<ProviderReauthBanner />", () => {
       target: { value: "  cursor-key  " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    const saveCall = mocks.setApiKeyMutate.mock.calls.at(0);
     expect(
-      mocks.setApiKeyMutate.mock.calls.length === 1 &&
-        saveCall !== undefined &&
-        saveCall[0].providerId === "cursor" &&
-        saveCall[0].apiKey === "cursor-key",
+      hasSingleSetApiKeyMutation(
+        mocks.setApiKeyMutate.mock.calls,
+        "cursor",
+        "cursor-key",
+      ),
     ).toBe(true);
   });
 
