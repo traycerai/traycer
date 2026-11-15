@@ -98,7 +98,10 @@ export function WindowsBridgeAuthSessionBridge(
         token: snapshot.token,
       };
       const serialized = JSON.stringify(expected);
-      if (lastLocalRestoreSerialized === serialized) return;
+      // A caller that waits on the answer (the fallback) keys itself, and a
+      // skipped restore would never answer it.
+      if (onSettled === null && lastLocalRestoreSerialized === serialized)
+        return;
       lastLocalRestoreSerialized = serialized;
       void bridge.authSession.restoreLocal(expected).then(
         (result) => {
@@ -148,6 +151,10 @@ export function WindowsBridgeAuthSessionBridge(
       if (serialized === lastWrittenSerialized) {
         return;
       }
+      // A different session (a rotated token, another sign-in) is not the one
+      // held: it is handed over afresh and takes its own fallback if it must.
+      if (heldLocally !== null && heldLocally !== serialized)
+        releaseLocalHold();
       lastWrittenSerialized = serialized;
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
