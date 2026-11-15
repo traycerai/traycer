@@ -30,6 +30,26 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
+// The release floor is "0.0.0" (it admits every host), so a row can only fall
+// below it where a case raises it. A getter, so every case that does not raise
+// it keeps the real floor.
+const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return {
+      ...actual,
+      get MINIMUM_HOST_VERSION(): string {
+        return minimumHostVersion.value;
+      },
+    };
+  },
+);
+
 // `attached` is the authority's "has anyone answered yet" flag, and it is a
 // SEPARATE axis from `id`: the pair (attached: false, id: null) is bootstrap,
 // while (attached: true, id: null) is the real ∅. Defaults to attached so every
@@ -808,6 +828,25 @@ function installOwnerIdentityRows(): (
   hostId: string,
   publicKey: string | null,
 ) => void {
+  const emitRowChanged = installOwnerIdentityRowSource();
+  return (hostId, publicKey) => {
+    // `null` removes the row - a deregistration, after which the owner
+    // reading for that host is absent rather than rotated.
+    if (publicKey === null) {
+      sessionHostRows.byHostId.delete(hostId);
+    } else {
+      sessionHostRows.byHostId.set(hostId, {
+        ...ownerIdentityRemoteTarget(publicKey),
+        hostId,
+        label: hostId,
+      });
+    }
+    emitRowChanged();
+  };
+}
+
+/** The real connection registry over `sessionHostRows`; returns the row-changed emit. */
+function installOwnerIdentityRowSource(): () => void {
   const listeners = new Set<() => void>();
   sessionHostRows.userId = OWNER_IDENTITY_FIXTURE_USER_ID;
   installHostConnectionRegistrySource({
@@ -825,18 +864,7 @@ function installOwnerIdentityRows(): (
     },
     leases: null,
   });
-  return (hostId, publicKey) => {
-    // `null` removes the row - a deregistration, after which the owner
-    // reading for that host is absent rather than rotated.
-    if (publicKey === null) {
-      sessionHostRows.byHostId.delete(hostId);
-    } else {
-      sessionHostRows.byHostId.set(hostId, {
-        ...ownerIdentityRemoteTarget(publicKey),
-        hostId,
-        label: hostId,
-      });
-    }
+  return () => {
     for (const listener of [...listeners]) {
       listener();
     }
@@ -2663,6 +2691,110 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  describe("a host whose row is below the minimum version", () => {
+    interface FloorSession {
+      readonly streams: ControlledStream[];
+      /** Publishes the host's row at `appVersion`, or removes it for `null`. */
+      readonly publishRow: (appVersion: string | null) => void;
+    }
+
+    async function mountSessionAtFloor(): Promise<FloorSession> {
+      minimumHostVersion.value = "2.0.0";
+      const streams: ControlledStream[] = [];
+      installStreamFactory((_epicId, _callbacks) => {
+        const stream: ControlledStream = { closeCount: 0 };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
+      });
+      hostBindingRef.value = { hostClient: buildOwnerIdentityHostClient() };
+      hostState.id = OWNER_IDENTITY_HOST_ID;
+      const emitRowChanged = installOwnerIdentityRowSource();
+      const target = ownerIdentityRemoteTarget("pubkey-a");
+      const publishRow = (appVersion: string | null): void => {
+        if (appVersion === null) {
+          sessionHostRows.byHostId.delete(OWNER_IDENTITY_HOST_ID);
+        } else {
+          sessionHostRows.byHostId.set(OWNER_IDENTITY_HOST_ID, {
+            ...target,
+            remoteStatus: { ...target.remoteStatus, appVersion },
+          });
+        }
+        emitRowChanged();
+      };
+      publishRow("2.0.0");
+      render(
+        <TestEpicSessionTab
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe onHandle={() => undefined} />
+        </TestEpicSessionTab>,
+      );
+      await waitFor(() => {
+        expect(streams).toHaveLength(1);
+      });
+      return { streams, publishRow };
+    }
+
+    afterEach(() => {
+      minimumHostVersion.value = "0.0.0";
+    });
+
+    it("releases the mounted session's durable stream when its row falls below the floor", async () => {
+      const { streams, publishRow } = await mountSessionAtFloor();
+
+      act(() => {
+        publishRow("1.5.4");
+      });
+
+      await waitFor(() => {
+        expect(streams[0].closeCount).toBe(1);
+      });
+      expect(streams).toHaveLength(1);
+    });
+
+    it("keeps the stream when its row is removed", async () => {
+      const { streams, publishRow } = await mountSessionAtFloor();
+
+      act(() => {
+        publishRow(null);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(streams[0].closeCount).toBe(0);
+    });
+
+    it("reacquires one stream when the row rises back above the floor", async () => {
+      const { streams, publishRow } = await mountSessionAtFloor();
+      act(() => {
+        publishRow("1.5.4");
+      });
+      await waitFor(() => {
+        expect(streams[0].closeCount).toBe(1);
+      });
+
+      act(() => {
+        publishRow("2.0.0");
+      });
+
+      await waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
+      expect(streams[0].closeCount).toBe(1);
+      expect(streams[1].closeCount).toBe(0);
+    });
   });
 
   it("defers acquisition without crashing while the active host is null, then acquires when it binds", async () => {

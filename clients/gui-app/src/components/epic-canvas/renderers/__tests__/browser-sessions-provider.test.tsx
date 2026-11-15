@@ -1059,6 +1059,33 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(stream.closed).toBe(true);
   });
 
+  it("opens one coordinator when the host rises back to the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    expect(hookState.openedHostIds).toEqual([]);
+    expect(transport.wsStreamClient.sessions).toHaveLength(0);
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(false);
+    expect(transport.wsStreamClient.sessions).toHaveLength(1);
+  });
+
   it("surfaces live snapshot sessions", () => {
     renderProvider();
     const stream = hookState.streamClient?.sessions[0];
