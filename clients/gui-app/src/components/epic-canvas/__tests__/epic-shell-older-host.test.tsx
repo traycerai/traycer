@@ -415,11 +415,11 @@ function renderTabOnTheWindowsComputer(): void {
   );
 }
 
-function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
+function renderTabOnAnotherComputer(seededOnTabComputer: boolean): void {
   // The tab's own computer, not the window's: the create-host seed names it,
-  // and the window's computer is then the tab's original host. Without the
-  // seed the tab simply follows the effective computer.
-  if (hasOriginalHost) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+  // and its first session is then on that computer. Without the seed the tab
+  // simply follows the effective computer.
+  if (seededOnTabComputer) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
   else seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -517,7 +517,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     setMobileApp(false);
   });
 
-  it("shows Host update needed, Update now and Open on original host, and no Retry", async () => {
+  it("shows Host update needed and Update now alone when the tab's original host is the computer below the floor", async () => {
     installStreams();
     publishTabRow("2.0.0");
     renderTabOnAnotherComputer(true);
@@ -527,13 +527,13 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
-    // The card's one action is Update now; "Open on original host" is the
-    // re-point's own way back, present because this tab has an original host.
+    // The tab's first session was on this very computer, so there is no other
+    // computer to go back to: Update now is the card's only action.
     expect(
       within(card)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Update now", "Open on original host"]);
+    ).toEqual(["Update now"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
     expect(screen.queryByText(/Couldn't load this task/)).toBeNull();
     expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
