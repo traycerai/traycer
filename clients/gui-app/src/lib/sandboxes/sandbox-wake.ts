@@ -252,23 +252,12 @@ function toastWakeOutcome(
       });
       return;
     case "credit-gate": {
-      // A refusal that named a team pot says which, as a row does; the
-      // person's own balance, or an older server's silence, keeps the
-      // add-credits line.
-      const { creditSource } = outcome;
-      toast.warning("Not enough credits to wake this sandbox", {
-        description:
-          creditSource === undefined ||
-          creditSource === null ||
-          creditSource === "personal"
-            ? addCreditsLine(outcome.shortfallMc)
-            : sandboxCreditShortLine(
-                configuration,
-                creditSource,
-                outcome.shortfallMc,
-                { waking: true, context: "sentence" },
-              ),
-      });
+      const description = creditGateDescription(outcome, configuration);
+      if (description === null) {
+        toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE);
+        return;
+      }
+      toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE, { description });
       return;
     }
     case "wake-not-available":
@@ -286,6 +275,35 @@ function toastWakeOutcome(
       toastWakeFailed();
       return;
   }
+}
+
+const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
+
+/**
+ * The credit gate's description, or `null` for the title alone. A refusal
+ * that named a team pot says which, as a row does. The person's own balance
+ * keeps the add-credits line, and so does an older server's silence on a
+ * known Personal sandbox. While whose sandbox it is is not known, or an
+ * older server names no pot on a team's, nothing is told as the person's own.
+ */
+function creditGateDescription(
+  outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  if (configuration === null) return null;
+  const { creditSource } = outcome;
+  if (creditSource === "personal") return addCreditsLine(outcome.shortfallMc);
+  if (creditSource === undefined || creditSource === null) {
+    return configuration.kind === "personal"
+      ? addCreditsLine(outcome.shortfallMc)
+      : null;
+  }
+  return sandboxCreditShortLine(
+    configuration,
+    creditSource,
+    outcome.shortfallMc,
+    { waking: true, context: "sentence" },
+  );
 }
 
 function addCreditsLine(shortfallMc: number | null): string {

@@ -42,6 +42,7 @@ import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-q
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
+  sandboxConfigurationOf,
   useSandboxConfigurations,
   useSandboxWakeString,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
@@ -86,7 +87,7 @@ import {
   sandboxPublicState,
   sandboxRowKind,
   sandboxRowMatches,
-  sandboxShapeAndCostLine,
+  sandboxRowShapeAndCostLine,
   sandboxTeamUsageUrl,
   sortSandboxRows,
   unstartedAutomationsMatches,
@@ -932,22 +933,39 @@ function UnstartedAutomationsRow(props: {
 }
 
 /**
+ * Whose credits a row speaks of: a team page's own team, or on Personal the
+ * row's own reading. A row with no creator and no environment id is listed on
+ * Personal, but who pays for it is not known (`null`).
+ */
+function useRowCredits(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+): SandboxPageConfiguration | null {
+  const configurations = useSandboxConfigurations();
+  return configuration.kind === "team"
+    ? configuration
+    : sandboxConfigurationOf(summary, configurations);
+}
+
+/**
  * A frozen row's cause line, and whether its primary offers "Add credits":
- * Personal always, a team's only to the team's Admin.
+ * Personal always, a team's only to the team's Admin. Neither while whose
+ * sandbox it is is not known.
  */
 function useFrozenRowFacts(
   summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
+  credits: SandboxPageConfiguration | null,
 ): { readonly cause: string | null; readonly offersAddCredits: boolean } {
   const teamBillingAdmin = useTeamBillingAdmin(
-    configuration.kind === "team" ? configuration.teamId : null,
+    credits?.kind === "team" ? credits.teamId : null,
   );
+  if (credits === null) return { cause: null, offersAddCredits: false };
   const offersAddCredits = sandboxFrozenOffersAddCredits(
-    configuration,
+    credits,
     teamBillingAdmin,
   );
   if (!summary.frozen) return { cause: null, offersAddCredits };
-  const cause = sandboxFrozenCause(configuration);
+  const cause = sandboxFrozenCause(credits);
   return {
     cause:
       offersAddCredits || !ONLY_TEAM_ADMINS_LINE.shown
@@ -987,7 +1005,8 @@ function SandboxListRow(props: {
   };
   const setupFailed =
     awake && (settingsFailed || summary.guestConfigured === false);
-  const frozen = useFrozenRowFacts(summary, configuration);
+  const credits = useRowCredits(summary, configuration);
+  const frozen = useFrozenRowFacts(summary, credits);
   const frozenCause = frozen.cause;
   let clock: string | null;
   if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
@@ -999,6 +1018,7 @@ function SandboxListRow(props: {
         ? { ...summary, guestConfigured: false }
         : summary,
       configuration,
+      credits,
       cost: props.cost,
       wakeString: wake,
       viewerUserId,
@@ -1031,7 +1051,7 @@ function SandboxListRow(props: {
             viewerUserId={viewerUserId}
           />
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sandboxShapeAndCostLine(summary, configuration)}
+            {sandboxRowShapeAndCostLine(summary, configuration, credits)}
           </p>
           {clock === null ? null : (
             <p
@@ -1071,6 +1091,7 @@ function SandboxListRow(props: {
       <SandboxRowActions
         summary={summary}
         configuration={configuration}
+        credits={credits}
         unreachable={unreachable}
         frozenOffersAddCredits={frozen.offersAddCredits}
         settingsFailed={settingsFailed}

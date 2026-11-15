@@ -34,9 +34,9 @@ export function SandboxFailedChatActions(props: {
   );
   const configuration = sandboxConfigurationOf(props.summary, configurations);
   // The resolver's Personal fallback is not proof: both personal sandboxes
-  // and team pods can carry an environment id without a recorded creator.
+  // and team pods can carry an environment id without a recorded creator,
+  // and a missing environment id says nothing about whose it is.
   const personal =
-    props.summary.environmentId === null ||
     environments.data?.environments.some(
       (environment) =>
         environment.environmentId === props.summary.environmentId &&

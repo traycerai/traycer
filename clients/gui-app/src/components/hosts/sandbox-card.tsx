@@ -38,6 +38,7 @@ import {
   sandboxSuspendKeepsLine,
   sandboxWithdrawalLine,
   type SandboxCardAction,
+  type SandboxHeaderOwnership,
   type SandboxSecretsReadiness,
 } from "@/components/hosts/sandbox-card-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
@@ -56,7 +57,10 @@ import {
   useSandboxOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
-import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  sandboxRegionLabel,
+  type SandboxPageConfiguration,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import {
   formatRunway,
   sandboxBalanceMc,
@@ -278,11 +282,28 @@ function SandboxPersonalHeaderCost(props: {
   );
 }
 
+/**
+ * Whose the page's sandbox is: a team's by its host owner, the directory's
+ * owner or its environment; the person's by the owner or its environment;
+ * else not known (a row known only from the sandbox list carries no owner).
+ */
+function headerOwnership(
+  teamOwned: boolean,
+  ownerKind: HostScopeSandbox["ownerKind"],
+  listed: SandboxPageConfiguration | null,
+): SandboxHeaderOwnership {
+  if (teamOwned || ownerKind === "team" || listed?.kind === "team") {
+    return "team";
+  }
+  if (ownerKind === "user" || listed?.kind === "personal") return "personal";
+  return "unknown";
+}
+
 export function SandboxHeaderNotices(props: {
   readonly sandbox: HostScopeSandbox;
   readonly teamName: string | null;
 }): ReactNode {
-  const { summary, state, frozen, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned, ownerKind } = props.sandbox;
   const configurations = useSandboxConfigurations();
   // A row known only from the sandbox list has no host owner to name its
   // team; its environment names it once the person's teams have answered.
@@ -292,7 +313,7 @@ export function SandboxHeaderNotices(props: {
     props.teamName ?? (listed?.kind === "team" ? listed.teamName : null);
   const credits = sandboxHeaderCreditsLine(
     summary,
-    teamOwned,
+    headerOwnership(teamOwned, ownerKind, listed),
     teamName,
     configurations.complete,
   );

@@ -2519,29 +2519,36 @@ function pendingDispatchLineCopy(
 
 /**
  * The dispatch's line. Out of credits on a team's sandbox, anyone who cannot
- * buy the team's credits is told whose ran out, not to add them.
+ * buy the team's credits is told whose ran out, not to add them. Nothing
+ * while whose sandbox it is is not known.
  */
 function PendingDispatchLine(props: {
   readonly kind: PendingSandboxSendRequest["kind"];
   readonly line: Exclude<PendingSendView["line"], "settings">;
   readonly row: SandboxSummary | null;
 }): ReactNode {
-  if (props.line === "credits" && props.row !== null)
+  if (props.line === "credits")
     return <PendingDispatchCreditsLine kind={props.kind} row={props.row} />;
   return pendingDispatchLineCopy(props.kind, props.line);
 }
 
 function PendingDispatchCreditsLine(props: {
   readonly kind: PendingSandboxSendRequest["kind"];
-  readonly row: SandboxSummary;
+  readonly row: SandboxSummary | null;
 }): ReactNode {
   const configurations = useSandboxConfigurations();
-  const configuration = sandboxConfigurationOf(props.row, configurations);
+  const configuration =
+    props.row === null
+      ? null
+      : sandboxConfigurationOf(props.row, configurations);
   const offersAddCredits = useOffersAddCredits(configuration);
-  // A team's row whose team the app cannot name reads as the sandbox page's
-  // header does for it.
+  // Not known whose: a team's row (only a team agent sandbox names a creator)
+  // reads as the sandbox page's header does for a team it cannot name; a row
+  // not in hand, or one that may be the person's own, has no line.
   if (configuration === null)
-    return unnamedTeamCreditsRanOut(configurations.complete);
+    return props.row !== null && props.row.createdBy !== null
+      ? unnamedTeamCreditsRanOut(configurations.complete)
+      : null;
   if (configuration.kind === "team" && !offersAddCredits)
     return teamCreditsRanOutLine(configuration.teamName);
   return pendingDispatchLineCopy(props.kind, "credits");

@@ -340,6 +340,19 @@ export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
 ): string {
+  return sandboxRowShapeAndCostLine(summary, configuration, configuration);
+}
+
+/**
+ * The same line for a row whose credits may not be the page's:
+ * `configuration` is the page's, `credits` whose credits the row is on, and
+ * `null` where that is not known leaves the funding clause out.
+ */
+export function sandboxRowShapeAndCostLine(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  credits: SandboxPageConfiguration | null,
+): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const creator = agentCreatorClause(summary);
   if (summary.priceMcPerHour === null) {
@@ -348,12 +361,9 @@ export function sandboxShapeAndCostLine(
   const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
   // A burst creator replaces the funding clause. A kept row's task does not.
   const cost =
-    summary.burst && creator !== null
+    (summary.burst && creator !== null) || credits === null
       ? hourly
-      : costLine(
-          summary.priceMcPerHour.awakeMc,
-          configurationCopy(configuration),
-        );
+      : costLine(summary.priceMcPerHour.awakeMc, configurationCopy(credits));
   return joinParts(sandboxShapeLine(summary), cost, creator);
 }
 
@@ -422,7 +432,14 @@ export interface SandboxClockInput {
   /** A resumed host has not answered for this wake yet. */
   readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
+  /** The page's configuration, which the settings line names. */
   readonly configuration: SandboxPageConfiguration;
+  /**
+   * Whose credits the row is on, for the frozen cause and the storage clause:
+   * `null` where that is not known, which leaves both out. Absent, the
+   * page's configuration is.
+   */
+  readonly credits?: SandboxPageConfiguration | null;
   readonly cost: SandboxCost | null;
   /** The class's wake string, or `null` when the catalogue does not say. */
   readonly wakeString: string | null;
@@ -721,10 +738,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
     case "destroying":
       return "Pending.";
     case "frozen":
-      return [
-        sandboxFrozenCause(input.configuration),
-        sandboxFrozenClock(summary.frozenAt),
-      ]
+      return [rowFrozenCause(input), sandboxFrozenClock(summary.frozenAt)]
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
@@ -787,18 +801,35 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
-/** Whose credits a resting row's storage draws on: the person's, or the team's. */
-function storageCreditClause(configuration: SandboxPageConfiguration): string {
-  return configuration.kind === "personal"
+/** Whose credits the row is on: `null` where that is not known. */
+function rowCredits(input: SandboxClockInput): SandboxPageConfiguration | null {
+  return input.credits === undefined ? input.configuration : input.credits;
+}
+
+/** A frozen row's cause, or nothing while whose credits ran out is not known. */
+function rowFrozenCause(input: SandboxClockInput): string | null {
+  const credits = rowCredits(input);
+  return credits === null ? null : sandboxFrozenCause(credits);
+}
+
+/**
+ * Whose credits a resting row's storage draws on: the person's, or the
+ * team's; nothing while that is not known.
+ */
+function storageCreditClause(
+  credits: SandboxPageConfiguration | null,
+): string | null {
+  if (credits === null) return null;
+  return credits.kind === "personal"
     ? "storage uses your credits"
-    : `storage uses ${teamPossessive(configuration.teamName)} credits`;
+    : `storage uses ${teamPossessive(credits.teamName)} credits`;
 }
 
 function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
 ): string {
-  const { summary, configuration, cost, now } = input;
+  const { summary, cost, now } = input;
   const since = summary.restingSince ?? summary.lastTransitionAt;
   const resting =
     state === "suspended"
@@ -814,7 +845,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
-    storageCreditClause(configuration),
+    storageCreditClause(rowCredits(input)),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,

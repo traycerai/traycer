@@ -503,10 +503,25 @@ function knownTeamName(
 /**
  * A spend refusal names the pot checked, with amounts rounded up for top-up.
  * Sentence/clause context is independent of whether this starts or wakes.
- * `configuration` is `null` where the app does not know whose sandbox it is;
- * it then reads as no team configuration known.
+ * `configuration` is `null` where the app does not know whose sandbox it is:
+ * nothing is then told as the person's own, neither their balance nor an
+ * amount for them to add, and a team pot reads as no team configuration
+ * known.
  */
 export function sandboxCreditShortLine(
+  configuration: SandboxConfigurationCopy | null,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  if (configuration === null && creditSource !== "team") {
+    return notEnoughCreditsText(null, options);
+  }
+  return potCreditShortLine(configuration, creditSource, shortfallMc, options);
+}
+
+/** The refusal's sentence once the owner is known, or for a team pot. */
+function potCreditShortLine(
   configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,

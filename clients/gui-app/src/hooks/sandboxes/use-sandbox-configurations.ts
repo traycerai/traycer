@@ -14,7 +14,10 @@ export interface SandboxConfigurations {
   readonly configurations: readonly SandboxPageConfiguration[];
   /** Every team's environment id read so far. */
   readonly teamEnvironmentIds: ReadonlySet<string>;
-  /** Every team has answered, so Personal's rows can be told apart. */
+  /**
+   * The person's teams are known and every team has answered, so Personal's
+   * rows can be told apart.
+   */
   readonly complete: boolean;
   /**
    * The person's own environment's id where their environment list is
@@ -29,11 +32,17 @@ export interface SandboxConfigurations {
  * person's teams, each team with the environment id its sandbox rows carry.
  */
 export function useSandboxConfigurations(): SandboxConfigurations {
-  const user = useAuthUser().data ?? null;
+  const userRead = useAuthUser();
+  const user = userRead.data ?? null;
+  // The person's teams are known only once the user read has answered: a
+  // pending or failed read, or data kept from before a failed refetch, says
+  // nothing about which teams there are.
+  const teamsKnown = !userRead.isPending && !userRead.isError && user !== null;
   const teams = useMemo(() => sandboxCreateTeams(user), [user]);
   const teamIds = useMemo(() => teams.map((team) => team.teamId), [teams]);
   const environments = useTeamEnvironmentIds(teamIds);
-  const { byTeamId, complete } = environments;
+  const { byTeamId } = environments;
+  const complete = teamsKnown && environments.complete;
   // The environment list another surface has read (the team Admin read):
   // only what is already cached, never a read of its own.
   const list = useEnvironmentListQuery(useOptionalHostClient(), false);
@@ -67,8 +76,10 @@ export function useSandboxConfigurations(): SandboxConfigurations {
  * from a team's (a team's pods and a server before `createdBy` carry no
  * creator either): its environment is the person's own, or every team has
  * answered and none is its. `null` where the app does not know whose sandbox
- * it is: a team row whose team is not (yet) among the person's, or a row
- * with no creator while a team is still unanswered or failed.
+ * it is: a team row whose team is not (yet) among the person's, a row with
+ * no creator while the person's teams are unread or a team is unanswered or
+ * failed, or a row with no environment id (a server before environments),
+ * whose owner the wire leaves unknown.
  */
 export function sandboxConfigurationOf(
   summary: SandboxSummary,
@@ -86,9 +97,9 @@ export function sandboxConfigurationOf(
     summary.environmentId !== null &&
     summary.environmentId === configurations.personalEnvironmentId;
   const teamsTold =
+    summary.environmentId !== null &&
     configurations.complete &&
-    (summary.environmentId === null ||
-      !configurations.teamEnvironmentIds.has(summary.environmentId));
+    !configurations.teamEnvironmentIds.has(summary.environmentId);
   return ownEnvironment || teamsTold ? { kind: "personal" } : null;
 }
 

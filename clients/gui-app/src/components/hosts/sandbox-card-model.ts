@@ -621,18 +621,23 @@ export function unnamedTeamCreditsRanOut(
   return teamsAnswered ? TEAM_CREDITS_RAN_OUT_UNNAMED : null;
 }
 
+/** Whose a host page's sandbox is, as far as the app knows. */
+export type SandboxHeaderOwnership = "team" | "personal" | "unknown";
+
 /**
  * The host page offers only Destroy when credits run out, so names no wake
- * remedy. `null` while a team's sandbox has no name to give yet.
+ * remedy. `null` while whose sandbox it is is not known, and while a team's
+ * sandbox has no name to give yet.
  */
 export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,
-  teamOwned: boolean,
+  ownership: SandboxHeaderOwnership,
   teamName: string | null,
   teamsAnswered: boolean,
 ): string | null {
+  if (ownership === "unknown") return null;
   let credits: string | null = "Your credits ran out";
-  if (teamOwned) {
+  if (ownership === "team") {
     credits =
       teamName === null
         ? unnamedTeamCreditsRanOut(teamsAnswered)

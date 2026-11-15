@@ -219,10 +219,12 @@ type HostOwnership = "team" | "personal" | "unknown";
 
 /**
  * The configuration the sandbox runs under, the line under its name: the
- * sandbox's bound environment, read against the person's teams (Personal
- * once every team has answered and none is its). An absent environment is
- * unknown; the label is `null` only while its name is still unread. The
- * summary keeps this available while the sandbox is suspended or stopped.
+ * sandbox's bound environment, read against the person's teams as
+ * `sandboxConfigurationOf` reads it. An absent environment is unknown, and so
+ * is a row that is still not known once the teams have answered (a team
+ * agent sandbox of a team that is not the person's); the label is `null` only
+ * while its name is still unread. The summary keeps this available while the
+ * sandbox is suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,
@@ -235,9 +237,11 @@ function hoverConfiguration(
   if (configuration?.kind === "team") {
     return { label: configuration.teamName, ownership: "team" };
   }
-  return configurations.complete &&
-    !configurations.teamEnvironmentIds.has(sandbox.environmentId)
-    ? { label: "Personal", ownership: "personal" }
+  if (configuration?.kind === "personal") {
+    return { label: "Personal", ownership: "personal" };
+  }
+  return configurations.complete
+    ? { label: "unknown", ownership: "unknown" }
     : { label: null, ownership: "unknown" };
 }
 
