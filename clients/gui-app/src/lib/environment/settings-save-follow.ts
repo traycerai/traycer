@@ -44,3 +44,15 @@ export async function sendFollowedSave<T>(
   pending.answered();
   return answer;
 }
+
+/**
+ * `error`, or null when it is a request abandoned before it was sent, as
+ * {@link sendFollowedSave} abandons a save whose sign-in has ended: nothing
+ * went out, so the screen stays as it was before the press and says nothing.
+ * Any other failure, a lost reply included, is returned as it is.
+ */
+export function reportedSaveFailure<E>(error: E): E | null {
+  return error instanceof HostRequestAbortedError && !error.mayHaveDispatched
+    ? null
+    : error;
+}

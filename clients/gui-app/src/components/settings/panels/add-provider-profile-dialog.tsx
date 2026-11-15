@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -409,7 +410,7 @@ export function AddProviderProfileDialog({
             finalizeError={recolorProfile.error}
             duplicateProfile={duplicateProfile}
             naming={naming}
-            namingError={renameProfile.error}
+            namingError={reportedSaveFailure(renameProfile.error)}
             emailRevealed={emailRevealed}
             setEmailRevealed={setEmailRevealed}
             linkDisabled={linkHeldOff({
