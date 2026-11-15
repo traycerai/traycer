@@ -568,10 +568,13 @@ describe("MembersPage offboarding previews", () => {
         .find((row) => row.querySelector("th")?.textContent === label)
         ?.querySelector("td")?.textContent;
     expect(valueOf("m@acme.dev's work now")).toBe(
-      "m@acme.dev's access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.",
+      "Their connections close. Work they started keeps running for Acme under their name.",
     );
     expect(valueOf("Shared sign-ins")).toBe("None.");
-    expect(valueOf("Linked plan")).toBe("None.");
+    expect(valueOf("Can't be recalled")).toBe(
+      'Files m@acme.dev already copied off a host and work already done upstream with Acme\'s services. What m@acme.dev started stays, labelled "started by a former member".',
+    );
+    expect(valueOf("Linked plan")).toBeUndefined();
     expect(dialog.textContent).not.toContain("u-priya");
     expect(dialog.textContent).not.toMatch(/\d+ turns?/);
   });
