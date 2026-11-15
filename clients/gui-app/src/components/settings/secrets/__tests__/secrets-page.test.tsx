@@ -251,11 +251,12 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
 }
 
 /**
- * A Local pick whose environment list cannot be read names no environment, so
- * its secrets calls stay the host's own: the only list that carries a revoked
- * row, and the only create whose refused and pending outcomes reach the
- * dialog. A named environment's are authn's: live rows only, and a create that
- * answers created or a refusal in its own words.
+ * A Local pick on a computer's own settings (`source.kind === "host"`) names no
+ * environment (`useAddressedEnvironment`), so its secrets calls stay the
+ * host's own: the only list that carries a revoked row, and the only create
+ * whose refused and pending outcomes reach the dialog. A named environment's
+ * are authn's: live rows only, and a create that answers created or a refusal
+ * in its own words.
  */
 function buildLocalSecretsHost(
   overrides: Partial<SecretsHostState>,
@@ -263,13 +264,7 @@ function buildLocalSecretsHost(
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
-  return mountSecretsHost(
-    {
-      ...overrides,
-      environmentsError: new Error("environment list unavailable"),
-    },
-    { kind: "host" },
-  );
+  return mountSecretsHost(overrides, { kind: "host" });
 }
 
 function renderPage(host: SecretsHost): QueryClient {
