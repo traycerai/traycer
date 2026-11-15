@@ -178,7 +178,6 @@ vi.mock(
 
 import {
   completeTeamInstall,
-  formatCredentialProvisionNote,
   maybeProvisionCredential,
   provisionRunningHostCredential,
   warnIfTeamInstallSignInRemains,
@@ -1528,12 +1527,6 @@ describe("install auth helpers", () => {
         stage: "host-credential",
         message: "authorizing the running host...",
       }),
-    );
-  });
-
-  it("keeps the existing exact note for a host-token mint that did not complete", () => {
-    expect(formatCredentialProvisionNote({ kind: "mint-unavailable" })).toBe(
-      "host authorization not confirmed (the authorization did not complete) - run `traycer host doctor` to see how to fix it",
     );
   });
 });
