@@ -34,6 +34,7 @@ import {
   reachableHost,
   teamEnvironments,
 } from "./mcp-skills-test-support";
+import { authnMcpServer } from "./team-environment-cloud-handlers";
 import {
   configurationItem,
   mountTeamPage,
@@ -704,19 +705,13 @@ describe("The MCP servers page", () => {
           ],
           hostServers: [],
         }),
-        ...(item === null
-          ? {
-              "environment.configuration.items.put": () => {
-                throw new Error("authn is unavailable");
-              },
-            }
-          : {
-              "environment.configuration.items.delete": () => {
-                throw new Error("authn is unavailable");
-              },
-            }),
       });
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      harness.cloudResponses.set(
+        `${item === null ? "PUT" : "DELETE"} /api/v3/environments/env-a/items/mcp_server`,
+        () => ({ status: 503, text: "{}" }),
+      );
 
       await userEvent.click(
         await screen.findByRole("switch", { name: "github" }),
@@ -743,7 +738,7 @@ describe("The MCP servers page", () => {
 
       const toggle = await screen.findByRole("switch", { name: "github" });
       harness.cloudResponses.set(
-        "PATCH /api/v3/environments/env-a/mcp-servers/srv-1",
+        `${item === null ? "PUT" : "DELETE"} /api/v3/environments/env-a/items/mcp_server`,
         () => {
           throw new Error("The transport did not answer.");
         },
@@ -1214,6 +1209,27 @@ describe("The MCP servers page", () => {
         ],
       }),
     });
+    harness.cloudResponses.set(
+      "PATCH /api/v3/environments/env-a/mcp-servers/srv-1",
+      () => ({
+        status: 200,
+        text: JSON.stringify({
+          server: authnMcpServer(
+            declaredServer({
+              serverId: "srv-1",
+              name: "github",
+              url: "https://github.invalid/mcpx",
+              item: {
+                key: "github",
+                revision: 4,
+                toolToggles: { codex: { search: false } },
+                offFor: [],
+              },
+            }),
+          ),
+        }),
+      }),
+    );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     await screen.findByText("github");
@@ -1228,22 +1244,13 @@ describe("The MCP servers page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
+      expect(authnWritesSince(harness, fetchStart)).toHaveLength(1);
       expect(
         harness.paramsOf("environment.configuration.mcpServers.put"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(0);
-    });
-    expect(
-      harness.paramsOf("environment.configuration.mcpServers.put")[0],
-    ).toMatchObject({
-      environmentId: "env-a",
-      serverId: "srv-1",
-      name: "github",
-      url: "https://github.invalid/mcpx",
-      toolToggles: { codex: { search: false } },
-      offFor: [],
     });
     const writes = authnWritesSince(harness, fetchStart);
     expect(writes).toHaveLength(1);

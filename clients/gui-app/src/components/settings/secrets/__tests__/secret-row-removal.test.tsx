@@ -405,7 +405,6 @@ describe("Remove on a team secret", () => {
       secretId: "sec-1",
       versionId: "ver-2",
       environmentId: "env-a",
-      allowCurrent: true,
     });
     const status = await screen.findByTestId("secret-removal-status");
     expect(status.textContent).toBe(
@@ -557,7 +556,6 @@ describe("a secret with a removal", () => {
         secretId: "sec-1",
         versionId: "ver-2",
         environmentId: "env-a",
-        allowCurrent: true,
       });
       expect(destroyRequests(harness, 0)).toEqual([
         {
@@ -691,7 +689,6 @@ describe("the Versions list", () => {
       secretId: "sec-1",
       versionId: "ver-1",
       environmentId: "env-a",
-      allowCurrent: true,
     });
   });
 
@@ -915,7 +912,6 @@ describe("a removed secret the list has moved to removed", () => {
       secretId: "sec-1",
       versionId: "ver-2",
       environmentId: "env-a",
-      allowCurrent: true,
     });
     expect(
       operationRequests.map(({ method, url, body }) => ({
