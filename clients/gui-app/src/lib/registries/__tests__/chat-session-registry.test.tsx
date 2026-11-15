@@ -183,8 +183,11 @@ vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
   };
 });
 
-import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
-import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
+import {
+  disposeAllChatSessions,
+  getChatSessionRegistry,
+  useChatSessionHandle,
+} from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
@@ -980,30 +983,49 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       dead: null,
     });
 
-    const { result, rerender } = renderHook(
-      () =>
-        useChatSessionHandle(
+    const registry = getChatSessionRegistry();
+    const demandChanges = vi.fn();
+    const unsubscribe = registry.subscribe(demandChanges);
+    try {
+      const { result, rerender } = renderHook(
+        () =>
+          useChatSessionHandle(
+            "chat-remote-restart-below-floor",
+            REMOTE_HOST_ID,
+            true,
+          ),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      expect(tracked.records()).toHaveLength(1);
+      const owner = result.current;
+      if (owner === null) throw new Error("remote chat owner was not acquired");
+      const changesBeforeRelease = demandChanges.mock.calls.length;
+
+      const remoteBelowFloor: RemoteHostDirectoryEntry = {
+        ...remoteAtFloor,
+        remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
+      };
+      hostEntryRef.value = remoteBelowFloor;
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+      await waitFor(() => {
+        expect(demandChanges).toHaveBeenCalledTimes(changesBeforeRelease + 1);
+      });
+      expect(
+        registry.peek(
+          "epic-1",
           "chat-remote-restart-below-floor",
           REMOTE_HOST_ID,
-          true,
         ),
-      { wrapper },
-    );
-    await waitFor(() => {
-      expect(result.current).not.toBeNull();
-    });
-    expect(tracked.records()).toHaveLength(1);
-
-    const remoteBelowFloor: RemoteHostDirectoryEntry = {
-      ...remoteAtFloor,
-      remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
-    };
-    hostEntryRef.value = remoteBelowFloor;
-    rerender();
-    await waitFor(() => {
-      expect(result.current).toBeNull();
-    });
-    expect(tracked.records()[0].closeCount).toBe(1);
+      ).toBe(owner);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("keeps an at-floor remote owner when its absent endpoint is covered by restarting-expected", async () => {

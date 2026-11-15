@@ -412,6 +412,13 @@ describe("desktop main local streams open with host tokens", () => {
     if (client === null)
       throw new Error("the local inventory stream did not build at the floor");
     expect(wsStreamClientConstructionHarness.constructed).toBe(1);
+    const inventory = new HostInventoryStreamClient({
+      wsStreamClient: client,
+      callbacks: {
+        onSnapshot: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
 
     try {
       await vi.waitFor(() =>
@@ -452,6 +459,7 @@ describe("desktop main local streams open with host tokens", () => {
       );
       expect(FakeNativeWebSocket.instances).toHaveLength(2);
     } finally {
+      inventory.close();
       client.close("test complete");
     }
   });

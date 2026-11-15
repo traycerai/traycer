@@ -727,7 +727,7 @@ describe("<WindowHostModalHost />", () => {
       },
       hostTokens.era(USER_A),
     );
-    const target = { ...mockLocalHostEntry, hostId };
+    const target = { ...mockLocalHostEntry, hostId, version: null };
     const client = buildHostStreamClient({
       target,
       endpoint: () =>
@@ -921,7 +921,7 @@ describe("<WindowHostModalHost />", () => {
 
     const sockets: StreamWebSocketLike[] = [];
     let dialAttempts = 0;
-    let failedRedialDelivered = false;
+    const failedRedial = Promise.withResolvers<void>();
     const webSocketFactory: IStreamWebSocketFactory = {
       create: (url, priority) => {
         dialAttempts += 1;
@@ -943,13 +943,18 @@ describe("<WindowHostModalHost />", () => {
         queueMicrotask(() => {
           failedSocket.onerror?.({ message: "relay network unavailable" });
           const close = failedSocket.onclose;
-          if (close === null) return;
+          if (close === null) {
+            failedRedial.reject(
+              new Error("failed redial socket had no close handler"),
+            );
+            return;
+          }
           close({
             code: 1006,
             reason: "relay network unavailable",
             wasClean: false,
           });
-          failedRedialDelivered = true;
+          failedRedial.resolve();
         });
         return failedSocket;
       },
@@ -1056,9 +1061,9 @@ describe("<WindowHostModalHost />", () => {
           wasClean: false,
         });
         await vi.advanceTimersByTimeAsync(0);
+        await failedRedial.promise;
       });
       expect(dialAttempts).toBe(2);
-      expect(failedRedialDelivered).toBe(true);
       expect(hasReadyRemoteSession(hostId)).toBe(false);
       expect(client.isClosed()).toBe(false);
       const belowFloor = fixture.directory.findById(hostId);
