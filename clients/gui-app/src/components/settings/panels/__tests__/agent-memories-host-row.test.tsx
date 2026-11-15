@@ -173,7 +173,9 @@ function mount(): TeamPageHarness {
 
 /** The row's status line; request failures use the shared host notice. */
 async function line(): Promise<string> {
-  const row = await screen.findByText("Agents use environment memory");
+  const row = await screen.findByText(
+    "Let agents use and update common memory",
+  );
   const text = row.closest("div")?.parentElement?.textContent ?? null;
   if (text === null) throw new Error("no row text");
   return text;

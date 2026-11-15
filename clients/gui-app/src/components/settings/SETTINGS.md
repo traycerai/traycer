@@ -964,8 +964,8 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
-  - **Memories** is one switch, "Agents use environment memory": whether the
-    configuration's agents are shown its environment memory and keep it
+  - **Memories** is one switch, "Let agents use and update common memory":
+    whether the configuration's agents are shown its common memory and keep it
     current (`agent_memory`, key `memory`; the route and section id stay
     `agent-memories`). Its own page rather than a Permissions tab, because
     Permissions is what an agent may do inside a task and this is what it
