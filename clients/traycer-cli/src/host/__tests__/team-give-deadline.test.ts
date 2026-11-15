@@ -182,17 +182,7 @@ const GIVE_BUDGET_MS = 45_000;
 const TRANSFER_LINE =
   "The team transfer could not be confirmed. Check this computer in the app before trying again.";
 
-const teamEnvironment = {
-  environmentId: "environment-acme",
-  ownerKind: "organization",
-  ownerId: TEAM_ID,
-  roomId: "room-acme",
-  label: "Acme",
-  effectiveRole: "admin",
-  kind: "team",
-  hostCount: 0,
-  providerHandle: "acme",
-} as const;
+const TARGET_ENVIRONMENT_ID = "environment-acme";
 const personalBinding = {
   hostId: HOST_ID,
   environment: {
@@ -215,9 +205,7 @@ function signInWithAcme() {
     user: { ...base.user, id: USER_ID },
     environments: {
       personal: "environment-personal",
-      teams: [
-        { teamId: TEAM_ID, environmentId: teamEnvironment.environmentId },
-      ],
+      teams: [{ teamId: TEAM_ID, environmentId: TARGET_ENVIRONMENT_ID }],
     },
     teamSubscriptions: [
       {
@@ -258,7 +246,7 @@ function moveStage() {
       sourceHostId: HOST_ID,
       sharingGeneration: 1,
       targetKind: "team",
-      environmentId: teamEnvironment.environmentId,
+      environmentId: TARGET_ENVIRONMENT_ID,
       teamId: TEAM_ID,
       disclosureVersion: 2,
     },
