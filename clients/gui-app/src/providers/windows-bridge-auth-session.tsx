@@ -134,6 +134,10 @@ export function WindowsBridgeAuthSessionBridge(
 
     const writeOutbound = (snapshot: AuthSessionSnapshot): void => {
       if (projectingInbound) return;
+      // Only a signed-in session is held: a sign-out, a sign-in starting or a
+      // session demoted to unverified (which restores locally on its own)
+      // ends the hold and its timer.
+      if (snapshot.status !== "signed-in") releaseLocalHold();
       if (snapshot.status === "unverified") {
         // Main needs a local identity to select the already-running host.
         // It reads that identity from disk rather than trusting this profile;
@@ -143,8 +147,6 @@ export function WindowsBridgeAuthSessionBridge(
         restoreLocal(snapshot, null);
         return;
       }
-      // A sign-out (or a sign-in starting) is not a session to hold.
-      if (snapshot.status !== "signed-in") releaseLocalHold();
       lastLocalRestoreSerialized = null;
       const desktopSnapshot = toDesktopSnapshot(snapshot);
       const serialized = serializeDesktopSnapshot(desktopSnapshot);
