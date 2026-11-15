@@ -70,6 +70,8 @@ function historyResult(
     isFetching: false,
     error: null,
     hostId: "host-1",
+    sort: "recent",
+    createdSortAvailable: true,
     // The identity the fixture's rows belong to. The palette source never
     // reads it; it is here so the stub still satisfies the hook's contract.
     currentUserId: "user-1",
@@ -107,6 +109,7 @@ function historyItem(overrides: HistoryItemOverrides): HistoryItem {
     taskType: "epic",
     title: overrides.title ?? "Untitled row",
     initialUserPrompt: "",
+    createdAtMs: 0,
     updatedAtMs: 0,
     updatedLabel: "",
     updatedBucket: "today",
