@@ -36,7 +36,8 @@ export type McpMutateVariables = {
   readonly workspaceRoot: string | null;
   readonly mutation:
     | Exclude<ProvidersMcpMutateAction, { action: "add" | "update" }>
-    | { readonly action: "add" | "update"; readonly name: string };
+    | { readonly action: "add"; readonly name: string }
+    | { readonly action: "update"; readonly name: string };
   /**
    * When true, the hook skips the global toast so the caller can render a
    * row-local native error. Default toast still fires for non-native errors
