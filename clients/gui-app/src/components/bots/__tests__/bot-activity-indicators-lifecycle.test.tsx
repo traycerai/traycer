@@ -148,12 +148,12 @@ const NOW = Date.now();
 function quiet(): BotTaskEntry {
   return {
     taskId: "t-life",
-    cadence: { kind: "none" },
+    cadence: { kind: "every", seconds: 7_200 },
     lastCheckinAt: NOW,
     lastCheckin: null,
-    nextAt: null,
-    state: "ended",
-    endedReason: "completed",
+    nextAt: NOW + 3_600_000,
+    state: "tracking",
+    endedReason: null,
     createdByUserId: null,
     spun: true,
     label: null,
@@ -170,7 +170,7 @@ function quiet(): BotTaskEntry {
 const listed = { tasks: [] as ReadonlyArray<BotTaskEntry> };
 
 function Body(): ReactNode {
-  const active = useBotActiveTasks(listed.tasks, "host-bound", true);
+  const active = useBotActiveTasks(listed.tasks, "host-bound", true, BOT_ID);
   return (
     <BotActivityPage
       roomFresh
@@ -264,12 +264,10 @@ afterEach(() => {
 });
 
 describe("the Activity list over an indicator read that is answered, held and answered again", () => {
-  it("never lets a cached empty answer remove a quiet task while the host is unreachable and the replacement read is held, and shows the changed answer once it lands", async () => {
+  it("never lets a cached empty answer vouch for a quiet task while the host is unreachable and the replacement read is held, and shows the changed answer once it lands", async () => {
     const view = render(<Tree />);
-    // The first answer is empty and complete: the quiet task has left.
-    await waitFor(() =>
-      expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0),
-    );
+    // The first answer is empty and complete: the quiet task reads periodic.
+    await waitFor(() => expect(bandNow()).toBe("periodic"));
 
     dropAndHoldNextRead(view);
     expect(bandNow()).toBe("unknown");
@@ -290,7 +288,7 @@ describe("the Activity list over an indicator read that is answered, held and an
     await waitFor(() => expect(bandNow()).toBe("unseen"));
   });
 
-  it("never shows a cached positive as current while the host is unreachable and the replacement read is held, and lets the task leave once the empty answer lands", async () => {
+  it("never shows a cached positive as current while the host is unreachable and the replacement read is held, and reads the task periodic once the empty answer lands", async () => {
     mocks.state.unread.add("t-life");
     const view = render(<Tree />);
     await waitFor(() => expect(bandNow()).toBe("unseen"));
@@ -308,18 +306,14 @@ describe("the Activity list over an indicator read that is answered, held and an
       mocks.state.held?.resolve(mocks.answer({ epicIds: ["t-life"] }));
       await Promise.resolve();
     });
-    await waitFor(() =>
-      expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0),
-    );
+    await waitFor(() => expect(bandNow()).toBe("periodic"));
   });
 });
 
 describe("the Activity list over an indicator read invalidated while the replacement is held", () => {
   it("shows unknown, not the cached empty answer, from the invalidation until the replacement lands, then the changed answer", async () => {
     const view = render(<Tree />);
-    await waitFor(() =>
-      expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0),
-    );
+    await waitFor(() => expect(bandNow()).toBe("periodic"));
 
     // The host stays reachable: only the invalidation makes the cache old.
     invalidateAndHoldNextRead();
@@ -335,7 +329,7 @@ describe("the Activity list over an indicator read invalidated while the replace
     await waitFor(() => expect(bandNow()).toBe("unseen"));
   });
 
-  it("shows unknown, not the cached positive, from the invalidation until the replacement lands, then lets the task leave", async () => {
+  it("shows unknown, not the cached positive, from the invalidation until the replacement lands, then reads the task periodic", async () => {
     mocks.state.unread.add("t-life");
     const view = render(<Tree />);
     await waitFor(() => expect(bandNow()).toBe("unseen"));
@@ -350,16 +344,12 @@ describe("the Activity list over an indicator read invalidated while the replace
       mocks.state.held?.resolve(mocks.answer({ epicIds: ["t-life"] }));
       await Promise.resolve();
     });
-    await waitFor(() =>
-      expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0),
-    );
+    await waitFor(() => expect(bandNow()).toBe("periodic"));
   });
 
   it("reads the cache as old when it was invalidated while the read was disabled: unknown on re-enable until the held read lands", async () => {
     const view = render(<Tree />);
-    await waitFor(() =>
-      expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0),
-    );
+    await waitFor(() => expect(bandNow()).toBe("periodic"));
 
     // The list empties, so the indicator read is disabled; the cache is invalidated meanwhile.
     listed.tasks = [];
@@ -389,7 +379,7 @@ describe("the Activity list over an indicator read invalidated while the replace
 
 describe("the Activity list over an indicator cache invalidated and not yet refetched", () => {
   it.each([
-    ["an empty cached answer", false, null],
+    ["an empty cached answer", false, "periodic"],
     ["a positive cached answer", true, "unseen"],
   ] as const)(
     "does not treat %s as current once it is marked invalid and no read has started: unknown until the refetch lands",
