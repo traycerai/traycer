@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -42,9 +43,6 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
-const ORIGINAL_HOME = process.env.HOME;
-const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
-
 let workHome: string;
 let exitSpy: MockInstance;
 let stdoutSpy: MockInstance;
@@ -53,10 +51,11 @@ let stdoutChunks: string[];
 let stderrChunks: string[];
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   workHome = mkdtempSync(join(tmpdir(), "traycer-runner-disc-test-"));
   osHome.current = workHome;
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  vi.stubEnv("HOME", workHome);
+  vi.stubEnv("USERPROFILE", workHome);
   stdoutChunks = [];
   stderrChunks = [];
   // `write`'s completion callback is load-bearing, not decoration: the
@@ -89,16 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (ORIGINAL_HOME === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = ORIGINAL_HOME;
-  }
-  if (ORIGINAL_USERPROFILE === undefined) {
-    delete process.env.USERPROFILE;
-  } else {
-    process.env.USERPROFILE = ORIGINAL_USERPROFILE;
-  }
+  vi.unstubAllEnvs();
   rmSync(workHome, { recursive: true, force: true });
   // The runner now signals failure by SETTING `process.exitCode` rather than
   // calling `process.exit`, so a test that drives a failing command leaves it
@@ -234,11 +224,16 @@ function mockLogoutStore(args: {
         : null,
     signOut: vi.fn(async () => args.signOut),
   });
-  vi.doMock("../../store/credentials-store", () => ({
-    runWithCliStore: <T>(fn: (s: CredentialsMutationStore) => Promise<T>) =>
-      fn(store),
-    withCommitRetry: <T>(op: () => Promise<T>) => op(),
-  }));
+  vi.doMock("../../store/credentials-store", async (importOriginal) => {
+    const actual =
+      await importOriginal<typeof import("../../store/credentials-store")>();
+    return {
+      ...actual,
+      runWithCliStore: <T>(fn: (s: CredentialsMutationStore) => Promise<T>) =>
+        fn(store),
+      withCommitRetry: <T>(op: () => Promise<T>) => op(),
+    };
+  });
   return store;
 }
 
@@ -250,6 +245,41 @@ const DELETED: MutationResult = {
 };
 
 describe("logoutCommand runner contract", () => {
+  it("removes the signed-out account's host-only tokens", async () => {
+    mockLogoutStore({ hadSession: true, signOut: DELETED });
+    const { config } = await import("../../config");
+    const { hostTokensPath } =
+      await import("@traycer-clients/shared/auth/host-token-file");
+    const tokenPath = hostTokensPath(config.environment);
+    mkdirSync(dirname(tokenPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      tokenPath,
+      JSON.stringify({
+        version: 1,
+        users: {
+          u1: {
+            "host-1": {
+              token: "host-only",
+              expiresAt: Date.now() + 60_000,
+            },
+          },
+        },
+      }),
+      { mode: 0o600 },
+    );
+
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+
+    assertSingleTerminalResult(out);
+    expect(
+      JSON.parse(readFileSync(hostTokensPath(config.environment), "utf8")),
+    ).toEqual({
+      version: 1,
+      users: {},
+    });
+  });
+
   it("JSON mode: emits a single ok result with loggedOut=true when a session existed", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
     const { logoutCommand } = await import("../logout");
