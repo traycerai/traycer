@@ -32,6 +32,7 @@ import type { SideTabRowVariant } from "./side-tab-row";
 import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_NAV_TILE_COUNT_CLASS,
+  SIDE_STRIP_NAV_TILE_QUIET_DOT_CLASS,
   SIDE_STRIP_NAV_TILE_UNKNOWN_DOT_CLASS,
   SIDE_STRIP_SECTION_LABEL_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
@@ -205,8 +206,9 @@ function InboxNavRow(props: {
   const pill = inboxPillOf({
     needsYou: needsYouCount,
     attention: attentionCount,
-    unread: unreadCount,
   });
+  // Unread with nothing to count: the bell's quiet dot.
+  const quiet = pill === null && bellState.kind === "quietDot";
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
   const unavailable = bellState.kind === "unknown";
@@ -245,6 +247,7 @@ function InboxNavRow(props: {
               <InboxTileMark
                 needsYouCount={needsYouCount}
                 attentionCount={attentionCount}
+                quiet={quiet}
                 unavailable={unavailable}
               />
             ) : (
@@ -257,29 +260,11 @@ function InboxNavRow(props: {
                 >
                   Notifications
                 </span>
-                {pill === null ? null : (
-                  <Badge
-                    variant={INBOX_PILL_VARIANT[pill.tone]}
-                    size="sm"
-                    aria-hidden
-                    data-testid="side-strip-inbox-count"
-                    data-tone={pill.tone}
-                    data-needs-you={pill.tone === "needs-you"}
-                  >
-                    <span className="tabular-nums">{pill.count}</span>
-                  </Badge>
-                )}
-                {/* Only where no count is drawn, as on the tile: a zero with
-                    no summary behind it is the claim the dot exists to
-                    qualify. Beside a count it said nothing the tooltip and
-                    the row's name do not. */}
-                {unavailable && pill === null ? (
-                  <span
-                    aria-hidden
-                    data-testid="side-strip-inbox-unknown-indicator"
-                    className={cn(INBOX_UNKNOWN_DOT_CLASS, "shrink-0")}
-                  />
-                ) : null}
+                <InboxRowMark
+                  pill={pill}
+                  quiet={quiet}
+                  unavailable={unavailable}
+                />
               </>
             )}
           </NavRowButton>
@@ -341,36 +326,85 @@ function usePhoneShellTouchScope(): {
 }
 
 /** What the Notifications pill's one count says, which its colour names. */
-type InboxPillTone = "needs-you" | "attention" | "unread";
+type InboxPillTone = "needs-you" | "attention";
+
+interface InboxPill {
+  readonly tone: InboxPillTone;
+  readonly count: number;
+}
 
 const INBOX_PILL_VARIANT: Readonly<
-  Record<InboxPillTone, "warning" | "destructive" | "muted">
-> = { "needs-you": "warning", attention: "destructive", unread: "muted" };
+  Record<InboxPillTone, "warning" | "destructive">
+> = { "needs-you": "warning", attention: "destructive" };
 
 /**
  * The Notifications row's one count, as the header's bell picks its mark:
  * amber, tasks and actionable notices that need the person; else red,
- * what needs attention, failures among it; else muted, the unread total.
- * `null` with nothing to count.
+ * what needs attention, failures among it. `null` with nothing to count.
  */
 function inboxPillOf(input: {
   readonly needsYou: number;
   readonly attention: number;
-  readonly unread: number;
-}): { readonly tone: InboxPillTone; readonly count: number } | null {
+}): InboxPill | null {
   if (input.needsYou > 0) return { tone: "needs-you", count: input.needsYou };
-  if (input.attention > 0) return { tone: "attention", count: input.attention };
-  return input.unread > 0 ? { tone: "unread", count: input.unread } : null;
+  return input.attention > 0
+    ? { tone: "attention", count: input.attention }
+    : null;
+}
+
+/**
+ * The expanded Notifications row's trailing mark: its count, else the quiet
+ * dot for anything unread, else the status-unavailable dot, else nothing.
+ */
+function InboxRowMark(props: {
+  readonly pill: InboxPill | null;
+  readonly quiet: boolean;
+  readonly unavailable: boolean;
+}): ReactNode {
+  if (props.pill !== null) {
+    return (
+      <Badge
+        variant={INBOX_PILL_VARIANT[props.pill.tone]}
+        size="sm"
+        aria-hidden
+        data-testid="side-strip-inbox-count"
+        data-tone={props.pill.tone}
+        data-needs-you={props.pill.tone === "needs-you"}
+      >
+        <span className="tabular-nums">{props.pill.count}</span>
+      </Badge>
+    );
+  }
+  if (props.quiet) {
+    return (
+      <span
+        aria-hidden
+        data-testid="side-strip-inbox-quiet-dot"
+        className={cn(INBOX_QUIET_DOT_CLASS, "shrink-0")}
+      />
+    );
+  }
+  // Only where no count is drawn: a zero with no summary behind it is the
+  // claim the dot exists to qualify.
+  if (!props.unavailable) return null;
+  return (
+    <span
+      aria-hidden
+      data-testid="side-strip-inbox-unknown-indicator"
+      className={cn(INBOX_UNKNOWN_DOT_CLASS, "shrink-0")}
+    />
+  );
 }
 
 /**
  * The collapsed Notifications tile's corner: the needs-you count, else the
- * red count of what needs attention, else the status-unavailable dot, else
- * nothing.
+ * red count of what needs attention, else the quiet dot for anything unread,
+ * else the status-unavailable dot, else nothing.
  */
 function InboxTileMark(props: {
   readonly needsYouCount: number;
   readonly attentionCount: number;
+  readonly quiet: boolean;
   readonly unavailable: boolean;
 }): ReactNode {
   if (props.needsYouCount > 0) {
@@ -401,6 +435,18 @@ function InboxTileMark(props: {
       </span>
     );
   }
+  if (props.quiet) {
+    return (
+      <span
+        aria-hidden
+        data-testid="side-strip-inbox-quiet-dot"
+        className={cn(
+          SIDE_STRIP_NAV_TILE_QUIET_DOT_CLASS,
+          INBOX_QUIET_DOT_CLASS,
+        )}
+      />
+    );
+  }
   if (!props.unavailable) return null;
   return (
     <span
@@ -413,6 +459,9 @@ function InboxTileMark(props: {
     />
   );
 }
+
+/** The bell's quiet dot: filled, for unread activity with nothing to count. */
+const INBOX_QUIET_DOT_CLASS = "size-2 rounded-full bg-primary";
 
 /**
  * The bell's hollow `unknown` dot: an outline, since a filled dot would claim
