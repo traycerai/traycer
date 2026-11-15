@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
@@ -13,6 +14,28 @@ import {
   windowNarrationAwaitsDiscovery,
   type WindowNarrationInput,
 } from "@/lib/host/window-narration";
+import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const windowNarrationBinding = vi.hoisted(() => ({
+  directory: {
+    hasConcludedDiscovery: () => true,
+    getLocalHostId: () => null,
+    onChange: () => ({ dispose: () => undefined }),
+  },
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => ({ directory: windowNarrationBinding.directory }),
+  };
+});
 
 function incompatibility(
   overrides: Partial<SelectionIncompatibility>,
@@ -940,5 +963,270 @@ describe("update-client: the host's structured epoch rejection", () => {
         requirement,
       },
     });
+  });
+});
+
+const WINDOW_NARRATION_HOST_ID = "host-window-narration";
+
+function renderWindowNarrationHook(serving: boolean) {
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: WINDOW_NARRATION_HOST_ID,
+      targetHostId: WINDOW_NARRATION_HOST_ID,
+      effectiveHostId: serving ? WINDOW_NARRATION_HOST_ID : null,
+      leases: [
+        {
+          hostId: WINDOW_NARRATION_HOST_ID,
+          status: serving ? ("ready" as const) : ("connecting" as const),
+          dead: null,
+        },
+      ],
+      selectionRevision: 1,
+    });
+  });
+
+  return renderHook(() => useWindowNarration());
+}
+
+describe("useWindowNarration door states through the real stores", () => {
+  afterEach(() => {
+    cleanup();
+    useSelectionAuthorityStore.getState().reset();
+    useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("covers a not-admitted target while no host serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "not-admitted" },
+    });
+  });
+
+  it("keeps the not-admitted cover over a ready host that has served this window", () => {
+    const { result } = renderWindowNarrationHook(true);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "not-admitted" },
+    });
+  });
+
+  it("uses the token-unavailable cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "token-unavailable",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "token-unavailable", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the keys-unavailable cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "keys-unavailable",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "keys-unavailable", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the clock-skew cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "clock-skew",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "clock-skew", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the token-expired cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "token-expired",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "token-expired", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the enrolment-broken cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "enrolment-broken",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "enrolment-broken", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the membership-removed cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "membership-removed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "membership-removed", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("keeps the current offline result for host-claimed while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "host-claimed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("keeps the current offline result for older-host while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "older-host",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("shows the reason code for an unrecognised refusal while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "unrecognised-refusal",
+        detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "unrecognised-refusal", code: "UNAUTHORIZED" },
+    });
+  });
+
+  it("uses the team-membership cover for not-a-member while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-a-member",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "team-membership-required" },
+    });
+  });
+
+  it("keeps the no-door result when access checks are delayed", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "access-check-delayed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("is silent when an unrecognised refusal arrives after the host has served", () => {
+    const { result } = renderWindowNarrationHook(true);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "unrecognised-refusal",
+        detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+      });
+    });
+
+    expect(result.current.narration).toEqual({ kind: "silent" });
   });
 });
