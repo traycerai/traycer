@@ -1597,7 +1597,12 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
+  const activeTasks = useBotActiveTasks(
+    snapshot.tasks,
+    hostId,
+    snapshotFresh,
+    botId,
+  );
   const showMessages = useCallback(() => {
     closeSession();
     onViewChange("messages");

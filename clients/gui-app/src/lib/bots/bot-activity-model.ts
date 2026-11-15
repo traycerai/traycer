@@ -11,7 +11,8 @@ type BotActiveBand =
   | "working"
   | "unseen"
   | "periodic"
-  | "unknown";
+  | "unknown"
+  | "ended";
 
 /** One row of a bot's Activity list (Tracy Bots, decision 182). */
 export type BotActiveTask = {
@@ -32,6 +33,7 @@ const BAND_RANK: Readonly<Record<BotActiveBand, number>> = {
   unseen: 2,
   periodic: 3,
   unknown: 4,
+  ended: 5,
 };
 
 /**
@@ -50,7 +52,7 @@ export function activeTasksOf(input: {
 }): ReadonlyArray<BotActiveTask> {
   const rows: BotActiveTask[] = [];
   for (const task of input.tasks) {
-    if (task.endedReason === "deleted") continue;
+    if (task.state === "ended") continue;
     const working = input.workingInTask(task.taskId);
     const band = activeBandOf(
       task,
