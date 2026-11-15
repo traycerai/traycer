@@ -23,6 +23,7 @@ import { FrameCommentPins } from "@/components/comments/frame-comment-pins";
 import { cn } from "@/lib/utils";
 import { useOrderedFrameThreads } from "@/components/comments/use-ordered-frame-threads";
 import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
+import { COMMENT_OPENER } from "@/lib/comments/comment-opener";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 import { useCanvasBoardDocument } from "./use-canvas-board-document";
@@ -46,6 +47,7 @@ export function CanvasCommentAction(props: {
   return (
     <>
       <ToolbarActionButton
+        {...COMMENT_OPENER}
         label="Comment"
         tooltip={null}
         className="tc-editor-toolbar-action"

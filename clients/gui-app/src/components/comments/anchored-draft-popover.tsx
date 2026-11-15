@@ -1,4 +1,5 @@
 import { FrameCommentPortalContext } from "./frame-comment-surface-context";
+import { COMMENT_OPENER_ATTRIBUTE } from "@/lib/comments/comment-opener";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
@@ -66,15 +67,15 @@ export interface AnchoredDraftTidInsertion {
 /**
  * A comment started anywhere in the task, this view included, would replace
  * this draft, and neither a pick inside a page nor a draft out of sight meets a
- * press outside the box: it answers through `discard`, which asks before
+ * press outside the box: it answers through `dismiss`, which asks before
  * dropping typed text.
  */
 function useDiscardForReplacement(
   epicId: string,
   draft: AnchoredCommentDraft | null,
-  answer: () => boolean,
+  dismiss: () => boolean,
 ): void {
-  const discard = useEffectEvent((): boolean => answer());
+  const discard = useEffectEvent((): boolean => dismiss());
   const draftId = draft?.draftId ?? null;
   useEffect(() => {
     if (draftId === null) return;
@@ -129,13 +130,7 @@ export function AnchoredDraftPopover(props: {
     onClosed();
     return true;
   }, [draft, epicId, onClosed, pending]);
-  // A press outside the box that the reader would not discard for is
-  // cancelled, but the click it ends in still reaches its target: an opener
-  // that click starts (a pin on the canvas, another view's Comment) takes that
-  // answer rather than asking again. The next press or key starts afresh.
-  const declinedPress = useRef(false);
   const keyDown = useEffectEvent((event: KeyboardEvent) => {
-    declinedPress.current = false;
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
     dismiss();
@@ -158,8 +153,11 @@ export function AnchoredDraftPopover(props: {
       trigger !== null && (floatingRef.current?.contains(trigger) ?? false)
     );
   };
+  // A press on a control that opens a comment (a frame or canvas taking
+  // comments, another view's Comment) is the opener's to ask about: it asks
+  // through this box's discard before replacing the draft, and asking here
+  // too would put the question twice.
   const outside = useEffectEvent((event: PointerEvent) => {
-    declinedPress.current = false;
     if (
       !(event.target instanceof Node) ||
       floatingRef.current?.contains(event.target) ||
@@ -169,22 +167,18 @@ export function AnchoredDraftPopover(props: {
         .some(
           (target) =>
             target instanceof Element &&
-            target.getAttribute("data-slot") === "mention-suggestion",
+            (target.getAttribute("data-slot") === "mention-suggestion" ||
+              target.hasAttribute(COMMENT_OPENER_ATTRIBUTE)),
         )
     )
       return;
     if (!dismiss()) {
-      declinedPress.current = true;
       event.preventDefault();
       event.stopImmediatePropagation();
     }
   });
   const hasDraft = draft !== null;
-  useDiscardForReplacement(
-    epicId,
-    draft,
-    () => !declinedPress.current && dismiss(),
-  );
+  useDiscardForReplacement(epicId, draft, dismiss);
   // The composer below is the only copy of what the reader typed, so a
   // transcript row the draft lives in stays mounted while it is open, raised
   // or not: a list that virtualized the row away would take the text with it.
@@ -198,7 +192,6 @@ export function AnchoredDraftPopover(props: {
     window.addEventListener("keydown", keyDown);
     window.addEventListener("pointerdown", outside, true);
     return () => {
-      declinedPress.current = false;
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("pointerdown", outside, true);
     };
