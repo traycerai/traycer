@@ -1028,8 +1028,8 @@ function useChannelSearchEntry(args: {
 
 /**
  * The bot's session shown in place of the channel's views,
- * and where the channel lands once it is back. A receipt, a check-in's link
- * or a thread's "Thread session" opens a session; each open is a new visit,
+ * and where the channel lands once it is back. A receipt or a check-in's
+ * link opens a session; each open is a new visit,
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
@@ -1768,7 +1768,6 @@ function BotTabContent(props: {
                       openThread={openThread}
                       onOpenThread={setOpenThread}
                       onOpenTurn={openTurn}
-                      onOpenSession={openSession}
                       landOn={channelLanding}
                       openMemory={openMemory}
                       onOpenMemory={setOpenMemory}
