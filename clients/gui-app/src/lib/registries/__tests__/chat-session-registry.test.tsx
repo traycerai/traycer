@@ -984,8 +984,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     });
 
     const registry = getChatSessionRegistry();
-    const demandChanges = vi.fn();
-    const unsubscribe = registry.subscribe(demandChanges);
+    const releaseHandle = vi.spyOn(registry, "releaseHandle");
     try {
       const { result, rerender } = renderHook(
         () =>
@@ -1002,7 +1001,6 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       expect(tracked.records()).toHaveLength(1);
       const owner = result.current;
       if (owner === null) throw new Error("remote chat owner was not acquired");
-      const changesBeforeRelease = demandChanges.mock.calls.length;
 
       const remoteBelowFloor: RemoteHostDirectoryEntry = {
         ...remoteAtFloor,
@@ -1014,7 +1012,12 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
         expect(result.current).toBeNull();
       });
       await waitFor(() => {
-        expect(demandChanges).toHaveBeenCalledTimes(changesBeforeRelease + 1);
+        expect(releaseHandle).toHaveBeenCalledWith(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+          owner,
+        );
       });
       expect(
         registry.peek(
@@ -1024,7 +1027,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
         ),
       ).toBe(owner);
     } finally {
-      unsubscribe();
+      releaseHandle.mockRestore();
     }
   });
 
