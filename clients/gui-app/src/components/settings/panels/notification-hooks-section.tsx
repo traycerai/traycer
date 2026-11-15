@@ -1,3 +1,5 @@
+import { NotificationHooksAccountSaveError } from "@/lib/notifications/notification-hooks-account-save-error";
+import { HOST_OVERVIEW } from "./host-overview.definitions";
 import { notificationHooksRemovedMessage } from "@traycer/protocol/host/notifications/presentation";
 import { useState, type ReactNode } from "react";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
@@ -9,7 +11,6 @@ import {
   HOOK_SEVERITIES,
 } from "@/components/settings/panels/notification-hook-draft";
 import { NotificationHookEditorDialog } from "@/components/settings/panels/notification-hook-editor-dialog";
-import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +38,7 @@ export function NotificationHooksSection(props: {
   const { data, error, isLoading, refetch } = props.statusQuery;
   return (
     <SettingsGroup
-      group={HOST_NOTIFICATIONS.definitions.notificationHooks}
+      group={HOST_OVERVIEW.definitions.notificationHooks}
       showTitle
       tone="default"
       dataTestId="notification-hooks-manager"
@@ -267,14 +268,30 @@ interface HookSnapshot {
   readonly hooks: readonly NotificationHookConfig[];
   readonly configurationRevision: string | null;
 }
-type EditorState =
-  | { readonly kind: "closed" }
-  | { readonly kind: "add"; readonly snapshot: HookSnapshot }
+type OpenEditorState =
+  | {
+      readonly kind: "add";
+      readonly snapshot: HookSnapshot;
+      readonly saveError: string | null;
+    }
   | {
       readonly kind: "edit";
       readonly hook: HookEntry;
       readonly snapshot: HookSnapshot;
+      readonly saveError: string | null;
     };
+type EditorState = { readonly kind: "closed" } | OpenEditorState;
+
+interface DeleteState {
+  readonly hook: HookEntry;
+  readonly snapshot: HookSnapshot;
+  readonly saveError: string | null;
+}
+
+type SaveOrigin =
+  | { readonly kind: "list" }
+  | { readonly kind: "editor"; readonly opening: OpenEditorState }
+  | { readonly kind: "delete"; readonly opening: DeleteState };
 
 function HooksEditor(props: {
   readonly hooks: readonly HookEntry[];
@@ -289,12 +306,10 @@ function HooksEditor(props: {
   // editor and its typed draft survive without being parked anywhere. A real
   // host switch remounts through the gate's key and correctly starts closed.
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
-  const [pendingDelete, setPendingDelete] = useState<{
-    readonly hook: HookEntry;
-    readonly snapshot: HookSnapshot;
-  } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeleteState | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const visibleHooks = props.hooks.filter((hook) => hook.localOnly === true);
   const snapshot: HookSnapshot = {
     hooks: props.hooks.map(toConfig),
     configurationRevision: props.configurationRevision,
@@ -303,26 +318,72 @@ function HooksEditor(props: {
     hooks: readonly NotificationHookConfig[],
     revision: string | null,
     done: string,
+    origin: SaveOrigin,
   ) => {
+    // A result belongs to the opening that submitted it, even after cancel/reopen.
+    const closeSubmittedOpening = () => {
+      if (origin.kind === "editor")
+        setEditor((current) =>
+          current === origin.opening ? { kind: "closed" } : current,
+        );
+      else if (origin.kind === "delete")
+        setPendingDelete((current) =>
+          current === origin.opening ? null : current,
+        );
+    };
     setSaveError(null);
     props.saveHooks.mutate(
       {
         hooks: [...hooks],
-        executableWriteGrant: null,
         configurationRevision: revision,
       },
       {
         onSuccess: () => {
-          setEditor({ kind: "closed" });
-          setPendingDelete(null);
+          closeSubmittedOpening();
           toast.success(done);
         },
         onError: (error) => {
-          setEditor({ kind: "closed" });
-          setPendingDelete(null);
-          setSaveError(
-            `${error.message} Review the refreshed hooks before saving again.`,
-          );
+          const message = `${error.message} Review the refreshed hooks before saving again.`;
+          if (error instanceof NotificationHooksAccountSaveError) {
+            // This app wrote these exact hooks locally. A retry may quote
+            // that answered revision, but never a revision from a later read.
+            const saved: HookSnapshot = {
+              hooks,
+              configurationRevision: error.savedConfigurationRevision,
+            };
+            if (origin.kind === "editor")
+              setEditor((current) =>
+                current.kind === "closed" || current !== origin.opening
+                  ? current
+                  : {
+                      ...current,
+                      saveError: message,
+                      snapshot:
+                        current.kind === "add"
+                          ? {
+                              ...current.snapshot,
+                              configurationRevision:
+                                saved.configurationRevision,
+                            }
+                          : saved,
+                    },
+              );
+            else if (origin.kind === "delete")
+              setPendingDelete((current) =>
+                current === origin.opening
+                  ? { ...current, snapshot: saved, saveError: message }
+                  : current,
+              );
+          } else if (origin.kind === "delete") {
+            setPendingDelete((current) =>
+              current === origin.opening
+                ? { ...current, saveError: message }
+                : current,
+            );
+          } else {
+            closeSubmittedOpening();
+          }
+          setSaveError(message);
           props.onRefresh();
         },
       },
@@ -331,12 +392,12 @@ function HooksEditor(props: {
 
   return (
     <ManagerShell
-      count={props.hooks.length}
+      count={visibleHooks.length}
       configPath={props.configPath}
       addDisabled={props.saveHooks.isPending}
       onRefresh={props.onRefresh}
       onAdd={() => {
-        setEditor({ kind: "add", snapshot });
+        setEditor({ kind: "add", snapshot, saveError: null });
       }}
     >
       {saveError === null ? null : (
@@ -348,7 +409,7 @@ function HooksEditor(props: {
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
-        {props.hooks.length === 0 ? (
+        {visibleHooks.length === 0 ? (
           <div
             className="flex h-full flex-col items-center justify-center gap-3 px-4 py-6 text-center"
             data-testid="notification-hooks-empty-state"
@@ -367,7 +428,7 @@ function HooksEditor(props: {
               variant="outline"
               size="sm"
               onClick={() => {
-                setEditor({ kind: "add", snapshot });
+                setEditor({ kind: "add", snapshot, saveError: null });
               }}
             >
               <Plus aria-hidden className="size-3.5" />
@@ -376,14 +437,14 @@ function HooksEditor(props: {
           </div>
         ) : (
           <div className="divide-y divide-border/40">
-            {props.hooks.map((hook) => (
+            {visibleHooks.map((hook) => (
               <HookRow
                 key={hook.id}
                 hook={hook}
                 testHook={props.testHook}
                 saving={props.saveHooks.isPending}
                 onEdit={() => {
-                  setEditor({ kind: "edit", hook, snapshot });
+                  setEditor({ kind: "edit", hook, snapshot, saveError: null });
                 }}
                 onToggleEnabled={(enabled) => {
                   saveAll(
@@ -392,10 +453,11 @@ function HooksEditor(props: {
                     ),
                     snapshot.configurationRevision,
                     enabled ? "Hook enabled" : "Hook disabled",
+                    { kind: "list" },
                   );
                 }}
                 onDelete={() => {
-                  setPendingDelete({ hook, snapshot });
+                  setPendingDelete({ hook, snapshot, saveError: null });
                 }}
               />
             ))}
@@ -412,6 +474,7 @@ function HooksEditor(props: {
           }
           title={editor.kind === "add" ? "Add hook" : "Edit hook"}
           saving={props.saveHooks.isPending}
+          serverProblem={props.saveHooks.isPending ? null : editor.saveError}
           onCancel={() => {
             setEditor({ kind: "closed" });
           }}
@@ -426,6 +489,7 @@ function HooksEditor(props: {
               next,
               editor.snapshot.configurationRevision,
               editor.kind === "add" ? "Hook added" : "Hook saved",
+              { kind: "editor", opening: editor },
             );
           }}
         />
@@ -450,9 +514,17 @@ function HooksEditor(props: {
               ),
               pendingDelete.snapshot.configurationRevision,
               "Hook deleted",
+              { kind: "delete", opening: pendingDelete },
             );
           }}
-        />
+        >
+          {props.saveHooks.isPending ||
+          pendingDelete.saveError === null ? null : (
+            <p role="alert" className="px-5 pb-5 text-ui-sm text-destructive">
+              {pendingDelete.saveError}
+            </p>
+          )}
+        </ConfirmDestructiveDialog>
       )}
     </ManagerShell>
   );

@@ -1,3 +1,4 @@
+import { TEAM_NOTIFICATION_HOOKS } from "@/components/settings/environment/team-notification-hooks-page.definitions";
 /**
  * Docs: see `src/components/settings/SETTINGS.md` § Search.
  *
@@ -74,6 +75,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     SANDBOXES,
     STORAGE,
     MEMBERS,
+    TEAM_NOTIFICATION_HOOKS,
     MACHINE_SETUP,
     DEVICES,
     LINK_PHONE,

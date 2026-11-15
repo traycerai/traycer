@@ -71,6 +71,7 @@ import type {
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
 import { useOpenLink } from "@/lib/links/open-link";
+import { TEAM_NOTIFICATION_HOOKS_COPY } from "@/components/settings/panels/cloud-notification-copy";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { FileRouteTypes } from "@/routeTree.gen";
 import type { DesktopSupportDialogProps } from "./types";
@@ -138,6 +139,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/layout": "Settings - Layout",
   "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
+  "/settings/notification-hooks": TEAM_NOTIFICATION_HOOKS_COPY.title,
   "/settings/opening-behavior": "Settings - Opening behavior",
   "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
