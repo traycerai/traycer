@@ -11,7 +11,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => ({}) as ReturnType<typeof actual.useHostClient>,
+    useHostClient: () => ({}),
   };
 });
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
@@ -29,7 +29,7 @@ afterEach(cleanup);
 function elementFor(
   configuration: "personal" | "team",
   role: ConfigurationRole | null,
-  transportReadOnly = false,
+  transportReadOnly: boolean,
 ) {
   const source: ConfigurationSource = {
     kind: "pool",
@@ -56,7 +56,7 @@ function elementFor(
 
 describe("AddToConfigurationButton role gate", () => {
   it("offers Add to Personal to its owner", () => {
-    render(elementFor("personal", "owner"));
+    render(elementFor("personal", "owner", false));
 
     expect(
       screen.getByRole("button", { name: "Add to Personal" }),
@@ -64,22 +64,22 @@ describe("AddToConfigurationButton role gate", () => {
   });
 
   it("offers Add to a team to an admin", () => {
-    render(elementFor("team", "admin"));
+    render(elementFor("team", "admin", false));
 
     expect(screen.getByRole("button", { name: "Add to Acme" })).toBeDefined();
   });
 
   it("offers Add to a team to an editor", () => {
-    render(elementFor("team", "editor"));
+    render(elementFor("team", "editor", false));
 
     expect(screen.getByRole("button", { name: "Add to Acme" })).toBeDefined();
   });
 
   it("hides Add from a viewer and a role the app does not know", () => {
-    const view = render(elementFor("team", "viewer"));
+    const view = render(elementFor("team", "viewer", false));
     expect(screen.queryByRole("button", { name: "Add to Acme" })).toBeNull();
 
-    view.rerender(elementFor("team", null));
+    view.rerender(elementFor("team", null, false));
     expect(screen.queryByRole("button", { name: "Add to Acme" })).toBeNull();
   });
 

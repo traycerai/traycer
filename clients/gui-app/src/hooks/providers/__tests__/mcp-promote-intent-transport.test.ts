@@ -36,21 +36,21 @@ afterEach(() => {
 describe("MCP promote intent authn calls", () => {
   it("records the binding and reads the intent state through the person's bearer", async () => {
     const requests: EnvironmentTransportRequest[] = [];
-    const transport: EnvironmentCloud["transport"] = async (request) => {
+    const transport: EnvironmentCloud["transport"] = (request) => {
       requests.push(request);
       if (request.method === "POST") {
-        return {
+        return Promise.resolve({
           status: 200,
           text: JSON.stringify({
             operationId: OPERATION_ID,
             endsAt: 2_000_000_000,
           }),
-        };
+        });
       }
-      return {
+      return Promise.resolve({
         status: 200,
         text: JSON.stringify({ state: "consumed", mcpServerId: SERVER_ID }),
-      };
+      });
     };
     const source = cloud(transport);
 

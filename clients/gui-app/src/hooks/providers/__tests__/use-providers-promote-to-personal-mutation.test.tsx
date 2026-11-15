@@ -7,10 +7,15 @@ import type {
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { McpPromoteIntentState } from "@traycer-clients/shared/environment/mcp-promote-intent";
 import type { ProvidersNativeMutateResponseV15 } from "@traycer/protocol/host/provider-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useProvidersPromoteToPersonal } from "@/hooks/providers/use-providers-promote-to-personal-mutation";
+import {
+  useProvidersPromoteToPersonal,
+  type PromoteToEnvironmentOutcome,
+} from "@/hooks/providers/use-providers-promote-to-personal-mutation";
 import {
   negotiateMethods,
   WINDOW_HOST_ID,
@@ -38,9 +43,9 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => cloudHarness.source,
 }));
 vi.mock("@/hooks/environment/use-executable-write-grant", () => ({
-  useExecutableWriteGrant: () => async (request: unknown) => {
+  useExecutableWriteGrant: () => (request: unknown) => {
     const prepare = grantHarness.prepare;
-    return prepare === null ? request : prepare(request);
+    return prepare === null ? Promise.resolve(request) : prepare(request);
   },
 }));
 vi.mock("@/lib/host-error-toast", () => ({
@@ -67,7 +72,7 @@ function deferred<Value>(): {
   return { promise, resolve };
 }
 
-function binding(sharingGeneration: number | null) {
+function binding(sharingGeneration: number | null): EnvironmentHostBinding {
   return {
     hostId: WINDOW_HOST_ID,
     environment: {
@@ -86,7 +91,7 @@ function binding(sharingGeneration: number | null) {
 
 function makeCloud(
   transport: EnvironmentCloud["transport"],
-  onOriginSignIn: () => boolean = () => true,
+  onOriginSignIn: () => boolean,
 ): EnvironmentCloud {
   return {
     authnBaseUrl: "https://authn.example.test/",
@@ -102,31 +107,34 @@ function makeCloud(
 function stateCloud(
   state: "consumed" | "pending" | "ended" | "read-failed",
   requests: EnvironmentTransportRequest[],
-  recordStatus = 200,
+  recordStatus: number,
 ): EnvironmentCloud {
-  return makeCloud(async (request) => {
-    requests.push(request);
-    if (request.method === "POST") {
-      return {
-        status: recordStatus,
-        text: JSON.stringify({
-          operationId: "00000000-0000-4000-8000-000000000001",
-          endsAt: 2_000_000_000,
-        }),
-      };
-    }
-    if (state === "read-failed") return { status: 503, text: "" };
-    return {
-      status: 200,
-      text: JSON.stringify(
-        state === "consumed"
-          ? { state, mcpServerId: SERVER_ID }
-          : state === "pending"
-            ? { state, endsAt: 2_000_000_000 }
-            : { state },
-      ),
-    };
-  });
+  return makeCloud(
+    (request) => {
+      requests.push(request);
+      if (request.method === "POST") {
+        return Promise.resolve({
+          status: recordStatus,
+          text: JSON.stringify({
+            operationId: "00000000-0000-4000-8000-000000000001",
+            endsAt: 2_000_000_000,
+          }),
+        });
+      }
+      if (state === "read-failed")
+        return Promise.resolve({ status: 503, text: "" });
+      let body: McpPromoteIntentState;
+      if (state === "consumed") {
+        body = { state, mcpServerId: SERVER_ID };
+      } else if (state === "pending") {
+        body = { state, endsAt: 2_000_000_000 };
+      } else {
+        body = { state };
+      }
+      return Promise.resolve({ status: 200, text: JSON.stringify(body) });
+    },
+    () => true,
+  );
 }
 
 function installListRead(queryClient: QueryClient): () => boolean {
@@ -142,7 +150,7 @@ function installListRead(queryClient: QueryClient): () => boolean {
     false;
 }
 
-async function runPromote(args: {
+function runPromote(args: {
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
   readonly cloud: EnvironmentCloudSource | null;
   readonly entryKind?: "mcp" | "skills";
@@ -164,7 +172,7 @@ async function runPromote(args: {
     name: "scratch",
     expectedEnvironmentId: "env-a",
   };
-  return { host, rendered, input };
+  return Promise.resolve({ host, rendered, input });
 }
 
 afterEach(() => {
@@ -179,7 +187,7 @@ describe("useProvidersPromoteToPersonal", () => {
   it("records the bound MCP server, sends the same operation id, and refreshes lists when consumed", async () => {
     const requests: EnvironmentTransportRequest[] = [];
     const nativeRequests: unknown[] = [];
-    const cloud = stateCloud("consumed", requests);
+    const cloud = stateCloud("consumed", requests, 200);
     const result = await runPromote({
       cloud: () => cloud,
       handlers: {
@@ -191,15 +199,13 @@ describe("useProvidersPromoteToPersonal", () => {
       },
     });
     const invalidated = installListRead(result.host.queryClient);
-    let outcome: Awaited<
-      ReturnType<typeof result.rendered.result.current.mutateAsync>
-    >;
+    let outcome: PromoteToEnvironmentOutcome | undefined;
 
     await act(async () => {
       outcome = await result.rendered.result.current.mutateAsync(result.input);
     });
 
-    expect(outcome!).toEqual({ kind: "added" });
+    expect(outcome).toEqual({ kind: "added" });
     const operationId = bodyOperationId(requests[0]);
     expect(requests[0]?.body).toEqual({
       operationId,
@@ -217,7 +223,7 @@ describe("useProvidersPromoteToPersonal", () => {
 
   it("shows the failure line and refreshes lists while the intent is pending", async () => {
     const requests: EnvironmentTransportRequest[] = [];
-    const cloud = stateCloud("pending", requests);
+    const cloud = stateCloud("pending", requests, 200);
     const result = await runPromote({
       cloud: () => cloud,
       handlers: {
@@ -226,15 +232,13 @@ describe("useProvidersPromoteToPersonal", () => {
       },
     });
     const invalidated = installListRead(result.host.queryClient);
-    let outcome: Awaited<
-      ReturnType<typeof result.rendered.result.current.mutateAsync>
-    >;
+    let outcome: PromoteToEnvironmentOutcome | undefined;
 
     await act(async () => {
       outcome = await result.rendered.result.current.mutateAsync(result.input);
     });
 
-    expect(outcome!).toEqual({
+    expect(outcome).toEqual({
       kind: "refused",
       text: "Couldn't add it to Acme.",
       refreshLists: true,
@@ -246,7 +250,7 @@ describe("useProvidersPromoteToPersonal", () => {
     "shows the failure line without refreshing lists when the intent is %s",
     async (state) => {
       const requests: EnvironmentTransportRequest[] = [];
-      const cloud = stateCloud(state, requests);
+      const cloud = stateCloud(state, requests, 200);
       const result = await runPromote({
         cloud: () => cloud,
         handlers: {
@@ -255,9 +259,7 @@ describe("useProvidersPromoteToPersonal", () => {
         },
       });
       const invalidated = installListRead(result.host.queryClient);
-      let outcome = null as Awaited<
-        ReturnType<typeof result.rendered.result.current.mutateAsync>
-      > | null;
+      let outcome: PromoteToEnvironmentOutcome | undefined;
 
       await act(async () => {
         outcome = await result.rendered.result.current.mutateAsync(
@@ -297,25 +299,81 @@ describe("useProvidersPromoteToPersonal", () => {
     expect(nativeRequests).toEqual([]);
   });
 
+  it.each(["mutate", "mutateAsync"] as const)(
+    "%s captures each click's sign-in before yielding, including reused input",
+    async (mode) => {
+      const account = { current: "A" };
+      const aRequests: EnvironmentTransportRequest[] = [];
+      const bRequests: EnvironmentTransportRequest[] = [];
+      const cloudA: EnvironmentCloud = {
+        ...stateCloud("consumed", aRequests, 200),
+        onOriginSignIn: () => account.current === "A",
+      };
+      const cloudB: EnvironmentCloud = {
+        ...stateCloud("consumed", bRequests, 200),
+        onOriginSignIn: () => account.current === "B",
+      };
+      const nativeRequests: unknown[] = [];
+      const result = await runPromote({
+        cloud: () => (account.current === "A" ? cloudA : cloudB),
+        handlers: {
+          "environment.host.read": () => binding(7),
+          "providers.nativeMutate": (request) => {
+            nativeRequests.push(request);
+            return PROMOTED;
+          },
+        },
+      });
+
+      await act(async () => {
+        if (mode === "mutateAsync") {
+          const first = result.rendered.result.current.mutateAsync(
+            result.input,
+          );
+          account.current = "B";
+          const second = result.rendered.result.current.mutateAsync(
+            result.input,
+          );
+          await Promise.all([first, second]);
+        } else {
+          result.rendered.result.current.mutate(result.input);
+          account.current = "B";
+          result.rendered.result.current.mutate(result.input);
+        }
+      });
+
+      await waitFor(() =>
+        expect(result.rendered.result.current.isSuccess).toBe(true),
+      );
+      expect(result.rendered.result.current.data).toEqual({ kind: "added" });
+      expect(aRequests).toEqual([]);
+      expect(bRequests.map(({ method }) => method)).toEqual(["POST", "GET"]);
+      expect(nativeRequests).toHaveLength(1);
+      expect(nativeRequests[0]).toMatchObject({
+        mutation: { intentOperationId: bodyOperationId(bRequests[0]) },
+      });
+    },
+  );
+
   it("does not record on B or upload after the binding read switches sign-ins", async () => {
     const account = { current: "A" };
     const aRequests: EnvironmentTransportRequest[] = [];
     const bRequests: EnvironmentTransportRequest[] = [];
     const cloudA = makeCloud(
-      async (request) => {
+      (request) => {
         aRequests.push(request);
-        return { status: 200, text: "{}" };
+        return Promise.resolve({ status: 200, text: "{}" });
       },
       () => account.current === "A",
     );
     const cloudB = makeCloud(
-      async (request) => {
+      (request) => {
         bRequests.push(request);
-        return { status: 200, text: "{}" };
+        return Promise.resolve({ status: 200, text: "{}" });
       },
       () => account.current === "B",
     );
-    const bindingRead = deferred<ReturnType<typeof binding>>();
+    const bindingRead = deferred<EnvironmentHostBinding>();
     const bindingStarted = deferred<void>();
     const nativeRequests: unknown[] = [];
     const result = await runPromote({
@@ -429,8 +487,8 @@ describe("useProvidersPromoteToPersonal", () => {
   it("reads the intent through the cloud operation captured for the click", async () => {
     const aRequests: EnvironmentTransportRequest[] = [];
     const bRequests: EnvironmentTransportRequest[] = [];
-    const cloudA = stateCloud("consumed", aRequests);
-    const cloudB = stateCloud("consumed", bRequests);
+    const cloudA = stateCloud("consumed", aRequests, 200);
+    const cloudB = stateCloud("consumed", bRequests, 200);
     let sourceCalls = 0;
     const result = await runPromote({
       cloud: () => {
@@ -458,23 +516,25 @@ describe("useProvidersPromoteToPersonal", () => {
     const account = { current: "A" };
     const requests: EnvironmentTransportRequest[] = [];
     const cloudA = makeCloud(
-      async (request) => {
+      (request) => {
         requests.push(request);
-        return request.method === "POST"
-          ? {
-              status: 200,
-              text: JSON.stringify({
-                operationId: "00000000-0000-4000-8000-000000000001",
-                endsAt: 2_000_000_000,
-              }),
-            }
-          : {
-              status: 200,
-              text: JSON.stringify({
-                state: "consumed",
-                mcpServerId: SERVER_ID,
-              }),
-            };
+        return Promise.resolve(
+          request.method === "POST"
+            ? {
+                status: 200,
+                text: JSON.stringify({
+                  operationId: "00000000-0000-4000-8000-000000000001",
+                  endsAt: 2_000_000_000,
+                }),
+              }
+            : {
+                status: 200,
+                text: JSON.stringify({
+                  state: "consumed",
+                  mcpServerId: SERVER_ID,
+                }),
+              },
+        );
       },
       () => account.current === "A",
     );
@@ -520,7 +580,7 @@ describe("useProvidersPromoteToPersonal", () => {
   it("does not record or promote when sharing generation is null or cloud is absent", async () => {
     const requests: EnvironmentTransportRequest[] = [];
     const nativeRequests: unknown[] = [];
-    const cloud = stateCloud("consumed", requests);
+    const cloud = stateCloud("consumed", requests, 200);
     for (const sharingGeneration of [null, 7] as const) {
       const result = await runPromote({
         cloud: sharingGeneration === null ? () => cloud : null,
@@ -568,7 +628,7 @@ describe("useProvidersPromoteToPersonal", () => {
   it("does not record an MCP intent for a skill on 1.5", async () => {
     const requests: EnvironmentTransportRequest[] = [];
     const nativeRequests: unknown[] = [];
-    const cloud = stateCloud("consumed", requests);
+    const cloud = stateCloud("consumed", requests, 200);
     const result = await runPromote({
       cloud: () => cloud,
       entryKind: "skills",
@@ -614,9 +674,7 @@ describe("useProvidersPromoteToPersonal", () => {
         },
       });
 
-      let outcome = null as Awaited<
-        ReturnType<typeof result.rendered.result.current.mutateAsync>
-      > | null;
+      let outcome: PromoteToEnvironmentOutcome | undefined;
       await act(async () => {
         outcome = await result.rendered.result.current.mutateAsync(
           result.input,
@@ -652,9 +710,7 @@ describe("useProvidersPromoteToPersonal", () => {
       },
     });
 
-    let outcome = null as Awaited<
-      ReturnType<typeof result.rendered.result.current.mutateAsync>
-    > | null;
+    let outcome: PromoteToEnvironmentOutcome | undefined;
     await act(async () => {
       outcome = await result.rendered.result.current.mutateAsync(result.input);
     });

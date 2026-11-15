@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   useMutation,
   useQueryClient,
@@ -81,6 +82,19 @@ interface PromoteContext {
   readonly hostId: string | null;
 }
 
+type CapturedPromoteRequest =
+  | {
+      readonly kind: "ready";
+      readonly hostId: string | null;
+      readonly operation: EnvironmentCloud | null;
+      readonly intentRequired: boolean;
+    }
+  | {
+      readonly kind: "failed";
+      readonly hostId: string | null;
+      readonly error: unknown;
+    };
+
 /** The intent the click recorded, to read back once the computer answers. */
 interface RecordedIntent {
   readonly environmentId: string;
@@ -118,7 +132,10 @@ export function useProvidersPromoteToPersonal(
   const cloud = useEnvironmentCloud();
   const grant = useExecutableWriteGrant();
   const queries = useQueryClient();
-  return useMutation<
+  const capturedRequests = useRef(
+    new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
+  );
+  const mutation = useMutation<
     PromoteToEnvironmentOutcome,
     HostRpcError,
     PromoteToEnvironmentVariables,
@@ -128,10 +145,15 @@ export function useProvidersPromoteToPersonal(
       mutationKey: providersMutationKeys.promoteToPersonal(),
       mutationFn: (variables) =>
         withHostQueryErrorBoundary(METHOD, async () => {
+          const captured = capturedRequests.current.get(variables);
+          if (captured === undefined)
+            throw new Error("Missing promote request capture.");
+          if (captured.kind === "failed") throw captured.error;
           let intent: RecordedIntent | null = null;
-          if (variables.entryKind === "mcp" && takesIntent(client)) {
-            if (cloud === null) return intentOutcome(null, environmentName);
-            const operation = cloud();
+          if (captured.intentRequired) {
+            const operation = captured.operation;
+            if (operation === null || !operation.onOriginSignIn())
+              return intentOutcome(null, environmentName);
             const operationId = crypto.randomUUID();
             const recorded = await recordIntent(
               client,
@@ -179,8 +201,10 @@ export function useProvidersPromoteToPersonal(
           if (intent === null) return { kind: "added" };
           return intentOutcome(await readIntentState(intent), environmentName);
         }),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (outcome, variables, context) => {
+      onMutate: (variables) => ({
+        hostId: capturedRequests.current.get(variables)?.hostId ?? null,
+      }),
+      onSuccess: (outcome, variables) => {
         if (outcome.kind === "refused" && !outcome.refreshLists) return;
         // The entry joins the configuration, so the MCP servers and Skills
         // pages' lists move too, on every host that read them.
@@ -195,9 +219,19 @@ export function useProvidersPromoteToPersonal(
             ],
           );
         }
-        if (context.hostId === null) return;
+      },
+      onSettled: (outcome, error, variables, context) => {
+        capturedRequests.current.delete(variables);
+        if (context?.hostId === null || context === undefined) return;
+        if (
+          error === null &&
+          outcome?.kind === "refused" &&
+          !outcome.refreshLists
+        )
+          return;
         // The native lists (the row's mark) and the host's status (where the
         // item now applies) both change, on the host the click was sent on.
+        // A lost answer may follow a committed upload, so errors re-read too.
         for (const method of [
           "providers.list",
           "environment.status",
@@ -220,6 +254,37 @@ export function useProvidersPromoteToPersonal(
       },
     }),
   );
+
+  const capture = (
+    variables: PromoteToEnvironmentVariables,
+  ): PromoteToEnvironmentVariables => {
+    // TanStack yields before onMutate. A distinct variables object pairs
+    // each press with its own capture, even when callers reuse their input.
+    const request = { ...variables };
+    const hostId = client.getActiveHostId();
+    try {
+      const intentRequired =
+        variables.entryKind === "mcp" && takesIntent(client);
+      const operation = intentRequired && cloud !== null ? cloud() : null;
+      capturedRequests.current.set(request, {
+        kind: "ready",
+        hostId,
+        operation,
+        intentRequired,
+      });
+    } catch (error) {
+      capturedRequests.current.set(request, { kind: "failed", hostId, error });
+    }
+    return request;
+  };
+
+  return {
+    ...mutation,
+    mutate: (variables, options) =>
+      mutation.mutate(capture(variables), options),
+    mutateAsync: (variables, options) =>
+      mutation.mutateAsync(capture(variables), options),
+  };
 }
 
 /** Whether the host the request goes to takes the intent on the promote arm. */

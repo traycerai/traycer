@@ -45,7 +45,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => ({}) as ReturnType<typeof actual.useHostClient>,
+    useHostClient: () => ({}),
   };
 });
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({

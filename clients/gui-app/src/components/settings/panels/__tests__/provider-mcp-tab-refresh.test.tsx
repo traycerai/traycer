@@ -501,15 +501,15 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
 
   it("renders the unsupported-action copy for a promote-only v1.5 list refusal", async () => {
     const fixture = createFixture();
+    const response = listResponse([]);
+    // Deliberately violate the list schema at the fake-host boundary:
+    // needs_connection belongs only to the promote response.
+    Object.defineProperty(response, "native", {
+      value: { ok: false, code: "needs_connection", detail: null },
+    });
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "pending",
-      // A host off its contract: a promote-only code in a list answer, which
-      // the list's own type cannot carry. The whole answer is stated here, so
-      // the cast hides no missing field.
-      promise: Promise.resolve({
-        providers: [],
-        native: { ok: false, code: "needs_connection", detail: null },
-      } as unknown as ProvidersListResponse),
+      promise: Promise.resolve(response),
     });
     renderTab(fixture, "codex");
 

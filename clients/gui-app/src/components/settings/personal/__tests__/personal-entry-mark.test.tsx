@@ -4,11 +4,13 @@
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
-const servedEnvironmentPermission = vi.hoisted(() => ({
-  hostRead: null as unknown,
-  environmentList: null as unknown,
-  served: { environmentId: "env_me", name: "Personal", team: false },
-}));
+const servedEnvironmentPermission = vi.hoisted(
+  (): ServedEnvironmentPermissionFixture => ({
+    hostRead: null,
+    environmentList: null,
+    served: { environmentId: "env_me", name: "Personal", team: false },
+  }),
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -153,7 +155,11 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   }),
 }));
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -171,7 +177,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderMcpCapabilities,
@@ -181,10 +190,13 @@ import type {
 import type { ProviderNativeMutateErrorCodeV15 } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   EnvironmentDescriptorV11,
+  EnvironmentHostBinding,
+  EnvironmentListResponseV11,
   EnvironmentOwnerKind,
 } from "@traycer/protocol/host/environment/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -196,6 +208,37 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+
+type PermissionQueryFixture<Data> = Pick<
+  UseQueryResult<Data, HostRpcError>,
+  "data" | "isPending" | "isFetching" | "isError"
+>;
+
+interface ServedEnvironmentPermissionFixture {
+  hostRead:
+    | { readonly kind: "pending" }
+    | {
+        readonly kind: "binding";
+        readonly query: PermissionQueryFixture<
+          Pick<
+            EnvironmentHostBinding,
+            | "hostId"
+            | "environment"
+            | "explicit"
+            | "enrolledByUserId"
+            | "canUnbind"
+          >
+        >;
+      }
+    | null;
+  environmentList:
+    | (PermissionQueryFixture<EnvironmentListResponseV11> & {
+        readonly error: null;
+        readonly refetch: () => Promise<undefined>;
+      })
+    | null;
+  served: { environmentId: string; name: string; team: boolean };
+}
 
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
@@ -334,6 +377,7 @@ interface HostOptions {
   readonly promote:
     | "ok"
     | "unreachable"
+    | "applied-reply-lost"
     | { readonly refusal: string }
     | { readonly code: ProviderNativeMutateErrorCodeV15 };
 }
@@ -344,6 +388,10 @@ interface Rig {
   /** What the host has applied as the person's items, as `environment.status` says. */
   readonly applied: EnvironmentItemStatus[];
   readonly mintedFor: string[];
+  readonly appliedAtRead: {
+    readonly status: number[];
+    readonly providers: number[];
+  };
 }
 
 const READY_HOST: HostOptions = {
@@ -441,16 +489,23 @@ function renderPage(
     error: null,
     refetch: () => Promise.resolve(undefined),
   };
-  const rig: Rig = { sent: [], applied: [...options.applied], mintedFor: [] };
+  const rig: Rig = {
+    sent: [],
+    applied: [...options.applied],
+    mintedFor: [],
+    appliedAtRead: { status: [], providers: [] },
+  };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
-    "environment.status": () =>
-      environmentStatusFixture({
+    "environment.status": () => {
+      rig.appliedAtRead.status.push(rig.applied.length);
+      return environmentStatusFixture({
         items: [...rig.applied],
         principal:
           served.ownerKind === "organization"
             ? { kind: "team", teamName: served.label }
             : { kind: "personal" },
-      }),
+      });
+    },
     "environment.localOverrides": () => ({ overrides: [] }),
     "providers.nativeMutate": (request) => {
       rig.sent.push(request);
@@ -484,10 +539,20 @@ function renderPage(
           }),
         );
       }
+      if (options.promote === "applied-reply-lost")
+        return Promise.reject(new Error("upload reply lost"));
       return Promise.resolve({
         result: { ok: true, kind: "mcp", servers: [] },
       });
     },
+    ...(options.promote === "applied-reply-lost"
+      ? {
+          "providers.list": () => {
+            rig.appliedAtRead.providers.push(rig.applied.length);
+            return { providers: [] };
+          },
+        }
+      : {}),
   };
   const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
   const manifest: Record<string, { major: number; minor: number }> = {
@@ -534,6 +599,11 @@ function renderPage(
     </QueryClientProvider>,
   );
   return rig;
+}
+
+function HostProvidersRead(): null {
+  useProvidersList({ enabled: true, subscribed: true });
+  return null;
 }
 
 function mcpPage(): ReactNode {
@@ -643,6 +713,32 @@ describe("A `claude mcp add` entry on a provider's MCP tab", () => {
     ).toBeNull();
     await settle();
     expect(rig.sent).toHaveLength(1);
+  });
+
+  it("rereads the host and shows Personal when upload applied but its reply was lost", async () => {
+    listMock.servers = [mcpServer("github")];
+    const rig = renderPage(
+      "providers",
+      <>
+        <HostProvidersRead />
+        {mcpPage()}
+      </>,
+      { ...READY_HOST, promote: "applied-reply-lost" },
+    );
+    const row = await mcpRow("github");
+    const mark = await within(row).findByTestId(MARK);
+    await waitFor(() => expect(rig.appliedAtRead.providers).toContain(0));
+
+    fireEvent.click(
+      within(mark).getByRole("button", { name: "Add to Personal" }),
+    );
+
+    await within(row).findByTestId(PERSONAL);
+    await waitFor(() => expect(rig.appliedAtRead.providers).toContain(1));
+    expect(rig.appliedAtRead.status).toContain(1);
+    expect(rig.sent).toHaveLength(1);
+    expect(within(row).queryByTestId(MARK)).toBeNull();
+    expect(toast.error).toHaveBeenCalled();
   });
 
   it.each(["admin", "editor"] as const)(
