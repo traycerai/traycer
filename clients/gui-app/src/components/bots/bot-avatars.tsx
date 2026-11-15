@@ -294,6 +294,19 @@ export function BotAvatar(props: {
   return <ExpressiveBotAvatar size={props.size} expression="idle" />;
 }
 
+/** The bot a picture is of where none is named. */
+const PLAIN_BOT_ID = "bot";
+
+/**
+ * The plain bot's picture, whatever surface it is drawn on: what stands for
+ * bots as a kind, where no one bot is meant.
+ */
+export function PlainBotAvatar(props: {
+  readonly size: IdentityAvatarSize;
+}): ReactElement {
+  return <NamedBotAvatar botId={PLAIN_BOT_ID} size={props.size} />;
+}
+
 /**
  * The surface's bot with its eyes on what it is doing: where a surface says
  * what the bot is doing now, beside that.
@@ -306,7 +319,7 @@ export function ExpressiveBotAvatar(props: {
   return (
     <IdentityAvatar
       kind="bot"
-      botId={identity?.botId ?? "bot"}
+      botId={identity?.botId ?? PLAIN_BOT_ID}
       expression={props.expression}
       size={props.size}
       testId="bot-avatar"

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Bot } from "lucide-react";
+import { TracyEntryPicture } from "@/components/bots/tracy-entry-picture";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -24,7 +24,7 @@ import {
 export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
- * Where the count sits: up and to the right of the glyph, clear of it, as the
+ * Where the count sits: up and to the right of the picture, clear of it, as the
  * bell's mark sits, ringed in the colour of the ground the entry stands on so
  * it reads as cut out of it.
  */
@@ -37,10 +37,10 @@ const COUNT_SEAT_CLASS = {
 } as const;
 
 /**
- * The entry's glyph, in every strip placement, wearing the bot's unread count
+ * The entry's picture, in every strip placement, wearing the bot's unread count
  * off its top-right corner (the rail tile passes none: its row draws the count)
  * and the muted mark on its bottom-right while the person set the channel to
- * Nothing; the bare glyph at zero, and where the host does not count.
+ * Nothing; the bare picture at zero, and where the host does not count.
  * `ground` is what the entry stands on: the strip's, or the phone drawer's.
  */
 export function TracyEntryIcon(props: {
@@ -56,22 +56,11 @@ export function TracyEntryIcon(props: {
       testId="tracy-entry-muted"
     />
   ) : null;
-  if ((unreadCount === null || unreadCount <= 0) && !muted) {
-    return (
-      <Bot
-        className={cn("size-4 shrink-0", className)}
-        aria-hidden="true"
-        data-testid="tracy-entry-icon"
-      />
-    );
-  }
   return (
     <span className={cn("relative inline-flex shrink-0", className)}>
-      <Bot
-        className="size-4 shrink-0"
-        aria-hidden="true"
-        data-testid="tracy-entry-icon"
-      />
+      <span className="inline-flex" data-testid="tracy-entry-icon">
+        <TracyEntryPicture />
+      </span>
       {mutedMark}
       {unreadCount === null ? null : (
         <UnreadCountBadge
