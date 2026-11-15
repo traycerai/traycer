@@ -324,6 +324,7 @@ function TracySurfaceShell(props: {
           {threadsShown ? (
             <BotThreadsView
               hostId={hostId}
+              channelId={botId}
               channelTitle={channelTitle}
               onBack={leaveThreads}
               level2={level2}
@@ -1985,6 +1986,14 @@ function BotChannelActions({
   readonly settingsButtonRef: React.RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { settingsOpen } = props;
+  const pendingDestination = useRef<(() => void) | null>(null);
+  // A channel departure drops its deferred action instead of opening it later.
+  useEffect(
+    () => () => {
+      pendingDestination.current = null;
+    },
+    [],
+  );
   return titleTarget === null ? (
     <>
       {props.onOpenSearch === null ? null : (
@@ -2022,7 +2031,11 @@ function BotChannelActions({
       </Button>
     </>
   ) : (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) pendingDestination.current = null;
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           ref={settingsButtonRef}
@@ -2047,7 +2060,17 @@ function BotChannelActions({
           />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          const destination = pendingDestination.current;
+          pendingDestination.current = null;
+          if (destination !== null) {
+            event.preventDefault();
+            destination();
+          }
+        }}
+      >
         <DropdownMenuRadioGroup
           value={props.view}
           onValueChange={(next) => {
@@ -2070,11 +2093,20 @@ function BotChannelActions({
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         {props.onOpenSearch === null ? null : (
-          <DropdownMenuItem onSelect={props.onOpenSearch}>
+          <DropdownMenuItem
+            onSelect={() => {
+              pendingDestination.current = props.onOpenSearch;
+            }}
+          >
             Search
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={props.onToggleSettings}>
+        <DropdownMenuItem
+          onSelect={() => {
+            if (settingsOpen) props.onToggleSettings();
+            else pendingDestination.current = props.onToggleSettings;
+          }}
+        >
           Channel settings
         </DropdownMenuItem>
       </DropdownMenuContent>

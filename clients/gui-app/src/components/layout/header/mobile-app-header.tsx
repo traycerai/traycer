@@ -220,9 +220,8 @@ type MobileHeaderSurface =
   | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
   | { readonly kind: "composer" }
-  // The Tracy surface draws its own header band (title, host, environment), so the
-  // app header presents no title for it - the same answer the composer
-  // surfaces give, kept as its own kind so nothing mistakes it for one.
+  // Tracy supplies its own title to the header slot when the installed
+  // layout uses a compact picker.
   | { readonly kind: "bot" };
 
 const COMPOSER_SURFACE: MobileHeaderSurface = { kind: "composer" };

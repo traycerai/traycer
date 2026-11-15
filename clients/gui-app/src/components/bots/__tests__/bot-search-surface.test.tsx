@@ -6,6 +6,7 @@
  * beside the results are in `bot-search-surface-states.test.tsx`.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   TAB_HOST,
@@ -26,8 +27,8 @@ import {
 } from "./bot-search-surface-support";
 import { Surface as UnthemedSurface } from "./bot-search-surface-view";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
 import { CHAT_SEARCH_DEBOUNCE_MS } from "@/lib/chat-search/chat-search-results";

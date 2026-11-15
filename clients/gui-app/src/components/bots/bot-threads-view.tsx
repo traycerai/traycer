@@ -85,6 +85,8 @@ const MESSAGES_IN_FULL = 6;
 /** The replies a folded card shows under its fold: the newest. */
 const FOLDED_TAIL = 2;
 
+function stayOnThreads(): void {}
+
 /**
  * Threads, in place of a bot's channel (Tracy Bots, decisions 149 and 184):
  * every thread the person follows across the bots the column lists, newest
@@ -102,10 +104,9 @@ const FOLDED_TAIL = 2;
  * goes back to the tab's channel itself: as the installed app's form says, and
  * elsewhere as the tab's own container does.
  */
-function stayOnThreads(): void {}
-
 export function BotThreadsView(props: {
   readonly hostId: string;
+  readonly channelId: string | null;
   /** The tab's channel, which the back control names. */
   readonly channelTitle: string;
   readonly onBack: () => void;
@@ -132,7 +133,7 @@ export function BotThreadsView(props: {
       <BotChannelTitle
         level2={level2}
         title="Threads"
-        activeBotId={null}
+        activeBotId={props.channelId}
         hostId={props.hostId}
         threadsView={{
           shown: true,

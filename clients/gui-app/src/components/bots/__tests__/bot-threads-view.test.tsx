@@ -437,6 +437,7 @@ function mount(): void {
               <BotThreadsView
                 level2={mountLevel2}
                 hostId="host-1"
+                channelId={TRACY}
                 channelTitle="Tracy"
                 onBack={mocks.back}
               />

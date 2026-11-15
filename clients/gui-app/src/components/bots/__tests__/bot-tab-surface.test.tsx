@@ -2484,6 +2484,42 @@ describe("<BotTabSurface /> under the compact app header", () => {
   });
 });
 
+describe("<BotTabSurface /> beside the bots column under the app header", () => {
+  let shell: ShellFormHarness;
+  beforeEach(() => {
+    shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    focusTab(TRACY_REF);
+  });
+  afterEach(() => {
+    shell.dispose();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it("keeps the channel's own tabs, Search and settings buttons, and gives the app header no bot name and no Channel actions menu", () => {
+    render(surfaceUnderHeader(BOT_ID));
+
+    expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
+      "256px",
+    );
+    for (const name of ["Messages", "Activity"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.closest("[hidden]")).toBeNull();
+    }
+    expect(screen.getByTestId("bot-channel-search-open")).toBeTruthy();
+    expect(screen.getByTestId("bot-channel-settings-open")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /^Channel actions/ }),
+    ).toBeNull();
+    expect(headerPicker()).toBeNull();
+    expect(
+      within(screen.getByTestId("app-header")).queryByText("Release Bot"),
+    ).toBeNull();
+    expect(screen.getByTestId("bot-tab-title").textContent).toContain(
+      "Release Bot",
+    );
+  });
+});
+
 describe("<BotTabSurface /> under the app header on a short viewport with the keyboard up", () => {
   beforeEach(() => {
     setPhoneLayoutOnly(true);
