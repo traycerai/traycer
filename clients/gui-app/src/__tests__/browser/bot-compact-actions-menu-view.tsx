@@ -249,7 +249,6 @@ acquireHostStreamClient(
     publicKey: "",
     authnBaseUrl: AUTHN_BASE_URL,
     authRecovery: "revalidate",
-    openAuth: null,
   },
   () => streamClient,
 );

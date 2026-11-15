@@ -24,6 +24,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -43,10 +44,6 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import {
-  noteLocalTeamAdmission,
-  useLocalTeamAdmissionStore,
-} from "@/stores/host/local-team-admission-store";
 
 export interface TeamProfileRecordHttpRequest {
   readonly url: string;
@@ -458,6 +455,7 @@ interface TeamAuthRuntime {
 }
 
 const activeTeamAuthRuntimes: TeamAuthRuntime[] = [];
+let teamWindowRegistered = false;
 let restoreTeamFetch: (() => void) | null = null;
 let teamIntentsFetch: typeof fetch | null = null;
 
@@ -699,6 +697,33 @@ function teamHttpResponse(
   );
 }
 
+function teamWindowRegistry(): HostListResponse {
+  return {
+    hosts: teamWindowRegistered
+      ? [
+          {
+            hostId: mockLocalHostEntry.hostId,
+            displayName: mockLocalHostEntry.label,
+            platform: "darwin",
+            kind: "personal",
+            publicKey: "team-window-test-key",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatePolicy: "manual",
+            owner: { kind: "team", id: "team-a", name: "Alpha" },
+            status: {
+              connectivity: "connectable",
+              viewerReachability: "ok",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.4",
+              lastSeenAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+        ]
+      : [],
+  };
+}
+
 function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -710,6 +735,9 @@ function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
     traycerCli: undefined,
   });
   const auth = new AuthService({ runnerHost });
+  vi.spyOn(auth, "fetchRegisteredHosts").mockImplementation(() =>
+    Promise.resolve(teamWindowRegistry()),
+  );
   const directory = createAuthBoundHostDirectory({
     auth,
     runnerHost,
@@ -720,6 +748,7 @@ function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
   let requestId = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: vi.fn(),
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -928,7 +957,7 @@ export function admitCurrentUserToTeamWindow(): void {
   if (userId === undefined) {
     throw new Error("team window admission requires a signed-in test user");
   }
-  noteLocalTeamAdmission(mockLocalHostEntry.hostId, userId, "admitted");
+  teamWindowRegistered = true;
 }
 
 /**
@@ -1046,7 +1075,7 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
   teamProviderKeyResponseArm = "s3-key-action";
   const queryClient = createTeamPageQueryClient();
   useAuthStore.setState({ status: "signed-in" });
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  teamWindowRegistered = false;
   const authHarness = buildTeamAuthRuntime(queryClient);
   const assembly = assembleTeamPage(
     { ...options, pinBoundaryWindowHost: true },
@@ -1076,7 +1105,7 @@ function buildVerifiedTeamProvidersPage(
   installTeamFetch();
   const queryClient = createTeamPageQueryClient();
   useAuthStore.setState({ status: "signed-out" });
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  teamWindowRegistered = false;
   const authHarness = buildTeamAuthRuntime(queryClient);
   void startVerifiedTeamAuth(authHarness);
   const assembly = assembleTeamPage(options, queryClient, authHarness);
@@ -1214,7 +1243,7 @@ export function resetTeamPageHarness(): void {
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out" });
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  teamWindowRegistered = false;
   teamProfileRecordHttpBoundary.list = {
     status: 200,
     body: { enabled: false },

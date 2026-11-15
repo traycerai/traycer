@@ -25,11 +25,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import {
+  admitCurrentUserToTeamWindow,
   requireTeamHostClient,
   resetTeamPageHarness,
   mountTeamPageWithRealBoundary,
@@ -84,7 +83,6 @@ afterEach(() => {
   resetTeamPageHarness();
   resetNegotiatedManifests();
   apiKeyPageHost.hostId = null;
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   useSettingsEnvironmentPickStore.setState({ pick: null });
   setSystemTabModalApi(null);
   vi.restoreAllMocks();
@@ -237,11 +235,7 @@ async function renderBoundaryPage(
   if (userId === undefined) {
     throw new Error("test session was not verified");
   }
-  useLocalTeamAdmissionStore.setState({
-    byHost: new Map([
-      [mockLocalHostEntry.hostId, { userId, state: "admitted" }],
-    ]),
-  });
+  admitCurrentUserToTeamWindow();
   render(
     <ConfigurationSourceBoundary target={target} section={section}>
       {child}
