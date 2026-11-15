@@ -525,9 +525,10 @@ describe("TeamPlans", () => {
   });
 
   it("asks once per opening, rejects a previous opening's count, and holds the settled answer through refreshes", async () => {
-    const resolvers: Array<
-      (value: EnvironmentPreviewLocalFactsResponse) => void
-    > = [];
+    const requests: Array<{
+      readonly promise: Promise<EnvironmentPreviewLocalFactsResponse>;
+      readonly resolve: (value: EnvironmentPreviewLocalFactsResponse) => void;
+    }> = [];
     useSelectionAuthorityStore.setState({
       effectiveHostId: mockLocalHostEntry.hostId,
     });
@@ -539,10 +540,18 @@ describe("TeamPlans", () => {
       "environment.host.list": () => ({
         hosts: [{ ...host, hostId: mockLocalHostEntry.hostId }],
       }),
-      "environment.previewLocalFacts": () =>
-        new Promise((resolve) => {
-          resolvers.push(resolve);
-        }),
+      "environment.previewLocalFacts": () => {
+        let resolveRequest: (
+          value: EnvironmentPreviewLocalFactsResponse,
+        ) => void = () => undefined;
+        const promise = new Promise<EnvironmentPreviewLocalFactsResponse>(
+          (resolve) => {
+            resolveRequest = resolve;
+          },
+        );
+        requests.push({ promise, resolve: resolveRequest });
+        return promise;
+      },
     });
     render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
       wrapper: harness.Wrapper,
@@ -552,48 +561,34 @@ describe("TeamPlans", () => {
     await userEvent.click(
       within(card).getAllByRole("button", { name: "Unlink" })[0],
     );
-    await waitFor(() => expect(resolvers).toHaveLength(1));
+    await waitFor(() => expect(requests).toHaveLength(1));
     expect(screen.queryByRole("dialog")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await userEvent.click(
       within(card).getAllByRole("button", { name: "Unlink" })[0],
     );
-    await waitFor(() => expect(resolvers).toHaveLength(2));
+    await waitFor(() => expect(requests).toHaveLength(2));
     expect(screen.queryByRole("dialog")).toBeNull();
-    act(() => {
-      resolvers[0]({ activeTurns: 3, terminals: null });
-    });
-    await waitFor(() => {
-      expect(
-        harness.queryClient
-          .getQueryCache()
-          .getAll()
-          .filter(
-            (query) =>
-              query.queryKey.includes("environment.previewLocalFacts") &&
-              query.state.fetchStatus === "idle",
-          ),
-      ).toHaveLength(1);
+    const previousOpening = requests[0];
+    if (previousOpening === undefined) {
+      throw new Error("expected the previous opening's count request");
+    }
+    await act(async () => {
+      previousOpening.resolve({ activeTurns: 3, terminals: null });
+      await previousOpening.promise;
     });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText(/3 active turns/)).toBeNull();
 
-    act(() => {
-      resolvers[1]({ activeTurns: 7, terminals: null });
-    });
-    await waitFor(() => {
-      expect(
-        harness.queryClient
-          .getQueryCache()
-          .getAll()
-          .filter(
-            (query) =>
-              query.queryKey.includes("environment.previewLocalFacts") &&
-              query.state.fetchStatus === "idle",
-          ),
-      ).toHaveLength(2);
+    const currentOpening = requests[1];
+    if (currentOpening === undefined) {
+      throw new Error("expected the current opening's count request");
+    }
+    await act(async () => {
+      currentOpening.resolve({ activeTurns: 7, terminals: null });
+      await currentOpening.promise;
     });
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/7 active turns/)).toBeTruthy();
