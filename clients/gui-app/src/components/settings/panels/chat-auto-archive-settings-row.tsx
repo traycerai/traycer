@@ -8,6 +8,7 @@ import type {
   ChatAutoArchiveSetRequest,
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 import { SettingsRow } from "@/components/settings/settings-row";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,10 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useChatAutoArchivePolicyQuery } from "@/hooks/chat-auto-archive/use-chat-auto-archive-policy-query";
 import { useChatAutoArchiveSetMutation } from "@/hooks/chat-auto-archive/use-chat-auto-archive-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
+import {
+  useQueuedAutoArchiveSave,
+  type AutoArchiveSave,
+} from "@/hooks/chat-auto-archive/use-queued-auto-archive-save";
 import {
   chatAutoArchiveShownPolicy,
   CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS,
@@ -87,42 +92,12 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   const current = setPolicy.isPending
     ? setPolicy.variables
     : chatAutoArchiveShownPolicy(data);
-  const disabled = data === undefined;
-
-  // The newest write this row sent that has not settled. Writes are BUILT on
-  // it, at event time, not on `current`: the mutation reaches React a timer
-  // tick after `mutate`, and a touch tap delivers the threshold field's
-  // leave-blur and the switch's click in one task, so a click built on the
-  // rendered `current` would carry the old threshold and, queued last, put
-  // it back. Read only in handlers, never during render.
-  const unsettled = useRef<ChatAutoArchiveSetRequest | null>(null);
-
-  // `build` gets the policy to write over and returns the write, or `null`
-  // when there is nothing to send. `onRejected` runs after the hook's own
-  // error toast, for the one write whose control holds local state: the
-  // custom threshold field.
-  const save = (
-    build: (
-      base: ChatAutoArchiveSetRequest,
-    ) => ChatAutoArchiveSetRequest | null,
-    onRejected: (() => void) | null,
-  ): void => {
-    const next = build(unsettled.current ?? current);
-    if (next === null) return;
-    unsettled.current = next;
+  const save = useQueuedAutoArchiveSave(current, setPolicy.mutate, () => {
     trackSettingChanged("general", "chatAutoArchive");
-    setPolicy.mutate(next, {
-      onError: onRejected ?? undefined,
-      // Per-call callbacks run only for the observer's newest `mutate`, the
-      // only one `unsettled` can still name.
-      onSettled: () => {
-        if (unsettled.current === next) unsettled.current = null;
-      },
-    });
-  };
+  });
 
   return (
-    <SettingsRow
+    <ChatAutoArchiveRowView
       row={GENERAL.definitions.chatAutoArchive}
       status={
         query.isError ? (
@@ -132,9 +107,41 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
           </div>
         ) : undefined
       }
+      current={current}
+      bounds={data?.bounds ?? null}
+      disabled={data === undefined}
+      pending={setPolicy.isPending}
+      includeLabel="Include chats I started"
+      includeHint="Terminal agent chats count as yours"
+      save={save}
+    />
+  );
+}
+
+/**
+ * The row itself: the switch, and while it is on the threshold, the include
+ * choice and the footnote. `bounds` is null until the read lands; the
+ * options wait for it.
+ */
+export function ChatAutoArchiveRowView(props: {
+  readonly row: SettingsRowDefinition;
+  readonly status: ReactNode;
+  readonly current: ChatAutoArchiveSetRequest;
+  readonly bounds: ChatAutoArchiveBounds | null;
+  readonly disabled: boolean;
+  readonly pending: boolean;
+  readonly includeLabel: string;
+  readonly includeHint: string;
+  readonly save: AutoArchiveSave;
+}): ReactNode {
+  const { current, bounds, disabled, save } = props;
+  return (
+    <SettingsRow
+      row={props.row}
+      status={props.status}
       control={
         <div className="flex items-center gap-2">
-          {setPolicy.isPending ? (
+          {props.pending ? (
             <AgentSpinningDots
               className={undefined}
               testId="chat-auto-archive-spinner"
@@ -144,7 +151,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
           <Switch
             checked={current.enabled}
             disabled={disabled}
-            aria-label="Archive idle agents automatically"
+            aria-label={props.row.label}
             onCheckedChange={(enabled) => {
               save((base) => ({ ...base, enabled }), null);
             }}
@@ -155,7 +162,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
       // only while it is on. Closing them writes nothing: the threshold and
       // include choice are where they were when the switch comes back.
       details={
-        data !== undefined && current.enabled ? (
+        bounds !== null && current.enabled ? (
           <div className="flex flex-col gap-2.5">
             {/* An alpha of the foreground rather than `bg-muted`: every
                 preset theme's dark variant collapses `--muted` onto the card
@@ -169,7 +176,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
                     controlId={controlId}
                     hintId={hintId}
                     idleSeconds={current.idleSeconds}
-                    bounds={data.bounds}
+                    bounds={bounds}
                     disabled={disabled}
                     onCommit={(idleSeconds, onRejected) => {
                       save(
@@ -184,8 +191,8 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
                 )}
               />
               <ChatAutoArchiveOptionLine
-                label="Include chats I started"
-                hint="Terminal agent chats count as yours"
+                label={props.includeLabel}
+                hint={props.includeHint}
                 renderControl={(controlId, hintId) => (
                   <Switch
                     id={controlId}

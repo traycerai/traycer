@@ -268,8 +268,7 @@ function answerRead(
 /** A team's read answered, or the person left the team: nothing waits on it. */
 function settleRead(era: ClaimReadEra, teamId: string, ask: number): void {
   useClaimReadsStore.setState((state) => {
-    if (!sameEra(state.era, era) || state.pending[teamId] !== ask)
-      return state;
+    if (!sameEra(state.era, era) || state.pending[teamId] !== ask) return state;
     const { [teamId]: _settled, ...pending } = state.pending;
     const failed = new Set(state.failed);
     failed.delete(teamId);
@@ -454,7 +453,6 @@ export function useClaimedComputerNotice(): void {
     }
     askReads(queryClient, era, teamsNamed(teams, teamIds), false);
   }, [era, ownClaims, queryClient, teams]);
-
 }
 
 function tellClaims(
