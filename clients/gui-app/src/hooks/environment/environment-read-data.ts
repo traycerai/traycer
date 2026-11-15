@@ -2,14 +2,15 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 
 /**
  * The host's refusals of a person's standing, and authn's as the app's own
- * reads code them (`HOST_CODE_OF`): 401 `UNAUTHORIZED`, a seated person's role
- * refused 403 `E_ROLE_FORBIDDEN`, an environment not theirs to read 404
- * `NOT_FOUND`. A malformed request (`E_INVALID_ARGUMENT`) is none of these.
+ * reads code them (`HOST_CODE_OF`): 401 `UNAUTHORIZED`, and an environment
+ * authn says is not theirs to read (`not_readable`, its 404
+ * `environment_not_found` or 403 `environment_action_forbidden`) `NOT_FOUND`.
+ * A malformed request (`E_INVALID_ARGUMENT`) and a 403 without authn's code
+ * (`E_ROLE_FORBIDDEN`) are none of these.
  */
 const AUTHORITY_REFUSALS = new Set([
   "UNAUTHORIZED",
   "FORBIDDEN",
-  "E_ROLE_FORBIDDEN",
   "NOT_FOUND",
   "TEAM_MEMBERSHIP_REQUIRED",
   "E_ENVIRONMENT_NOT_A_MEMBER",

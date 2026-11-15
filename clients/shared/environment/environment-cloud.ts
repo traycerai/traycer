@@ -31,9 +31,9 @@ export type EnvironmentPurpose = "settings" | "secrets";
  * - `unauthorized`: authn refused the person's credential (401);
  * - `forbidden`: the person's role does not allow it (403);
  * - `invalid`: authn refused the request, or it names nothing it can serve;
- * - `not_found`: authn answered a read that this person may not read the
- *   environment at all (`environment_not_found`), as the host list tells it
- *   apart from a malformed request;
+ * - `not_readable`: authn answered a read that the environment is not this
+ *   person's to read (`environment_not_found`, `environment_action_forbidden`),
+ *   as the host list tells it apart from a malformed request or a plain 403;
  * - `refused`: authn did not take a review, notice or Undo call, which the
  *   host answered as a plain refusal rather than by its cause;
  * - `unavailable`: the cloud failed, or answered in a shape this cannot read;
@@ -44,7 +44,7 @@ export type EnvironmentErrorKind =
   | "unauthorized"
   | "forbidden"
   | "invalid"
-  | "not_found"
+  | "not_readable"
   | "refused"
   | "unavailable"
   | "no_response";
@@ -77,7 +77,7 @@ export const SIGN_IN_AGAIN_MESSAGE: Readonly<
 /** The words of a `forbidden` failure: the person's role does not allow it. */
 export const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
 
-/** The words of an `invalid` or `not_found` failure. */
+/** The words of an `invalid` failure, and of authn's 404 `not_readable`. */
 export const SETTINGS_REFUSED_MESSAGE = "The settings request was refused.";
 
 /** The words of an `unavailable` failure, as the host's cloud errors say them. */

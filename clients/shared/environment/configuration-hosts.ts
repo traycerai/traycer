@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import {
   EnvironmentCloudError,
+  NEEDS_PERMISSION_MESSAGE,
   SETTINGS_REFUSED_MESSAGE,
   environmentPath,
   errorBodyCode,
@@ -62,10 +63,15 @@ function reportedItemState(
 /**
  * Every host authn lists for the environment, less those removed and not
  * seen since (`purgePending`). A failure is the settings mapping of every
- * other read here, except authn's answer that the person may not read the
- * environment (404 `environment_not_found`: no accepted seat, another
- * person's Personal, or no such environment), which is `not_found` rather
- * than a malformed request, so the last list is not kept through it.
+ * other read here, except authn's two answers that the environment is not
+ * this person's to read, which are `not_readable` with the words their
+ * status already had, so the last list is not kept through them:
+ * - 404 `environment_not_found`: no accepted seat, another person's
+ *   Personal, or no such environment;
+ * - 403 `environment_action_forbidden`: a seated person whose role does not
+ *   allow the read.
+ * The same statuses without authn's code are a malformed request and a plain
+ * `forbidden`, as for every other call.
  */
 export async function listConfigurationHosts(
   cloud: EnvironmentCloud,
@@ -77,11 +83,12 @@ export async function listConfigurationHosts(
     `${environmentPath(environmentId)}/hosts?include=localRow,binding`,
     null,
   );
-  if (
-    answer.status === 404 &&
-    errorBodyCode(answer.body) === "environment_not_found"
-  ) {
-    throw new EnvironmentCloudError("not_found", SETTINGS_REFUSED_MESSAGE);
+  const code = errorBodyCode(answer.body);
+  if (answer.status === 404 && code === "environment_not_found") {
+    throw new EnvironmentCloudError("not_readable", SETTINGS_REFUSED_MESSAGE);
+  }
+  if (answer.status === 403 && code === "environment_action_forbidden") {
+    throw new EnvironmentCloudError("not_readable", NEEDS_PERMISSION_MESSAGE);
   }
   const { hosts } = parseSettings(answer, authnHostsSchema);
   return {
