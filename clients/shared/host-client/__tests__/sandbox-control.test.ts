@@ -1854,3 +1854,39 @@ describe("the IAP proxy credential", () => {
     });
   });
 });
+
+/** A browser's answer to a redirect it was told not to follow: status 0. */
+function opaqueRedirect(): Response {
+  const response = new Response(null);
+  Object.defineProperty(response, "status", { value: 0 });
+  Object.defineProperty(response, "type", { value: "opaqueredirect" });
+  return response;
+}
+
+describe("a redirect answered to a sandbox control call", () => {
+  it.each([
+    {
+      name: "a 302 with a Location",
+      answer: () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://elsewhere.test/sandboxes" },
+        }),
+      status: 302,
+    },
+    { name: "a browser's opaque redirect", answer: opaqueRedirect, status: 0 },
+  ])(
+    "reads $name as a network error and follows nothing",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer());
+
+      await expect(listSandboxesViaHttp(BASE, BEARER, null)).resolves.toEqual({
+        kind: "network-error",
+        detail: `the control plane answered HTTP ${status} without a typed refusal`,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+    },
+  );
+});
