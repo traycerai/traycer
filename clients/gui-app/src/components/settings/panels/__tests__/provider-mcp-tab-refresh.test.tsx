@@ -880,7 +880,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     await screen.findByText("server-b");
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -997,7 +997,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     const initialData = fixture.queryClient.getQueryData<McpListData>(key);
     if (initialData === undefined) throw new Error("missing initial MCP data");
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -1081,7 +1081,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     await screen.findByText("server-b");
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -1486,7 +1486,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
       ).toBe(true),
     );
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let mutationPromise: Promise<unknown> | null = null;
