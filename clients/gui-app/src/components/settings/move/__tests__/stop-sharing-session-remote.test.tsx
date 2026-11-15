@@ -389,7 +389,7 @@ function preview(
   const base = { managed: [], needsChoice: [] };
   return profiles === undefined
     ? base
-    : { ...base, personalProfiles: [...profiles] };
+    : { ...base, personalProfiles: profiles === null ? null : [...profiles] };
 }
 
 function providerList(profiles: readonly ProviderProfile[]): ProvidersList {
