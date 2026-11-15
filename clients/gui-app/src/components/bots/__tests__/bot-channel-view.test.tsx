@@ -2294,6 +2294,52 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     ).toBe("none");
   });
 
+  it("lands a channel that is already shown on each message the tab names after its mount", () => {
+    const view = mount({ openThreadPostId: null });
+    const channelLanding = (): string | null =>
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-land-on");
+    expect(channelLanding()).toBe("none");
+
+    mountLanding = {
+      messageId: "post-a",
+      sendPostId: null,
+      threadId: null,
+      visit: 1,
+    };
+    view.rerender();
+    expect(channelLanding()).toBe("post-a");
+
+    mountLanding = {
+      messageId: "post-b",
+      sendPostId: null,
+      threadId: null,
+      visit: 2,
+    };
+    view.rerender();
+    expect(channelLanding()).toBe("post-b");
+  });
+
+  it("lands the thread beside a channel that is already shown on the message the tab names after its mount", () => {
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("none");
+
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    view.rerender();
+
+    expect(threadLanding()).toBe("reply-a9");
+  });
+
   it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
     mountLanding = {
       messageId: "reply-a9",
