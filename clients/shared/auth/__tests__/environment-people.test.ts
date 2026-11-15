@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchEnvironmentPerson } from "../environment-people";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const BEARER = "person-read-test-bearer";
@@ -91,6 +92,15 @@ describe("authn environment person read", () => {
     stubFetch(() => new Response(null, { status: 404 }));
 
     await expect(readPerson(null)).resolves.toEqual({ kind: "not-found" });
+  });
+
+  it("does not follow or accept a browser's opaque redirect", async () => {
+    const requests = stubFetch(() => createOpaqueRedirectResponse());
+
+    await expect(readPerson(null)).rejects.toThrow();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.init?.redirect).toBe("manual");
   });
 
   it.each([302, 401, 403, 500])(

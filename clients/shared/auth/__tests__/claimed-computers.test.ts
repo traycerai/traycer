@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { fetchClaimedComputers } from "../claimed-computers";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://authn.example.test/";
 const TOKEN = "member-session-token";
@@ -48,6 +49,17 @@ describe("fetchClaimedComputers", () => {
       `Bearer ${TOKEN}`,
     );
     expect(init?.redirect).toBe("manual");
+  });
+
+  it("reads a browser's opaque redirect as failed, with the bearer sent once and never followed", async () => {
+    const fetchMock = stubFetch(async () => createOpaqueRedirectResponse());
+
+    await expect(
+      fetchClaimedComputers(BASE, TOKEN, ENVIRONMENT_ID, null),
+    ).resolves.toEqual({ kind: "failed" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
   });
 
   it.each([
