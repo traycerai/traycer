@@ -1274,8 +1274,7 @@ describe("a card whose draft a blocker has parked", () => {
   });
 
   describe("the Comment action of another view over a dirty draft", () => {
-    it("asks nothing at the press and once at the click that opens the comment", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    function mountActionOverDirtyDraft(): Element {
       const bridge = realBridge();
       vi.spyOn(bridge, "describeElement").mockResolvedValue(null);
       const registry = new CanvasFrameRegistry();
@@ -1312,6 +1311,12 @@ describe("a card whose draft a blocker has parked", () => {
       // The draft box has a Comment button of its own; the action is the toolbar's.
       const action = document.querySelector("button[data-toolbar-action]");
       if (action === null) throw new Error("no Comment action");
+      return action;
+    }
+
+    it("asks nothing at the press and once at the click that opens the comment", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      const action = mountActionOverDirtyDraft();
 
       fireEvent.pointerDown(action, { button: 0 });
 
@@ -1325,6 +1330,28 @@ describe("a card whose draft a blocker has parked", () => {
       expect(openDraftId()).toBe("draft-x");
       expect(composerEditorAt(0).getText()).toBe("unsent words");
     });
+
+    it.each([
+      ["Enter", "{Enter}"],
+      ["Space", " "],
+    ])(
+      "asks once when %s activates the focused action, and keeps the draft when the reader says no",
+      async (_name, keys) => {
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+        const user = userEvent.setup();
+        const action = mountActionOverDirtyDraft();
+        if (!(action instanceof HTMLElement))
+          throw new Error("the Comment action is not an element");
+
+        action.focus();
+        await user.keyboard(keys);
+        await settle();
+
+        expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+        expect(openDraftId()).toBe("draft-x");
+        expect(composerEditorAt(0).getText()).toBe("unsent words");
+      },
+    );
   });
 
   describe("a pick in a card whose own draft holds typed text", () => {
