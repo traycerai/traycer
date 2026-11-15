@@ -46,11 +46,13 @@ function headlineRpcError(
 }
 
 function setSignedInForHeadline(): void {
-  useAuthStore.getState().setSignedIn(
-    { userId: "user-1", userName: "U", email: "u@example.com" },
-    { userId: "user-1", username: "U" },
-    [],
-  );
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-1", userName: "U", email: "u@example.com" },
+      { userId: "user-1", username: "U" },
+      [],
+    );
 }
 
 describe("UsageErrorCard", () => {
