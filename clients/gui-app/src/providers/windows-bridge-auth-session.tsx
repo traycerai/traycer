@@ -209,8 +209,10 @@ export function WindowsBridgeAuthSessionBridge(
             // would: a refresh is handed over; a rejection demotes the session
             // to unverified, the local computer only (signed out only when the
             // stored session moved to another account, was deleted or was
-            // tombstoned); an acceptance is handed over on the next tick; and
-            // an unreachable authn leaves the hold as it is.
+            // tombstoned, or the token store could not be used, which signs
+            // this window out and schedules recovery); an acceptance is handed
+            // over on the next tick; and an unreachable authn leaves the hold
+            // as it is.
             if (judgedHeld === serialized) return;
             judgedHeld = serialized;
             if (
