@@ -32,7 +32,10 @@
  *   no card, since the window it leaves works;
  * - an invalidate (`bindAuthInvalidation`) and a refusal's navigation call
  *   async router methods whose failures are rejections the caller has always
- *   left unhandled, before the queue as now; neither throws synchronously.
+ *   left unhandled, before the queue as now; neither throws synchronously;
+ * - the Tracy surface's correction of its place before the window's tabs are
+ *   restored (`useTracyPlaceRoute`) catches its navigation's rejection, as it
+ *   always has, and reports nothing.
  */
 import { appLogger } from "@/lib/logger";
 

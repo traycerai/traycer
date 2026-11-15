@@ -21,9 +21,11 @@ import {
 } from "@/lib/bots/tracy-place-traversal";
 import {
   subscribeTabNavigationPending,
+  tabNavigationController,
   tracyNavigationPending,
 } from "@/lib/tab-navigation";
 import { applyRouteBookkeeping } from "@/lib/tab-navigation/route-bookkeeping";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -199,6 +201,7 @@ export function useTracyPlaceRoute(botId: string | null): void {
   useEffect(() => {
     if (!surfaceOpen || surfaceBotId !== botId || navigating) return;
     if (!readsOwnEntry(router.history.location, location, botId)) return;
+    const pendingWrites: Array<() => void> = [];
     const write = (place: TracyPlace, mode: "push" | "replace"): void => {
       placeWrites += 1;
       const seq = placeWrites;
@@ -232,41 +235,82 @@ export function useTracyPlaceRoute(botId: string | null): void {
             };
       // Best-effort, as a task's focus write is: a commit that is refused or
       // superseded leaves the entry as it was, and the next move writes again.
-      router.navigate(options).catch(() => undefined);
+      if (mode === "push" || tabNavigationController.hasHydrated()) {
+        // A step the person took, and any write once the window's tabs are
+        // restored, goes out as it is made.
+        router.navigate(options).catch(() => undefined);
+        return;
+      }
+      // Before the window's tabs are restored, a correction over the current
+      // entry is a router load the app starts on its own while the route
+      // replay may be loading, so it waits for any load in flight
+      // (`runWhenRouterSettled`). It goes only if, by then, no navigation to
+      // the surface is pending and the router still reads the entry this run
+      // read; otherwise that newer arrival's run decides.
+      const readEntry = historyEntryIdentity(location);
+      const pending = { ran: false };
+      const cancel = runWhenRouterSettled(router, () => {
+        pending.ran = true;
+        const current = router.state.location;
+        if (
+          tracyNavigationPending() ||
+          historyEntryIdentity(current) !== readEntry ||
+          !readsOwnEntry(router.history.location, current, botId)
+        ) {
+          awaited.current.delete(seq);
+          return;
+        }
+        router.navigate(options).catch(() => undefined);
+      });
+      // A correction that never went out is no write of this hook's to
+      // recognise.
+      pendingWrites.push(() => {
+        if (pending.ran) return;
+        cancel();
+        awaited.current.delete(seq);
+      });
     };
 
-    const identity = historyEntryIdentity(location);
-    const arrived = seen.current.identity !== identity;
-    const automatic = seen.current.automaticMoves !== automaticMoves;
-    seen.current = { identity, automaticMoves };
-    const routed = tracyPlaceOfSearch(location.search);
-    const here = readTracyPlace(botId);
-    const agrees =
-      routed !== null && tracyPlaceKey(routed) === tracyPlaceKey(here);
-    if (!arrived) {
-      if (agrees) return;
-      write(here, routed === null || automatic ? "replace" : "push");
-      return;
-    }
-    const stepped = takeTracyPlaceStep(identity);
-    const own = takeOwnWrite(location.state, awaited.current);
-    if (routed === null) {
-      write(here, "replace");
-      return;
-    }
-    if (agrees) return;
-    if (stepped) {
-      applyTracyPlace(botId, routed);
-      const landed = readTracyPlace(botId);
-      if (tracyPlaceKey(landed) !== tracyPlaceKey(routed)) {
-        write(landed, "replace");
+    const decide = (): void => {
+      const identity = historyEntryIdentity(location);
+      const arrived = seen.current.identity !== identity;
+      const automatic = seen.current.automaticMoves !== automaticMoves;
+      seen.current = { identity, automaticMoves };
+      const routed = tracyPlaceOfSearch(location.search);
+      const here = readTracyPlace(botId);
+      const agrees =
+        routed !== null && tracyPlaceKey(routed) === tracyPlaceKey(here);
+      if (!arrived) {
+        if (agrees) return;
+        write(here, routed === null || automatic ? "replace" : "push");
+        return;
       }
-      return;
-    }
-    // The person moved on while this hook's own write was committing: that
-    // move is a step, unless the move since is nobody's own. Any other entry
-    // the app wrote is corrected over itself.
-    write(here, own && !automatic ? "push" : "replace");
+      const stepped = takeTracyPlaceStep(identity);
+      const own = takeOwnWrite(location.state, awaited.current);
+      if (routed === null) {
+        write(here, "replace");
+        return;
+      }
+      if (agrees) return;
+      if (stepped) {
+        applyTracyPlace(botId, routed);
+        const landed = readTracyPlace(botId);
+        if (tracyPlaceKey(landed) !== tracyPlaceKey(routed)) {
+          write(landed, "replace");
+        }
+        return;
+      }
+      // The person moved on while this hook's own write was committing: that
+      // move is a step, unless the move since is nobody's own. Any other entry
+      // the app wrote is corrected over itself.
+      write(here, own && !automatic ? "push" : "replace");
+    };
+    decide();
+    // A correction still waiting when the route or the stores move again is
+    // dropped: the next run decides from what it reads then.
+    return () => {
+      for (const cancel of pendingWrites) cancel();
+    };
   }, [
     automaticMoves,
     botId,

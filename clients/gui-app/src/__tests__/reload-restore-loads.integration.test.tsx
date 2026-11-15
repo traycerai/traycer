@@ -353,7 +353,6 @@ describe("the reload path restores the open task with no load started under anot
         initialRoute: route,
         withBridge: true,
         onRouteError: null,
-        onRouteError: null,
         persisted: true,
         layoutChunk: layoutChunk.promise,
         taskChunk: taskChunk.promise,
