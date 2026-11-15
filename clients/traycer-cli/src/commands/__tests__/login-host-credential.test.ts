@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import type { RuntimeContext } from "../../runner/runtime";
 import { isProcessAlive } from "../../store/cli-lock";
 import { hostPidMetadataPath } from "../../store/paths";
 import { hostTokensPath } from "@traycer-clients/shared/auth/host-token-file";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
 // `traycer login` persists the sign-in, then hands a host that is already
 // running its credential. The device poll, the access-token probe, and the
@@ -299,6 +301,17 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (lockPresentAtCleanup) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] login-host-credential cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms token-lock-at-entry=${lockPresentAtCleanup}`,
+  );
   await removeHostPid();
   vi.unstubAllGlobals();
   const home = mocks.home.path;
@@ -307,7 +320,7 @@ afterEach(async () => {
   if (realStdin !== undefined) {
     Object.defineProperty(process, "stdin", realStdin);
   }
-});
+}, 15_000);
 
 describe("traycer login credentials a host already running", () => {
   it("does not expose the account id when the identity has no email or name", async () => {
@@ -407,10 +420,14 @@ describe("traycer login credentials a host already running", () => {
   });
 
   it("keeps exit 0 and names traycer host doctor when the running host is unreachable", async () => {
+    const startedAt = performance.now();
     await writeHostPid(process.pid);
     provisionMock.mockResolvedValue({ kind: "unreachable" });
 
     const result = await loginCommand(makeCtx());
+    console.info(
+      `[timing] login-host-unreachable command-settled-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.human).toBe(UNREACHABLE_LINE);

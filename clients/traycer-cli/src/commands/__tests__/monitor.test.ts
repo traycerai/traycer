@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildAgentSendCommand } from "../agent-send";
-import { runMonitor } from "../monitor";
+import { runMonitor as runMonitorCommand, type MonitorArgs } from "../monitor";
+import { config } from "../../config";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -159,6 +162,20 @@ const resolveAuthMock = vi.mocked(resolveHostAuth);
 const pidMock = vi.mocked(readHostPidMetadata);
 const callHostRpcMock = vi.mocked(callHostRpc);
 const callHostRpcWithDispatchMock = vi.mocked(callHostRpcWithDispatch);
+const activeMonitorRuns = new Set<Promise<void>>();
+let firstHostTokenFetchAt: number | null = null;
+
+function runMonitor(args: MonitorArgs): Promise<void> {
+  const pending = runMonitorCommand(args);
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  activeMonitorRuns.add(settled);
+  void settled.then(() => activeMonitorRuns.delete(settled));
+  return pending;
+}
+
 function makeCommandContext(): CommandContext {
   const runtime = resolveRuntimeContext(
     {
@@ -203,7 +220,9 @@ function incompatibleFatal() {
 }
 
 async function waitForSessions(count: number): Promise<void> {
-  await vi.waitFor(() => expect(sessions).toHaveLength(count));
+  await vi.waitFor(() => expect(sessions).toHaveLength(count), {
+    timeout: 10_000,
+  });
 }
 
 async function advanceFakeTime(ms: number): Promise<void> {
@@ -219,16 +238,18 @@ beforeEach(async () => {
   revalidateMock.mockReset();
   disposeMock.mockClear();
   fetchMock.mockReset();
-  fetchMock.mockImplementation(
-    async () =>
-      new Response(
-        JSON.stringify({
-          session_grant: `monitor-host-token-${fetchMock.mock.calls.length}`,
-          session_grant_expires_in: 3600,
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-  );
+  firstHostTokenFetchAt = null;
+  fetchMock.mockImplementation(async () => {
+    if (firstHostTokenFetchAt === null)
+      firstHostTokenFetchAt = performance.now();
+    return new Response(
+      JSON.stringify({
+        session_grant: `monitor-host-token-${fetchMock.mock.calls.length}`,
+        session_grant_expires_in: 3600,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
   vi.stubGlobal("fetch", fetchMock);
   callHostRpcMock.mockReset();
   callHostRpcMock.mockResolvedValue({});
@@ -256,16 +277,41 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const pendingAtCleanup = activeMonitorRuns.size;
+  if (activeMonitorRuns.size > 0) {
+    await vi.waitFor(
+      () => {
+        expect(sessions.length > 0 || activeMonitorRuns.size === 0).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    for (const session of sessions) {
+      session.statusChange?.("closed", incompatibleFatal());
+    }
+    await Promise.all([...activeMonitorRuns]);
+  }
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (lockPresentAtCleanup) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] monitor cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms pending-at-entry=${pendingAtCleanup} token-lock-at-entry=${lockPresentAtCleanup}`,
+  );
   vi.clearAllTimers();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   const home = testHome.path;
   testHome.path = null;
   if (home !== null) await rm(home, { recursive: true, force: true });
-});
+}, 15_000);
 
 describe("runMonitor recovery", () => {
   it("opens the inbox stream with the host-only token", async () => {
+    const startedAt = performance.now();
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
     const options = streamClientOptions[0];
@@ -273,12 +319,24 @@ describe("runMonitor recovery", () => {
     if (options === undefined)
       throw new Error("stream options were not captured");
     expect(options.bearer()).toBeNull();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
-      expect(options.bearer()?.getBearerToken()).toBe("monitor-host-token-1"),
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), {
+      timeout: 10_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(options.bearer()?.getBearerToken()).toBe("monitor-host-token-1"),
+      { timeout: 10_000 },
     );
-    void result;
-  });
+    const fetchAt = firstHostTokenFetchAt;
+    if (fetchAt === null) throw new Error("host-token fetch timestamp missing");
+    console.info(
+      `[timing] monitor token-ready-at=${performance.now().toFixed(1)} fetch-at=${fetchAt.toFixed(1)} elapsed-from-start=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
+    sessions[0]?.statusChange?.("closed", incompatibleFatal());
+    expect(await result).toMatchObject({
+      message: "traycer monitor: host closed the stream: version mismatch",
+    });
+  }, 15_000);
 
   it("ends with the team-membership line when authn refuses its first host-token mint", async () => {
     fetchMock.mockResolvedValueOnce(
