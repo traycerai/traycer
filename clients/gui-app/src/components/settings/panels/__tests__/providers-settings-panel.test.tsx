@@ -8879,7 +8879,8 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("hides an abandoned naming save, reports a transport failure, and allows retry", async () => {
+  /** A new profile linked through the dialog, up to its naming step. */
+  async function renderLinkedProfileAtNaming(): Promise<RenderResult> {
     const ambient = profile({
       profileId: "ambient",
       kind: "ambient",
@@ -8958,6 +8959,11 @@ describe("<ProvidersSettingsPanel />", () => {
         existingProfileId: null,
       });
     });
+    return view;
+  }
+
+  it("hides an abandoned naming save, reports a transport failure, and allows retry", async () => {
+    const view = await renderLinkedProfileAtNaming();
 
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Work org" },
@@ -9150,6 +9156,38 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
     expect(screen.getByText(transportFailure.message)).toBeDefined();
+  });
+
+  it("keeps the finalize step's failure line for a recolor abandoned before it was sent, and retries it", async () => {
+    const view = await renderLinkedProfileAtNaming();
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    const [, renameOptions] =
+      providerMocks.renameProfileMutate.mock.calls.at(0) ?? [];
+    if (renameOptions === undefined) throw new Error("Expected a rename call.");
+    act(() => renameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      providerMocks.recolorProfileError = abandonedSaveError(
+        "providers.recolorProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "The account was linked, but the profile color could not be saved.",
+      ),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
   });
 
   it("warns when the selected accent color is already used by the ambient terminal account", () => {
