@@ -50,7 +50,10 @@ import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRpcShellConfigController } from "@/components/settings/panels/shell/use-rpc-shell-config-controller";
 import type { ShellConfigController } from "@/components/settings/panels/shell/shell-config-controller";
-import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+} from "@/lib/environment/settings-save-follow";
 import {
   useSettingsSave,
   useSettingsItemExists,
@@ -1169,7 +1172,7 @@ describe("settings-save callers", () => {
       OTHER_HOST_ID,
       harness.environmentCloud(),
     );
-    const answer = await sendFollowedSave(pending, sent);
+    const answer = await sendFollowedSave(pending, sent, everyAnswerProposes);
 
     expect(answer).toBe("host-answered");
     expect(sent).toHaveBeenCalledTimes(1);
