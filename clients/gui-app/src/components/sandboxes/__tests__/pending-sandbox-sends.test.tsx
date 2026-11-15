@@ -6065,7 +6065,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         state: "suspended",
         frozen: true,
         createdBy:
-          configuration.kind === "team" ? AUTHENTICATED_USER_FIXTURE_ID : null,
+          configuration.kind === "team"
+            ? { userId: AUTHENTICATED_USER_FIXTURE_ID, displayName: "Viewer" }
+            : null,
         environmentId:
           configuration.kind === "team"
             ? configuration.environmentId

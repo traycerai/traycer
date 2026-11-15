@@ -28,7 +28,7 @@ function sandboxHost(
   state: "awake" | "suspended",
   health: "offline" | "online",
   frozen: boolean,
-  ownerKind: "user" | "team" | "unknown" | undefined,
+  ownerKind: "user" | "team" | "unknown",
 ): HostScopeOption {
   return hostScopeOptionFixture({
     hostId: "sbx-a",

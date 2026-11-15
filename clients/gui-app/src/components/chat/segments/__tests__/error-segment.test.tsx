@@ -822,6 +822,7 @@ describe("<ErrorSegment /> sandbox refusals", () => {
           value={{
             chatId: "chat-with-frozen-sandbox",
             hostId: TRANSCRIPT_HOST_ID,
+            payerHostId: TRANSCRIPT_HOST_ID,
           }}
         >
           <ErrorSegment
@@ -970,7 +971,11 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     installHostDirectoryRows([plainHostEntry(TRANSCRIPT_HOST_ID)]);
     render(
       <ChatTranscriptProvider
-        value={{ chatId: "chat-on-personal-host", hostId: TRANSCRIPT_HOST_ID }}
+        value={{
+          chatId: "chat-on-personal-host",
+          hostId: TRANSCRIPT_HOST_ID,
+          payerHostId: TRANSCRIPT_HOST_ID,
+        }}
       >
         <ErrorSegment
           hostTimestamp={null}

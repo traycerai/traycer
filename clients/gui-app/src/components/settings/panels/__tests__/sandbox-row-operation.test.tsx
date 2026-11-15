@@ -263,13 +263,17 @@ const FROZEN_DESTROY_CASE: VerbCase = {
   reached: "destroyed",
 };
 
+/** The page the row is listed under; whose credits it is on is `mocks.configuration`. */
+const LISTED_UNDER: SandboxPageConfiguration = { kind: "personal" };
+
 function Rows(): ReactNode {
   const list = useSandboxList();
   return list.data?.sandboxes.map((summary) => (
     <section key={summary.id} aria-label={summary.displayName}>
       <SandboxRowActions
         summary={summary}
-        configuration={mocks.configuration}
+        configuration={LISTED_UNDER}
+        credits={mocks.configuration}
         unreachable={false}
         frozenOffersAddCredits={false}
         settingsFailed={false}
@@ -1023,7 +1027,8 @@ describe("sandbox row operations", () => {
       <section aria-label="Another view">
         <SandboxRowActions
           summary={main}
-          configuration={mocks.configuration}
+          configuration={LISTED_UNDER}
+          credits={mocks.configuration}
           unreachable={false}
           frozenOffersAddCredits={false}
           settingsFailed={false}

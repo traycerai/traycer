@@ -37,7 +37,10 @@ const TEAM_CONFIGURATION: SandboxPageConfiguration = {
 const PERSONAL_CONFIGURATION: SandboxPageConfiguration = { kind: "personal" };
 const environmentListRequests: Array<string | null> = [];
 
-function refusedCreate(): SandboxCreateFetchResult {
+function refusedCreate(): Extract<
+  SandboxCreateFetchResult,
+  { readonly kind: "refused" }
+> {
   return {
     kind: "refused",
     status: 402,
@@ -49,6 +52,14 @@ function refusedCreate(): SandboxCreateFetchResult {
     message: null,
     creditSource: "team",
   };
+}
+
+interface RetryRefusalCase {
+  readonly reader: string;
+  readonly configuration: SandboxPageConfiguration;
+  readonly environmentRole: "admin" | "editor" | "viewer";
+  readonly refusal: SandboxCreateFetchResult;
+  readonly expected: string;
 }
 
 async function retryAndExpectToast(
@@ -111,6 +122,7 @@ async function retryAndExpectToast(
           environmentId: "env-acme",
         })}
         configuration={configuration}
+        credits={configuration}
       />
     </SandboxBillingRuntime>,
   );
@@ -143,40 +155,42 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
+const RETRY_REFUSAL_CASES: readonly RetryRefusalCase[] = [
+  {
+    reader: "Editor",
+    configuration: TEAM_CONFIGURATION,
+    environmentRole: "editor",
+    refusal: refusedCreate(),
+    expected: "The team's credits don't cover an hour of this sandbox.",
+  },
+  {
+    reader: "Admin",
+    configuration: TEAM_CONFIGURATION,
+    environmentRole: "admin",
+    refusal: refusedCreate(),
+    expected:
+      "The team's credits don't cover an hour of this sandbox. Add $1.20 and try again.",
+  },
+  {
+    reader: "Personal reader",
+    configuration: PERSONAL_CONFIGURATION,
+    environmentRole: "editor",
+    refusal: { ...refusedCreate(), creditSource: "personal" },
+    expected:
+      "Your credits don't cover an hour of this sandbox. Add $1.20 and try again.",
+  },
+  {
+    reader: "team reader with an unverified balance",
+    configuration: TEAM_CONFIGURATION,
+    environmentRole: "editor",
+    refusal: { ...refusedCreate(), reason: "unverified" },
+    expected:
+      "Traycer couldn't confirm your credit balance. Try again in a moment.",
+  },
+];
+
 describe("SandboxFailedRowActions Retry", () => {
-  it.each([
-    {
-      reader: "Editor",
-      configuration: TEAM_CONFIGURATION,
-      environmentRole: "editor",
-      refusal: refusedCreate(),
-      expected: "The team's credits don't cover an hour of this sandbox.",
-    },
-    {
-      reader: "Admin",
-      configuration: TEAM_CONFIGURATION,
-      environmentRole: "admin",
-      refusal: refusedCreate(),
-      expected:
-        "The team's credits don't cover an hour of this sandbox. Add $1.20 and try again.",
-    },
-    {
-      reader: "Personal reader",
-      configuration: PERSONAL_CONFIGURATION,
-      environmentRole: "editor",
-      refusal: { ...refusedCreate(), creditSource: "personal" },
-      expected:
-        "Your credits don't cover an hour of this sandbox. Add $1.20 and try again.",
-    },
-    {
-      reader: "team reader with an unverified balance",
-      configuration: TEAM_CONFIGURATION,
-      environmentRole: "editor",
-      refusal: { ...refusedCreate(), reason: "unverified" },
-      expected:
-        "Traycer couldn't confirm your credit balance. Try again in a moment.",
-    },
-  ])(
+  it.each(RETRY_REFUSAL_CASES)(
     "shows the right create refusal to a $reader after Retry",
     async ({ configuration, environmentRole, refusal, expected }) => {
       await retryAndExpectToast(

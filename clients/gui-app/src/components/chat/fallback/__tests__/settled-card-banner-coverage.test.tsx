@@ -360,7 +360,9 @@ function AdvisoryProbe() {
 function Scene({ turnIds }: { readonly turnIds: ReadonlyArray<string> }) {
   return (
     <TabHostProvider hostId={HOST_ID}>
-      <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+      <ChatTranscriptProvider
+        value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+      >
         <AdvisoryProbe />
         {turnIds.map((turnId) => (
           <FallbackManualRungActions key={turnId} turnId={turnId} />

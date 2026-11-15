@@ -1,7 +1,7 @@
 import { vi, type Mock } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type {
-  TeamEnvironmentFetchResult,
   SandboxAutomationFetchResult,
   SandboxAutomationOpenFetchResult,
   SandboxControlFailure,

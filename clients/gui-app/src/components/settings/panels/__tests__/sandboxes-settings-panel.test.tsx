@@ -355,6 +355,7 @@ vi.mock(
       SandboxRowActions: (props: {
         summary: SandboxSummary;
         configuration: SandboxPageConfiguration;
+        credits: SandboxPageConfiguration | null;
         unreachable: boolean;
         frozenOffersAddCredits: boolean;
         settingsFailed: boolean;

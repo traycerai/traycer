@@ -437,7 +437,9 @@ function lastPickerProps(): ComponentProps<typeof RoutingDestinationPicker> {
 function renderActions(turnId: string) {
   return render(
     <TabHostProvider hostId={HOST_ID}>
-      <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+      <ChatTranscriptProvider
+        value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+      >
         <FallbackManualRungActions turnId={turnId} />
       </ChatTranscriptProvider>
     </TabHostProvider>,

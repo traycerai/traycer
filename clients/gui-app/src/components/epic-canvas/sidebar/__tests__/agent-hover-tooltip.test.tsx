@@ -61,6 +61,7 @@ const h = vi.hoisted(() => {
     configurations: [{ kind: "personal" }],
     teamEnvironmentIds: new Set(),
     complete: false,
+    personalEnvironmentId: null,
   };
   const state: {
     sandboxes: object[];
@@ -350,6 +351,7 @@ afterEach(() => {
     configurations: [{ kind: "personal" }],
     teamEnvironmentIds: new Set(),
     complete: false,
+    personalEnvironmentId: null,
   };
   h.setPanel.mockClear();
   h.openDetails.mockClear();
@@ -761,6 +763,7 @@ describe("AgentHoverTooltip host section", () => {
       ],
       teamEnvironmentIds: new Set(["env-team-personal"]),
       complete: true,
+      personalEnvironmentId: null,
     };
     h.sandboxes = [
       sandboxRow({
@@ -839,6 +842,7 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
       renderAgent({
@@ -863,6 +867,7 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderAgent({
@@ -879,6 +884,7 @@ describe("AgentHoverTooltip host section", () => {
         configurations: [{ kind: "personal" }],
         teamEnvironmentIds: new Set(),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
       renderAgent({
@@ -917,6 +923,7 @@ describe("AgentHoverTooltip host section", () => {
           configurations: [{ kind: "personal" }],
           teamEnvironmentIds: new Set(),
           complete: true,
+          personalEnvironmentId: null,
         };
         h.sandboxes = [
           sandboxRow({
@@ -958,6 +965,7 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderHostSandbox();

@@ -420,6 +420,7 @@ describe("a requested terminal and an Automations terminal opening together", ()
             <SandboxRowActions
               summary={automationsRow()}
               configuration={{ kind: "personal" }}
+              credits={{ kind: "personal" }}
               unreachable={false}
               frozenOffersAddCredits={false}
               settingsFailed={false}
@@ -434,6 +435,7 @@ describe("a requested terminal and an Automations terminal opening together", ()
                 guestConfigured: true,
               })}
               configuration={{ kind: "personal" }}
+              credits={{ kind: "personal" }}
               unreachable={false}
               frozenOffersAddCredits={false}
               settingsFailed={false}

@@ -1566,7 +1566,11 @@ describe("<UserMessageBody /> agent messages", () => {
         render(
           <ChatContainerContext value="epic-1">
             <ChatTranscriptProvider
-              value={{ chatId: "chat-1", hostId: "host-1" }}
+              value={{
+                chatId: "chat-1",
+                hostId: "host-1",
+                payerHostId: "host-1",
+              }}
             >
               <UserMessageBody actions={null} message={crossMessage(null)} />
             </ChatTranscriptProvider>

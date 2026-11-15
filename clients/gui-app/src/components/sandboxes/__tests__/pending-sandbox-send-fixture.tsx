@@ -43,6 +43,7 @@ import type {
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -702,7 +703,10 @@ const hostBinding = vi.hoisted(() => ({
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
     getTeamEnvironment: () =>
-      Promise.resolve({ kind: "ok", environmentId: "env-acme" }),
+      Promise.resolve<TeamEnvironmentFetchResult>({
+        kind: "ok",
+        environmentId: "env-acme",
+      }),
   },
   directory: {
     refresh: () => Promise.resolve(),

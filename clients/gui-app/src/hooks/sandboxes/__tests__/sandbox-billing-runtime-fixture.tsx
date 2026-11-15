@@ -5,7 +5,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentDescriptorV11,
+  EnvironmentListResponseV11,
+} from "@traycer/protocol/host/environment/contracts";
 import {
   AUTHENTICATED_USER_FIXTURE_ID,
   createAuthenticatedUserFixture,
@@ -21,6 +24,9 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
+// The fixture user's own name and email, as the sign-in wants them (non-null).
+const BILLING_USER_NAME = "Test User";
+const BILLING_USER_EMAIL = "test@example.com";
 const BILLING_USER = createAuthenticatedUserFixture(undefined);
 const BILLING_TOKENS = {
   token: "sandbox-billing-test-token",
@@ -100,9 +106,7 @@ function messengerFactory(
             );
           }
           if (answer.kind === "loading") {
-            return new Promise<{
-              readonly environments: readonly EnvironmentDescriptorV11[];
-            }>(() => undefined);
+            return new Promise<EnvironmentListResponseV11>(() => undefined);
           }
           if (answer.kind === "failed") {
             throw new Error("environment.list failed");
@@ -209,8 +213,8 @@ export function SandboxBillingRuntime(props: {
     void runnerHost.tokenStore
       .signIn(BILLING_TOKENS, {
         id: AUTHENTICATED_USER_FIXTURE_ID,
-        name: BILLING_USER.user.name,
-        email: BILLING_USER.user.email,
+        name: BILLING_USER_NAME,
+        email: BILLING_USER_EMAIL,
       })
       .then(() => {
         if (cancelled) return;
