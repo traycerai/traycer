@@ -78,6 +78,7 @@ import {
 import { putImage } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import {
+  LandingImageRootsUnreadableError,
   reserveLandingImageBudget,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
@@ -262,14 +263,17 @@ async function runPendingImageIngestJob(args: {
       // The PREPARED length, which is what `putImage` just stored and what the
       // node's `size` will report back to the budget's steady-state accounting
       // - charging the source length would bill capacity nothing holds.
-      postStoreReservation = reserveLandingImageBudget(draftId, [
-        { hash, bytes: prepared.byteLength },
-      ]);
+      postStoreReservation = reserveMigratedImage(
+        draftId,
+        hash,
+        prepared.byteLength,
+      );
       if (postStoreReservation === null) {
         // The node STAYS. This is a migration of bytes the draft already
         // holds inline, not a new paste being refused: `b64content` is the
         // durable copy, so removing the node discarded the user's attachment
-        // for no reason other than opening a draft while the budget was full.
+        // for no reason other than opening a draft while the budget was full,
+        // or while storage could not say what the budget holds.
         //
         // The cost is real and bounded, and it is why this branch differs from
         // the `putImage` rejection below. An inline node keeps the draft out of
@@ -304,16 +308,7 @@ async function runPendingImageIngestJob(args: {
       return;
     }
     editorRef.current?.removeImageAttachmentById(id);
-    reportableErrorToast(
-      "Couldn't attach the image.",
-      { description: "Please try adding it again." },
-      {
-        title: "Could not attach image",
-        message: null,
-        code: null,
-        source: "Chat composer",
-      },
-    );
+    showImageNotAttachedToast();
     scheduleLandingImageReconcile();
   } finally {
     signal.removeEventListener("abort", releaseCallerReservation);
@@ -412,11 +407,21 @@ export function useComposerPendingImageIngest(args: {
       // see a `let` mutated inside an arrow callback and calls the later read
       // of it always-falsy.
       let admitted = true;
+      // Storage unavailable rather than a full budget: refused the same way,
+      // with no budget toast, and said once below.
+      let rootsUnreadable = false;
       for (const [index, plan] of plans.entries()) {
         if (plan.bytes === null || !plan.storable) continue;
-        const reservation = reserveLandingImageBudget(draftId, [
-          { hash: null, bytes: plan.bytes.byteLength },
-        ]);
+        let reservation: LandingImageBudgetReservation | null;
+        try {
+          reservation = reserveLandingImageBudget(draftId, [
+            { hash: null, bytes: plan.bytes.byteLength },
+          ]);
+        } catch (error) {
+          if (!(error instanceof LandingImageRootsUnreadableError)) throw error;
+          rootsUnreadable = true;
+          reservation = null;
+        }
         if (reservation === null) {
           admitted = false;
           break;
@@ -469,6 +474,7 @@ export function useComposerPendingImageIngest(args: {
         return { kind: "accepted", id };
       });
       if (corruptedCount > 0) showPastedImageToast(corruptedCount);
+      if (rootsUnreadable) showImageNotAttachedToast();
       return outcomes;
     },
     [draftId, startPendingImageIngest],
@@ -537,6 +543,37 @@ export function useComposerPendingImageIngest(args: {
     reingestPendingImages,
     noteContentImages,
   };
+}
+
+/**
+ * A migrating image's reservation, or `null` where its node stays inline: the
+ * budget is full, or storage cannot say what the budget holds. Each mount
+ * tries again.
+ */
+function reserveMigratedImage(
+  draftId: string | null,
+  hash: string,
+  bytes: number,
+): LandingImageBudgetReservation | null {
+  try {
+    return reserveLandingImageBudget(draftId, [{ hash, bytes }]);
+  } catch (error) {
+    if (error instanceof LandingImageRootsUnreadableError) return null;
+    throw error;
+  }
+}
+
+function showImageNotAttachedToast(): void {
+  reportableErrorToast(
+    "Couldn't attach the image.",
+    { description: "Please try adding it again." },
+    {
+      title: "Could not attach image",
+      message: null,
+      code: null,
+      source: "Chat composer",
+    },
+  );
 }
 
 function showPastedImageToast(corruptedCount: number): void {

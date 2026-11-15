@@ -12,7 +12,8 @@ import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
  * (`boxesReading`), so an image read that never ends holds that box, never
  * the tab. A sign-in attempt in flight, or one that failed, keeps
  * the identity it started from, as the bridge does
- * (`useAuthIdentityTransition`).
+ * (`useAuthIdentityTransition`), and waits as it does for the read of that
+ * identity's own drafts.
  */
 export function useBotDraftsAdmitted(): boolean {
   const status = useAuthStore((state) => state.status);
@@ -20,9 +21,11 @@ export function useBotDraftsAdmitted(): boolean {
   const signedOutCause = useAuthStore((state) => state.signedOutCause);
   const owner = useBotDraftsStore((state) => state.owner);
   const ownDraftsRead = useBotDraftsStore((state) => state.ownDraftsRead);
-  if (status === "signing-in") return true;
-  if (status === "signed-out" && signedOutCause === "attempt-failed") {
-    return true;
+  if (
+    status === "signing-in" ||
+    (status === "signed-out" && signedOutCause === "attempt-failed")
+  ) {
+    return owner === null || ownDraftsRead;
   }
   if (!admitsLocalPlane(status)) return owner === null;
   return owner !== null && owner.userId === userId && ownDraftsRead;

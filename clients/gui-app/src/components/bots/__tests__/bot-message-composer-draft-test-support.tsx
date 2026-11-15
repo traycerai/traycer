@@ -106,6 +106,7 @@ export async function startCase(mocks: SendMocks): Promise<void> {
   sends = mocks;
   app = await startFresh();
   ui = await loadUi();
+  startDebounceClock();
 }
 
 /** The app is started again over what is stored, as a restart does, and the box's UI loaded over it. */
@@ -124,16 +125,21 @@ export function endCase(): void {
 }
 
 /**
- * The box mounted and its editor found, which polls on the real clock; the
- * fake clock the drafts' write debounce runs on comes after.
+ * The box's editor of a render's tree, once the render's effects have run: the
+ * editor is created in an effect (`immediatelyRender: false`), so what it
+ * waits on is the act queue, not a clock.
  */
+export async function settledBoxInput(): Promise<HTMLElement> {
+  await ui.rtl.act(async () => {});
+  return ui.box.boxInput(OWNER_LABEL);
+}
+
+/** The box mounted and its editor found. */
 export async function mountBox(
   initial: string,
 ): Promise<{ unmount: () => void }> {
-  vi.useRealTimers();
   const view = ui.rtl.render(<ui.owner.OwnerBox initial={initial} />);
-  await ui.box.findBoxInput(OWNER_LABEL);
-  startDebounceClock();
+  await settledBoxInput();
   return view;
 }
 
@@ -146,7 +152,8 @@ export function withQueryClient(children: ReactNode): ReactNode {
   );
 }
 
-export function startDebounceClock(): void {
+/** The clock the drafts' write debounce runs on, from the start of the case: nothing in a case waits on a real one. */
+function startDebounceClock(): void {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 }
 

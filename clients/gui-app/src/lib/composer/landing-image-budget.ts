@@ -70,7 +70,26 @@ export function registerLandingDraftRootSource(
  * which live in this same partition.
  */
 export interface ExtraImageRootSource {
+  /**
+   * Every hash the source holds. Throws where it cannot read what it holds,
+   * such as storage the browser refuses: an answer missing the unread part
+   * would let the sweep delete what that part names.
+   */
   hashes(): ReadonlyArray<string>;
+}
+
+/**
+ * A root source could not read what it holds, so which hashes are rooted is
+ * unknown. Thrown by {@link landingLiveImageRootHashes}, and by every
+ * admission here before it reserves anything. Unknown is never unrooted:
+ * nothing is deleted, evicted or released on it, and an admission it refuses
+ * is storage being unavailable, never a full budget.
+ */
+export class LandingImageRootsUnreadableError extends Error {
+  constructor(cause: unknown) {
+    super("The image roots could not be read.", { cause });
+    this.name = "LandingImageRootsUnreadableError";
+  }
 }
 
 const extraRootSources: ExtraImageRootSource[] = [];
@@ -251,6 +270,10 @@ function imageHashesOf(content: JsonContent): Set<string> {
  * content and every keyed live runtime. Exposed (read-only) for
  * `landing-image-gc.ts`'s orphan-reconcile sweep and used internally here to
  * skip charging a reservation candidate that is already live.
+ *
+ * Whole or not at all: where a registered source cannot read what it holds,
+ * this throws {@link LandingImageRootsUnreadableError} rather than answer
+ * without it.
  */
 export function landingLiveImageRootHashes(): Set<string> {
   const roots = new Set<string>();
@@ -259,7 +282,13 @@ export function landingLiveImageRootHashes(): Set<string> {
   }
   for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
   for (const source of extraRootSources) {
-    for (const hash of source.hashes()) roots.add(hash);
+    let hashes: ReadonlyArray<string>;
+    try {
+      hashes = source.hashes();
+    } catch (cause) {
+      throw new LandingImageRootsUnreadableError(cause);
+    }
+    for (const hash of hashes) roots.add(hash);
   }
   return roots;
 }
@@ -448,6 +477,9 @@ function showBudgetExceededToast(draftId: string | null): void {
  * an opaque reservation; the caller must call `release()` on it exactly once,
  * after it either commits the reserved content or discovers it will not be
  * committed (rejected, stale destination, or a thrown write).
+ *
+ * Throws {@link LandingImageRootsUnreadableError}, having reserved nothing
+ * and shown nothing, where the roots cannot be read.
  */
 export function reserveLandingImageBudget(
   draftId: string | null,
@@ -460,6 +492,7 @@ export function reserveLandingImageBudget(
 
 /** Silent admission for callers that provide their own retryable failure UI.
  * Admission never deletes drafts or recovery history, including on rejection.
+ * Throws as `reserveLandingImageBudget` does.
  */
 export function tryReserveLandingImageBudget(
   candidates: ReadonlyArray<LandingImageBudgetCandidate>,
@@ -478,6 +511,7 @@ export function tryReserveLandingImageBudget(
  * is a real increase that the root sum only learns about afterwards. Skipping
  * the charge here let a restore push the partition past a cap that had just
  * refused a 68-byte paste.
+ * Throws as `reserveLandingImageBudget` does.
  */
 export function tryReserveLandingImageResidency(
   candidates: ReadonlyArray<LandingImageBudgetCandidate>,
@@ -573,6 +607,26 @@ function reserve(
       slot.key = hash;
     },
   };
+}
+
+/**
+ * Residency for verified bytes about to be written under `hash`, admitted only
+ * while something roots it. `null` where the bytes stay with the caller alone:
+ * nothing roots the hash, the budget refuses them, or the roots cannot be
+ * read.
+ */
+export function tryReserveLandingImageResidencyIfRooted(
+  hash: string,
+  bytes: number,
+): LandingImageBudgetReservation | null {
+  try {
+    return landingLiveImageRootHashes().has(hash)
+      ? tryReserveLandingImageResidency([{ hash, bytes }])
+      : null;
+  } catch (error) {
+    if (error instanceof LandingImageRootsUnreadableError) return null;
+    throw error;
+  }
 }
 
 export function resetLandingImageBudgetReservationsForTesting(): void {

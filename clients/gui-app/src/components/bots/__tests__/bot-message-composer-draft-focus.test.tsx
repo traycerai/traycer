@@ -12,13 +12,13 @@ import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conv
 import {
   BOT_ID,
   CHANNEL,
-  OWNER_LABEL,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import {
   app,
   boxText,
   endCase,
   scriptedSendMutation,
+  settledBoxInput,
   startCase,
   typeBox,
   ui,
@@ -59,14 +59,13 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
     /** The box beside another field that holds the focus. */
     async function mountedBesideAFocusedField(): Promise<HTMLElement> {
-      vi.useRealTimers();
       ui.rtl.render(
         <>
           <input aria-label="Other field" />
           <ui.owner.OwnerBox initial={CHANNEL} />
         </>,
       );
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       const other = ui.rtl.screen.getByLabelText("Other field");
       other.focus();
       expect(document.activeElement).toBe(other);
@@ -96,21 +95,20 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
       moveIn();
 
-      await vi.waitFor(() => expect(boxText()).toBe(MOVED));
       await ui.rtl.act(async () => {});
+      expect(boxText()).toBe(MOVED);
       expect(document.activeElement).toBe(other);
     });
 
     /** The box beside another field, with `text` typed into it. */
     async function mountedWithText(text: string): Promise<HTMLElement> {
-      vi.useRealTimers();
       ui.rtl.render(
         <>
           <input aria-label="Other field" />
           <ui.owner.OwnerBox initial={CHANNEL} />
         </>,
       );
-      const box = await ui.box.findBoxInput(OWNER_LABEL);
+      const box = await settledBoxInput();
       typeBox(text);
       return box;
     }
@@ -127,9 +125,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
       moveIn();
 
-      await vi.waitFor(() =>
-        expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`),
-      );
+      await ui.rtl.act(async () => {});
+      expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`);
       expect(document.activeElement).toBe(box);
       expect([editor.state.selection.from, editor.state.selection.to]).toEqual([
         7, 11,
@@ -151,9 +148,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
       moveIn();
 
-      await vi.waitFor(() =>
-        expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`),
-      );
+      await ui.rtl.act(async () => {});
+      expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`);
       expect(document.activeElement).toBe(other);
       expect([editor.state.selection.from, editor.state.selection.to]).toEqual([
         6, 6,
@@ -164,22 +160,21 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     });
 
     it("leaves the focus on the other field when an answer moves into a box that already has a kept draft", async () => {
-      vi.useRealTimers();
       ui.rtl.render(
         <>
           <input aria-label="Other field" />
           <ui.owner.OwnerBox initial={CHANNEL} />
         </>,
       );
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       typeBox("Existing");
       const other = ui.rtl.screen.getByLabelText("Other field");
       other.focus();
 
       moveIn();
 
-      await vi.waitFor(() => expect(boxText()).toBe(`Existing\n\n${MOVED}`));
       await ui.rtl.act(async () => {});
+      expect(boxText()).toBe(`Existing\n\n${MOVED}`);
       expect(document.activeElement).toBe(other);
     });
   });

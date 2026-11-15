@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type * as DraftStorage from "@/lib/bots/bot-box-draft-storage";
@@ -238,4 +238,42 @@ export async function untilClockless(condition: () => boolean): Promise<void> {
   while (!condition()) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+}
+
+/** Makes the real `localStorage.getItem` throw for `key` its first `reads` times, as a browser's does when storage cannot be read; every other read goes through. */
+function failReadsOf(key: string, reads: number): () => void {
+  const read = Storage.prototype.getItem.bind(localStorage);
+  let failed = 0;
+  const spy = vi
+    .spyOn(Storage.prototype, "getItem")
+    .mockImplementation((asked: string) => {
+      if (asked === key && failed < reads) {
+        failed += 1;
+        throw new Error("storage cannot be read");
+      }
+      return read(asked);
+    });
+  const restore = (): void => spy.mockRestore();
+  onTestFinished(restore);
+  return restore;
+}
+
+/** The first read of `key` fails; the rest go through. */
+export function failFirstReadOf(key: string): void {
+  failReadsOf(key, 1);
+}
+
+/** Every read of `key` fails until the returned function restores storage. */
+export function failEveryReadOf(key: string): () => void {
+  return failReadsOf(key, Number.POSITIVE_INFINITY);
+}
+
+/** Storage cannot list its keys until the returned function restores it. */
+export function failStorageKeys(): () => void {
+  const spy = vi.spyOn(Storage.prototype, "key").mockImplementation(() => {
+    throw new Error("storage cannot list its keys");
+  });
+  const restore = (): void => spy.mockRestore();
+  onTestFinished(restore);
+  return restore;
 }

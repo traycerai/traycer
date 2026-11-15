@@ -28,7 +28,12 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { StrictMode, type ComponentProps, type ReactNode } from "react";
+import {
+  StrictMode,
+  useEffect,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -103,6 +108,7 @@ import { BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS } from "@/lib/bots/bot-box-draft-storag
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   boxDoc,
+  failFirstReadOf,
   hashedImage,
   storeImageBytes,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
@@ -130,6 +136,11 @@ const channelHandles = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
   /** A stored image's read waits for the gate of its hash, while there is one. */
   imageGates: new Map<string, PromiseWithResolvers<void>>(),
+  /** The drafts store's owner and whether its own drafts were read, at every commit of the surface's composer. */
+  commits: [] as Array<{
+    readonly owner: string | null;
+    readonly read: boolean;
+  }>,
   /** Every (viewer, A's markers) pair the probe under the surface's composer saw. */
   observed: [] as Array<{
     readonly at: "render" | "layout";
@@ -285,15 +296,21 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
     if (Object.keys(cards.getState().entries).length > 0) found.push("card");
     return found;
   };
+  const commitOf = () => ({
+    owner: drafts.getState().owner?.userId ?? null,
+    read: drafts.getState().ownDraftsRead,
+  });
   function Probe(props: { readonly edit: { readonly text: string } | null }) {
     const viewer = auth((state) => state.profile?.userId ?? null);
     const editText = props.edit === null ? null : props.edit.text;
+    channelHandles.commits.push(commitOf());
     channelHandles.observed.push({
       at: "render",
       viewer,
       markers: markersOf(editText),
     });
     useLayoutEffect(() => {
+      channelHandles.commits.push(commitOf());
       channelHandles.observed.push({
         at: "layout",
         viewer,
@@ -557,6 +574,24 @@ function signOut(): void {
       signingInAttempt: null,
       profile: null,
       contextMetadata: null,
+    });
+  });
+}
+
+/** The session turns unverified as `userId`: the same account kept from disk, another than the one signed in. */
+function turnUnverifiedAs(userId: string): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "unverified",
+      signedOutCause: null,
+      signingInAttempt: null,
+      profile: {
+        userId,
+        userName: userId,
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+      },
+      contextMetadata: { userId, username: userId },
     });
   });
 }
@@ -1216,25 +1251,6 @@ describe("<BotTabSurface /> what the tree shows at the commit an identity change
   });
 });
 
-/**
- * Makes the real `localStorage.getItem` throw for `key` on its first call, as a
- * browser's does when storage cannot be read; every other read goes through.
- */
-function failFirstReadOf(key: string): void {
-  const read = Storage.prototype.getItem.bind(localStorage);
-  let failed = false;
-  const reads = vi
-    .spyOn(Storage.prototype, "getItem")
-    .mockImplementation((asked: string) => {
-      if (asked === key && !failed) {
-        failed = true;
-        throw new Error("storage cannot be read");
-      }
-      return read(asked);
-    });
-  onTestFinished(() => reads.mockRestore());
-}
-
 describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)", () => {
   /** A's stored draft of the channel box. */
   function storedChannelDraft(
@@ -1405,6 +1421,143 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
         (seen) => seen.viewer === ACCOUNT_B && seen.markers.length > 0,
       ),
     ).toEqual([]);
+  });
+
+  describe("a sign-in attempt that starts while the stored drafts of the account the session turned to are being read", () => {
+    /** Fails the attempt the commit after the bridge saw it start, as an attempt that does not go through does. */
+    function FailsTheAttempt(): null {
+      const status = useAuthStore((state) => state.status);
+      useEffect(() => {
+        if (status !== "signing-in") return;
+        useAuthStore.setState({
+          status: "signed-out",
+          signedOutCause: "attempt-failed",
+          signingInAttempt: null,
+          profile: null,
+          contextMetadata: null,
+        });
+      }, [status]);
+      return null;
+    }
+
+    /**
+     * B's stored channel draft is `stored`, the tab is open for A, and the
+     * session turns unverified as B; the sign-in attempt starts inside the
+     * store's own change to B, before anything can render, as the read of a
+     * draft with no image is only microtasks wide. `beside` is rendered after
+     * the surface, so its effects run after the bridge's.
+     */
+    async function onSwitchToB(
+      stored: string,
+      beside: ReactNode,
+    ): Promise<void> {
+      localStorage.setItem(botBoxDraftsKey(ACCOUNT_B), stored);
+      channelHandles.handles.set(
+        CHANNEL,
+        chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+      );
+      render(
+        <>
+          {surfaceTree()}
+          {beside}
+        </>,
+      );
+      await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+      channelHandles.commits.length = 0;
+      const stop = useBotDraftsStore.subscribe((state) => {
+        if (state.owner?.userId === ACCOUNT_B && !state.ownDraftsRead) {
+          stop();
+          useAuthStore.getState().setSigningIn("device");
+        }
+      });
+      onTestFinished(stop);
+      turnUnverifiedAs(ACCOUNT_B);
+    }
+
+    /** No box was shown for B before B's own stored text was read. */
+    function expectNoBoxBeforeBsDraftsAreRead(): void {
+      expect(channelHandles.commits.filter((commit) => !commit.read)).toEqual(
+        [],
+      );
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    }
+
+    it.each([
+      ["in flight", null],
+      ["failed", <FailsTheAttempt key="fails" />],
+    ])(
+      "shows no box for B before B's stored text is in the store, then B's stored text, when the attempt is %s",
+      async (_attempt, beside) => {
+        await onSwitchToB(storedChannelDraft("B's stored draft", null), beside);
+
+        await vi.waitFor(() =>
+          expect(textOf(channelBox())).toContain("B's stored draft"),
+        );
+        // The box was committed for B at all, and only once its text was read.
+        expect(channelHandles.commits.length).toBeGreaterThan(0);
+        expectNoBoxBeforeBsDraftsAreRead();
+      },
+    );
+
+    // The text of a draft that names an image is read in the store's own
+    // synchronous step, so no commit can fall between the account changing
+    // and its text being there: these two hold without the admission change.
+    it.each([
+      ["in flight", null],
+      ["failed", <FailsTheAttempt key="fails" />],
+    ])(
+      "shows B's box waiting for its image on its own, with B's stored text and no box before it, when the attempt is %s and B's draft names an image still being read",
+      async (_attempt, beside) => {
+        installFreshIndexedDb();
+        const hash = await storeImageBytes();
+        channelHandles.imageGates.set(hash, Promise.withResolvers<void>());
+        await onSwitchToB(
+          storedChannelDraft(
+            "B's stored draft",
+            boxDoc("B's stored draft ", [hashedImage(hash)]),
+          ),
+          beside,
+        );
+
+        await screen.findByTestId("bot-channel-composer-reading");
+        expect(screen.getByTestId("bot-channel-composer-input")).toHaveProperty(
+          "value",
+          "B's stored draft",
+        );
+        expectNoBoxBeforeBsDraftsAreRead();
+      },
+    );
+
+    it("leaves B's stored draft as it is, and shows an empty box once the read has ended, when B's stored read throws during the attempt", async () => {
+      const keyOfB = botBoxDraftsKey(ACCOUNT_B);
+      const stored = storedChannelDraft("B's stored draft", null);
+      failFirstReadOf(keyOfB);
+      await onSwitchToB(stored, null);
+
+      await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+      expectNoBoxBeforeBsDraftsAreRead();
+      typeInto(channelBox(), "typed while unread");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS);
+      });
+      expect(localStorage.getItem(keyOfB)).toBe(stored);
+    });
+
+    it("keeps the tab open when an attempt starts after the session signed out, with nobody's drafts in the store", async () => {
+      channelHandles.handles.set(
+        CHANNEL,
+        chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+      );
+      mountSurface();
+      await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+      signOut();
+      expect(useBotDraftsStore.getState().owner).toBeNull();
+
+      act(() => useAuthStore.getState().setSigningIn("device"));
+
+      expect(textOf(channelBox())).toBe("");
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    });
   });
 
   it("opens the thread box for editing as soon as its own image is read, while the channel box still waits for its own", async () => {

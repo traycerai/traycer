@@ -20,6 +20,7 @@ import { reconcile } from "@/lib/composer/landing-image-gc";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   forgetCloudDraftPayloadUnsupportedHost,
+  prefetchRecordedCloudDraftImages,
   recordCloudDraftImageSources,
   readCloudDraftImageBytes,
   recoverCloudDraftImages,
@@ -77,8 +78,13 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
 const OWNER = "user-1";
 
 const liveLandingImageRoots = new Set<string>();
+/** Set while the image roots cannot be read, as the bot drafts' are when storage fails. */
+const unreadableRoots = { on: false };
 registerExtraImageRootSource({
-  hashes: () => [...liveLandingImageRoots],
+  hashes: () => {
+    if (unreadableRoots.on) throw new Error("the image roots cannot be read");
+    return [...liveLandingImageRoots];
+  },
 });
 
 function rootLandingImages(...hashes: string[]): void {
@@ -189,6 +195,7 @@ beforeEach(() => {
 afterEach(() => {
   resetCloudDraftImageRecoveryForTests();
   liveLandingImageRoots.clear();
+  unreadableRoots.on = false;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -240,6 +247,77 @@ describe("cloud-draft-image-recovery", () => {
 
     expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
     expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
+  });
+
+  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read (Tracy Bots T186)", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    unreadableRoots.on = true;
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(result).toEqual(bytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+    expect(sessionImageBytes(hash)).toBeNull();
+  });
+
+  it("fetches nothing, and resolves, when an idle prefetch cannot read the image roots (Tracy Bots T186)", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+    rootLandingImages(hash);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    unreadableRoots.on = true;
+
+    await prefetchRecordedCloudDraftImages(
+      [{ hash, bytes: bytes.byteLength }],
+      new AbortController().signal,
+    );
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps every recorded source, and records the new ones, when the image roots cannot be read as the sources overflow their cap (Tracy Bots T186)", async () => {
+    // The oldest address is the one an unrooted overflow would evict first.
+    const bytes = bytesA();
+    const oldest = await sha256HexOf(bytes);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [oldest],
+    });
+    const fillers = Array.from({ length: 512 }, (_unused, index) =>
+      index.toString(16).padStart(64, "0"),
+    );
+    unreadableRoots.on = true;
+
+    expect(() =>
+      recordCloudDraftImageSources({
+        identity: IDENTITY,
+        hostId: "host-a",
+        client,
+        hashes: fillers,
+      }),
+    ).not.toThrow();
+
+    // Readable again, and rooted: the oldest address was not evicted unread.
+    unreadableRoots.on = false;
+    rootLandingImages(oldest);
+    expect(await readCloudDraftImageBytes(oldest)).toEqual(bytes);
   });
 
   it("a full resident budget returns verified bytes ephemerally: no IDB/session entry afterward", async () => {

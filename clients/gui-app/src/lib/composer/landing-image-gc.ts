@@ -160,6 +160,8 @@ export async function reconcile(): Promise<void> {
     });
   }
   const stored = await imageHashKeys();
+  // Throws where a root source cannot be read, as the read after the reclaims
+  // below does: nothing is deleted or released on a partial set.
   const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);

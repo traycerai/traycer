@@ -7,6 +7,7 @@ import {
 } from "@/lib/composer/image-atoms";
 import { base64ToBytes, bytesToBase64Async } from "@/lib/composer/image-base64";
 import {
+  LandingImageRootsUnreadableError,
   registerExtraImageRootSource,
   showLandingImageBudgetExceededToast,
   tryReserveLandingImageResidency,
@@ -943,9 +944,17 @@ async function storeImage(
   // As bytes becoming resident: a hash another window's draft names is a root
   // whose bytes this window's image store does not hold, and storing them
   // here adds them; a hash this store holds still costs nothing more.
-  const reservation = tryReserveLandingImageResidency([
-    { hash, bytes: bytes.byteLength },
-  ]);
+  let reservation: LandingImageBudgetReservation | null;
+  try {
+    reservation = tryReserveLandingImageResidency([
+      { hash, bytes: bytes.byteLength },
+    ]);
+  } catch (error) {
+    // Storage unavailable, not a full budget: the image is left out of this
+    // write, as one whose put failed is, and the box keeps it.
+    if (error instanceof LandingImageRootsUnreadableError) return null;
+    throw error;
+  }
   if (reservation === null) {
     if (hash === null || !writer.refused.has(hash)) {
       if (hash !== null) writer.refused.add(hash);
@@ -1310,6 +1319,7 @@ function readStoredValue(
  * now, whichever window wrote them, for an account signed out keeps its drafts
  * and their images; the ones this window's boxes held at the last write that
  * landed, or read back; and the ones the newest write has stored so far.
+ * Throws where storage cannot be read.
  */
 function botBoxDraftImageRoots(): ReadonlyArray<string> {
   const roots = new Set([
@@ -1317,13 +1327,10 @@ function botBoxDraftImageRoots(): ReadonlyArray<string> {
     ...writer.inFlightHashByInline.values(),
   ]);
   for (const name of accountDraftKeys()) {
-    let stored: StorageValue<PersistedBotBoxDrafts> | null;
-    try {
-      stored = readStoredValue(name);
-    } catch {
-      // As for the keys: storage that cannot be read names no image.
-      continue;
-    }
+    // A key storage refuses to read throws out of here: what it names is
+    // unknown, and the image store keeps every image for it
+    // (`landingLiveImageRootHashes`). A value nothing can parse names none.
+    const stored = readStoredValue(name);
     if (stored === null) continue;
     for (const draft of eachDraft(stored.state.threadBoxes)) {
       if (draft.content === null) continue;
@@ -1333,17 +1340,15 @@ function botBoxDraftImageRoots(): ReadonlyArray<string> {
   return [...roots];
 }
 
-/** The keys every account's stored drafts on this device are kept under. */
+/**
+ * The keys every account's stored drafts on this device are kept under.
+ * Throws where storage cannot be reached.
+ */
 function accountDraftKeys(): ReadonlyArray<string> {
   const keys: string[] = [];
-  try {
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key?.startsWith(ACCOUNT_DRAFTS_PREFIX) === true) keys.push(key);
-    }
-  } catch {
-    // Storage that cannot be reached names no image.
-    return [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(ACCOUNT_DRAFTS_PREFIX) === true) keys.push(key);
   }
   return keys;
 }

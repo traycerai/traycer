@@ -652,6 +652,43 @@ describe("the image budget a draft's images are stored under", () => {
 
     expect(toast).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects nothing unhandled, keeps the box's image in the store and tells the person nothing, when the image roots cannot be read as the write admits the image", async () => {
+    const toast = watchRefusalToast();
+    app = await restart();
+    const budget = await import("@/lib/composer/landing-image-budget");
+    let reads = 0;
+    budget.registerExtraImageRootSource({
+      hashes: () => {
+        reads += 1;
+        throw new Error("the image roots cannot be read");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    onTestFinished(() => {
+      process.off("unhandledRejection", onUnhandled);
+    });
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => reads > 0);
+    // A rejection nothing handles is reported once the turn that made it ends.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(unhandled).toEqual([]);
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
+    expect(toast).not.toHaveBeenCalled();
+  });
 });
 
 describe("a box changed while the stored drafts are read", () => {
@@ -815,7 +852,7 @@ describe("the image hashes the stored drafts keep alive", () => {
     expect(app.imageRoots().has(HASH)).toBe(false);
   });
 
-  it("still name the images of the accounts whose drafts can be read, and throw nothing, when one account's stored drafts cannot be read", () => {
+  it("cannot be named, and the read throws as unreadable with no partial set, when one account's stored drafts cannot be read", async () => {
     const hashOfA = "a".repeat(64);
     const hashOfB = "b".repeat(64);
     const keyOfA = botBoxDraftsKey("user-a");
@@ -845,10 +882,10 @@ describe("the image hashes the stored drafts keep alive", () => {
       });
     onTestFinished(() => reads.mockRestore());
 
-    const roots = app.imageRoots();
+    const { LandingImageRootsUnreadableError } =
+      await import("@/lib/composer/landing-image-budget");
 
-    expect(roots.has(hashOfB)).toBe(true);
-    expect(roots.has(hashOfA)).toBe(false);
+    expect(() => app.imageRoots()).toThrow(LandingImageRootsUnreadableError);
   });
 
   it("include the ones this window's boxes hold, after storage drops them", async () => {
