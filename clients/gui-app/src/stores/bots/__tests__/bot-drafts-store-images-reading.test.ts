@@ -764,6 +764,27 @@ describe("the boxes' drafts while images they name are being read", () => {
     expect(stored(started).a).toEqual(STORED_A);
   });
 
+  it("stays admitted for good, the image box still waiting, while an image never settles, and the text-only box holds what is typed and has it stored", async () => {
+    const started = await startOver({ a: STORED_A, c: STORED_C });
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+    expect(started.drafts.getState().ownDraftsRead).toBe(true);
+    expect(waitingBoxes(started)).toEqual(["a"]);
+    expect(boxesOf(started).a).toBeUndefined();
+    type(started, "c", "C edited", []);
+    await waitForStore(
+      started,
+      (document) => document?.[BOT_ID]?.c?.text === "C edited",
+    );
+
+    expect(boxesOf(started).c?.text).toBe("C edited");
+    expect(waitingBoxes(started)).toEqual(["a"]);
+    expect(stored(started).c?.text).toBe("C edited");
+    expect(stored(started).a).toEqual(STORED_A);
+    expectStored(started, { a: [HASH_A], c: [] });
+  });
+
   it("is admitted before any image settles, with the text-only box in place and the image box waiting by its stored text", async () => {
     const started = await startOver({ a: STORED_A, c: STORED_C });
 
