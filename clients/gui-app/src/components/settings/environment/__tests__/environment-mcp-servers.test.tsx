@@ -45,6 +45,7 @@ import {
   windowHostBoundary,
   resetTeamPageHarness,
   windowHostScopeMock,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -200,25 +201,20 @@ interface AuthnWrite {
   readonly body: unknown;
 }
 
-function authnWritesSince(start: number): AuthnWrite[] {
-  return vi
-    .mocked(globalThis.fetch)
-    .mock.calls.slice(start)
-    .flatMap(([input, init]) => {
-      const method = init?.method;
-      if (method === undefined || method === "GET") return [];
-      let url: string;
-      if (typeof input === "string") {
-        url = input;
-      } else if (input instanceof URL) {
-        url = input.href;
-      } else {
-        url = input.url;
-      }
-      let body: unknown = null;
-      if (typeof init?.body === "string") body = JSON.parse(init.body);
-      return [{ method, path: new URL(url).pathname, body }];
-    });
+function authnWritesSince(
+  harness: TeamPageHarness,
+  start: number,
+): AuthnWrite[] {
+  return harness.cloudRequests.slice(start).flatMap((request) => {
+    if (request.method === "GET") return [];
+    return [
+      {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        body: request.body,
+      },
+    ];
+  });
 }
 
 function refuseNextMcpItemPut(
@@ -552,7 +548,7 @@ describe("The MCP servers page", () => {
     const listReadsBefore = harness.paramsOf(
       "environment.configuration.mcpServers.list",
     ).length;
-    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const fetchStart = harness.cloudRequests.length;
     await userEvent.click(screen.getByRole("switch", { name: "github" }));
 
     await waitFor(() => {
@@ -563,7 +559,7 @@ describe("The MCP servers page", () => {
         harness.paramsOf("environment.configuration.mcpServers.list").length,
       ).toBeGreaterThan(listReadsBefore + 1);
     });
-    expect(authnWritesSince(fetchStart)).toEqual([
+    expect(authnWritesSince(harness, fetchStart)).toEqual([
       {
         method: "PUT",
         path: "/api/v3/environments/env-a/items/mcp_server",
@@ -612,7 +608,7 @@ describe("The MCP servers page", () => {
     const listReadsBefore = harness.paramsOf(
       "environment.configuration.mcpServers.list",
     ).length;
-    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const fetchStart = harness.cloudRequests.length;
     await userEvent.click(screen.getByRole("switch", { name: "github" }));
 
     await waitFor(() => {
@@ -623,7 +619,7 @@ describe("The MCP servers page", () => {
         harness.paramsOf("environment.configuration.mcpServers.list").length,
       ).toBeGreaterThan(listReadsBefore);
     });
-    expect(authnWritesSince(fetchStart)).toEqual([
+    expect(authnWritesSince(harness, fetchStart)).toEqual([
       {
         method: "PATCH",
         path: "/api/v3/environments/env-a/mcp-servers/srv-1",
@@ -666,7 +662,7 @@ describe("The MCP servers page", () => {
     });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const fetchStart = harness.cloudRequests.length;
     await userEvent.click(
       await screen.findByRole("switch", { name: "github" }),
     );
@@ -677,7 +673,7 @@ describe("The MCP servers page", () => {
     expect(harness.paramsOf("environment.configuration.items.delete")).toEqual([
       expect.objectContaining({ key: "github", revision: 4 }),
     ]);
-    expect(authnWritesSince(fetchStart)).toEqual([
+    expect(authnWritesSince(harness, fetchStart)).toEqual([
       {
         method: "PATCH",
         path: "/api/v3/environments/env-a/mcp-servers/srv-1",
@@ -746,8 +742,11 @@ describe("The MCP servers page", () => {
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
       const toggle = await screen.findByRole("switch", { name: "github" });
-      vi.mocked(globalThis.fetch).mockRejectedValueOnce(
-        new Error("The transport did not answer."),
+      harness.cloudResponses.set(
+        "PATCH /api/v3/environments/env-a/mcp-servers/srv-1",
+        () => {
+          throw new Error("The transport did not answer.");
+        },
       );
       await userEvent.click(toggle);
 
@@ -1221,7 +1220,7 @@ describe("The MCP servers page", () => {
     await openServerCard("github");
     const endpoint = await screen.findByLabelText("Endpoint URL for github");
     expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
-    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const fetchStart = harness.cloudRequests.length;
     await userEvent.type(endpoint, "x");
     await userEvent.click(
       await screen.findByRole("switch", { name: "github search" }),
@@ -1246,34 +1245,7 @@ describe("The MCP servers page", () => {
       toolToggles: { codex: { search: false } },
       offFor: [],
     });
-    const writes: {
-      readonly method: string;
-      readonly path: string;
-      readonly body: unknown;
-    }[] = vi
-      .mocked(globalThis.fetch)
-      .mock.calls.slice(fetchStart)
-      .flatMap(([input, init]) => {
-        const method = init?.method;
-        if (method === undefined || method === "GET") return [];
-        let url: string;
-        if (typeof input === "string") {
-          url = input;
-        } else if (input instanceof URL) {
-          url = input.href;
-        } else {
-          url = input.url;
-        }
-        let body: unknown = null;
-        if (typeof init?.body === "string") body = JSON.parse(init.body);
-        return [
-          {
-            method,
-            path: new URL(url).pathname,
-            body,
-          },
-        ];
-      });
+    const writes = authnWritesSince(harness, fetchStart);
     expect(writes).toHaveLength(1);
     const [write] = writes;
     expect(write.method).toBe("PATCH");

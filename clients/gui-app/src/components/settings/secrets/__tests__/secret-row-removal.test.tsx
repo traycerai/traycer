@@ -295,57 +295,54 @@ function destroyCalls(harness: TeamPageHarness) {
 }
 
 interface CapturedSecretRequest {
-  readonly method: string | undefined;
+  readonly method: string;
   readonly path: string;
   readonly body: unknown;
-  readonly redirect: RequestRedirect | undefined;
 }
 
-function capturedSecretRequests(start: number): CapturedSecretRequest[] {
-  return vi
-    .mocked(globalThis.fetch)
-    .mock.calls.slice(start)
-    .flatMap(([input, init]) => {
-      let url: string;
-      if (typeof input === "string") {
-        url = input;
-      } else if (input instanceof URL) {
-        url = input.href;
-      } else {
-        url = input.url;
-      }
-      const parsedUrl = new URL(url);
-      if (
-        !parsedUrl.pathname.startsWith("/api/v3/environments/") ||
-        !parsedUrl.pathname.includes("/secrets")
-      ) {
-        return [];
-      }
-      const body: unknown =
-        typeof init?.body === "string" ? JSON.parse(init.body) : null;
-      return [
-        {
-          method: init?.method,
-          path: `${parsedUrl.pathname}${parsedUrl.search}`,
-          body,
-          redirect: init?.redirect,
-        },
-      ];
-    });
+function capturedSecretRequests(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return harness.cloudRequests.slice(start).flatMap((request) => {
+    const parsedUrl = new URL(request.url);
+    if (
+      !parsedUrl.pathname.startsWith("/api/v3/environments/") ||
+      !parsedUrl.pathname.includes("/secrets")
+    ) {
+      return [];
+    }
+    return [
+      {
+        method: request.method,
+        path: `${parsedUrl.pathname}${parsedUrl.search}`,
+        body: request.body ?? null,
+      },
+    ];
+  });
 }
 
-function destroyRequests(start: number): CapturedSecretRequest[] {
-  return capturedSecretRequests(start).filter(
+function destroyRequests(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return capturedSecretRequests(harness, start).filter(
     ({ method, path }) => method === "POST" && path.endsWith("/destroy"),
   );
 }
 
-function removalRequestsSince(start: number): CapturedSecretRequest[] {
-  return capturedSecretRequests(start);
+function removalRequestsSince(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return capturedSecretRequests(harness, start);
 }
 
-function removalRequestOrder(start: number): string[] {
-  return capturedSecretRequests(start).flatMap(({ method, path }) => {
+function removalRequestOrder(
+  harness: TeamPageHarness,
+  start: number,
+): string[] {
+  return capturedSecretRequests(harness, start).flatMap(({ method, path }) => {
     if (method === "GET" && path.endsWith("/secrets/sec-1/versions"))
       return ["environment.secrets.versions"];
     if (method === "POST" && path.endsWith("/versions/ver-2/destroy"))
@@ -391,12 +388,11 @@ describe("Remove on a team secret", () => {
     await waitFor(() => {
       expect(destroyCalls(harness)).toHaveLength(1);
     });
-    expect(destroyRequests(0)).toEqual([
+    expect(destroyRequests(harness, 0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
         body: { allowCurrent: true },
-        redirect: "manual",
       },
     ]);
     expect(
@@ -463,12 +459,11 @@ describe("Remove on Personal", () => {
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "This is the current value. Replace or revoke it first.",
     );
-    expect(destroyRequests(0)).toEqual([
+    expect(destroyRequests(harness, 0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-2/destroy",
         body: { allowCurrent: true },
-        redirect: "manual",
       },
     ]);
     expect(
@@ -495,13 +490,12 @@ describe("Remove on Personal", () => {
       ),
     );
 
-    await waitFor(() => expect(destroyRequests(0)).toHaveLength(1));
-    expect(destroyRequests(0)).toEqual([
+    await waitFor(() => expect(destroyRequests(harness, 0)).toHaveLength(1));
+    expect(destroyRequests(harness, 0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-1/destroy",
         body: { allowCurrent: true },
-        redirect: "manual",
       },
     ]);
     expect(
@@ -531,7 +525,7 @@ describe("Remove on Personal", () => {
     expect(harness.paramsOf("environment.secrets.list")).toContainEqual({
       environmentId: null,
     });
-    expect(destroyRequests(0)).toEqual([]);
+    expect(destroyRequests(harness, 0)).toEqual([]);
     expect(destroyCalls(harness)).toEqual([]);
   });
 });
@@ -565,12 +559,11 @@ describe("a secret with a removal", () => {
         environmentId: "env-a",
         allowCurrent: true,
       });
-      expect(destroyRequests(0)).toEqual([
+      expect(destroyRequests(harness, 0)).toEqual([
         {
           method: "POST",
           path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
           body: { allowCurrent: true },
-          redirect: "manual",
         },
       ]);
       // Destroyed is the one outcome that takes the row out of the list: the
@@ -911,7 +904,7 @@ describe("a removed secret the list has moved to removed", () => {
         return answer;
       },
     });
-    const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const requestStart = harness.cloudRequests.length;
     await user.click(within(status).getByRole("button", { name: "Retry" }));
 
     await waitFor(() => {
@@ -947,25 +940,22 @@ describe("a removed secret the list has moved to removed", () => {
         body: null,
       },
     ]);
-    const retryRequests = removalRequestsSince(requestStart);
+    const retryRequests = removalRequestsSince(harness, requestStart);
     expect(retryRequests.slice(0, 3)).toEqual([
       {
         method: "GET",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions",
         body: null,
-        redirect: "manual",
       },
       {
         method: "POST",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
         body: { allowCurrent: true },
-        redirect: "manual",
       },
       {
         method: "GET",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions",
         body: null,
-        redirect: "manual",
       },
     ]);
     const secretReadPaths = [
@@ -977,7 +967,7 @@ describe("a removed secret the list has moved to removed", () => {
       expect(request.method).toBe("GET");
       expect(secretReadPaths).toContain(request.path.split("?")[0]);
     }
-    const order = removalRequestOrder(requestStart);
+    const order = removalRequestOrder(harness, requestStart);
     expect(order.indexOf("environment.secrets.versions")).toBeLessThan(
       order.indexOf("environment.secrets.destroy"),
     );
@@ -993,7 +983,7 @@ describe("a removed secret the list has moved to removed", () => {
     const readsBeforeRetry = harness.paramsOf(
       "environment.secrets.versions",
     ).length;
-    const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    const requestStart = harness.cloudRequests.length;
     const baseCloud =
       requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     let signInA = true;
@@ -1042,12 +1032,11 @@ describe("a removed secret the list has moved to removed", () => {
 
     await waitFor(() => expect(harness.queryClient.isMutating()).toBe(0));
     expect(harness.paramsOf("environment.secrets.destroy")).toEqual([]);
-    expect(removalRequestsSince(requestStart)).toEqual([
+    expect(removalRequestsSince(harness, requestStart)).toEqual([
       {
         method: "GET",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions",
         body: null,
-        redirect: "manual",
       },
     ]);
     expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(
@@ -1105,7 +1094,7 @@ describe("Retry on a removal still waiting for a host", () => {
     });
     expect(toastCall).toHaveBeenCalledWith(WAITING);
     expect(destroyCalls(harness)).toHaveLength(1);
-    const order = removalRequestOrder(0);
+    const order = removalRequestOrder(harness, 0);
     expect(order.lastIndexOf("environment.secrets.versions")).toBeGreaterThan(
       order.indexOf("environment.secrets.destroy"),
     );
