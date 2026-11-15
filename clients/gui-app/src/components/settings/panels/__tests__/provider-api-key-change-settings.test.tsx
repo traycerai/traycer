@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
+import type { ExternalToast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRequestContext,
@@ -47,11 +48,16 @@ import {
   storedApiKeyState,
 } from "./provider-api-key-section-fixture";
 
+type ToastErrorCall = (
+  message: ReactNode,
+  options: ExternalToast | undefined,
+) => string;
+
 const mocks = vi.hoisted(() => ({
   hostClient: vi.fn<() => HostClient<typeof hostRpcRegistry>>(),
   authService: vi.fn<() => AuthService>(),
   openLink: vi.fn(),
-  toastError: vi.fn(),
+  toastError: vi.fn<ToastErrorCall>(),
   mobileApp: false,
   mobilePlatform: "ios" as "ios" | "android" | null,
 }));
@@ -416,7 +422,7 @@ describe("provider API-key change Settings flow", () => {
     await waitFor(() =>
       expect(mocks.toastError.mock.calls.length > 0).toBe(true),
     );
-    const toastCall = mocks.toastError.mock.calls[0];
+    const toastCall = mocks.toastError.mock.calls.at(0);
     if (toastCall === undefined)
       throw new Error("Expected desktop update notice");
     const options = isRecord(toastCall[1]) ? toastCall[1] : null;
@@ -451,7 +457,7 @@ describe("provider API-key change Settings flow", () => {
       await waitFor(() =>
         expect(mocks.toastError.mock.calls.length > 0).toBe(true),
       );
-      const toastCall = mocks.toastError.mock.calls[0];
+      const toastCall = mocks.toastError.mock.calls.at(0);
       if (toastCall === undefined)
         throw new Error("Expected mobile update notice");
       const options = isRecord(toastCall[1]) ? toastCall[1] : null;

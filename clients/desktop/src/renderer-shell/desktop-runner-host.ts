@@ -172,6 +172,8 @@ import type {
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -372,6 +374,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -1522,6 +1528,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult> {
     return this.bridge.getTeamEnvironment(bearerToken, teamId);
+  }
+
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    return this.bridge.replaceEnvironmentApiKey(bearerToken, request);
   }
 
   getEnvironmentProviders(

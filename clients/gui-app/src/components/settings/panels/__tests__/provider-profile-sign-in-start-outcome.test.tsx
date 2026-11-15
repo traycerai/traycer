@@ -51,6 +51,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -538,6 +539,7 @@ function renderAntigravityAddDialog(
   });
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -826,6 +828,7 @@ describe.each(MOUNT_MODES)(
       });
       const client = Object.assign({} as HostClient<HostRpcRegistry>, {
         getActiveHostId: () => "host-local",
+        onChange: () => () => undefined,
         request: host.request,
         requestWithSignal: host.request,
         requestWithOptions: host.requestWithOptions,

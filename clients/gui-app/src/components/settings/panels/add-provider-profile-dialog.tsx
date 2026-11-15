@@ -10,6 +10,7 @@ import {
   Link2,
   LogIn,
 } from "lucide-react";
+import type { ProfileRecordActionFailure } from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -298,12 +299,8 @@ function ProviderProfileSignInDialog({
     target,
     client,
   );
-  const renameProfile = useAddProfileRename(
-    client,
-    state.providerId,
-    flow.state,
-    offersSignIns,
-  );
+  const { mutation: renameProfile, recordFailure: namingRecordFailure } =
+    useAddProfileRename(client, state.providerId, flow.state, offersSignIns);
   const targetTerminal = destinationResult(flow.state);
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
@@ -484,6 +481,7 @@ function ProviderProfileSignInDialog({
               duplicateProfile={duplicateProfile}
               naming={naming}
               namingError={renameProfile.error}
+              namingRecordFailure={namingRecordFailure}
               emailRevealed={emailRevealed}
               setEmailRevealed={setEmailRevealed}
               linkDisabled={linkHeldOff({
@@ -653,6 +651,8 @@ function dialogShowsCloseButton(
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "waiting-for-profile" ||
+    (flowState.kind === "target-outcome" &&
+      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }
@@ -690,6 +690,7 @@ function AddProfileAccountSection({
   duplicateProfile,
   naming,
   namingError,
+  namingRecordFailure,
   emailRevealed,
   setEmailRevealed,
   linkDisabled,
@@ -714,6 +715,7 @@ function AddProfileAccountSection({
   readonly duplicateProfile: ProviderProfile | null;
   readonly naming: NamingStepState | null;
   readonly namingError: Error | null;
+  readonly namingRecordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
   readonly linkDisabled: boolean;
@@ -812,6 +814,7 @@ function AddProfileAccountSection({
         profile={naming.profile}
         collisionProfile={naming.collisionProfile}
         error={namingError}
+        recordFailure={namingRecordFailure}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
       />
@@ -924,7 +927,7 @@ function SignInCard({
 }
 
 /** A profile's name and dot with its provider, as the dialog's body. */
-function ProfileAccountRow({
+export function ProfileAccountRow({
   providerId,
   profile,
 }: {
@@ -1116,12 +1119,14 @@ function AddProfileNamingStep({
   profile,
   collisionProfile,
   error,
+  recordFailure,
   emailRevealed,
   setEmailRevealed,
 }: {
   readonly profile: ProviderProfile;
   readonly collisionProfile: ProviderProfile;
   readonly error: Error | null;
+  readonly recordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
 }): ReactNode {
@@ -1140,7 +1145,11 @@ function AddProfileNamingStep({
       {error !== null ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-xs text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>Couldn&apos;t save the name. Try again.</span>
+          <span>
+            {recordFailure === null
+              ? "Couldn't save the name. Try again."
+              : recordFailure.message}
+          </span>
         </div>
       ) : null}
     </div>
@@ -1423,7 +1432,7 @@ export function AddProfileIdentityStep({
   );
 }
 
-function AddProfileFailureStep({
+export function AddProfileFailureStep({
   providerId,
   message,
   refusal,
@@ -1559,7 +1568,11 @@ function useAddProfileRename(
     providerId,
     recordProfileId !== null,
   );
-  return recordProfileId === null ? local : record;
+  return {
+    mutation: recordProfileId === null ? local : record,
+    recordFailure:
+      recordProfileId === null ? null : (record.error?.failure ?? null),
+  };
 }
 
 interface NamingStepState {

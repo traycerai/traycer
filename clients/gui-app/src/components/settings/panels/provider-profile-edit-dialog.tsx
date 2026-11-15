@@ -1,4 +1,5 @@
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
+import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -510,6 +511,21 @@ function ProfileEditAccountSection(props: {
   );
 }
 
+function profileSignOutAvailable(
+  profile: ProviderProfile,
+  recordAccount: boolean,
+  supported: boolean,
+): boolean {
+  if (profile.kind !== "managed") return false;
+  if (recordAccount) return true;
+  const custodyClass = profile.credentialHome?.custodyClass;
+  return (
+    supported &&
+    profile.presence?.kind === "admitted" &&
+    (custodyClass === "self-sufficient" || custodyClass === "brokered")
+  );
+}
+
 function ProfileSignOutAction(props: {
   readonly providerId: ProviderId;
   readonly profile: ProviderProfile;
@@ -518,7 +534,12 @@ function ProfileSignOutAction(props: {
   readonly disabled: boolean;
   readonly onSignedOut: () => void;
 }): ReactNode {
-  const signOut = useSignOutProviderProfile();
+  const localSignOut = useSignOutProviderProfile();
+  const recordSignOut = useProfileRecordPersonAction(
+    "sign-out",
+    props.recordAccount,
+  );
+  const signOut = props.recordAccount ? recordSignOut : localSignOut;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(
@@ -527,13 +548,7 @@ function ProfileSignOutAction(props: {
   );
   const custodyClass = props.profile.credentialHome?.custodyClass;
   const recordAccount = props.recordAccount;
-  if (
-    !supported ||
-    props.profile.kind !== "managed" ||
-    (!recordAccount &&
-      (props.profile.presence?.kind !== "admitted" ||
-        (custodyClass !== "self-sufficient" && custodyClass !== "brokered")))
-  )
+  if (!profileSignOutAvailable(props.profile, recordAccount, supported))
     return null;
   const environmentAccount = recordAccount || custodyClass === "brokered";
   const scope = recordAccount ? "record" : "legacy";
@@ -723,16 +738,24 @@ export function ProfileEditDialog(props: {
   const environmentName = usePickedTeamLabel(
     presence?.scope === "environment" ? presence.environmentId : "",
   );
+  const localRemoveProfile = useRemoveProviderProfile();
+  const recordRemoveProfile = useProfileRecordPersonAction(
+    "remove",
+    recordAccount,
+  );
+  const removeProfile = recordAccount
+    ? recordRemoveProfile
+    : localRemoveProfile;
   const hostClient = useHostClient();
   const openSwitchFlow = useProviderProfileAddFlowStore(
     (state) => state.openForSwitch,
   );
   const startSwitch = (): void => {
-    const hostId = hostClient.getActiveHostId();
     if (signInOutcomes === null) {
       setSwitchingAccount(true);
       return;
     }
+    const hostId = hostClient.getActiveHostId();
     if (hostId === null) return;
     props.onOpenChange(false);
     openSwitchFlow(
@@ -742,7 +765,6 @@ export function ProfileEditDialog(props: {
       props.onSelectedProfileIdChange,
     );
   };
-  const removeProfile = useRemoveProviderProfile();
   const renameProfile = useProfileRename(providerId, props.profile);
   const recolorProfile = useAccountProfileRecolorForClient(
     hostClient,

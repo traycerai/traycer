@@ -29,7 +29,8 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 export type OpenResult =
   | { readonly kind: "answer"; readonly response: BotOpenResponse }
-  | { readonly kind: "error"; readonly message: string };
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "failure"; readonly error: Error };
 
 export type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
 
@@ -84,8 +85,10 @@ export const mocks = {
       const result = mocks.state.openResult;
       if (result === null) return;
       if (result.kind === "answer") options.onSuccess(result.response);
+      else if (result.kind === "failure") options.onError(result.error);
       else options.onError({ message: result.message });
     },
+    isPending: false,
   },
   /** The bots the tab subscribed to, in order. */
   subscribed: [] as string[],
