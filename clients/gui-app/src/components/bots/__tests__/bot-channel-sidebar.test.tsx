@@ -103,6 +103,8 @@ const mocks = vi.hoisted(() => {
       bots: [] as BotRecord[],
       /** `bot.list` has not answered: no data, as while it loads or fails. */
       botListPending: false,
+      /** `bot.list` failed: its last ask answered with an error. */
+      botListFailed: false,
       mainBotIds: null as Record<string, string> | null,
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
@@ -126,6 +128,7 @@ const mocks = vi.hoisted(() => {
       activity,
     },
     readRequests,
+    refetchBotList: vi.fn<() => void>(),
   };
 });
 
@@ -289,6 +292,8 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
     data: mocks.state.botListPending
       ? undefined
       : { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+    isError: mocks.state.botListFailed,
+    refetch: mocks.refetchBotList,
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
@@ -479,6 +484,8 @@ beforeEach(() => {
   }
   mocks.readRequests.length = 0;
   mocks.state.botListPending = false;
+  mocks.state.botListFailed = false;
+  mocks.refetchBotList.mockClear();
   localStorage.clear();
   useBotColumnLayoutStore.setState({
     sectionOrder: [],
@@ -1731,5 +1738,24 @@ describe("<BotChannelSidebar /> a channel's mascot", () => {
 
     expect(parked.after).toEqual(parked.before);
     expect(parked.before).toEqual(mascotPaths("bot-release"));
+  });
+});
+
+describe("<BotChannelSidebar /> when the bot list fails with nothing loaded", () => {
+  it("says so with Retry in place of the sections, offers no New bot, and asks the list again on Retry", async () => {
+    const user = userEvent.setup();
+    mocks.state.botListPending = true;
+    mocks.state.botListFailed = true;
+    mount("bot-release", null);
+
+    const failure = screen.getByTestId("bot-channel-sidebar-error");
+    expect(failure.textContent).toBe("Couldn't load your bots.Retry");
+    expect(screen.queryByText("New bot")).toBeNull();
+    expect(screen.queryByRole("button", { name: /new bot/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse Acme" })).toBeNull();
+
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.refetchBotList).toHaveBeenCalledTimes(1);
   });
 });

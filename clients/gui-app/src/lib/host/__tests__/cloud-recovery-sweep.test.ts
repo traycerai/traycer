@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MutationObserver } from "@tanstack/react-query";
+import { MutationObserver, type QueryClient } from "@tanstack/react-query";
 import { cloudQueryKeys } from "@/lib/query-keys/cloud-query-keys";
 import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 import {
@@ -10,6 +10,7 @@ import {
   heldFailure,
   rejects,
   resolves,
+  transportFailure,
 } from "@/lib/host/test-support/cloud-failure-reads";
 
 import {
@@ -116,13 +117,16 @@ describe("sweepTransientCloudFailures", () => {
     expect(theirs.state.status).toBe("error");
   });
 
-  it.each(["FORBIDDEN", "RPC_ERROR"] as const)(
-    "never re-asks a read that failed with %s",
-    async (code) => {
+  it.each([
+    { code: "FORBIDDEN", method: "bot.list" },
+    { code: "RPC_ERROR", method: "epic.list" },
+  ] as const)(
+    "never re-asks a $method read that failed with $code",
+    async ({ code, method }) => {
       const client = freshClient();
       const permanent = await failedRead(client, {
         hostId: HOST,
-        method: "bot.list",
+        method,
         name: "p",
         code,
       });
@@ -685,4 +689,94 @@ describe("sweepTransientCloudFailures", () => {
       });
     },
   );
+});
+
+describe("sweepTransientCloudFailures on a bot read that failed with a server error", () => {
+  const serverError = (): Error => hostFailure("RPC_ERROR", "bot.list");
+
+  /** A `bot.list` read the host answered with `RPC_ERROR`. */
+  function serverFailedRead(client: QueryClient): Promise<ScriptedRead> {
+    return failedRead(client, {
+      hostId: HOST,
+      method: "bot.list",
+      name: "s",
+      code: "RPC_ERROR",
+    });
+  }
+
+  it("re-asks it once on a ring", async () => {
+    const client = freshClient();
+    const read = await serverFailedRead(client);
+    read.answer = resolves("recovered");
+
+    await sweepTransientCloudFailures(client, HOST);
+
+    expect(read.calls).toBe(2);
+    expect(read.state.data).toBe("recovered");
+  });
+
+  it("re-asks it no more than once when the re-ask fails the same way, however many rings follow", async () => {
+    const client = freshClient();
+    const read = await serverFailedRead(client);
+    read.answer = rejects(serverError());
+
+    await sweepTransientCloudFailures(client, HOST);
+    await sweepTransientCloudFailures(client, HOST);
+    await sweepTransientCloudFailures(client, HOST);
+
+    expect(read.calls).toBe(2);
+    expect(read.state.status).toBe("error");
+  });
+
+  it("re-asks it once more on the next ring after an attempt from elsewhere failed the same way", async () => {
+    const client = freshClient();
+    const read = await serverFailedRead(client);
+    read.answer = rejects(serverError());
+    await sweepTransientCloudFailures(client, HOST);
+    await client.refetchQueries({ queryKey: read.queryKey, exact: true });
+    expect(read.calls).toBe(3);
+    read.answer = resolves("recovered");
+
+    await sweepTransientCloudFailures(client, HOST);
+
+    expect(read.calls).toBe(4);
+    expect(read.state.data).toBe("recovered");
+  });
+
+  it("owes the ring it met an attempt from elsewhere in flight, re-asking once when that attempt fails the same way", async () => {
+    const client = freshClient();
+    const read = await serverFailedRead(client);
+    const held = heldFailure(serverError());
+    read.answer = held.answer;
+    const retry = client.refetchQueries({
+      queryKey: read.queryKey,
+      exact: true,
+    });
+    await waitUntil(() => expect(read.calls).toBe(2));
+    const sweeping = sweepTransientCloudFailures(client, HOST);
+
+    read.answer = resolves("recovered");
+    held.release();
+    await Promise.all([retry, sweeping]);
+    await waitUntil(() => expect(read.calls).toBe(3));
+    await quiet(client);
+
+    expect(read.calls).toBe(3);
+    expect(read.state.data).toBe("recovered");
+  });
+
+  it("never re-asks one that failed with a transport failure", async () => {
+    const client = freshClient();
+    const read = new ScriptedRead(
+      client,
+      hostReadKey(HOST, "bot.list", "t"),
+      rejects(transportFailure("bot.list")),
+    );
+    await waitUntil(() => expect(read.state.status).toBe("error"));
+    read.answer = resolves("ok");
+
+    await sweepTransientCloudFailures(client, HOST);
+
+    expect(read.calls).toBe(1);
+  });
 });

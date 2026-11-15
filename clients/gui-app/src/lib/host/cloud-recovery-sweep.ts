@@ -1,9 +1,14 @@
 import type { Query, QueryClient } from "@tanstack/react-query";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { queryKeys } from "@/lib/query-keys";
 import {
   attemptInFlightHasNotFailed,
   isActiveRefetchExempt,
 } from "@/lib/host/query-invalidator";
+import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
 import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 
 /**
@@ -21,11 +26,50 @@ export function isTransientlyFailedRead(query: Query): boolean {
 }
 
 /**
- * How the attempt a ring met ended, read from that attempt's own settlement:
- * still in flight, failed transiently (the ring is spent), or ended any other
- * way (the ring is dropped).
+ * Whether `error`, an answer of a bot read (`bot.*`), is one a ring re-asks
+ * once although it is not a transient cloud failure: a host error such as a
+ * cloud server error (`RPC_ERROR`), which a ring, the cloud answering again,
+ * may have mended. Never a lasting refusal, which answers the same however
+ * often it is asked; never a transport failure, which the host's
+ * availability sweep re-asks; never a bot stream's slot.
  */
-type AttemptOutcome = "in-flight" | "failed-transiently" | "ended-otherwise";
+function isRingMendableBotFailure(query: Query, error: unknown): boolean {
+  const method = query.queryKey[2];
+  return (
+    typeof method === "string" &&
+    method.startsWith("bot.") &&
+    error instanceof HostRpcError &&
+    !(error instanceof HostTransportFailureError) &&
+    !isTransientCloudFailure(error) &&
+    lastingHostRefusal(error) === null
+  );
+}
+
+/**
+ * A read a ring re-asks: one whose last answer was a transient cloud failure,
+ * or a bot read whose last answer was a ring-mendable failure (see
+ * {@link isRingMendableBotFailure}) from an attempt no ring's re-ask started.
+ *
+ * That last part bounds a bot read's server errors to one re-ask per failure
+ * episode, by edges alone: a ring re-asks it once, and if that re-ask fails
+ * the same way, later rings leave it until an attempt from elsewhere (Retry,
+ * a mount, the availability sweep) begins a new one.
+ */
+function isRingReAskable(state: SweepState, query: Query): boolean {
+  if (isTransientlyFailedRead(query)) return true;
+  return (
+    query.state.status === "error" &&
+    isRingMendableBotFailure(query, query.state.error) &&
+    state.ringAttempts.get(query) !== query.promise
+  );
+}
+
+/**
+ * How the attempt a ring met ended, read from that attempt's own settlement:
+ * still in flight, failed in a way the ring re-asks (the ring is spent), or
+ * ended any other way (the ring is dropped).
+ */
+type AttemptOutcome = "in-flight" | "failed-re-askably" | "ended-otherwise";
 
 /** A ring remembered for one attempt of one read. */
 interface OwedRing {
@@ -60,14 +104,20 @@ interface Claim {
  * 1. every take names the attempt, and a claim is one re-ask's, with its own
  *    attempt;
  * 2. a ring is settled only by its own attempt's outcome;
- * 3. when that attempt has failed transiently, the ring is spent only if the
- *    attempt is still the read's latest; an attempt begun after the ring
- *    already answers it, so the ring is dropped;
+ * 3. when that attempt has failed in a way a ring re-asks, the ring is spent
+ *    only if the attempt is still the read's latest; an attempt begun after
+ *    the ring already answers it, so the ring is dropped;
  * 4. a ring never cancels or restarts an attempt begun after it.
  */
 interface SweepState {
   /** The reads a sweep has chosen and not finished re-asking. */
   readonly claimed: Map<Query, Claim>;
+  /**
+   * The latest attempt a sweep's re-ask started on each read. A bot read
+   * whose latest attempt is that one, and failed with a ring-mendable error,
+   * was already re-asked by a ring in this episode.
+   */
+  readonly ringAttempts: WeakMap<Query, Promise<unknown>>;
   /**
    * The ring owed to each read, for one attempt. It is dropped if that
    * attempt succeeds, fails otherwise, or is cancelled: by a reset, a refetch
@@ -82,14 +132,20 @@ const sweeps = new WeakMap<QueryClient, SweepState>();
 function sweepStateOf(client: QueryClient): SweepState {
   const existing = sweeps.get(client);
   if (existing !== undefined) return existing;
-  const created: SweepState = { claimed: new Map(), owed: new Map() };
+  const created: SweepState = {
+    claimed: new Map(),
+    ringAttempts: new WeakMap(),
+    owed: new Map(),
+  };
   sweeps.set(client, created);
   return created;
 }
 
 /**
  * Asks `hostId` again for every read it answered with a transient cloud
- * failure, once. Run when that host's doorbell rings.
+ * failure, and every bot read a ring may have mended (`isRingReAskable`),
+ * once. Run when that host's doorbell rings, the ring the host sends as the
+ * doorbell opens included.
  *
  * Bounded by the cache, not by time: one ring re-asks each such read at most
  * once. Only reads with an observer refetch; one with none is marked stale
@@ -130,7 +186,7 @@ export async function sweepTransientCloudFailures(
       // Not held, or held by a re-ask a newer attempt has replaced, which
       // stops at that attempt without acting.
       if (
-        isTransientlyFailedRead(query) &&
+        isRingReAskable(state, query) &&
         !attemptInFlightHasNotFailed(query)
       ) {
         chosen.push(query);
@@ -140,7 +196,7 @@ export async function sweepTransientCloudFailures(
     } else if (claim.attempt !== undefined) {
       if (attemptInFlight(query) !== undefined) {
         oweRing(client, state, query);
-      } else if (isTransientlyFailedRead(query)) {
+      } else if (isRingReAskable(state, query)) {
         claim.rungAfterEnd = true;
       }
     }
@@ -162,7 +218,8 @@ export async function sweepTransientCloudFailures(
 /**
  * Re-asks one claimed read, and once more if a ring met that ask in flight,
  * the attempt itself failed transiently and nothing has asked since; then
- * releases it.
+ * releases it. A bot read's ring-mendable failure of its own ask is not asked
+ * again: the ask was the episode's one.
  *
  * It works by key, so before each step it checks that its read is still the
  * cache's entry for that key: once the read is removed, a cancel or an
@@ -191,6 +248,9 @@ async function reAsk(
       if (query.promise !== claim.after) return;
       const asked = client.invalidateQueries(filters);
       claim.attempt = attemptInFlight(query);
+      if (claim.attempt !== undefined) {
+        state.ringAttempts.set(query, claim.attempt);
+      }
       await asked;
       if (!isCurrentEntry(client, query)) return;
       // An attempt begun since answers the rings, and is not cancelled for
@@ -235,7 +295,7 @@ function attemptInFlight(query: Query): Promise<unknown> | undefined {
 
 /**
  * Takes the ring owed to `attempt` of `query`, if any; never a ring owed to
- * another attempt. True when that attempt failed transiently.
+ * another attempt. True when that attempt failed in a way the ring re-asks.
  */
 function takeOwedRing(
   state: SweepState,
@@ -245,7 +305,7 @@ function takeOwedRing(
   const owed = state.owed.get(query);
   if (owed === undefined || owed.attempt !== attempt) return false;
   state.owed.delete(query);
-  return owed.outcome === "failed-transiently";
+  return owed.outcome === "failed-re-askably";
 }
 
 /**
@@ -261,7 +321,9 @@ function oweRing(client: QueryClient, state: SweepState, query: Query): void {
   const ring: OwedRing = { attempt, outcome: "in-flight" };
   state.owed.set(query, ring);
   // A cancel rejects the attempt with TanStack's `CancelledError`, which ends
-  // it otherwise: the canceller decided not to ask.
+  // it otherwise: the canceller decided not to ask. A bot read's
+  // ring-mendable failure is re-asked only when no ring's re-ask started the
+  // attempt; that re-ask was this episode's one.
   const settle = (outcome: AttemptOutcome): void => {
     ring.outcome = outcome;
     settleOwedRing(client, state, query, ring);
@@ -270,8 +332,10 @@ function oweRing(client: QueryClient, state: SweepState, query: Query): void {
     () => settle("ended-otherwise"),
     (error: unknown) =>
       settle(
-        isTransientCloudFailure(error)
-          ? "failed-transiently"
+        isTransientCloudFailure(error) ||
+          (isRingMendableBotFailure(query, error) &&
+            state.ringAttempts.get(query) !== attempt)
+          ? "failed-re-askably"
           : "ended-otherwise",
       ),
   );
@@ -293,8 +357,8 @@ function settleOwedRing(
   // A second re-ask started here would overlap the one that owns the ring,
   // and that one's sweep would resolve before this ask answers.
   if (state.claimed.get(query)?.attempt === ring.attempt) return;
-  const failedTransiently = takeOwedRing(state, query, ring.attempt);
-  if (!failedTransiently || query.promise !== ring.attempt) return;
+  const reAskable = takeOwedRing(state, query, ring.attempt);
+  if (!reAskable || query.promise !== ring.attempt) return;
   const claim: Claim = newClaim();
   state.claimed.set(query, claim);
   void reAsk(client, state, query, claim);

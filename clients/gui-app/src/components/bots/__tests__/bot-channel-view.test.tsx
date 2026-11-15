@@ -41,6 +41,7 @@ import {
   type Mock,
 } from "vitest";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostFailure } from "@/lib/host/test-support/cloud-failure-reads";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
@@ -132,8 +133,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
-      // Whether the read of the bot's conversations failed.
-      conversationsError: false,
+      // What the read of the bot's conversations failed with; `null` = it did not.
+      conversationsFailure: null as HostRpcError | null,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
       // The person's follows of the threads; `undefined` = not read.
@@ -183,7 +184,10 @@ vi.mock(
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
-    isError: mocks.state.conversationsError,
+    isError: mocks.state.conversationsFailure !== null,
+    error: mocks.state.conversationsFailure,
+    dataUpdatedAt: 1_700_000_000_000,
+    isFetching: false,
     refetch: vi.fn(),
   }),
 }));
@@ -202,6 +206,9 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
           }
         : undefined,
       isError: mocks.state.threadListError,
+      error: null,
+      dataUpdatedAt: 1_700_000_000_000,
+      isFetching: false,
       refetch: mocks.refetchThreads,
     };
   },
@@ -673,7 +680,7 @@ beforeEach(() => {
   mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
-  mocks.state.conversationsError = false;
+  mocks.state.conversationsFailure = null;
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.state.realComposer = false;
@@ -1287,7 +1294,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
     expect(box.getAttribute("data-sendable")).toBe("false");
     await user.click(
-      within(screen.getByTestId("bot-thread-error")).getByRole("button", {
+      within(screen.getByTestId("bot-thread-stale")).getByRole("button", {
         name: "Retry",
       }),
     );
@@ -1297,7 +1304,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     mocks.state.threadAnchors = saidBy("host-capable", 4, ["answer"]);
     reopen(ANSWER_THREAD);
 
-    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-stale")).toBeNull();
     expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
     expect(box.getAttribute("data-sendable")).toBe("true");
   });
@@ -1436,7 +1443,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
         .getAttribute("data-sendable"),
     ).toBe("false");
     await user.click(
-      within(within(panel).getByTestId("bot-thread-error")).getByRole(
+      within(within(panel).getByTestId("bot-thread-stale")).getByRole(
         "button",
         { name: "Retry" },
       ),
@@ -1446,7 +1453,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     mocks.state.threadListError = false;
     mocks.state.threadAnchors = saidBy("host-other", 4, ["answer"]);
     reopen(ANSWER_THREAD);
-    expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
+    expect(within(panel).queryByTestId("bot-thread-stale")).toBeNull();
     expect(
       within(panel)
         .getByTestId("stub-bot-thread-composer")
@@ -2336,11 +2343,14 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
         .getAttribute("data-land-on");
     expect(threadLanding()).toBe("reply-a9");
 
-    mocks.state.conversationsError = true;
+    mocks.state.conversationsFailure = hostFailure(
+      "FORBIDDEN",
+      "bot.conversation.list",
+    );
     view.rerender();
     expect(screen.getByTestId("bot-channel-error")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    mocks.state.conversationsError = false;
+    mocks.state.conversationsFailure = null;
     view.rerender();
 
     expect(threadLanding()).toBe("none");

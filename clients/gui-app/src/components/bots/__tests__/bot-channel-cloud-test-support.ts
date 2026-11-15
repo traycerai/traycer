@@ -7,6 +7,10 @@ import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mo
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
+  BotReadCursorAdvanceRequest,
+  BotReadCursorReadResponse,
+} from "@traycer/protocol/host/bot/schemas";
+import type {
   BotConversationListResponse,
   BotThreadListResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -16,6 +20,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import {
   BOT_ID,
   CHANNEL_ID,
+  THREAD_ID,
   postThread,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 
@@ -29,7 +34,8 @@ import {
 /** The host the tab's client serves; every read of the view is keyed under it. */
 export const TAB_HOST_ID = mockRemoteHostEntry.hostId;
 
-export const CHANNEL_FAILURE_COPY = "Couldn't load this bot's channel.";
+/** What the channel says in place of its rows while the host cannot reach the cloud and nothing is loaded. */
+export const CHANNEL_RECONNECTING_COPY = "Reconnecting…";
 
 export const CHANNEL_LIST: BotConversationListResponse = {
   conversations: [
@@ -51,12 +57,25 @@ const THREAD_LIST: BotThreadListResponse = {
   total: 1,
 };
 
+/** Every conversation of the bot has a newest row the person has not read. */
+const UNREAD_CURSORS: BotReadCursorReadResponse = {
+  cursors: {},
+  latest: {
+    [CHANNEL_ID]: { messageId: "channel-newest", seq: 4 },
+    [THREAD_ID]: { messageId: "thread-newest", seq: 2 },
+  },
+};
+
 /** What the host answers each read with next; a case swaps these between asks. */
 export interface HostScript {
   conversationList: () => Promise<BotConversationListResponse>;
   threadList: () => Promise<BotThreadListResponse>;
   conversationListCalls: number;
   threadListCalls: number;
+  /** What the host's `bot.readCursor.read` answers next. */
+  readCursor: () => BotReadCursorReadResponse;
+  /** The `bot.readCursor.advance` asks the host took, in order. */
+  advances: BotReadCursorAdvanceRequest[];
 }
 
 export function freshScript(): HostScript {
@@ -65,6 +84,8 @@ export function freshScript(): HostScript {
     threadList: () => Promise.resolve(THREAD_LIST),
     conversationListCalls: 0,
     threadListCalls: 0,
+    readCursor: () => UNREAD_CURSORS,
+    advances: [],
   };
 }
 
@@ -85,6 +106,11 @@ export function hostClientAnswering(
       "bot.thread.list": () => {
         script.threadListCalls += 1;
         return script.threadList();
+      },
+      "bot.readCursor.read": () => script.readCursor(),
+      "bot.readCursor.advance": (params) => {
+        script.advances.push(params);
+        return { cursor: { messageId: params.messageId, seq: params.seq } };
       },
     },
   });

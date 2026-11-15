@@ -18,6 +18,7 @@ import {
 } from "@/lib/logger";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
@@ -87,8 +88,11 @@ export function createAppQueryClient(): QueryClient {
         // The History fetcher's two admission refusals are terminal for the
         // same reason as each other: a retry would start another full
         // request-context wait, or re-ask a store that will refuse the
-        // withdrawn verdict again.
+        // withdrawn verdict again. A lasting refusal (signed out, no access, a
+        // host that cannot serve the call) answers the same at once, so it
+        // surfaces on its first answer too.
         retry: (failureCount, error) =>
+          lastingHostRefusal(error) === null &&
           !(error instanceof RetryableTransportError) &&
           !(error instanceof CloudEpicTasksRequestContextTimeoutError) &&
           !(error instanceof CloudEpicTasksVerdictWithdrawnError) &&

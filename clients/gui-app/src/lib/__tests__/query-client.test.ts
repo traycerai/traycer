@@ -1,6 +1,7 @@
 import { MutationObserver, onlineManager } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RpcErrorCode } from "@traycer/protocol/framework";
 import { createAppQueryClient } from "@/lib/query-client";
 
 // Regression coverage for the wake-from-sleep freeze: Chromium can report
@@ -177,5 +178,45 @@ describe("createAppQueryClient query key hashing", () => {
     });
     expect(client.getQueryData(["svc", { instance: 1 }])).toBeUndefined();
     expect(client.getQueryData(["svc", { $instance: 1 }])).toBeUndefined();
+  });
+});
+
+// A lasting refusal answers the same at once, so the app's single retry would
+// only make the person wait for the same answer twice.
+describe("createAppQueryClient retry of a host read", () => {
+  /** How many requests a read that always fails with `code` makes. */
+  async function requestsFor(code: RpcErrorCode): Promise<number> {
+    const client = createAppQueryClient();
+    let requests = 0;
+    await client
+      .fetchQuery({
+        queryKey: ["retry-policy", code],
+        queryFn: () => {
+          requests += 1;
+          return Promise.reject(
+            new HostRpcError({
+              code,
+              message: `${code} for the test`,
+              requestId: "req-1",
+              method: "bot.list",
+              fatalDetails: null,
+            }),
+          );
+        },
+        retryDelay: 0,
+      })
+      .catch(() => undefined);
+    return requests;
+  }
+
+  it.each(["FORBIDDEN", "UNAUTHORIZED", "E_HOST_UNSUPPORTED"] as const)(
+    "asks once when the host answers %s",
+    async (code) => {
+      expect(await requestsFor(code)).toBe(1);
+    },
+  );
+
+  it("still asks a second time when the host answers RPC_ERROR", async () => {
+    expect(await requestsFor("RPC_ERROR")).toBe(2);
   });
 });

@@ -1,4 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   ChevronRight,
   EllipsisVertical,
@@ -43,6 +45,7 @@ import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-s
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -204,38 +207,40 @@ export function BotChannelSidebar(props: {
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
-      <SortableColumnList
-        ids={model.groups.map((group) => group.environmentId)}
-        onReorder={(order) => setSectionOrder(order, answeredModel)}
-        renderLifted={(environmentId) => (
-          <SectionLiftedHeader
-            label={
-              model.groups.find(
-                (group) => group.environmentId === environmentId,
-              )?.label ?? environmentId
-            }
-          />
-        )}
-      >
-        {model.groups.map((group) => (
-          <SidebarSection
-            key={group.environmentId}
-            answeredModel={answeredModel}
-            group={group}
-            activeBotId={currentBotId}
-            unreadByBotId={unreadByBotId}
-            canSetMainBot={canSetMainBot}
-            setup={
-              teamSetups.setups.find(
-                (setup) => setup.environmentId === group.environmentId,
-              ) ?? null
-            }
-            hostId={hostId}
-            onOpenChannel={openChannel}
-            onNewBot={setNewBot}
-          />
-        ))}
-      </SortableColumnList>
+      <UnlessBotListFailed bots={bots}>
+        <SortableColumnList
+          ids={model.groups.map((group) => group.environmentId)}
+          onReorder={(order) => setSectionOrder(order, answeredModel)}
+          renderLifted={(environmentId) => (
+            <SectionLiftedHeader
+              label={
+                model.groups.find(
+                  (group) => group.environmentId === environmentId,
+                )?.label ?? environmentId
+              }
+            />
+          )}
+        >
+          {model.groups.map((group) => (
+            <SidebarSection
+              key={group.environmentId}
+              answeredModel={answeredModel}
+              group={group}
+              activeBotId={currentBotId}
+              unreadByBotId={unreadByBotId}
+              canSetMainBot={canSetMainBot}
+              setup={
+                teamSetups.setups.find(
+                  (setup) => setup.environmentId === group.environmentId,
+                ) ?? null
+              }
+              hostId={hostId}
+              onOpenChannel={openChannel}
+              onNewBot={setNewBot}
+            />
+          ))}
+        </SortableColumnList>
+      </UnlessBotListFailed>
       {noTeam ? <CreateTeamRow /> : null}
       <NewBotDialog
         target={newBot}
@@ -244,6 +249,26 @@ export function BotChannelSidebar(props: {
         onClose={() => setNewBot(null)}
       />
     </nav>
+  );
+}
+
+/**
+ * The sections, or the bot list's failure with Retry while it has loaded
+ * nothing: with no bots, the sections would read as having none, and offer
+ * to make one.
+ */
+function UnlessBotListFailed(props: {
+  readonly bots: UseQueryResult<unknown, HostRpcError>;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { bots } = props;
+  if (!bots.isError || bots.data !== undefined) return props.children;
+  return (
+    <BotReadFailure
+      message="Couldn't load your bots."
+      onRetry={() => void bots.refetch()}
+      testId="bot-channel-sidebar-error"
+    />
   );
 }
 

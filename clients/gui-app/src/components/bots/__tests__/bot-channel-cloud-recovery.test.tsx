@@ -2,7 +2,7 @@
  * A bot's channel after the host's cloud reads failed: the REAL
  * `BotChannelView` over the real `bot.conversation.list` read, and the real
  * cloud-recovery doorbell watching the same cache. The host refuses the read
- * with `E_CLOUD_REQUEST_REFUSED`, the channel says it could not load, the
+ * with `E_CLOUD_REQUEST_REFUSED`, the channel says it is reconnecting, the
  * host's doorbell rings `recovered`, and the channel loads without Retry.
  */
 import {
@@ -22,25 +22,16 @@ import {
   cleanup,
   act,
   fireEvent,
-  render,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  notifyManager,
-  QueryClientProvider,
-  type QueryClient,
-} from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { THREAD_OPEN } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
-  BOT_ID,
-  CHANNEL_ID,
-  THREAD_OPEN,
-} from "@/components/bots/__tests__/bot-turn-test-support";
-import {
-  CHANNEL_FAILURE_COPY,
+  CHANNEL_RECONNECTING_COPY,
   CHANNEL_LIST,
   TAB_HOST_ID,
   appClientWithoutRetries,
@@ -48,11 +39,11 @@ import {
   hostClientAnswering,
   type HostScript,
 } from "@/components/bots/__tests__/bot-channel-cloud-test-support";
-import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
-import { BotChannelView } from "@/components/bots/bot-channel-view";
-import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  noticeText,
+  refetchRead,
+  renderRealChannel,
+} from "@/components/bots/__tests__/bot-channel-cloud-harness";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { createAppQueryClient } from "@/lib/query-client";
 import {
@@ -60,7 +51,6 @@ import {
   hostFailure,
 } from "@/lib/host/test-support/cloud-failure-reads";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
 
 const mocks = vi.hoisted(() => ({
@@ -134,8 +124,6 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
 let script: HostScript;
 let queryClient: QueryClient;
 
-const resolveMember: BotMemberResolver = () => null;
-
 /** The channel under `queryClient`, with `extra` rendered beside it (a doorbell, say). */
 function mountRealChannel(args: {
   readonly queryClient: QueryClient;
@@ -143,44 +131,7 @@ function mountRealChannel(args: {
   readonly extra: ReactElement | null;
 }): void {
   mocks.client = hostClientAnswering(script, args.queryClient);
-  render(
-    <QueryClientProvider client={args.queryClient}>
-      {args.extra}
-      <BotTestRunnerHost>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              tiles={null}
-              botId={BOT_ID}
-              hostId={TAB_HOST_ID}
-              boundHostId={TAB_HOST_ID}
-              boundHostEpoch={1}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={CHANNEL_ID}
-              trunkChatId="trunk-chat"
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={null}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              environmentBots={null}
-              openExchange={null}
-              exchangeRail={{ open: () => undefined, close: () => undefined }}
-              resolveMember={resolveMember}
-              tasks={[]}
-              surfaceActions={null}
-              openThread={args.openThread}
-              onOpenThread={vi.fn()}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
-      </BotTestRunnerHost>
-    </QueryClientProvider>,
-  );
+  renderRealChannel(args);
 }
 
 function mountWithDoorbell(): void {
@@ -232,7 +183,7 @@ describe("<BotChannelView /> after the host's cloud read failed", () => {
       );
     mountWithDoorbell();
     const panel = await screen.findByTestId("bot-channel-error");
-    expect(panel.textContent).toContain(CHANNEL_FAILURE_COPY);
+    expect(panel.textContent).toContain(CHANNEL_RECONNECTING_COPY);
     await waitFor(() =>
       expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
     );
@@ -262,22 +213,6 @@ function mountPlain(openThread: BotOpenThread | null): void {
   mountRealChannel({ queryClient, openThread, extra: null });
 }
 
-/**
- * Asks the read again and waits until what the answer changed is on screen:
- * TanStack hands observers their result through its own scheduler, so a check
- * made as soon as the refetch settles would look at the frame before it.
- */
-async function refetchRead(
-  method: "bot.conversation.list" | "bot.thread.list",
-): Promise<void> {
-  await act(async () => {
-    await queryClient.refetchQueries({
-      queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, method),
-    });
-    await new Promise<void>((resolve) => notifyManager.schedule(resolve));
-  });
-}
-
 describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
   it("keeps the channel when the refetch is refused by the host's egress budget", async () => {
     mountPlain(null);
@@ -287,7 +222,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
         hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.conversation.list"),
       );
 
-    await refetchRead("bot.conversation.list");
+    await refetchRead(queryClient, "bot.conversation.list");
 
     expect(script.conversationListCalls).toBe(2);
     expect(screen.getByTestId("bot-channel")).toBeDefined();
@@ -302,23 +237,23 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
         hostFailure("E_CLOUD_UNREACHABLE", "bot.conversation.list"),
       );
 
-    await refetchRead("bot.conversation.list");
+    await refetchRead(queryClient, "bot.conversation.list");
 
     expect(script.conversationListCalls).toBe(2);
     expect(screen.queryByTestId("bot-channel-error")).toBeNull();
   });
 
-  it("still says the channel could not load when the refetch fails permanently", async () => {
+  it("says the person no longer has access when the refetch is refused as forbidden", async () => {
     mountPlain(null);
     await screen.findByTestId("bot-channel");
     script.conversationList = () =>
       Promise.reject(hostFailure("FORBIDDEN", "bot.conversation.list"));
 
-    await refetchRead("bot.conversation.list");
+    await refetchRead(queryClient, "bot.conversation.list");
 
-    expect(
-      (await screen.findByTestId("bot-channel-error")).textContent,
-    ).toContain(CHANNEL_FAILURE_COPY);
+    expect((await screen.findByTestId("bot-channel-error")).textContent).toBe(
+      "You don't have access to this channel anymore.Check again",
+    );
   });
 
   it("keeps an open thread when the thread list refetch is refused", async () => {
@@ -328,7 +263,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
     script.threadList = () =>
       Promise.reject(hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"));
 
-    await refetchRead("bot.thread.list");
+    await refetchRead(queryClient, "bot.thread.list");
 
     expect(script.threadListCalls).toBe(2);
     expect(screen.queryByTestId("bot-thread-error")).toBeNull();
@@ -341,7 +276,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
     script.threadList = () =>
       Promise.reject(hostFailure("FORBIDDEN", "bot.thread.list"));
 
-    await refetchRead("bot.thread.list");
+    await refetchRead(queryClient, "bot.thread.list");
 
     expect(await screen.findByTestId("bot-thread-error")).toBeDefined();
   });
@@ -349,7 +284,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
 
 describe("<BotChannelView /> when Retry is pressed while the host still refuses the read", () => {
   /** What the channel panel says, as one string: its message and its Retry. */
-  const PANEL_TEXT = `${CHANNEL_FAILURE_COPY}Retry`;
+  const PANEL_TEXT = `${CHANNEL_RECONNECTING_COPY}Retry`;
 
   it("shows the loading state while the press is answered, then the same panel, and loads by itself when the host rings", async () => {
     script.conversationList = () =>
@@ -358,7 +293,7 @@ describe("<BotChannelView /> when Retry is pressed while the host still refuses 
       );
     mountWithDoorbellAndAppRetries();
     const panel = await screen.findByTestId("bot-channel-error");
-    expect(panel.textContent).toBe(PANEL_TEXT);
+    expect(noticeText(panel)).toBe(PANEL_TEXT);
     await waitFor(() =>
       expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
     );
@@ -386,7 +321,7 @@ describe("<BotChannelView /> when Retry is pressed while the host still refuses 
 
     // The host refused the press and its retry: the same panel, nothing added.
     const again = await screen.findByTestId("bot-channel-error");
-    expect(again.textContent).toBe(PANEL_TEXT);
+    expect(noticeText(again)).toBe(PANEL_TEXT);
     expect(script.conversationListCalls).toBe(asksBeforeRetry + 2);
     expect(screen.queryByTestId("bot-channel-loading")).toBeNull();
     expect(
@@ -458,5 +393,53 @@ describe("<BotChannelView /> when the host rings while a read's attempt is still
 
     expect(await screen.findByTestId("bot-channel")).toBeDefined();
     expect(script.conversationListCalls).toBe(before + 3);
+  });
+});
+
+describe("<BotChannelView /> when the host answers the channel's read with a server error", () => {
+  const serverError = (): Error =>
+    hostFailure("RPC_ERROR", "bot.conversation.list");
+
+  /** The asks are over: nothing is in flight, so a ring's re-ask would have shown. */
+  const quiet = (): Promise<void> =>
+    waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+  it("asks again once when the host rings, leaves it at the next ring, and asks once more when Retry failed the same way", async () => {
+    // The doorbell is held for a host while one of its reads is stranded by
+    // the cloud; the open thread's list is, and the channel's own read is not.
+    script.conversationList = () => Promise.reject(serverError());
+    script.threadList = () =>
+      Promise.reject(hostFailure("E_CLOUD_UNREACHABLE", "bot.thread.list"));
+    queryClient = appClientWithoutRetries();
+    mountRealChannel({
+      queryClient,
+      openThread: THREAD_OPEN,
+      extra: <CloudRecoveryDoorbellMount />,
+    });
+    const error = await screen.findByTestId("bot-channel-error");
+    expect(error.getAttribute("data-failure")).toBe("server");
+    await waitFor(() =>
+      expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
+    );
+    expect(script.conversationListCalls).toBe(1);
+
+    ringDoorbell(TAB_HOST_ID);
+    await waitFor(() => expect(script.conversationListCalls).toBe(2));
+    await quiet();
+    ringDoorbell(TAB_HOST_ID);
+    await quiet();
+    expect(script.conversationListCalls).toBe(2);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(script.conversationListCalls).toBe(3));
+    await screen.findByTestId("bot-channel-error");
+    await quiet();
+    ringDoorbell(TAB_HOST_ID);
+    await waitFor(() => expect(script.conversationListCalls).toBe(4));
+    await quiet();
+    ringDoorbell(TAB_HOST_ID);
+    await quiet();
+
+    expect(script.conversationListCalls).toBe(4);
   });
 });
