@@ -33,11 +33,13 @@ import type { EnvironmentCloud } from "@traycer-clients/shared/environment/envir
 import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
-  sendFollowedSave,
-  type PendingSettingsSave,
   useSettingsSave,
   type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
+import {
+  sendFollowedSave,
+  type PendingSettingsSave,
+} from "@/lib/environment/settings-save-follow";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -109,62 +111,79 @@ export function useRpcShellConfigController(props: {
   });
 
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
+
+  const cloudSource = useEnvironmentCloud();
   const setMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.set",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.shell.set", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.set", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.shellSet(),
     errorMessage: "Couldn't update the shell configuration",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const resetMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.reset",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.shell.reset", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.reset", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.shellReset(),
     errorMessage: "Couldn't use the system default shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const addMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.add",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.shell.add", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.add", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.shellAdd(),
     errorMessage: "Couldn't add that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const removeMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.remove",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.shell.remove", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.remove", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.shellRemove(),
     errorMessage: "Couldn't remove that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const revertMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.revertArgs",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.shell.revertArgs", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.revertArgs", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.shellRevertArgs(),
     errorMessage: "Couldn't restore the default flags",
     invalidateMethods: ["config.shell.get"],
@@ -172,24 +191,30 @@ export function useRpcShellConfigController(props: {
   const queryClient = useQueryClient();
   const envSetMutation = useHostScopedMutationForClient(client, {
     method: "config.env.set",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.env.set", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.env.set", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
     invalidateMethods: ["config.env.list"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: "config.env.delete", request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.env.delete", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the variable",
     invalidateMethods: ["config.env.list"],
@@ -201,7 +226,6 @@ export function useRpcShellConfigController(props: {
   // So are the save preparation and the sign-in it is pressed on: the
   // function runs with a newer render's options, `onMutate` with the render
   // the person acted in, as they act (see `useHostMutation`).
-  const cloudSource = useEnvironmentCloud();
   const [pressedIn] = useState(
     () =>
       new WeakMap<

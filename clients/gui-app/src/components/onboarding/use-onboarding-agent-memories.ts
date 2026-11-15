@@ -22,6 +22,7 @@ import {
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import {
   useHostMethodSchemaVersion,
@@ -100,6 +101,7 @@ export function useOnboardingAgentMemories(input: {
 }): OnboardingAgentMemories {
   const client = useOptionalHostClient();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   // The host the tour's binding addresses, read off the same client every
   // read and write below goes through.
   const readiness = useReactiveHostReadiness(client);
@@ -170,12 +172,15 @@ export function useOnboardingAgentMemories(input: {
   });
   const setTraycerMemories = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
-    followSettingsSave: (request, sentOn, pressedOn) =>
-      prepareSave(
-        { method: AGENT_MEMORIES_SET, request },
-        sentOn.getActiveHostId(),
-        pressedOn,
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_MEMORIES_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.
     errorMessage: null,
