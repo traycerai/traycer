@@ -38,10 +38,6 @@ import type {
 import { useTileDoorCover } from "@/hooks/host/use-tile-door-cover";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import {
-  claimedComputerDetail,
-  claimedComputerTitle,
-} from "@/hooks/teams/claimed-computer-notice-model";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { authQueryKeys } from "@/lib/query-keys";
 import { setMobileApp } from "@/lib/mobile-app";
@@ -525,7 +521,16 @@ describe("claimed-computer narration consumers", () => {
 
   it("keeps today's window cover and no tile cover until the pending read answers", async () => {
     const answer = deferredClaimRead();
+    const bothClaims = (): ClaimedComputersResult =>
+      claims(
+        claim(WINDOW_HOST_ID, "Priya", "2026-11-10T00:00:00.000Z"),
+        claim(TILE_HOST_ID, "Rao", "2026-11-10T00:00:00.000Z"),
+      );
     queueClaimPlan(ENVIRONMENT_ID, answer);
+    // Two states are on one team's entry. The tile's state asked while the
+    // window's read was in flight, so it waits for that read and then reads
+    // again (a read begun before its claim may predate it).
+    queueClaimPlan(ENVIRONMENT_ID, bothClaims());
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
     ]);
@@ -543,16 +548,13 @@ describe("claimed-computer narration consumers", () => {
     ).toBeNull();
 
     act(() => {
-      answer.resolve(
-        claims(
-          claim(WINDOW_HOST_ID, "Priya", "2026-11-10T00:00:00.000Z"),
-          claim(TILE_HOST_ID, "Rao", "2026-11-10T00:00:00.000Z"),
-        ),
-      );
+      answer.resolve(bothClaims());
     });
     await screen.findByText("Priya claimed this computer");
+    await screen.findByText("Rao claimed this computer");
     assertWindowClaim("Priya", ENVIRONMENT_LABEL);
     assertTileClaim(TILE_HOST_ID, "Rao", ENVIRONMENT_LABEL);
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
   it("keeps today's cover when the team says the claims were not found", async () => {
@@ -616,10 +618,9 @@ describe("claimed-computer narration consumers", () => {
       detail: null,
     });
     await waitFor(() => expect(pending.signalAborted).toBe(true));
-    pending.resolve(
-      claims(claim(WINDOW_HOST_ID, "Priya", "2026-11-10T00:00:00.000Z")),
-    );
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(1);
   });
 
   it("aborts a pending claims read when the stored door state is cleared", async () => {
@@ -635,10 +636,9 @@ describe("claimed-computer narration consumers", () => {
 
     act(() => clearHostDoorState(WINDOW_HOST_ID));
     await waitFor(() => expect(pending.signalAborted).toBe(true));
-    pending.resolve(
-      claims(claim(WINDOW_HOST_ID, "Priya", "2026-11-10T00:00:00.000Z")),
-    );
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(1);
   });
 
   it("keeps the resolved claims entry and cover when the same state remounts", async () => {
@@ -811,10 +811,9 @@ describe("claimed-computer narration consumers", () => {
       </>,
     );
 
-    await screen.findAllByText(/claimed this computer/);
+    await screen.findByText("Priya claimed this computer");
+    await screen.findByText("Rao claimed this computer");
     expect(harness.authReference.current).not.toBe(secondAuthReference.current);
-    expect(screen.getByText("Priya claimed this computer")).toBeTruthy();
-    expect(screen.getByText("Rao claimed this computer")).toBeTruthy();
     expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
@@ -1178,25 +1177,18 @@ describe("claimed-computer narration consumers", () => {
     harness.show(true, []);
     await waitFor(() => expect(claimCallCount(ENVIRONMENT_ID)).toBe(1));
     const { auth, queryKey } = claimedQuery(harness, ENVIRONMENT_ID);
-    let replacementFinished = false;
+    let replacement: Promise<unknown> = Promise.resolve();
     await act(async () => {
       await harness.queryClient.cancelQueries({ queryKey, exact: true });
-      void harness.queryClient
-        .fetchQuery({
-          queryKey,
-          queryFn: ({ signal }) =>
-            auth.listClaimedComputers(ENVIRONMENT_ID, signal),
-          staleTime: 0,
-        })
-        .then(() => {
-          replacementFinished = true;
-        });
+      replacement = harness.queryClient.fetchQuery({
+        queryKey,
+        queryFn: ({ signal }) =>
+          auth.listClaimedComputers(ENVIRONMENT_ID, signal),
+        staleTime: 0,
+      });
     });
     await waitFor(() => expect(initialRead.signalAborted).toBe(true));
-    await waitFor(() =>
-      expect(claimCallCount(ENVIRONMENT_ID)).toBeGreaterThanOrEqual(2),
-    );
-    expect(claimCallCount(ENVIRONMENT_ID)).toBeLessThanOrEqual(3);
+    await waitFor(() => expect(claimCallCount(ENVIRONMENT_ID)).toBe(2));
     expect(screen.getByText("No host is available")).toBeTruthy();
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
 
@@ -1205,16 +1197,15 @@ describe("claimed-computer narration consumers", () => {
         claims(claim(WINDOW_HOST_ID, "Rao", "2026-11-10T00:00:00.000Z")),
       );
     });
-    await waitFor(() => expect(replacementFinished).toBe(true));
+    await replacement;
     await screen.findByText("Rao claimed this computer");
     assertWindowClaim("Rao", ENVIRONMENT_LABEL);
-    expect(claimCallCount(ENVIRONMENT_ID)).toBeLessThanOrEqual(3);
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
   it("keeps today's cover when an outside replacement for a cached claim fails", async () => {
     const initialRead = deferredClaimRead();
     queueClaimPlan(ENVIRONMENT_ID, initialRead);
-    queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
     queueClaimPlan(ENVIRONMENT_ID, new Error("replacement claims failed"));
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
@@ -1229,34 +1220,32 @@ describe("claimed-computer narration consumers", () => {
     harness.show(true, []);
     await waitFor(() => expect(claimCallCount(ENVIRONMENT_ID)).toBe(1));
     const { auth, queryKey } = claimedQuery(harness, ENVIRONMENT_ID);
-    let replacementFinished = false;
+    let replacementOutcome: Promise<unknown> = Promise.resolve();
     await act(async () => {
       await harness.queryClient.cancelQueries({ queryKey, exact: true });
-      void harness.queryClient
+      replacementOutcome = harness.queryClient
         .fetchQuery({
           queryKey,
           queryFn: ({ signal }) =>
             auth.listClaimedComputers(ENVIRONMENT_ID, signal),
           staleTime: 0,
         })
-        .then(() => {
-          replacementFinished = true;
-        })
-        .catch(() => {
-          replacementFinished = true;
-        });
+        .then(
+          () => "answered",
+          (cause: unknown) => cause,
+        );
     });
     await waitFor(() => expect(initialRead.signalAborted).toBe(true));
-    await waitFor(() =>
-      expect(claimCallCount(ENVIRONMENT_ID)).toBeGreaterThanOrEqual(2),
-    );
+    await waitFor(() => expect(claimCallCount(ENVIRONMENT_ID)).toBe(2));
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-    await waitFor(() => expect(replacementFinished).toBe(true));
+    expect(await replacementOutcome).toEqual(
+      new Error("replacement claims failed"),
+    );
     harness.show(true, []);
 
     expect(screen.getByText("No host is available")).toBeTruthy();
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
-    expect(claimCallCount(ENVIRONMENT_ID)).toBeLessThanOrEqual(3);
+    expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
   it("keeps today's cover when no claim names this computer", async () => {
@@ -1334,12 +1323,7 @@ describe("claimed-computer narration consumers", () => {
     harness.show(true, []);
 
     await screen.findByText("Dr. Rao claimed this computer");
-    expect(screen.getByText("Dr. Rao claimed this computer").textContent).toBe(
-      claimedComputerTitle("Dr. Rao"),
-    );
-    expect(screen.getByText("It no longer belongs to Acme.").textContent).toBe(
-      claimedComputerDetail(ENVIRONMENT_LABEL),
-    );
+    assertWindowClaim("Dr. Rao", ENVIRONMENT_LABEL);
   });
 
   it("keeps the older team's claimant hidden until the newer team's read settles", async () => {
@@ -1411,7 +1395,7 @@ describe("claimed-computer narration consumers", () => {
     expect(screen.queryByText("Priya claimed this computer")).toBeNull();
   });
 
-  it("does not show an older claim while a newer team's read is pending", async () => {
+  it("shows the older team's claim once the newer team's read fails", async () => {
     const newerRead = deferredClaimRead();
     queueClaimPlan(
       "team-a",
