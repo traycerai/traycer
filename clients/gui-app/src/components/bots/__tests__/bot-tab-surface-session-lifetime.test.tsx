@@ -401,6 +401,7 @@ import {
   routeNotificationForHost,
 } from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
@@ -441,11 +442,19 @@ const THREAD_TURN: BotTurnRef = {
 
 let queryClient = new QueryClient();
 
+/** The picker's sheet reads the resolved theme the app's provider supplies. */
+const RESOLVED_THEME = {
+  resolvedTheme: "dark",
+  themePreset: "neutral",
+} as const;
+
 function surfaceFor(botId: string | null): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        <ResolvedThemeContext.Provider value={RESOLVED_THEME}>
+          <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        </ResolvedThemeContext.Provider>
       </QueryClientProvider>
     </StrictMode>
   );
