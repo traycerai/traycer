@@ -510,7 +510,8 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     items: pageItems,
     userId: currentUserId,
     hostId,
-    enabled: !hasActiveHistoryFilters(search) && sort === "recent",
+    // The sort the rows are in, as History's panel judges it.
+    enabled: !hasActiveHistoryFilters({ ...search, sort }) && sort === "recent",
     refreshEnabled: sort === "recent",
     refreshScope: activityRefreshScope,
     refetch: refetchTasks,

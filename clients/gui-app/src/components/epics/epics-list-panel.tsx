@@ -434,7 +434,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // body's branch count grow with every field the query gained.
   const view = historyPanelView(data);
   const pageItems = view.items;
-  const hasActiveFilters = hasActiveHistoryFilters(search);
+  // Judged on the sort the rows are in: a saved Newest created that this host
+  // serves as Most recent narrows nothing.
+  const hasActiveFilters = hasActiveHistoryFilters({ ...search, sort });
   // The same bounded activity projection drives this panel and the drawer.
   // Its active edge covers the short gap before the cloud record stamp lands.
   const items = useOptimisticActivityHistoryItems({
