@@ -49,6 +49,7 @@ import {
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -73,6 +74,11 @@ import "@/index.css";
  * The bot's `bot.subscribe` is a stream, which the mock messenger does not
  * serve, so a stream client that delivers one snapshot is placed in the cache
  * the surface acquires from.
+ *
+ * The drafts bridge the app mounts above every tab
+ * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
+ * the bot tab shows its tree only once the signed-in account's own drafts are
+ * read (T186), here from the page's own storage.
  */
 
 const HOST_ID = "bot-compact-actions-menu-host";
@@ -458,9 +464,11 @@ function buildRouter() {
             <WindowsBridgeContext.Provider value={windowsBridgeValue}>
               <TooltipProvider>
                 <SignedIn>
-                  <RequestContextGate>
-                    <Page />
-                  </RequestContextGate>
+                  <BotDraftsPersistLifecycleBridge>
+                    <RequestContextGate>
+                      <Page />
+                    </RequestContextGate>
+                  </BotDraftsPersistLifecycleBridge>
                 </SignedIn>
               </TooltipProvider>
             </WindowsBridgeContext.Provider>
