@@ -129,9 +129,8 @@ export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpc
   return requireTeamHostBinding();
 }
 /**
- * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
- * the source it yields holds none, exactly as an inventory row naming it
- * decodes in the app.
+ * `effectiveRole` is the wire's spelling; the source holds the role an
+ * inventory row naming it decodes to in the app.
  */
 export function poolSource(
   effectiveRole: "owner" | "admin" | "editor" | "viewer",
