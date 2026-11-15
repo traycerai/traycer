@@ -570,7 +570,7 @@ describe("TeamPlans", () => {
     );
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(screen.queryByRole("dialog")).toBeNull();
-    const previousOpening = requests[0];
+    const previousOpening = requests.at(0);
     if (previousOpening === undefined) {
       throw new Error("expected the previous opening's count request");
     }
@@ -582,7 +582,7 @@ describe("TeamPlans", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText(/3 active turns/)).toBeNull();
 
-    const currentOpening = requests[1];
+    const currentOpening = requests.at(1);
     if (currentOpening === undefined) {
       throw new Error("expected the current opening's count request");
     }

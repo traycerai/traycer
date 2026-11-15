@@ -1462,7 +1462,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       toastLog.length = 0;
       const attach = deferred<{ readonly attached: true }>();
       testState.attachEnvironment.mockReturnValue(attach.promise);
-      const fixture = await renderSignedInModal(null);
+      await renderSignedInModal(null);
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
         testState.bodySubmit?.();
