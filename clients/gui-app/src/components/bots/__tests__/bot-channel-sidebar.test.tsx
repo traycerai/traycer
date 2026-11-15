@@ -332,6 +332,15 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  tracySessionOf,
+  tracyViewOf,
+  useTracyPlaceStore,
+} from "@/stores/bots/tracy-place-store";
+import {
+  useBotOpenThreadStore,
+  type BotRail,
+} from "@/stores/bots/bot-open-thread-store";
 
 const TAB_HOST = "host-tab";
 const OTHER_HOST = "host-other";
@@ -500,6 +509,8 @@ beforeEach(() => {
     botId: null,
     visitedBotIds: [],
   });
+  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
+  useBotOpenThreadStore.setState(useBotOpenThreadStore.getInitialState(), true);
 });
 
 afterEach(() => {
@@ -894,13 +905,75 @@ describe("<BotChannelSidebar /> opening a channel", () => {
     expect(channelOpened).toHaveBeenCalledTimes(2);
   });
 
-  it("does nothing when the channel in view is clicked", async () => {
-    const user = userEvent.setup();
-    mount("bot-release", null);
+  describe("the channel the surface has selected", () => {
+    const THREAD_RAIL: BotRail = {
+      kind: "thread",
+      anchorMessageId: "m-1",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    };
 
-    await user.click(row("bot-release"));
+    beforeEach(() => {
+      useTracySurfaceStore.setState({ botId: "bot-release" });
+    });
 
-    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+    it("shows Messages when its row is clicked over Activity, and asks for no navigation", async () => {
+      const user = userEvent.setup();
+      useTracyPlaceStore.getState().setView("bot-release", "activity");
+      mount("bot-release", null);
+
+      await user.click(row("bot-release"));
+
+      expect(
+        tracyViewOf(useTracyPlaceStore.getState().viewByBotId, "bot-release"),
+      ).toBe("messages");
+      expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+    });
+
+    it("closes the session shown in place of the channel when its row is clicked", async () => {
+      const user = userEvent.setup();
+      useTracyPlaceStore
+        .getState()
+        .setSession("bot-release", { chatId: "chat-1", threadId: null });
+      mount("bot-release", null);
+
+      await user.click(row("bot-release"));
+
+      expect(
+        tracySessionOf(
+          useTracyPlaceStore.getState().sessionByBotId,
+          "bot-release",
+        ),
+      ).toBeNull();
+    });
+
+    it("keeps the thread open beside the channel when its row is clicked over Activity", async () => {
+      const user = userEvent.setup();
+      useTracyPlaceStore.getState().setView("bot-release", "activity");
+      useBotOpenThreadStore.getState().setRail("bot-release", THREAD_RAIL);
+      mount("bot-release", null);
+
+      await user.click(row("bot-release"));
+
+      expect(useBotOpenThreadStore.getState().byBotId["bot-release"]).toBe(
+        THREAD_RAIL,
+      );
+      expect(
+        tracyViewOf(useTracyPlaceStore.getState().viewByBotId, "bot-release"),
+      ).toBe("messages");
+    });
+
+    it("leaves Threads when its row is clicked in a picker marking another row current", async () => {
+      const user = userEvent.setup();
+      useTracyPlaceStore.getState().setThreadsShown(true);
+      mount("bot-triage", null);
+
+      await user.click(row("bot-release"));
+
+      expect(useTracyPlaceStore.getState().threadsShown).toBe(false);
+      expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps the surface on its own host while this client can still dial it", async () => {
@@ -1012,6 +1085,8 @@ describe("<BotChannelSidebar /> Threads", () => {
   it("is the current row while Threads shows, the tab's channel row is not, and that row goes back to the channel", async () => {
     const user = userEvent.setup();
     const threads = view(true);
+    useTracySurfaceStore.setState({ botId: "bot-release" });
+    useTracyPlaceStore.getState().setThreadsShown(true);
     mount("bot-release", threads);
 
     expect(threadsRow().getAttribute("aria-current")).toBe("page");
@@ -1021,7 +1096,7 @@ describe("<BotChannelSidebar /> Threads", () => {
 
     await user.click(row("bot-release"));
 
-    expect(threads.onLeave).toHaveBeenCalledTimes(1);
+    expect(useTracyPlaceStore.getState().threadsShown).toBe(false);
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 
@@ -1193,6 +1268,7 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
 
   it("marks the setup row as the current page while its channel is in view, and does nothing when it is clicked", async () => {
     const user = userEvent.setup();
+    useTracySurfaceStore.setState({ botId: SETUP_BOT_ID });
     mount(SETUP_BOT_ID, null);
 
     const setup = screen.getByTestId("bot-channel-setup-row");
