@@ -4,7 +4,9 @@ import {
   createTerminalSessionStore,
   type TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
-import type { TerminalViewersFrame } from "@traycer/protocol/host/terminal/subscribe";
+export type TerminalViewersFrame = Parameters<
+  TerminalStreamCallbacks["onViewers"]
+>[0];
 
 export interface TerminalViewerTestSession {
   readonly handle: TerminalSessionStoreHandle;
