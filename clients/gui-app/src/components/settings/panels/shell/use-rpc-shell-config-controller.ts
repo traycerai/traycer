@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   useMutation,
   useQueryClient,
+  type MutationFunctionContext,
   type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -31,6 +32,7 @@ import {
 import {
   sendFollowedSave,
   useSettingsSave,
+  type PrepareSettingsSave,
 } from "@/hooks/environment/use-settings-save";
 
 /**
@@ -185,6 +187,12 @@ export function useRpcShellConfigController(props: {
   // Both writes inside ONE `mutationFn`, so there is no observer boundary
   // between them to lose the second half at. The host id is captured in
   // `onMutate` and used for the invalidation, matching every other write here.
+  // So is the save preparation: the function runs with a newer render's
+  // options, `onMutate` with the render the person acted in (see
+  // `useHostMutation`).
+  const [prepareMadeIn] = useState(
+    () => new WeakMap<MutationFunctionContext, PrepareSettingsSave>(),
+  );
   const envRenameMutation = useMutation<
     void,
     HostRpcError,
@@ -196,7 +204,8 @@ export function useRpcShellConfigController(props: {
     { readonly hostId: string | null }
   >({
     mutationKey: configMutationKeys.envRename(),
-    mutationFn: async (rename) => {
+    mutationFn: async (rename, mutationContext) => {
+      const prepare = prepareMadeIn.get(mutationContext) ?? prepareSave;
       if (client === null) {
         // Normalized so `onError` always receives the `HostRpcError` shape the
         // toast helper reads, rather than a bare `Error` it cannot classify.
@@ -212,20 +221,20 @@ export function useRpcShellConfigController(props: {
         executableWriteGrant: null,
       };
       await sendFollowedSave(
-        await prepareSave({ method: "config.env.set", request: set }, sentOn),
+        await prepare({ method: "config.env.set", request: set }, sentOn),
         () => client.request("config.env.set", set),
       );
       if (rename.oldKey.length === 0) return;
       const remove = { key: rename.oldKey };
       await sendFollowedSave(
-        await prepareSave(
-          { method: "config.env.delete", request: remove },
-          sentOn,
-        ),
+        await prepare({ method: "config.env.delete", request: remove }, sentOn),
         () => client.request("config.env.delete", remove),
       );
     },
-    onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+    onMutate: (_rename, mutationContext) => {
+      prepareMadeIn.set(mutationContext, prepareSave);
+      return { hostId: client?.getActiveHostId() ?? null };
+    },
     // SETTLED, not success - the same two-write staleness the bridge twin has:
     // a set that lands followed by a delete that rejects leaves both keys on
     // the host with the editor showing the pre-rename list.

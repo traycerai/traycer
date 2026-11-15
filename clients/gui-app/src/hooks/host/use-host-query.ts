@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type MutationFunctionContext,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
@@ -440,10 +442,7 @@ export interface UseHostMutationOptions<
    * will propose (`useSettingsSave`). Told whether the host answered.
    */
   readonly followSettingsSave?:
-    | ((
-        request: RequestOfMethod<Registry, Method>,
-        client: HostRequester<Registry>,
-      ) => Promise<PendingSettingsSave>)
+    | FollowSettingsSave<Registry, Method>
     | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
@@ -526,6 +525,15 @@ export interface UseHostMutationOptions<
   readonly mapDispatchError?: (cause: unknown) => unknown;
 }
 
+/** {@link UseHostMutationOptions.followSettingsSave}. */
+type FollowSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = (
+  request: RequestOfMethod<Registry, Method>,
+  client: HostRequester<Registry>,
+) => Promise<PendingSettingsSave>;
+
 /**
  * Thin typed wrapper over TanStack `useMutation` that dispatches the
  * caller's params straight into `HostClient.request`.
@@ -543,7 +551,34 @@ export function useHostMutation<
   TVariables,
   TContext
 > {
-  const baseOptions = args.options ?? {};
+  // TanStack gives a pending mutation each newer render's options and runs
+  // its function with them, so a save made before an account switch, and
+  // started after it, would be followed by the next account's editor.
+  // `onMutate` runs as the person acts, with the options of the render they
+  // acted in, and keeps that render's follow for the function, which TanStack
+  // hands the same context.
+  const [followMadeIn] = useState(
+    () =>
+      new WeakMap<
+        MutationFunctionContext,
+        FollowSettingsSave<Registry, Method>
+      >(),
+  );
+  const follow = args.followSettingsSave;
+  const { onMutate } = args.options ?? {};
+  const baseOptions =
+    follow === undefined || onMutate === undefined
+      ? (args.options ?? {})
+      : {
+          ...args.options,
+          onMutate: (
+            variables: TVariables,
+            context: MutationFunctionContext,
+          ) => {
+            followMadeIn.set(context, follow);
+            return onMutate(variables, context);
+          },
+        };
   return useMutation<
     ResponseOfMethod<Registry, Method>,
     HostRpcError,
@@ -553,7 +588,7 @@ export function useHostMutation<
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
-    mutationFn: (variables) =>
+    mutationFn: (variables, mutationContext) =>
       withHostQueryErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
@@ -606,11 +641,12 @@ export function useHostMutation<
                 dispatch().catch((cause: unknown) => {
                   throw mapDispatchError(cause);
                 });
+        const followSave = followMadeIn.get(mutationContext) ?? follow;
         const dispatched =
-          args.followSettingsSave === undefined
+          followSave === undefined
             ? await mappedDispatch()
             : await sendFollowedSave(
-                await args.followSettingsSave(params, client),
+                await followSave(params, client),
                 mappedDispatch,
               );
         // Between the dispatch and `onResponse`, so a substituted response is

@@ -118,9 +118,30 @@ interface EditBaseScope {
   readonly session: string;
 }
 
+/**
+ * `read` on one sign-in of the viewer `base` names, for that viewer's cache:
+ * a read begun once anyone else is signed in, or answered after the sign-in
+ * it went out on ended, throws, and nothing is cached.
+ */
+async function readForViewer<T>(
+  source: EnvironmentCloudSource,
+  viewerId: string,
+  read: (cloud: EnvironmentCloud) => Promise<T>,
+): Promise<T> {
+  if (signedInViewer() !== viewerId) {
+    throw new Error("Another account is signed in");
+  }
+  const cloud = source();
+  const answer = await read(cloud);
+  if (!cloud.onOriginSignIn()) {
+    throw new Error("The sign-in the read went out on has ended");
+  }
+  return answer;
+}
+
 /** authn's listing of the host a save is made on. */
 function saveHostQuery(base: EditBaseScope, hostId: string) {
-  const { source, environmentId } = base;
+  const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names; adding it
   // would refetch on its identity alone.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -129,19 +150,22 @@ function saveHostQuery(base: EditBaseScope, hostId: string) {
     queryKey: environmentQueryKeys.settingsSaveHost(
       environmentId,
       hostId,
-      base.viewerId,
+      viewerId,
       base.session,
     ),
     queryFn:
       source === null
         ? skipToken
-        : () => readSettingsSaveHost(source(), environmentId, hostId),
+        : () =>
+            readForViewer(source, viewerId, (cloud) =>
+              readSettingsSaveHost(cloud, environmentId, hostId),
+            ),
   });
 }
 
 /** authn's rows of `kind`, as the person's edit is made over them. */
 function saveItemsQuery(base: EditBaseScope, kind: string) {
-  const { source, environmentId } = base;
+  const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return queryOptions({
@@ -149,13 +173,16 @@ function saveItemsQuery(base: EditBaseScope, kind: string) {
     queryKey: environmentQueryKeys.settingsSaveItems(
       environmentId,
       kind,
-      base.viewerId,
+      viewerId,
       base.session,
     ),
     queryFn:
       source === null
         ? skipToken
-        : () => readSettingsItemRows(source(), environmentId, kind),
+        : () =>
+            readForViewer(source, viewerId, (cloud) =>
+              readSettingsItemRows(cloud, environmentId, kind),
+            ),
   });
 }
 
@@ -291,11 +318,13 @@ async function followSave(
   accountId: string,
 ): Promise<PendingSettingsSave> {
   const { coordinator, queryClient, environmentId, hostId } = scope;
+  // A base read this save makes goes out on the save's own sign-in.
+  const reads: EditBaseScope = { ...scope, source: () => operation.cloud };
   const rowsOf = async (kind: string, key: string) =>
-    (await queryClient.fetchQuery(saveItemsQuery(scope, kind))).filter(
+    (await queryClient.fetchQuery(saveItemsQuery(reads, kind))).filter(
       (row) => row.key === key,
     );
-  const host = await queryClient.fetchQuery(saveHostQuery(scope, hostId));
+  const host = await queryClient.fetchQuery(saveHostQuery(reads, hostId));
   if (host === null) return NOTHING_TO_FOLLOW;
   const address = settingsSaveBaseAddress(save);
   const baseRows =

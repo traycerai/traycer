@@ -277,7 +277,12 @@ export function createSettingsSaveCoordinator(
   const reconcileOnce = async (hostId: string): Promise<void> => {
     const account = ports.accountId();
     if (account === null) return;
-    const sameAccount = (): boolean => ports.accountId() === account;
+    // The run's cloud is the sign-in it began on; once that sign-in ends, the
+    // run stops even where the account is the same.
+    const cloud = ports.cloud();
+    const sameAccount = (): boolean =>
+      ports.accountId() === account &&
+      (cloud === null || cloud.onOriginSignIn());
     forgetExpired();
     dropUnremembered();
     const mine = Object.entries(store().records).filter(
@@ -302,10 +307,8 @@ export function createSettingsSaveCoordinator(
     for (const { id } of sorted.forget) {
       forget(id);
     }
-    if (sorted.proposed.size === 0) return;
+    if (sorted.proposed.size === 0 || cloud === null) return;
 
-    const cloud = ports.cloud();
-    if (cloud === null) return;
     for (const [environmentId, saves] of sorted.proposed) {
       if (!(await applyProposed(cloud, environmentId, saves, sameAccount))) {
         return;
