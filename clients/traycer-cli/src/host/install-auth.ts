@@ -576,7 +576,6 @@ async function attendedTeamInstallAfterSignIn(
     outcome: minted.kind,
     code: minted.kind === "refused" ? minted.code : null,
   });
-  // Each failure is the sign-in read's own answer for the same cause.
   switch (minted.kind) {
     case "ok":
       return {
@@ -589,10 +588,10 @@ async function attendedTeamInstallAfterSignIn(
     case "unauthorized":
       throw storedCredentialRejectedCliError();
     case "refused":
-      if (minted.code === "environment_not_found")
+      if (minted.status >= 500 && minted.status < 600)
         throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message: NOT_A_TEAM_YOU_BELONG_TO,
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: AUTHN_UNREACHABLE_MESSAGE,
           details: null,
           exitCode: 1,
         });
