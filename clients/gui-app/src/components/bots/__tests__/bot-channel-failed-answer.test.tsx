@@ -1967,21 +1967,27 @@ describe("a frozen turn in a bot's channel or thread draws no error row, and the
 
   it("in a thread's panel", () => {
     const requestId = "req-thread-reply";
+    const threadReply: Message = {
+      role: "user",
+      messageId: "thread-reply",
+      sender: { type: "user", userId: VIEWER_USER_ID },
+      sessionAnchor: null,
+      message: {
+        kind: "user",
+        content: textDoc("thread-reply"),
+        browserAnnotations: [],
+      },
+      timestamp: 3_000,
+      conversationRequest: {
+        requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    };
     installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
     mocks.threads = [postThread(VIEWER_USER_ID)];
     mocks.threadHandle = {
-      store: createChannelStore([
-        {
-          ...memberPost(VIEWER_USER_ID),
-          messageId: "thread-reply",
-          conversationRequest: {
-            requestId,
-            resolvedAt: null,
-            resolvedByMessageId: null,
-          },
-        },
-        frozenTurn(),
-      ]),
+      store: createChannelStore([threadReply, frozenTurn()]),
     } as ChatSessionStoreHandle;
     activityStore.setState({
       activity: {

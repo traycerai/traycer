@@ -21,7 +21,6 @@ export async function refusedFrozenSandboxFatal(
       authnBaseUrl: "https://authn.test",
       hostId,
       getBearerToken: () => "user-bearer",
-      purpose: "remote",
     })();
     if (provision.kind !== "refused") {
       throw new Error(`the mint was not refused: ${provision.kind}`);
