@@ -579,7 +579,6 @@ describe("<RetrospectiveSession /> an authn refusal for a held choice", () => {
       ],
       [],
       {
-        extraHandlers: {},
         onOpenChange,
         applyAnswer: {
           status: 403,

@@ -386,7 +386,7 @@ async function expectOwnershipConsumers(options: {
     String(options.personalEditable),
   );
   expect(teamPage.getAttribute("data-can-edit")).toBe("true");
-  expect(planLink.disabled).toBe(!options.planLinkEnabled);
+  expect(planLink.matches(":disabled")).toBe(!options.planLinkEnabled);
   const readOnlyLine = screen.queryByText(
     "You can see Personal's settings but not change them.",
   );
