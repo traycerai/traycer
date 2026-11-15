@@ -101,12 +101,12 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   const [answeredBeforeChange, setAnsweredBeforeChange] =
     useState<ReadonlySet<string> | null>(null);
   const [refusalRefreshPending, setRefusalRefreshPending] = useState(false);
-  const refreshing =
-    refusalRefreshPending ||
-    (answeredBeforeChange !== null && preview.isFetching);
-  const previewStatus = refreshing
-    ? "loading"
-    : stopPreviewStatus(supported, preview);
+  const previewStatus = stopPreviewStatus(
+    supported,
+    preview,
+    answeredBeforeChange !== null,
+    refusalRefreshPending,
+  );
   const { managed, needsChoice } = useMemo(
     () => stopRowsForMode(preview.data, personalProfiles !== null),
     [preview.data, personalProfiles],
@@ -203,8 +203,16 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
 
 function stopPreviewStatus(
   supported: boolean | null,
-  preview: { readonly isError: boolean; readonly data: unknown },
+  preview: {
+    readonly isError: boolean;
+    readonly isFetching: boolean;
+    readonly data: unknown;
+  },
+  choicesChanged: boolean,
+  refusalRefreshPending: boolean,
 ): StopPreviewStatus {
+  if (refusalRefreshPending || (choicesChanged && preview.isFetching))
+    return "loading";
   if (supported === false || preview.isError) return "failed";
   if (preview.data !== undefined) return "ready";
   return "loading";
