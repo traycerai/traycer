@@ -75,61 +75,16 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 import { LinkLoginMintError } from "@/lib/auth/link-login-mint-error";
+import {
+  claimedStatus,
+  claimedStatusWithCode,
+  queryResultWithCode,
+  statusResult,
+} from "./link-phone-panel-test-support";
 import { LinkPhonePanel } from "../link-phone-panel";
-
-function queryResultWithCode(nowMs: number) {
-  return {
-    isPending: false,
-    isError: false,
-    isRefetching: false,
-    error: null,
-    refetch: vi.fn(),
-    data: {
-      code: "ABCDE-FGHJK",
-      expires_in: 60,
-      expires_at: Math.floor(nowMs / 1000) + 60,
-    },
-  };
-}
-
-function statusResult(data: unknown) {
-  return {
-    isPending: false,
-    isError: false,
-    error: null,
-    refetch: vi.fn(),
-    data,
-  };
-}
 
 function respondIdle() {
   return { isPending: false, mutate: vi.fn() };
-}
-
-function claimedStatus(claimedAtMs: number, userAgent: string) {
-  return {
-    status: "claimed",
-    claimant: {
-      address: "192.168.29.87",
-      userAgent,
-      location: "Bengaluru, IN",
-      claimedAt: claimedAtMs,
-    },
-  };
-}
-
-/**
- * The same claim from a server that knows about match codes: a string is
- * the code the phone is showing, `null` is the server saying the phone
- * presented none.
- */
-function claimedStatusWithCode(
-  claimedAtMs: number,
-  userAgent: string,
-  matchCode: string | null,
-) {
-  const status = claimedStatus(claimedAtMs, userAgent);
-  return { ...status, claimant: { ...status.claimant, matchCode } };
 }
 
 beforeEach(() => {
@@ -191,7 +146,7 @@ describe("LinkPhonePanel", () => {
       screen.getByTestId("link-phone-approve").click();
     });
     expect(respond.mutate).toHaveBeenCalledWith(
-      { code: "ABCDE-FGHJK", approve: true },
+      { approve: true },
       expect.anything(),
     );
   });
@@ -206,7 +161,7 @@ describe("LinkPhonePanel", () => {
       isPending: false,
       mutate: vi.fn(
         (
-          _variables: { code: string; approve: boolean },
+          _variables: { approve: boolean },
           options: { onSuccess: (outcome: string) => void },
         ) => {
           options.onSuccess("ok");
@@ -219,7 +174,7 @@ describe("LinkPhonePanel", () => {
       screen.getByTestId("link-phone-reject").click();
     });
     expect(respond.mutate).toHaveBeenCalledWith(
-      { code: "ABCDE-FGHJK", approve: false },
+      { approve: false },
       expect.anything(),
     );
     // The rejected claim released the server's per-user lock; the panel
@@ -711,7 +666,7 @@ describe("LinkPhonePanel", () => {
       screen.getByRole("button", { name: "Approve" }).click();
     });
     expect(respond.mutate).toHaveBeenCalledWith(
-      { code: "ABCDE-FGHJK", approve: true },
+      { approve: true },
       expect.anything(),
     );
   });

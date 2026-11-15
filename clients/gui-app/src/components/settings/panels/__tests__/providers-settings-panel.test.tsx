@@ -131,11 +131,17 @@ type AwaitLoginMutate = (
   options: AwaitLoginOptions,
 ) => void;
 
-type SubmitLoginCodeVariables = {
+type SubmitLoginCodeRequest = {
   readonly providerId: ProviderCliState["providerId"];
   readonly profileId: string | null;
   readonly code: string;
 };
+type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
+type SetEnvOverrideRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.setEnvOverride"
+>;
+type SetEnvOverrideVariables = Omit<SetEnvOverrideRequest, "value">;
 type SubmitLoginCodeOptions = {
   readonly onSuccess: (data: {
     readonly outcome: "accepted" | "noActiveLogin";
@@ -143,9 +149,24 @@ type SubmitLoginCodeOptions = {
   readonly onError: () => void;
 };
 type SubmitLoginCodeMutate = (
-  variables: SubmitLoginCodeVariables,
+  variables: SubmitLoginCodeRequest,
   options: SubmitLoginCodeOptions,
 ) => void;
+
+function submitLoginCodeRequestMatches(
+  actual: SubmitLoginCodeRequest,
+  expected: SubmitLoginCodeRequest,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.profileId === expected.profileId &&
+    actual.code === expected.code
+  );
+}
 
 type RenameProfileVariables = {
   readonly providerId: ProviderCliState["providerId"];
@@ -278,12 +299,16 @@ const providerMocks = vi.hoisted(() => {
     clearApiKeyMutate: vi.fn(),
     setTerminalAgentArgsMutate: vi.fn(),
     setEnvOverrideMutate: vi.fn(),
+    setEnvOverrideVariables:
+      vi.fn<(variables: SetEnvOverrideVariables) => void>(),
     deleteEnvOverrideMutate: vi.fn(),
     startLoginMutate: vi.fn<StartLoginMutate>(),
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
     cancelLoginMutate: vi.fn(),
     cancelLoginPending: false,
     submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
+    submitLoginCodeVariables:
+      vi.fn<(variables: SubmitLoginCodeVariables) => void>(),
     submitLoginCodeReset: vi.fn(),
     submitLoginCodePending: false,
     submitLoginCodeSuccess: false,
@@ -621,8 +646,15 @@ vi.mock(
 );
 
 vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
-  useProvidersSetEnvOverride: () => ({
-    mutate: providerMocks.setEnvOverrideMutate,
+  useProvidersSetEnvOverride: (
+    readValue: () => string | null,
+    clearValueInput: () => void,
+  ) => ({
+    mutate: (variables: SetEnvOverrideVariables) => {
+      providerMocks.setEnvOverrideVariables(variables);
+      providerMocks.setEnvOverrideMutate({ ...variables, value: readValue() });
+      clearValueInput();
+    },
     isPending: false,
   }),
 }));
@@ -736,17 +768,38 @@ vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
 });
 
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => {
-  const useProvidersSubmitLoginCode = () => ({
-    mutate: providerMocks.submitLoginCodeMutate,
+  const useProvidersSubmitLoginCode = (
+    readCode: () => string,
+    clearCodeInput: () => void,
+  ) => ({
+    mutate: (
+      variables: SubmitLoginCodeVariables,
+      options: SubmitLoginCodeOptions,
+    ) => {
+      providerMocks.submitLoginCodeVariables(variables);
+      providerMocks.submitLoginCodeMutate(
+        { ...variables, code: readCode() },
+        options,
+      );
+      clearCodeInput();
+    },
     isPending: providerMocks.submitLoginCodePending,
     isSuccess: providerMocks.submitLoginCodeSuccess,
     data: providerMocks.submitLoginCodeData,
     error: providerMocks.submitLoginCodeError,
     reset: providerMocks.submitLoginCodeReset,
   });
+  const useProvidersSubmitLoginCodeForClient = (
+    client: unknown,
+    readCode: () => string,
+    clearCodeInput: () => void,
+  ) => {
+    void client;
+    return useProvidersSubmitLoginCode(readCode, clearCodeInput);
+  };
   return {
     useProvidersSubmitLoginCode,
-    useProvidersSubmitLoginCodeForClient: useProvidersSubmitLoginCode,
+    useProvidersSubmitLoginCodeForClient,
   };
 });
 
@@ -2856,12 +2909,14 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.setProfileRecordEnabled.mockReset();
     providerMocks.setProfileRecordEnabled.mockResolvedValue({ kind: "ok" });
     providerMocks.setEnvOverrideMutate.mockClear();
+    providerMocks.setEnvOverrideVariables.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
     providerMocks.startLoginMutate.mockReset();
     providerMocks.awaitLoginMutate.mockReset();
     providerMocks.cancelLoginMutate.mockReset();
     providerMocks.cancelLoginPending = false;
     providerMocks.submitLoginCodeMutate.mockReset();
+    providerMocks.submitLoginCodeVariables.mockClear();
     providerMocks.submitLoginCodePending = false;
     providerMocks.submitLoginCodeSuccess = false;
     providerMocks.submitLoginCodeData = undefined;
@@ -7598,11 +7653,15 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("locks the field while submitting, then shows a verifying header once the relay is accepted and the exchange is still pending (statefulness fixup)", async () => {
+    const expectedProviderId = "codex";
+    const expectedProfileId = "managed-1";
+    const submittedCode = "abc123#xyz789";
+
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
-            providerId: "codex",
+            providerId: expectedProviderId,
             selected: { kind: "bundled" },
             candidates: [
               {
@@ -7654,14 +7713,28 @@ describe("<ProvidersSettingsPanel />", () => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
-        profileId: "managed-1",
+        profileId: expectedProfileId,
       });
       return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
-      clipboardData: { getData: () => "abc123#xyz789" },
+      clipboardData: { getData: () => submittedCode },
+    });
+    const recordedSubmitLoginCodeCall =
+      providerMocks.submitLoginCodeMutate.mock.calls.at(-1);
+    expect(
+      recordedSubmitLoginCodeCall !== undefined &&
+        submitLoginCodeRequestMatches(recordedSubmitLoginCodeCall[0], {
+          providerId: expectedProviderId,
+          profileId: expectedProfileId,
+          code: submittedCode,
+        }),
+    ).toBe(true);
+    expect(providerMocks.submitLoginCodeVariables).toHaveBeenCalledWith({
+      providerId: expectedProviderId,
+      profileId: expectedProfileId,
     });
 
     // The real mutation subscription rerenders the parent. The lightweight

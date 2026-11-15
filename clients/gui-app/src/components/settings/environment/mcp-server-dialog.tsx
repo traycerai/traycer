@@ -30,6 +30,8 @@ import {
   useConfigurationMcpServerMutations,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useHostClient } from "@/lib/host";
 import {
   useConfigurationIsPersonal,
@@ -102,7 +104,6 @@ export function McpServerDialog(props: {
       />
     );
   else if (secrets.isLoading) secretsRead = <MutedAgentSpinner />;
-  const { put } = useConfigurationMcpServerMutations();
   const [form, setForm] = useState<McpServerForm>(() =>
     initialMcpServerForm(server),
   );
@@ -110,11 +111,27 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, canPick);
+  const submittedServer =
+    useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
+      "MCP server input is unavailable.",
+    );
+  const { put } = useConfigurationMcpServerMutations(
+    submittedServer.read,
+    submittedServer.clear,
+  );
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
-    put.mutate(
+    submittedServer.set(
       mcpServerPutRequest(form, server, source.environmentId, credential),
+    );
+    const serverName = form.name.trim();
+    const refusalSecret = refusedSecret(form, server, secretList);
+    put.mutate(
+      {
+        environmentId: source.environmentId,
+        serverId: server?.serverId ?? null,
+      },
       {
         onSuccess: (result) => {
           if (result.outcome === "saved") props.onClose();
@@ -124,8 +141,8 @@ export function McpServerDialog(props: {
             setProblem(
               serverRefusal(result.reason, {
                 configuration: name,
-                server: form.name.trim(),
-                secret: refusedSecret(form, server, secretList),
+                server: serverName,
+                secret: refusalSecret,
               }),
             );
         },

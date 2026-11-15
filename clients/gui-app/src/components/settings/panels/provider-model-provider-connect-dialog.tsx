@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import type {
   ModelProviderAuthResult,
+  ModelProviderAuthAction,
   ModelProviderEntry,
   ModelProviderPrompt,
   ProviderModelProvidersCapabilities,
@@ -27,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useProvidersAwaitModelProviderAuth } from "@/hooks/providers/use-providers-await-model-provider-auth-mutation";
 import { useProvidersCancelModelProviderAuth } from "@/hooks/providers/use-providers-cancel-model-provider-auth-mutation";
@@ -148,7 +150,13 @@ export function ProviderModelProviderConnectDialog(props: {
   );
   const [cancelError, setCancelError] = useState<string | null>(null);
 
-  const auth = useProvidersModelProviderAuth();
+  const submittedAction = useSubmittedSecretInput<ModelProviderAuthAction>(
+    "Model provider input is unavailable.",
+  );
+  const auth = useProvidersModelProviderAuth(
+    submittedAction.read,
+    submittedAction.clear,
+  );
   const awaitAuth = useProvidersAwaitModelProviderAuth();
   const cancelAuth = useProvidersCancelModelProviderAuth();
   const openLink = useOpenLink();
@@ -441,9 +449,14 @@ export function ProviderModelProviderConnectDialog(props: {
     }
     setErrorMessage(null);
     setRestartNotice(null);
-    const promptInputs = modelProviderPromptInputs(choice.prompts, answers);
     if (choice.kind === "oauth") {
       if (choice.methodIndex === null) return;
+      submittedAction.set({
+        action: "startOauth",
+        modelProviderId: entry.id,
+        methodIndex: choice.methodIndex,
+        inputs: modelProviderPromptInputs(choice.prompts, answers),
+      });
       auth.mutate(
         {
           providerId,
@@ -451,17 +464,19 @@ export function ProviderModelProviderConnectDialog(props: {
             action: "startOauth",
             modelProviderId: entry.id,
             methodIndex: choice.methodIndex,
-            inputs: promptInputs,
           },
         },
         { onSuccess: (data) => applyStartResult(data.result) },
       );
       return;
     }
-    // `key` is the pasted SECRET, not a key name - upstream's `ApiAuth.key`,
-    // which reads like an identifier and is not one. The client no longer says
-    // anything about where the credential belongs: the provider's own store
-    // takes whatever is sent.
+    submittedAction.set({
+      action: "connect",
+      modelProviderId: entry.id,
+      methodIndex: choice.methodIndex,
+      key: secret.trim(),
+      inputs: modelProviderPromptInputs(choice.prompts, answers),
+    });
     auth.mutate(
       {
         providerId,
@@ -469,14 +484,14 @@ export function ProviderModelProviderConnectDialog(props: {
           action: "connect",
           modelProviderId: entry.id,
           methodIndex: choice.methodIndex,
-          key: secret.trim(),
-          inputs: promptInputs,
         },
       },
       { onSuccess: (data) => applyResult(data.result, false) },
     );
   }, [
     answers,
+    secret,
+    submittedAction,
     applyResult,
     applyStartResult,
     auth,
@@ -484,7 +499,6 @@ export function ProviderModelProviderConnectDialog(props: {
     credentialRefusal,
     entry,
     providerId,
-    secret,
   ]);
 
   const handleSubmitCode = useCallback(() => {
@@ -502,6 +516,12 @@ export function ProviderModelProviderConnectDialog(props: {
       return;
     }
     setErrorMessage(null);
+    submittedAction.set({
+      action: "submitCode",
+      modelProviderId: entry.id,
+      attemptId: attempt.attemptId,
+      code: code.trim(),
+    });
     auth.mutate(
       {
         providerId,
@@ -509,7 +529,6 @@ export function ProviderModelProviderConnectDialog(props: {
           action: "submitCode",
           modelProviderId: entry.id,
           attemptId: attempt.attemptId,
-          code: code.trim(),
         },
       },
       { onSuccess: (data) => applyResult(data.result, false) },
@@ -522,6 +541,7 @@ export function ProviderModelProviderConnectDialog(props: {
     credentialRefusal,
     entry.id,
     providerId,
+    submittedAction,
   ]);
 
   /**

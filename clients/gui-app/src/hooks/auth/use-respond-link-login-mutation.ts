@@ -3,7 +3,6 @@ import { useAuthService } from "@/lib/host";
 import { authMutationKeys } from "@/lib/query-keys";
 
 export interface RespondLinkLoginInput {
-  readonly code: string;
   readonly approve: boolean;
 }
 
@@ -18,16 +17,16 @@ export type RespondLinkLoginOutcome =
  * Outcomes are returned rather than thrown — the panel reconciles
  * `already-decided`/`gone` against its own state machine inline.
  */
-export function useRespondLinkLoginMutation(): UseMutationResult<
-  RespondLinkLoginOutcome,
-  Error,
-  RespondLinkLoginInput
-> {
+export function useRespondLinkLoginMutation(
+  readCode: () => string,
+  clearCodeInput: () => void,
+): UseMutationResult<RespondLinkLoginOutcome, Error, RespondLinkLoginInput> {
   const auth = useAuthService();
   return useMutation({
     mutationKey: authMutationKeys.respondLinkLogin(),
+    onSettled: clearCodeInput,
     mutationFn: async (input: RespondLinkLoginInput) => {
-      const result = await auth.respondLinkLogin(input.code, input.approve);
+      const result = await auth.respondLinkLogin(readCode(), input.approve);
       if (result.kind === "ok") {
         return "ok";
       }

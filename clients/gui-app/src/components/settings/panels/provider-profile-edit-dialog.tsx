@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
 import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -300,10 +301,18 @@ function ProfileApiKeyForm(props: {
   //
   // The draft lives on the dialog, which stays mounted throughout, so the
   // callback still has somewhere to write after this section is gone.
+  const onDraftChange = props.onDraftChange;
   const onSaved = (): void => {
-    props.onDraftChange("");
+    onDraftChange("");
   };
-  const setApiKey = useSetProviderProfileApiKey(onSaved);
+  const submittedApiKey = useSubmittedSecretInput<string>(
+    "Profile key input is unavailable.",
+  );
+  const setApiKey = useSetProviderProfileApiKey(
+    submittedApiKey.read,
+    submittedApiKey.clear,
+    onSaved,
+  );
   const clearApiKey = useClearProviderProfileApiKey(onSaved);
   // A sandbox never takes a key; removing one sends nothing secret, so
   // Remove key stays.
@@ -327,10 +336,10 @@ function ProfileApiKeyForm(props: {
     // rendered underneath a profile whose state contradicts it. Only the most
     // recently attempted mutation should be able to speak.
     clearApiKey.reset();
+    submittedApiKey.set(trimmed);
     setApiKey.mutate({
       providerId: props.providerId,
       profileId: props.profile.profileId,
-      apiKey: trimmed,
     });
   };
 
