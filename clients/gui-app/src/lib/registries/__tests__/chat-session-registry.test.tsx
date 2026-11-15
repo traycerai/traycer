@@ -103,6 +103,17 @@ vi.mock("@/hooks/environment/use-environment-arms", () => ({
   useEnvironmentArmChats: () => [],
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
   value: null,
 }));
@@ -205,8 +216,11 @@ vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
   };
 });
 
-import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
-import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
+import {
+  disposeAllChatSessions,
+  getChatSessionRegistry,
+  useChatSessionHandle,
+} from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
@@ -454,7 +468,7 @@ function accountWaitClient(): {
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
 } {
   const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
-  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "1.0.0");
+  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "2.0.0");
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -776,7 +790,7 @@ describe("a live chat session survives a degraded liveness read", () => {
         viewerReachability: "unknown",
         clientCloud: "ok",
         updateState: "current",
-        appVersion: "1.0.0",
+        appVersion: "2.0.0",
         lastSeenAt: "2026-08-01T00:00:00.000Z",
       },
     };
@@ -1023,7 +1037,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     signIn();
     openTransportRef.fn = createTrackedOpenTransport().openTransport;
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
     const { result } = renderHook(
       () => useChatSessionHandle(ACCOUNT_WAIT_CHAT_ID, LOCAL_HOST_ID, true),
       { wrapper },
@@ -1061,8 +1075,8 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
   }
 
   it.each([
-    ["the websocket URL", localEntry(RESPAWN_URL, "1.0.0")],
-    ["the host version", localEntry(FIRST_URL, "1.1.0")],
+    ["the websocket URL", localEntry(RESPAWN_URL, "2.0.0")],
+    ["the host version", localEntry(FIRST_URL, "2.1.0")],
   ] as const)(
     "keeps the same store when %s changes, and never reopens the transport",
     async (_label, changed) => {
@@ -1070,7 +1084,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       const tracked = createTrackedOpenTransport();
       openTransportRef.fn = tracked.openTransport;
       globalClientRef.value = buildGlobalClient();
-      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
       const { result, rerender } = renderHook(
         () => useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true),
@@ -1094,12 +1108,12 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     },
   );
 
-  it("holds the handle while the host boots, and the URL returning revives the same store", async () => {
+  it("keeps an at-floor owner while the host boots, and the URL returning revives the same store", async () => {
     signIn();
     const tracked = createTrackedOpenTransport();
     openTransportRef.fn = tracked.openTransport;
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
     const { result, rerender } = renderHook(
       () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true),
@@ -1111,13 +1125,13 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     const liveHandle = result.current;
 
     // The restart: the directory swaps in the booting twin.
-    hostEntryRef.value = localEntry(null, "1.0.0");
+    hostEntryRef.value = localEntry(null, "2.0.0");
     rerender();
     await settle();
     expect(result.current).toBe(liveHandle);
 
     // The host publishes again, on a new port and a new build.
-    hostEntryRef.value = localEntry(RESPAWN_URL, "1.1.0");
+    hostEntryRef.value = localEntry(RESPAWN_URL, "2.1.0");
     rerender();
     await settle();
     expect(result.current).toBe(liveHandle);
@@ -1257,7 +1271,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       openTransportRef.fn = createTrackedOpenTransport().openTransport;
       const globalClient = buildGlobalClient();
       globalClientRef.value = globalClient;
-      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
       const { result, rerender } = renderHook(
         () => useChatSessionHandle("chat-boot-lost-1", LOCAL_HOST_ID, true),
@@ -1266,7 +1280,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       await waitFor(() => {
         expect(result.current).not.toBeNull();
       });
-      hostEntryRef.value = localEntry(null, "1.0.0");
+      hostEntryRef.value = localEntry(null, "2.0.0");
       rerender();
       await settle();
       // Held by the booting shape, so the release below is the loss's doing.
@@ -1279,6 +1293,125 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       });
     },
   );
+  it("does not acquire an owner for a below-floor host in the local booting shape", () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(null, "1.5.4");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-boot-below-floor", LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+
+    expect(result.current).toBeNull();
+    expect(tracked.records()).toHaveLength(0);
+  });
+
+  it("releases an at-floor remote owner when appVersion falls below floor during restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      version: "9.9.9",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const registry = getChatSessionRegistry();
+    const releaseHandle = vi.spyOn(registry, "releaseHandle");
+    try {
+      const { result, rerender } = renderHook(
+        () =>
+          useChatSessionHandle(
+            "chat-remote-restart-below-floor",
+            REMOTE_HOST_ID,
+            true,
+          ),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      expect(tracked.records()).toHaveLength(1);
+      const owner = result.current;
+      if (owner === null) throw new Error("remote chat owner was not acquired");
+
+      const remoteBelowFloor: RemoteHostDirectoryEntry = {
+        ...remoteAtFloor,
+        remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
+      };
+      hostEntryRef.value = remoteBelowFloor;
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+      await waitFor(() => {
+        expect(releaseHandle).toHaveBeenCalledWith(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+          owner,
+        );
+      });
+      expect(
+        registry.peek(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+        ),
+      ).toBe(owner);
+    } finally {
+      releaseHandle.mockRestore();
+    }
+  });
+
+  it("keeps an at-floor remote owner when its absent endpoint is covered by restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const { result } = renderHook(
+      () =>
+        useChatSessionHandle(
+          "chat-remote-restart-at-floor",
+          REMOTE_HOST_ID,
+          true,
+        ),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
 });
 
 describe("useChatSessionHandle retryFromUser silence gate", () => {

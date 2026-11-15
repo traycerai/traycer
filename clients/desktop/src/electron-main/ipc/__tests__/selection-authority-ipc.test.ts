@@ -10,6 +10,15 @@ import {
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
+import {
+  FakeNativeWebSocket,
+  openAckFrame,
+  sentFramesOfKind,
+  sentTokens,
+  settle,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
@@ -78,6 +87,16 @@ vi.mock(
     >()),
     fetchRegisteredHostsViaHttp: fetchRegisteredHostsMock,
   }),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
 );
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
@@ -899,7 +918,7 @@ describe("local auth-session restore", () => {
     host.setSnapshot({
       hostId: "local-host",
       websocketUrl: "ws://127.0.0.1:1",
-      version: "1.0.0",
+      version: MINIMUM_HOST_VERSION,
       pid: 123,
       systemHostName: "test-host",
       displayName: "Test Host",
@@ -961,6 +980,121 @@ describe("local auth-session restore", () => {
       bridge.dispose();
       await rm(directory, { recursive: true, force: true });
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("carries the PID snapshot version through the installed inventory endpoint and refuses a below-floor reconnect", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+
+    const host = new FakeHost();
+    const floorSnapshot: DesktopPublishedHostSnapshot = {
+      hostId: "local-host",
+      websocketUrl: "ws://127.0.0.1:4455/ws",
+      version: MINIMUM_HOST_VERSION,
+      pid: 123,
+      systemHostName: "test-host",
+      displayName: "Test Host",
+      availability: "available",
+    };
+    host.setSnapshot(floorSnapshot);
+    const { bridge } = await buildBridge({
+      signedIn: { userId: "user-a", token: "user-sign-in-token" },
+      host,
+    });
+    await bridge.hostTokens.adopt(
+      "user-a",
+      floorSnapshot.hostId,
+      {
+        token: "host-only-token",
+        expiresAtMs: Date.now() + 60_000,
+      },
+      bridge.hostTokens.era("user-a"),
+    );
+
+    const observedSnapshotVersions: Array<string | null> = [];
+    const readSnapshot = host.getSnapshot.bind(host);
+    const snapshotReader = vi
+      .spyOn(host, "getSnapshot")
+      .mockImplementation(() => {
+        const snapshot = readSnapshot();
+        observedSnapshotVersions.push(snapshot?.version ?? null);
+        return snapshot;
+      });
+
+    try {
+      bridge.install();
+      await vi.waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(2),
+      );
+      const initialSockets = [...FakeNativeWebSocket.instances];
+      for (const socket of initialSockets) socket.fireOpen();
+      await settle();
+      for (const socket of initialSockets) {
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1);
+        socket.fireMessage(openAckFrame([], null));
+      }
+      expect(sentTokens()).toContain("host-only-token");
+
+      const subscriptionMethodsFor = (socket: FakeNativeWebSocket): string[] =>
+        sentFramesOfKind(socket, "subscribe").flatMap((frame) =>
+          typeof frame.method === "string" ? [frame.method] : [],
+        );
+      await vi.waitFor(() => {
+        const methods = initialSockets.flatMap(subscriptionMethodsFor);
+        expect(methods).toContain("host.hostInventory.subscribe");
+        expect(methods).toContain("host.browserPreparation.subscribe");
+      });
+      const inventorySockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes("host.hostInventory.subscribe"),
+      );
+      const browserPreparationSockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes(
+          "host.browserPreparation.subscribe",
+        ),
+      );
+      expect(inventorySockets).toHaveLength(1);
+      expect(browserPreparationSockets).toHaveLength(1);
+      const initialSocket = inventorySockets[0];
+      if (initialSocket === undefined) {
+        throw new Error("at-floor local inventory subscription was not opened");
+      }
+      const browserPreparationSocket = browserPreparationSockets.at(0);
+      if (browserPreparationSocket === undefined) {
+        throw new Error("browser preparation subscription was not opened");
+      }
+      expect(browserPreparationSocket).not.toBe(initialSocket);
+
+      const readsBeforeReconnect = observedSnapshotVersions.length;
+      const belowFloorSnapshot = { ...floorSnapshot, version: "1.5.4" };
+      expect({ ...belowFloorSnapshot, version: floorSnapshot.version }).toEqual(
+        floorSnapshot,
+      );
+      host.setSnapshot(belowFloorSnapshot);
+      initialSocket.fireClose(1006, "inventory socket interrupted");
+      await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS);
+      await settle();
+
+      expect(observedSnapshotVersions.slice(readsBeforeReconnect)).toContain(
+        "1.5.4",
+      );
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      const inventorySocketsAfterReconnect =
+        FakeNativeWebSocket.instances.filter((socket) =>
+          subscriptionMethodsFor(socket).includes(
+            "host.hostInventory.subscribe",
+          ),
+        );
+      expect(inventorySocketsAfterReconnect).toHaveLength(1);
+      expect(inventorySocketsAfterReconnect.at(0)).toBe(initialSocket);
+    } finally {
+      bridge.dispose();
+      snapshotReader.mockRestore();
+      await settle();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      FakeNativeWebSocket.instances.length = 0;
     }
   });
 

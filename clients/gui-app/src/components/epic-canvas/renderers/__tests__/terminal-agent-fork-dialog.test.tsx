@@ -310,7 +310,7 @@ function RealPrepareMutationProvider(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly children: ReactNode;
 }): ReactNode {
-  const prepare = useAgentStartTerminalSession(props.client);
+  const prepare = useAgentStartTerminalSession(props.client, "gesture");
   return (
     <prepareMutationContext.Provider value={prepare}>
       {props.children}

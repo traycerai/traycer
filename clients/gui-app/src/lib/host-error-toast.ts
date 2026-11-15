@@ -6,6 +6,13 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  hostDirectoryEntryNeedsUpdate,
+  MINIMUM_HOST_VERSION,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
@@ -14,7 +21,7 @@ import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
-import { drawnDoorCoverHost } from "@/stores/host/drawn-door-cover-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
 import { hostOfFailedCall } from "@/lib/host/refused-host";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -318,6 +325,10 @@ export function toastFromHostError(
   // saying "couldn't do X" for something they themselves cancelled is no
   // better.
   if (isSilentHostError(error)) return;
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
     showStaleWriteNotice(staleWrite);
@@ -419,6 +430,9 @@ export type SendRefusal =
 export function classifySendRefusal(error: unknown): SendRefusal {
   if (!(error instanceof HostRpcError) || isSilentHostError(error)) {
     return { kind: "silent" };
+  }
+  if (error instanceof HostBelowMinimumError) {
+    return { kind: "actionable", message: HOST_UPDATE_SKEW_COPY.title };
   }
   const byReason = reasonedDoorRefusal(error);
   if (byReason !== null) {
@@ -579,6 +593,7 @@ export function toastFromBackgroundHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (error instanceof HostBelowMinimumError) return;
   if (
     error.code === "E_HOST_UNSUPPORTED" &&
     reasonedDoorRefusal(error) === null
@@ -592,6 +607,10 @@ export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   if (shouldSuppressRecoverableUnauthorized(error)) return;
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
@@ -642,7 +661,7 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
 /** Whether the window has the door cover of the host `error` was sent to on screen. */
 function doorStateCovers(error: HostRpcError): boolean {
   const hostId = hostOfFailedCall(error);
-  return hostId !== null && drawnDoorCoverHost() === hostId;
+  return hostId !== null && isDoorCoverDrawn(hostId);
 }
 
 /**
@@ -1083,4 +1102,22 @@ function emitHostFatalErrorNotification(
     detail: error.fatalDetails.reason,
     payload: null,
   });
+}
+
+function hostUpdateNeededToast(): void {
+  toast(HOST_UPDATE_SKEW_COPY.title, { id: TRANSPORT_NOTICE_TOAST_ID });
+}
+
+/** Check at a press, including presses that schedule work for a later effect. */
+export function showHostUpdateNeededForGesture(hostId: string | null): boolean {
+  if (hostId === null) return false;
+  const entry = readHostDirectoryEntry(hostId);
+  if (
+    entry === null ||
+    !hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  ) {
+    return false;
+  }
+  hostUpdateNeededToast();
+  return true;
 }

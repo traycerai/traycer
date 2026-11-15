@@ -209,8 +209,9 @@ vi.mock(
       ...actual,
       useAgentStartTerminalSession: (
         client: HostClient<HostRpcRegistry> | null,
+        origin: "gesture" | "automatic",
       ) => {
-        const result = actual.useAgentStartTerminalSession(client);
+        const result = actual.useAgentStartTerminalSession(client, origin);
         useEffect(() => hooks.setPrepareError(result.error), [result.error]);
         return result;
       },

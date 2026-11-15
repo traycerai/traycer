@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   Suspense,
   useCallback,
@@ -57,6 +58,7 @@ import {
   adoptWarmSessionInstance,
   peekKeptAliveXtermHostGrid,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
@@ -109,7 +111,9 @@ export function LandingTerminalTile(
   return (
     <TabHostProvider hostId={props.tab.hostId}>
       <PaneVisibilityContext.Provider value={tileVisible}>
-        <LandingTerminalTileBody {...props} onScreen={onScreen} />
+        <HostTeamPeopleProvider hostId={props.tab.hostId}>
+          <LandingTerminalTileBody {...props} onScreen={onScreen} />
+        </HostTeamPeopleProvider>
       </PaneVisibilityContext.Provider>
     </TabHostProvider>
   );
@@ -426,7 +430,10 @@ function LandingTerminalDurableState(props: {
       <LandingTerminalErrorState
         message={props.requestError.message}
         isPending={props.requestPending}
-        onRetry={props.retry}
+        onRetry={() => {
+          if (showHostUpdateNeededForGesture(props.tab.hostId)) return;
+          props.retry();
+        }}
       />
     );
   }

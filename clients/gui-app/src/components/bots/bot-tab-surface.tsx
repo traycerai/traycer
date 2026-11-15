@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
+  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -64,6 +65,10 @@ import type {
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
+import {
+  BotMayChangeContext,
+  useReaderMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
@@ -872,6 +877,9 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  // The reader's standing on the bot's environment, for its settings and its
+  // failed turns' Switch, from the list the tab already reads.
+  const mayChangeBot = useReaderMayChangeBot(client, subscription.snapshot);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
@@ -906,26 +914,28 @@ function BotTabBody(props: {
   }
 
   return (
-    <BotTabContent
-      botId={botId}
-      hostId={hostId}
-      snapshot={snapshot}
-      pausedReason={openState.kind === "paused" ? openState.reason : null}
-      reopenFailure={openError}
-      onReopen={reopen}
-      reopenPending={openPending}
-      streamError={subscription.error}
-      snapshotFresh={subscription.snapshotFresh}
-      onRetry={resubscribe}
-      view={view}
-      onViewChange={changeView}
-      level2={props.level2}
-      tiles={props.tiles}
-      onRailDrawn={props.onRailDrawn}
-      threadsView={threadsView}
-      onDeleted={deleted}
-      mainBotIds={props.mainBotIds}
-    />
+    <BotMayChangeContext value={mayChangeBot}>
+      <BotTabContent
+        botId={botId}
+        hostId={hostId}
+        snapshot={snapshot}
+        pausedReason={openState.kind === "paused" ? openState.reason : null}
+        reopenFailure={openError}
+        onReopen={reopen}
+        reopenPending={openPending}
+        streamError={subscription.error}
+        snapshotFresh={subscription.snapshotFresh}
+        onRetry={resubscribe}
+        view={view}
+        onViewChange={changeView}
+        level2={props.level2}
+        tiles={props.tiles}
+        onRailDrawn={props.onRailDrawn}
+        threadsView={threadsView}
+        onDeleted={deleted}
+        mainBotIds={props.mainBotIds}
+      />
+    </BotMayChangeContext>
   );
 }
 
@@ -1531,6 +1541,7 @@ function BotTabContent(props: {
   // Only a personal environment's bot may answer posts itself; a list not
   // read yet draws no reply-mode control.
   const personal = environment?.ownerKind === "user";
+  const mayChangeBot = use(BotMayChangeContext);
   const setupHistory = useChannelSetupHistory({
     client,
     hostId,
@@ -1634,7 +1645,12 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
+  const activeTasks = useBotActiveTasks(
+    snapshot.tasks,
+    hostId,
+    snapshotFresh,
+    botId,
+  );
   const showMessages = useCallback(() => {
     closeSession();
     onViewChange("messages");
@@ -1808,6 +1824,7 @@ function BotTabContent(props: {
               <BotChannelSettingsPanel
                 bot={botWithProfileChoice(snapshot.bot, botList.data)}
                 personal={personal}
+                mayChange={mayChangeBot}
                 channelId={snapshot.bot.appConversationChatId}
                 environmentBots={environmentBots}
                 onClose={closeSettings}
@@ -1974,7 +1991,7 @@ type BotChannelHeaderProps = {
   readonly onOpenSearch: (() => void) | null;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
-  /** How many tasks the Activity list shows. */
+  /** How many tasks are active, excluding recently ended tracking. */
   readonly activityCount: number;
 };
 
@@ -2116,7 +2133,7 @@ function BotChannelActions({
   );
 }
 
-/** Activity counts the tasks shown in the channel’s Activity view. */
+/** The Activity badge counts active tasks, not recent ended rows. */
 function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
   const { settingsOpen } = props;
   const botHeaderSlot = useMobileBotHeaderSlot();

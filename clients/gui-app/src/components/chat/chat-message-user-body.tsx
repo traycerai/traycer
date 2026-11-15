@@ -97,7 +97,8 @@ import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { A2APeerPicture, AgentHeaderLink } from "./segments/agent-header-link";
+import { A2APeerPicture } from "./segments/a2a-peer-picture";
+import { AgentHeaderLink } from "./segments/agent-header-link";
 import { AgentMessageBody } from "./segments/agent-message-body";
 import {
   ReplyExpectedIcon,

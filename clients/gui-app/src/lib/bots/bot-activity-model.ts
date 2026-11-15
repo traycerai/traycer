@@ -4,14 +4,15 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
  * Why a task is on the bot's Activity list, in the list's order: a
  * surface in it waits on a person, an agent in it is working, an agent in it
  * carries a result not yet seen, it is a periodic check-in still tracking,
- * or its quiet state is not yet attested.
+ * or its quiet state is not yet attested. Ended tracking is listed separately.
  */
 type BotActiveBand =
   | "needs-you"
   | "working"
   | "unseen"
   | "periodic"
-  | "unknown";
+  | "unknown"
+  | "ended";
 
 /** One row of a bot's Activity list (Tracy Bots, decision 182). */
 export type BotActiveTask = {
@@ -32,13 +33,15 @@ const BAND_RANK: Readonly<Record<BotActiveBand, number>> = {
   unseen: 2,
   periodic: 3,
   unknown: 4,
+  ended: 5,
 };
 
 /**
  * The tasks the bot started that are still active, in the list's order: a
  * task is listed while anything in it works, waits on a person or has a
  * result not yet seen, or while it checks in periodically. Quiet and seen,
- * it leaves; History keeps it. Within a band the newest activity is first.
+ * it leaves the active group; recent ended tracking is listed separately.
+ * Within a band the newest activity is first.
  */
 export function activeTasksOf(input: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
@@ -50,7 +53,7 @@ export function activeTasksOf(input: {
 }): ReadonlyArray<BotActiveTask> {
   const rows: BotActiveTask[] = [];
   for (const task of input.tasks) {
-    if (task.endedReason === "deleted") continue;
+    if (task.state === "ended") continue;
     const working = input.workingInTask(task.taskId);
     const band = activeBandOf(
       task,

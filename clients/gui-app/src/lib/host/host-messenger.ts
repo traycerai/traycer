@@ -1,3 +1,7 @@
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -5,6 +9,7 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { v4 as uuidv4 } from "uuid";
 import type {
   BearerSourceProvider,
@@ -124,6 +129,8 @@ export function buildRawHostMessengerForTarget<
 >(
   params: BuildRawHostMessengerForTargetParams<Registry>,
 ): BuiltHostMessenger<Registry> | null {
+  if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
+    return null;
   if (isPoolHostDirectoryEntry(params.target)) {
     // The server pool: the same session as a host's, on a direct leg. What
     // `open` presents (the user bearer, `authz: null`, no member credential)
@@ -245,8 +252,8 @@ export interface RuntimeHostMessengerBinding<
   readonly dispose: () => void;
   /**
    * Called on every host list change. Drops a `SANDBOX_FROZEN` verdict once
-   * the list shows that sandbox thawed or gone, so a top-up inside the
-   * verdict's TTL is not still refused locally.
+   * the list shows that sandbox thawed or gone. Resumes cancelled reads when
+   * a host's reported version reaches the minimum, including this computer.
    */
   readonly hostListChanged: () => void;
 }
@@ -308,7 +315,7 @@ export function buildRuntimeHostMessenger<
     messenger,
     reset: () => messenger.reset(),
     dispose: () => messenger.dispose(),
-    hostListChanged: () => messenger.dropThawedSandboxVerdicts(),
+    hostListChanged: () => messenger.hostListChanged(),
   };
 }
 
@@ -344,7 +351,8 @@ class RuntimeHostMessenger<
     hostId: string,
     fatal: FatalErrorDetails,
   ) => void;
-  private readonly localMessenger: WsRpcClient<Registry>;
+  private localMessenger: WsRpcClient<Registry> | null = null;
+  private readonly belowMinimumHostIds = new Set<string>();
   /**
    * The remote bindings, keyed by the host they serve. Two slots: the server
    * pool's, and ONE host's. A request for a different remote host replaces
@@ -428,9 +436,12 @@ class RuntimeHostMessenger<
     this.requestId = params.requestId;
     this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
     this.onRemoteSessionTerminal = params.onRemoteSessionTerminal;
-    this.localMessenger = new WsRpcClient<Registry>({
-      registry: params.registry,
-      requestId: params.requestId,
+  }
+
+  private localMessengerForRequest(): WsRpcClient<Registry> {
+    this.localMessenger ??= new WsRpcClient<Registry>({
+      registry: this.registry,
+      requestId: this.requestId,
       webSocketFactory: browserWebSocketFactory,
       dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
       frameTimeoutMs: DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS,
@@ -440,10 +451,11 @@ class RuntimeHostMessenger<
       clientIdentity: getGuiClientIdentity(),
       doorFor: appHostDoorObserver,
       hostBearerFor: hostTokenBearerFor(
-        localDoorHostTokens(params.hostTokens),
+        localDoorHostTokens(this.hostTokens),
         noteHostTokenRefusal,
       ),
     });
+    return this.localMessenger;
   }
 
   request<Method extends keyof Registry & string>(
@@ -466,9 +478,11 @@ class RuntimeHostMessenger<
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
+    const belowMinimumRejection = this.rejectIfBelowMinimum(target, method);
+    if (belowMinimumRejection !== null) return belowMinimumRejection;
     if (target === null || servesOverLocalSocket(target)) {
       this.releaseHostBindings(null);
-      return this.localMessenger.request(method, params, options);
+      return this.localMessengerForRequest().request(method, params, options);
     }
 
     const verdictRejection = this.rejectIfTerminalVerdict(
@@ -513,9 +527,11 @@ class RuntimeHostMessenger<
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
+    const belowMinimumRejection = this.rejectIfBelowMinimum(target, method);
+    if (belowMinimumRejection !== null) return belowMinimumRejection;
     if (target === null || servesOverLocalSocket(target)) {
       this.releaseHostBindings(null);
-      return this.localMessenger.requestWithResponseTimeout(
+      return this.localMessengerForRequest().requestWithResponseTimeout(
         method,
         params,
         responseTimeoutMs,
@@ -563,10 +579,11 @@ class RuntimeHostMessenger<
    */
   dispose(): void {
     this.disposed = true;
+    this.belowMinimumHostIds.clear();
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
-    this.localMessenger.releaseIdleLocalSessions();
+    this.localMessenger?.releaseIdleLocalSessions();
   }
 
   reset(): void {
@@ -578,14 +595,30 @@ class RuntimeHostMessenger<
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
-    this.localMessenger.releaseIdleLocalSessions();
+    this.localMessenger?.releaseIdleLocalSessions();
     this.terminalVerdictByHost.clear();
+    this.belowMinimumHostIds.clear();
   }
 
   private detachOrphanAvailability(): void {
     for (const detach of [...this.owedOrphanDetachByHost.values()]) {
       detach();
     }
+  }
+
+  private rejectIfBelowMinimum(
+    target: HostDirectoryEntry | null,
+    method: string,
+  ): Promise<never> | null {
+    if (
+      target === null ||
+      !hostDirectoryEntryNeedsUpdate(target, MINIMUM_HOST_VERSION)
+    )
+      return null;
+    this.belowMinimumHostIds.add(target.hostId);
+    return Promise.reject(
+      new HostBelowMinimumError({ requestId: this.requestId(), method }),
+    );
   }
 
   private remoteMessengerFor(
@@ -906,9 +939,27 @@ class RuntimeHostMessenger<
   }
 
   /** See {@link RuntimeHostMessengerBinding.hostListChanged}. */
-  dropThawedSandboxVerdicts(): void {
+  hostListChanged(): void {
+    for (const hostId of [...this.remoteBindings.keys()]) {
+      const target = this.resolveTarget(hostId);
+      if (
+        target !== null &&
+        hostDirectoryEntryNeedsUpdate(target, MINIMUM_HOST_VERSION)
+      ) {
+        this.releaseBinding(hostId);
+      }
+    }
     for (const hostId of [...this.terminalVerdictByHost.keys()]) {
       this.dropVerdictIfThawed(hostId);
+    }
+    for (const hostId of this.belowMinimumHostIds) {
+      const target = this.resolveTarget(hostId);
+      if (target === null) {
+        this.belowMinimumHostIds.delete(hostId);
+      } else if (!hostDirectoryEntryNeedsUpdate(target, MINIMUM_HOST_VERSION)) {
+        this.belowMinimumHostIds.delete(hostId);
+        this.onRemoteAvailabilityRecovered(hostId);
+      }
     }
   }
 

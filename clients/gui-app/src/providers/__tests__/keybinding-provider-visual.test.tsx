@@ -509,7 +509,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     renderProbeWithExtra(
       buildMutableRouterSource("/epics/e1").router,
       <TooltipProvider>
-        <ArtifactExpansion title="Doc">
+        <ArtifactExpansion title="Doc" commentsInline>
           <ArtifactExpandButton />
         </ArtifactExpansion>
       </TooltipProvider>,

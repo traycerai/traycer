@@ -3,12 +3,21 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderTestingLibrary,
   screen,
+  within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  createTerminalViewerTestSession,
+  type TerminalViewerTestSession,
+} from "@/components/terminals/__tests__/terminal-viewer-test-support";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -24,6 +33,7 @@ import {
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (the title it reads).
@@ -46,6 +56,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 // QueryClient, and no tile here is a chat the projection lacks a record for.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({ data: undefined }),
+  useCloudChatViewerId: () => "user-1",
 }));
 
 /**
@@ -130,6 +141,14 @@ const mocks = vi.hoisted(() => ({
   handle: { current: null as OpenedStoreForTest | null },
 }));
 
+let queryClient: QueryClient;
+
+function render(ui: ReactNode) {
+  return renderTestingLibrary(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 // The display title's live-artifact read resolves through the open session.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => mocks.handle.current,
@@ -192,6 +211,14 @@ const TERMINAL_TILE: EpicCanvasTileRef = {
   hostId: "host-A",
   cwd: "/ws",
 };
+
+const terminalDirectory = new Map<
+  string,
+  { readonly displayName: string; readonly avatarUrl: string | null }
+>();
+const terminalDirectoryResolver: BotMemberResolver = (userId) =>
+  terminalDirectory.get(userId) ?? null;
+let terminalViewerSession: TerminalViewerTestSession | null = null;
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -261,10 +288,22 @@ function newSession(): OpenedStoreForTest {
 
 describe("<MobileCurrentTileBar trailing={null} />", () => {
   beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     mocks.handle.current = newSession();
   });
   afterEach(() => {
     cleanup();
+    queryClient.clear();
+    if (terminalViewerSession !== null) {
+      terminalViewerSession.dispose();
+      terminalViewerSession = null;
+    }
+    terminalDirectory.clear();
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
   });
@@ -378,6 +417,43 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       ).toBe(true);
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
         "Deciding",
+      );
+    });
+
+    it("shows the live viewer in the phone's current-tile bar", () => {
+      stubImmediateImage();
+      terminalDirectory.set("phone-viewer", {
+        displayName: "Phone Viewer",
+        avatarUrl: "https://images.example.test/phone-viewer.png",
+      });
+      terminalViewerSession = createTerminalViewerTestSession(
+        TERMINAL_TILE.instanceId,
+        TERMINAL_TILE.hostId,
+        "phone-viewers-session",
+      );
+      act(() => {
+        terminalViewerSession?.emitViewers(
+          ["phone-viewer"],
+          "phone-viewers-session",
+        );
+      });
+
+      render(
+        <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={TERMINAL_TILE}
+            onSwitch={null}
+            trailing={null}
+          />
+        </PersonMembersContext.Provider>,
+      );
+
+      const viewers = screen.getByTestId("terminal-viewers");
+      const faces = within(viewers).getAllByTestId("person-avatar");
+      expect(faces).toHaveLength(1);
+      expect(faces[0]?.querySelector("img")?.getAttribute("src")).toBe(
+        "https://images.example.test/phone-viewer.png",
       );
     });
   });

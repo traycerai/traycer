@@ -1,4 +1,5 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { ChatStartedByLine } from "@/components/chat/chat-started-by-line";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
 import {
   resolveChatSandbox,
@@ -336,9 +337,11 @@ import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
-  resolveSenderLabel,
+  otherPersonSenderId,
+  resolvePersonSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
@@ -812,6 +815,7 @@ function ChatTileForChat(props: ChatTileProps) {
         data-node-id={node.id}
         className="flex h-full min-h-0 flex-col"
       >
+        <ChatStartedByLine epicId={epicId} chatId={node.id} />
         {deadTileBanner}
         <ChatTileCatchingUpBanner
           chat={servingKey}
@@ -831,6 +835,7 @@ function ChatTileForChat(props: ChatTileProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+      <ChatStartedByLine epicId={epicId} chatId={node.id} />
       {deadTileBanner}
       <ChatTileCatchingUpBanner
         chat={servingKey}
@@ -2600,12 +2605,19 @@ function useChatTileSessionViewModel(
     tabHostCatalogClient,
     surfaceVisible,
   );
+  const identifyPerson = usePersonIdentityResolver();
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
-        resolveSenderLabel(sender, displayContext),
-      resolveUserSenderAvatarUrl: () => null,
+        resolvePersonSenderLabel(sender, displayContext, identifyPerson),
+      resolveUserSenderAvatarUrl: (sender) => {
+        const userId = otherPersonSenderId(sender, profile);
+        return userId === null
+          ? null
+          : (identifyPerson(userId)?.avatarUrl ?? null);
+      },
+      resolveUserSenderId: (sender) => otherPersonSenderId(sender, profile),
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2614,7 +2626,7 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext, resolveRunProfileLabel],
+    [displayContext, identifyPerson, profile, resolveRunProfileLabel],
   );
   // Read from the full store: its effective activity includes the handoff
   // carry, even before the next host turn is named.

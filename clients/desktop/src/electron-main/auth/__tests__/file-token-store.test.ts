@@ -27,6 +27,7 @@ import {
   writeCredentialsFile,
   type StoredCredentials,
 } from "@traycer/protocol/config/credentials";
+import { acquireCredentialsLock } from "@traycer/protocol/config/credentials-lock";
 import type { TokenStoreChange } from "@traycer-clients/shared/platform/runner-host";
 
 const AUTHN_BASE_URL = "http://authn.file-token-store.test";
@@ -277,6 +278,40 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(store.getSignInStorageLow()).toBe(false);
   });
 
+  it("saves the sign-in once another writer lets go of the credentials lock", async () => {
+    const store = makeStore();
+    // A second writer takes its turn, as the desktop does (12 s wait, 50 ms
+    // poll): the store's own start-up work (reserve fill, recovery gate) can
+    // hold the lock for a moment as the store is made.
+    const otherWriter = await acquireCredentialsLock({
+      lockPath: `${credentialsPath()}.lock`,
+      reason: "other writer",
+      waitMs: 12_000,
+      pollIntervalMs: 50,
+      signal: null,
+    });
+    if (!otherWriter.acquired) {
+      throw new Error("the other writer's lock was not acquired");
+    }
+    let letGo = false;
+    setTimeout(() => {
+      letGo = true;
+      void otherWriter.handle.release();
+    }, 200);
+
+    await expect(
+      store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY),
+    ).resolves.toBe("saved");
+
+    expect(letGo).toBe(true);
+    expect(await store.get()).toEqual({
+      token: "tok-1",
+      refreshToken: "rt-1",
+      savedAt: expect.any(String),
+      user: { ...IDENTITY },
+    });
+  });
+
   it("keeps the FileTokenStore pressure snapshot in sync with save results and continuation callbacks", async () => {
     vi.resetModules();
     const reporter: { current: ((pressure: "low" | "clear") => void) | null } =
@@ -481,6 +516,9 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       if (deliverWatchEvent === undefined) {
         throw new Error("desktop watcher was not installed");
       }
+      // Only the watcher's debounce needs the fake clock. The saves above
+      // wait on the credentials lock with real timers, so a lock held for a
+      // moment is waited out instead of parking on a clock nobody advances.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       deliverWatchEvent("change", basename(credentialsPath()));
       await vi.advanceTimersByTimeAsync(100);

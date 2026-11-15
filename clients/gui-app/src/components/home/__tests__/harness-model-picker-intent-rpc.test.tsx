@@ -274,7 +274,12 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClientProvider,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type { Key, ReactElement, ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -303,6 +308,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HeldTimers } from "@/lib/host/test-support/held-timers";
 import { createAppQueryClient } from "@/lib/query-client";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { HARNESS_CATALOG_REFRESH_AFTER_MS } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -430,6 +436,7 @@ interface PickerRpcFixture {
   readonly requiredModelFloors: Array<
     HostRequestOptions["requiredHostMethodVersion"]
   >;
+  readonly queryClient: QueryClient;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
@@ -557,7 +564,7 @@ function createPickerRpcFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { calls, requiredModelFloors, Wrapper };
+  return { calls, requiredModelFloors, queryClient, Wrapper };
 }
 
 function countFor(
@@ -1075,21 +1082,81 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("keeps the host's specific model error visible when the profile request reaches the host", async () => {
-    providersQueryMock.providers = [codexProviderWithProfiles()];
-    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
-      profileModelsErrorMessage: "Account model catalog is unavailable.",
-    });
-    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
-    await screen.findByRole("button", { name: /^Select model/ });
+    // The app's own query retry (one retry after 1000 ms) stays real. Its
+    // backoff timer is held, so the test observes the pending retry and fires
+    // exactly that timer instead of racing a real second. Install before the
+    // query client exists; the notify scheduler stays real so DOM updates flow.
+    const held = new HeldTimers();
+    try {
+      held.install();
+      notifyManager.setScheduler(defaultScheduler);
+      const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
+        profileModelsErrorMessage: "Account model catalog is unavailable.",
+      });
+      try {
+        providersQueryMock.providers = [codexProviderWithProfiles()];
+        renderPickerWithFixture(
+          fixture,
+          profileSelection("codex", "profile-work"),
+        );
+        await screen.findByRole("button", { name: /^Select model/ });
 
-    await openPickerByTriggerName(/^Select model/);
-    await screen.findByRole("option", {
-      name: "Account model catalog is unavailable.",
-    });
-    expect(
-      screen.queryByText("Update this host to load models for this account."),
-    ).toBeNull();
-    expect(countFor(fixture.calls.listModels, "codex")).toBeGreaterThan(0);
+        await openPickerByTriggerName(/^Select model/);
+        // The first profile RPC failed and the query's retry backoff is pending.
+        const retry = await waitFor(() => {
+          const pending = held
+            .pending()
+            .filter(
+              (timer) =>
+                timer.kind === "timeout" &&
+                timer.delay === 1_000 &&
+                /query-core\/build\/[^/]+\/retryer\./.test(timer.stack),
+            );
+          expect(pending).toHaveLength(1);
+          return pending[0];
+        });
+        expect(fixture.requiredModelFloors).toEqual([
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        ]);
+        expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
+        expect(screen.getByText("Loading models")).toBeTruthy();
+        expect(
+          screen.queryByRole("option", {
+            name: "Account model catalog is unavailable.",
+          }),
+        ).toBeNull();
+
+        act(() => {
+          held.fire(retry);
+        });
+        await screen.findByRole("option", {
+          name: "Account model catalog is unavailable.",
+        });
+        expect(fixture.requiredModelFloors).toEqual([
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        ]);
+        expect(countFor(fixture.calls.listModels, "codex")).toBe(2);
+        expect(screen.queryByText("Loading models")).toBeNull();
+        expect(
+          held.pending().filter((timer) => /retryer\./.test(timer.stack)),
+        ).toEqual([]);
+        expect(
+          screen.queryByText(
+            "Update this host to load models for this account.",
+          ),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Host updates" }),
+        ).toBeNull();
+      } finally {
+        cleanup();
+        await fixture.queryClient.cancelQueries();
+        fixture.queryClient.clear();
+      }
+    } finally {
+      held.restore();
+    }
   });
 
   it("issues zero listModels and zero listCommands calls on a programmatic selection change to an unavailable/disabled harness", async () => {
