@@ -12,7 +12,6 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   hostNotificationHooksSave,
-  hostNotificationHooksSaveUpgradeV3ToV4,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
   hostNotificationHooksSaveV40,
@@ -239,12 +238,13 @@ describe("notification hook save account part @4.0", () => {
     });
     const minorRegistry = {
       "host.notificationHooks.save": {
-        ...hostRpcRegistry["host.notificationHooks.save"],
         3: {
-          ...hostRpcRegistry["host.notificationHooks.save"][3],
           latestMinor: 1,
           versions: {
-            ...hostRpcRegistry["host.notificationHooks.save"][3].versions,
+            0: {
+              contract: hostNotificationHooksSaveV30,
+              upgradeFromPreviousVersion: null,
+            },
             1: {
               contract: hypotheticalV31,
               upgradeFromPreviousVersion: upgradeV30ToV31,
