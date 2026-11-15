@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
 import {
@@ -276,12 +277,13 @@ describe("refreshConnectedAccountSettings", () => {
     const session = readyRemoteSession();
     const sendStarted = deferred<void>();
     const sendGate = deferred<void>();
-    const sendUnary = vi.fn(async () => {
+    const sendUnary: FakeRemoteSession["sendUnary"] = async () => {
       sendStarted.resolve();
       await sendGate.promise;
-      return {};
-    });
-    session.sendUnary = sendUnary;
+      return hostAccountSettingsRefreshV10.responseSchema.parse({});
+    };
+    const sendSpy = vi.fn(sendUnary);
+    session.sendUnary = sendSpy;
     const owner = acquireRemoteSession(
       identity,
       remoteSessionPolicy,
@@ -312,7 +314,7 @@ describe("refreshConnectedAccountSettings", () => {
     sendGate.resolve();
     await refresh;
 
-    expect(sendUnary).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     expect(session.closeCalls).toBe(1);
     expect(requestedHosts).toEqual([]);
