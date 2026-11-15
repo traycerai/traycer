@@ -26,13 +26,13 @@ const UNEXPLAINED_ROW_RECHECK_MS = 60_000;
 interface PublicationTargetsRefreshState {
   mounts: number;
   lastRefresh: string | null;
+  readonly seenRows: Set<string>;
+  readonly pendingRows: Map<string, number>;
   readonly recheckedRows: Set<string>;
-}
-
-interface PublicationTargetsRechecks {
-  readonly seen: Set<string>;
-  readonly pending: Map<string, number>;
-  timer: number | null;
+  inFlight: {
+    readonly rows: ReadonlySet<string>;
+    readonly dataUpdateCount: number;
+  } | null;
 }
 
 // Share claims between observers without retaining a query after cache GC.
@@ -47,10 +47,35 @@ function publicationTargetsRefreshState(
   const state: PublicationTargetsRefreshState = {
     mounts: 0,
     lastRefresh: null,
+    seenRows: new Set(),
+    pendingRows: new Map(),
     recheckedRows: new Set(),
+    inFlight: null,
   };
   refreshStates.set(query, state);
   return state;
+}
+
+function settlePublicationTargetsRecheck(
+  query: Query,
+  state: PublicationTargetsRefreshState,
+): void {
+  const inFlight = state.inFlight;
+  if (inFlight === null || query.state.fetchStatus !== "idle") return;
+  // Query's write count also detects answers landing in the same millisecond.
+  if (query.state.dataUpdateCount > inFlight.dataUpdateCount) {
+    for (const id of inFlight.rows) state.recheckedRows.add(id);
+  } else if (
+    query.state.status === "error" &&
+    !(
+      query.state.error instanceof HostRpcError &&
+      query.state.error.code === "E_HOST_UNSUPPORTED"
+    )
+  ) {
+    const deadline = Date.now() + UNEXPLAINED_ROW_RECHECK_MS;
+    for (const id of inFlight.rows) state.pendingRows.set(id, deadline);
+  }
+  state.inFlight = null;
 }
 
 interface PublicationTargetsAnswer extends ResponseOfMethod<
@@ -244,16 +269,19 @@ function useChatPublicationTargetsQuery(
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
-  const { data, dataUpdatedAt, isEnabled, isFetching, refetch } = query;
+  const {
+    data,
+    dataUpdatedAt,
+    errorUpdatedAt,
+    isEnabled,
+    isFetching,
+    refetch,
+  } = query;
   const unexplained = useMemo(() => {
     const ids = unexplainedCloudChatIds(args.chatIds, ownCloudChatIds, data);
     return { ids, key: JSON.stringify(ids) };
   }, [args.chatIds, ownCloudChatIds, data]);
-  const rechecks = useRef<PublicationTargetsRechecks>({
-    seen: new Set<string>(),
-    pending: new Map<string, number>(),
-    timer: null,
-  });
+  const recheckTimer = useRef<number | null>(null);
   const [recheckTick, setRecheckTick] = useState(0);
   const unsupported = query.error?.code === "E_HOST_UNSUPPORTED";
   const partial =
@@ -267,55 +295,72 @@ function useChatPublicationTargetsQuery(
   useEffect(() => {
     const cached = queryClient.getQueryCache().get(queryHash);
     if (cached === undefined) return;
-    const schedule = rechecks.current;
     const state = publicationTargetsRefreshState(cached);
     state.mounts += 1;
     return () => {
-      if (schedule.timer !== null) window.clearTimeout(schedule.timer);
-      schedule.seen.clear();
-      schedule.pending.clear();
+      if (recheckTimer.current !== null)
+        window.clearTimeout(recheckTimer.current);
       state.mounts -= 1;
       if (state.mounts === 0) {
+        state.seenRows.clear();
+        state.pendingRows.clear();
         state.recheckedRows.clear();
+        state.inFlight = null;
         state.lastRefresh = null;
       }
     };
   }, [queryClient, queryHash]);
 
   useEffect(() => {
-    const schedule = rechecks.current;
-    if (schedule.timer !== null) window.clearTimeout(schedule.timer);
-    schedule.timer = null;
+    if (recheckTimer.current !== null)
+      window.clearTimeout(recheckTimer.current);
+    recheckTimer.current = null;
+    const cached = queryClient.getQueryCache().get(queryHash);
+    if (cached === undefined) return;
+    const state = publicationTargetsRefreshState(cached);
+    settlePublicationTargetsRecheck(cached, state);
     if (!isEnabled || unsupported) return;
     const now = Date.now();
     const current = new Set(unexplained.ids);
-    for (const id of schedule.pending.keys()) {
-      if (!current.has(id)) schedule.pending.delete(id);
+    for (const id of state.pendingRows.keys()) {
+      if (!current.has(id)) state.pendingRows.delete(id);
     }
     for (const id of unexplained.ids) {
-      if (schedule.seen.has(id)) continue;
-      schedule.seen.add(id);
-      schedule.pending.set(id, now + UNEXPLAINED_ROW_RECHECK_MS);
+      if (state.seenRows.has(id)) continue;
+      state.seenRows.add(id);
+      state.pendingRows.set(id, now + UNEXPLAINED_ROW_RECHECK_MS);
     }
     let next = Infinity;
-    for (const deadline of schedule.pending.values()) {
+    for (const deadline of state.pendingRows.values()) {
       if (deadline > now) next = Math.min(next, deadline);
     }
     if (next !== Infinity) {
-      schedule.timer = window.setTimeout(() => {
-        schedule.timer = null;
+      recheckTimer.current = window.setTimeout(() => {
+        recheckTimer.current = null;
         setRecheckTick((tick) => tick + 1);
       }, next - now);
     }
     return () => {
-      if (schedule.timer !== null) window.clearTimeout(schedule.timer);
+      if (recheckTimer.current !== null)
+        window.clearTimeout(recheckTimer.current);
     };
-  }, [isEnabled, queryHash, recheckTick, unexplained, unsupported]);
+  }, [
+    dataUpdatedAt,
+    errorUpdatedAt,
+    isEnabled,
+    isFetching,
+    queryClient,
+    queryHash,
+    recheckTick,
+    unexplained,
+    unsupported,
+  ]);
 
   // Refresh when the unexplained own-row set differs from the last answer's
-  // set. A newly unexplained row is re-checked once about 60 s later. Until
-  // the clone is listed, the other host's row can remain folded under the
-  // local id; listing the clone triggers refresh. Fork edges on the
+  // set. A newly unexplained row gets one successful re-check per mount about
+  // 60 s later; a failed non-unsupported read retries after another 60 s.
+  // Until the clone is listed, the other host's row can remain folded under
+  // the local id; listing the clone triggers refresh. Fork edges on the
   // addressable host can refresh the map sooner.
   useEffect(() => {
     if (!isEnabled || isFetching) {
@@ -336,7 +381,7 @@ function useChatPublicationTargetsQuery(
     const state = publicationTargetsRefreshState(cached);
     const now = Date.now();
     const dueRows = unexplained.ids.filter((id) => {
-      const deadline = rechecks.current.pending.get(id);
+      const deadline = state.pendingRows.get(id);
       return (
         deadline !== undefined &&
         deadline <= now &&
@@ -352,9 +397,14 @@ function useChatPublicationTargetsQuery(
     ]);
     if (state.lastRefresh === refreshKey && dueRows.length === 0) return;
     state.lastRefresh = refreshKey;
+    if (dueRows.length > 0) {
+      state.inFlight = {
+        rows: new Set(dueRows),
+        dataUpdateCount: cached.state.dataUpdateCount,
+      };
+    }
     for (const id of dueRows) {
-      state.recheckedRows.add(id);
-      rechecks.current.pending.delete(id);
+      state.pendingRows.delete(id);
     }
     // Settling an in-flight partial read re-arms this effect even when Query's
     // structural sharing preserves `data`. Never join that read as recovery.

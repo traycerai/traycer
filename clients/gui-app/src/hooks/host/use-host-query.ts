@@ -107,20 +107,20 @@ export interface UseHostQueryWithResponseMapOptions<
    * HOLDS, which says nothing about which resource is being read and everything
    * about how much of it needs to come back. The revision-gated record lists
    * (`epic.listChatRecords@1.3`, `epic.listTuiAgents@1.3`) send their last
-   * answer's list stamp this way:
-   * putting it in `params` would mint a new cache entry on every poll tick -
-   * so the 20s cadence would refetch from scratch forever and the gating would
-   * never fire - while a stamp frozen into the key at mount would be stale by
-   * the second tick.
+   * answer's list stamp this way: putting it in `params` would mint a new cache
+   * entry on every poll tick, so the 20s cadence would refetch from scratch
+   * forever and the gating would never fire. A stamp frozen into the key at
+   * mount would be stale by the second tick.
    *
    * Publication targets also send their current local chat-id set here. The
    * initial read waits for the full record list (or refreshes once on recovery
    * from a failed list). Later new chats use the fold's own-id fallback. The
    * map refreshes when the unexplained own-row set differs from the last
-   * answer's set, with one re-check about 60 s after a newly unexplained row.
-   * Until a clone is listed, the other host's row can stay folded under the
-   * local id; listing the clone triggers repair. Fork edges on the addressable
-   * host can refresh it sooner. Local membership does not require a new key.
+   * answer's set. Until a clone is listed, the other host's row can stay folded
+   * under the local id; listing the clone triggers a refresh, and one re-check
+   * about 60 s later, once per mount. A failed re-check waits another 60 s
+   * before retrying. Fork edges on the addressable host can refresh it sooner.
+   * Local membership does not require a new key.
    *
    * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
    * `captureRequestContext` - so the ordering fence stays the last thing read

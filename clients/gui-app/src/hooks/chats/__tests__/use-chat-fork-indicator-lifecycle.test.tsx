@@ -604,13 +604,107 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(sidebar.result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sidebar.result.current.isFetching).toBe(false);
+    });
     expect(harness.targetRequests).toHaveLength(3);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
     });
     expect(harness.targetRequests).toHaveLength(3);
+  });
+
+  it("retries a failed recheck after another 60 seconds before spending its row claim", async () => {
+    const harness = createHarness(null);
+    harness.queryClient.setDefaultOptions({
+      queries: {
+        ...harness.queryClient.getDefaultOptions().queries,
+        retryDelay: 0,
+      },
+      mutations: { retry: false },
+    });
+    let cloudChats: readonly CloudChatSummary[] = [];
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: [CHAT_ID],
+        cloudChats,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+        enabled: true,
+      });
+    const sidebar = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    expect(harness.targetRequests).toHaveLength(1);
+
+    vi.useFakeTimers();
+    cloudChats = [cloudSummary("clone-k", "host-other", true)];
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sidebar.result.current.isFetching).toBe(false);
+      expect(harness.targetRequests).toHaveLength(2);
+    });
+
+    harness.targetFailure.value = "rpc-error";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sidebar.result.current.error?.code).toBe("RPC_ERROR");
+      expect(sidebar.result.current.isFetching).toBe(false);
+      expect(palette.result.current.error?.code).toBe("RPC_ERROR");
+    });
+    expect(harness.targetRequests).toHaveLength(5);
+
+    harness.targetFailure.value = null;
+    harness.targetRedirects.value = [
+      { chatId: CHAT_ID, publicationChatId: "clone-k" },
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    expect(harness.targetRequests).toHaveLength(5);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        publicationTargetMap(sidebar.result.current.data).get(CHAT_ID),
+      ).toBe("clone-k");
+      expect(
+        publicationTargetMap(palette.result.current.data).get(CHAT_ID),
+      ).toBe("clone-k");
+    });
+    expect(harness.targetRequests).toEqual(
+      Array.from({ length: 6 }, () => [CHAT_ID]),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(harness.targetRequests).toHaveLength(6);
   });
 
   it("waits for an in-flight target read before sending the due recheck", async () => {
@@ -665,7 +759,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(harness.targetRequests).toHaveLength(4);
-    expect(result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
     expect(harness.targetRequests).toEqual([
       [CHAT_ID],
       [CHAT_ID],
@@ -769,7 +868,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(harness.targetRequests).toHaveLength(2);
-    expect(result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
     unmount();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
@@ -812,7 +916,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(harness.targetRequests).toHaveLength(3);
-    expect(result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
@@ -822,7 +931,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
     expect(harness.targetRequests).toHaveLength(4);
   });
 
@@ -868,7 +982,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(harness.targetRequests).toHaveLength(3);
-    expect(result.current.isFetching).toBe(false);
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+    });
     expect(publicationTargetMap(result.current.data).get(CHAT_ID)).toBe(
       "adopted-before-deadline",
     );
@@ -880,7 +999,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(3);
   });
 
-  it("cancels a due recheck when the record-list readiness gate closes", async () => {
+  it("holds a due recheck when the record-list readiness gate closes", async () => {
     const harness = createHarness(null);
     let authoritative = true;
     let cloudChats: readonly CloudChatSummary[] = [];
@@ -920,6 +1039,20 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(harness.targetRequests).toHaveLength(2);
+
+    authoritative = true;
+    act(() => rerender());
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.isFetching).toBe(false);
+      expect(harness.targetRequests).toHaveLength(3);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(harness.targetRequests).toHaveLength(3);
   });
 
   it("does not schedule delayed work without a host client", async () => {
