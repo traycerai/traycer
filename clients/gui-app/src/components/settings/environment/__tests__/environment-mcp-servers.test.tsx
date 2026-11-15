@@ -33,6 +33,7 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   windowHostBoundary,
   resetTeamPageHarness,
@@ -51,6 +52,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   useHostBinding: () => ({
     hostId: "host-local",
     hostClient: requireTeamHostClient(),
+    auth: requireTeamCloudAuth(),
   }),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
