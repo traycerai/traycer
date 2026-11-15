@@ -72,6 +72,7 @@ import type { OrganizationDialog } from "@/components/organization/organization-
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -175,7 +176,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: {
       items: testState.items,
       availableRepos: [],
@@ -185,6 +186,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
       completeness: testState.completeness,
     },
+    sort: params.search.sort,
+    createdSortAvailable: true,
     isPending: false,
     isFetching: false,
     error: null,
@@ -295,6 +298,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Open from landing",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",
