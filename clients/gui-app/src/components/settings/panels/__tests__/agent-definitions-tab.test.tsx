@@ -129,12 +129,15 @@ interface RigOptions {
   readonly failList: boolean;
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: AgentDefinition | null;
+  /** The host completes a write on a computer bound to no configuration. */
+  readonly localOnly: boolean;
 }
 
 const DEFAULT_RIG: RigOptions = {
   methods: METHODS,
   failList: false,
   dashboardWins: null,
+  localOnly: false,
 };
 
 function renderPage(
@@ -212,12 +215,18 @@ function renderPage(
       const next = { name: request.name, text: request.text, revision };
       if (index === -1) definitions.push(next);
       else definitions[index] = next;
+      if (options.localOnly) {
+        return Promise.resolve({ outcome: "local_only" as const });
+      }
       return Promise.resolve({ outcome: "saved" as const, revision });
     },
     "environment.agentDefinitions.delete": (request) => {
       deletes.push(request);
       const index = definitions.findIndex((d) => d.name === request.name);
       if (index !== -1) definitions.splice(index, 1);
+      if (options.localOnly) {
+        return Promise.resolve({ outcome: "local_only" as const });
+      }
       return Promise.resolve({
         outcome: "saved" as const,
         revision: request.expectedRevision + 1,
@@ -362,7 +371,7 @@ describe("<AgentDefinitionsTab />", () => {
       name: "reviewer.md",
       text: "Review the change, then approve.",
       expectedRevision: 3,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
 
     // The re-read remounts the editor on what the host now has: the new
@@ -424,7 +433,7 @@ describe("<AgentDefinitionsTab />", () => {
       name: "triage.md",
       text: "Triage the report.",
       expectedRevision: null,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
     // It lists once the host has it, and the form is empty again.
     await screen.findByRole("heading", { name: "triage.md" });
@@ -589,6 +598,41 @@ describe("<AgentDefinitionsTab />", () => {
     await settle();
     expect(rig.deletes).toEqual([]);
     expect(screen.getByRole("heading", { name: "reviewer.md" })).toBeTruthy();
+  });
+
+  it("completes a save and a delete the host answers local_only without drawing a notice", async () => {
+    const rig = renderPage([REVIEWER, PLANNER], {
+      ...DEFAULT_RIG,
+      localOnly: true,
+    });
+    await screen.findAllByTestId("agent-definition");
+
+    fireEvent.change(editorFor("reviewer.md"), { target: { value: "mine" } });
+    fireEvent.click(
+      within(sectionFor("reviewer.md")).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => {
+      expect(rig.puts).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(
+        within(sectionFor("reviewer.md"))
+          .getByRole("button", { name: "Save" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(editorFor("reviewer.md").value).toBe("mine");
+
+    fireEvent.click(
+      within(sectionFor("planner.md")).getByRole("button", { name: "Delete" }),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "planner.md" })).toBeNull();
+    });
+    expect(rig.deletes).toHaveLength(1);
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it("a save that lost to a dashboard change shows the stale notice and the latest text", async () => {
