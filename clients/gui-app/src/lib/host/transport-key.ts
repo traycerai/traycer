@@ -4,10 +4,7 @@ import {
   isConfirmedTransportRefusal,
   isRemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import {
-  hasReadyRemoteSession,
-  remoteOpenAuthFor,
-} from "@traycer-clients/shared/host-transport/remote/index";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
@@ -83,10 +80,13 @@ export function hostTransportKeyFor(
     entry.kind,
     entry.version ?? "",
     entry.websocketUrl,
-    // What `OPEN` presents is identity, not a gate: a sandbox first projected
-    // as a personal host must rebuild its stream once the entry is corrected,
-    // never keep a user-bearer session.
-    isRemoteHostDirectoryEntry(entry) ? remoteOpenAuthFor(entry) : "",
+    // Whose computer it is, kind and id only (a rename is the same owner). A
+    // change of owner reopens this surface's stream, and a reopen builds
+    // fresh; the host's close is what ends a stream another holder still
+    // holds.
+    isRemoteHostDirectoryEntry(entry) && entry.owner !== null
+      ? `${entry.owner.kind}:${entry.owner.id}`
+      : "",
   ].join(SEPARATOR);
 }
 

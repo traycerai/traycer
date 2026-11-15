@@ -251,7 +251,12 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
 });
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
+  useEnvironmentListQuery: () => ({
+    data: undefined,
+    error: null,
+    isError: false,
+    refetch: () => Promise.resolve(),
+  }),
 }));
 
 // ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.

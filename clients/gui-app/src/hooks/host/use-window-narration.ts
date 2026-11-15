@@ -1,8 +1,8 @@
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useMemo, useState } from "react";
 import {
   deriveWindowNarration,
+  doorCoverHostOf,
   findLease,
   isServingLease,
   type WindowNarrationState,
@@ -14,6 +14,11 @@ import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-author
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+
+export interface WindowNarrationReading {
+  readonly narration: WindowNarrationState;
+  readonly doorCoverHostId: string | null;
+}
 
 /**
  * The window narrator's verdict for THIS window.
@@ -28,8 +33,12 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * MOUNT ONCE PER WINDOW. The served latch below is component state, so a
  * second mount would carry a second, independently-armed latch - two answers
  * to "has this window ever worked". `WindowHostModalHost` is the only caller.
+ *
+ * `doorCoverHostId` is the host whose door cover the narration draws, read
+ * from the same input in the same mount, so the toast's question "is that
+ * host's cover on screen" has one answer with the narration's.
  */
-export function useWindowNarration(): WindowNarrationState {
+export function useWindowNarration(): WindowNarrationReading {
   const attached = useSelectionAuthorityAttached();
   const effectiveHostId = useEffectiveHostId();
   // Scalar selector: no `useShallow` needed, unlike a derived array/object.
@@ -53,12 +62,7 @@ export function useWindowNarration(): WindowNarrationState {
   // local host looks like, so the entry answers null for exactly the interval
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
-  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const localTeamAdmission = useLocalTeamAdmissionStore((state) => {
-    if (localHostId === null) return null;
-    const observation = state.byHost.get(localHostId);
-    return observation?.userId === userId ? observation.state : null;
-  });
+  const doorState = useHostDoorState(effectiveHostId ?? targetHostId);
   // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
@@ -84,29 +88,31 @@ export function useWindowNarration(): WindowNarrationState {
     setHasBeenServed(true);
   }
 
-  return useMemo(
-    () =>
-      deriveWindowNarration({
-        attached,
-        effectiveHostId,
-        targetHostId,
-        leases,
-        hasBeenServed,
-        localHostExpected,
-        discoveryConcluded,
-        localHostId,
-        localTeamAdmission,
-      }),
-    [
+  return useMemo(() => {
+    const input = {
       attached,
-      discoveryConcluded,
       effectiveHostId,
-      hasBeenServed,
-      leases,
-      localHostExpected,
-      localHostId,
-      localTeamAdmission,
       targetHostId,
-    ],
-  );
+      leases,
+      hasBeenServed,
+      localHostExpected,
+      discoveryConcluded,
+      localHostId,
+      doorState,
+    };
+    return {
+      narration: deriveWindowNarration(input),
+      doorCoverHostId: doorCoverHostOf(input),
+    };
+  }, [
+    attached,
+    discoveryConcluded,
+    effectiveHostId,
+    hasBeenServed,
+    leases,
+    localHostExpected,
+    localHostId,
+    doorState,
+    targetHostId,
+  ]);
 }

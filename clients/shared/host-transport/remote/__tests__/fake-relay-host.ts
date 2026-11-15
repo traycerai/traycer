@@ -112,13 +112,32 @@ interface FakeConnection {
  * The relay + host end of the wire, scripted per test via `decideOpen`. Runs a
  * REAL responder Noise-NK handshake against the session's initiator and
  * answers each in-channel `open{bearer}` with an `openAck` or a session-level
- * `fatal`, recording every bearer presented.
+ * `fatal`, recording every bearer presented and the host token beside it.
  */
+function presentedGrant(authz: unknown): string {
+  if (authz === null || typeof authz !== "object") return "";
+  const grant: unknown = Reflect.get(authz, "grant");
+  return typeof grant === "string" ? grant : "";
+}
+
+type FakeUnaryError = {
+  readonly code: string;
+  readonly message: string;
+  readonly holders?: unknown;
+  readonly retryable?: boolean;
+  readonly doorReason?: string;
+};
+
 export class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
   /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
+  /**
+   * The host-only token in `authz.grant` on every `open`, index-aligned with
+   * `openBearers`. A client open's bearer is empty; this is the credential.
+   */
+  readonly openGrants: string[] = [];
   /**
    * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
    *
@@ -187,11 +206,12 @@ export class FakeRelayHost {
    * When set, auto-RESPONSE carries this error envelope (and a null result)
    * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
    */
-  unaryError: {
-    readonly code: string;
-    readonly message: string;
-    readonly holders: unknown | undefined;
-  } | null = null;
+  unaryError: FakeUnaryError | null = null;
+  /** Per-request replies for a real retrying-messenger integration. */
+  readonly unaryResponseQueue: Array<{
+    readonly error: FakeUnaryError | null;
+    readonly result: unknown;
+  }> = [];
   /** Per-request response override for integrated consumer tests. */
   unaryResponseFor:
     | ((request: { readonly method: string; readonly params: unknown }) => {
@@ -234,11 +254,7 @@ export class FakeRelayHost {
   /** Every auto-RESPONSE this fake actually put on the wire. */
   readonly unaryResponses: {
     method: string;
-    error: {
-      readonly code: string;
-      readonly message: string;
-      readonly holders: unknown | undefined;
-    } | null;
+    error: FakeUnaryError | null;
   }[] = [];
   /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
   readonly closesSent: number[] = [];
@@ -628,6 +644,7 @@ export class FakeRelayHost {
       });
       this.unaryRequestConnectionIds.push(this.connections.indexOf(connection));
       const method = typeof json.method === "string" ? json.method : "";
+      const queuedResponse = this.unaryResponseQueue.shift();
       if (
         this.skipUnaryAutoRespond ||
         this.silentConnections.has(connection) ||
@@ -641,9 +658,15 @@ export class FakeRelayHost {
           params: json.params,
         }) ?? null;
       const sendResponse = async (): Promise<void> => {
+        const error =
+          queuedResponse === undefined ? this.unaryError : queuedResponse.error;
+        const result =
+          queuedResponse === undefined
+            ? this.unaryResult
+            : queuedResponse.result;
         const response = responseOverride ?? {
-          result: this.unaryError === null ? this.unaryResult : null,
-          error: this.unaryError,
+          result: error === null ? result : null,
+          error,
         };
         await this.sendMux(connection, {
           type: MuxFrameType.RESPONSE,
@@ -691,18 +714,21 @@ export class FakeRelayHost {
       message.json !== null && typeof message.json.bearer === "string"
         ? message.json.bearer
         : "";
+    const grant = presentedGrant(message.json?.authz);
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
+    this.openGrants.push(grant);
     this.openIdentities.push(message.json?.clientIdentity);
     this.openAuthz.push(message.json?.authz);
     if (this.stallOpens) {
       // Freeze this attempt mid-flight (the session sits in its opening
       // phase, its own phase timer pending) until the test releases it -
       // the window the forced-intent ordering tests need to aim into.
-      this.stalledOpens.push({ connection, bearer, openIndex });
+      // The host decides on the token in `authz`, which is what it verifies.
+      this.stalledOpens.push({ connection, bearer: grant, openIndex });
       return;
     }
-    await this.respondToOpen(connection, bearer, openIndex);
+    await this.respondToOpen(connection, grant, openIndex);
   }
 
   /**

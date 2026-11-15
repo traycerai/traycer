@@ -1,6 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -19,6 +21,8 @@ import type { CommandContext, CommandResult } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { isProcessAlive } from "../../store/cli-lock";
 import { hostPidMetadataPath } from "../../store/paths";
+import { hostTokensPath } from "@traycer-clients/shared/auth/host-token-file";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
 // `traycer login` persists the sign-in, then hands a host that is already
 // running its credential. The device poll, the access-token probe, and the
@@ -31,7 +35,14 @@ import { hostPidMetadataPath } from "../../store/paths";
 
 const mocks = vi.hoisted(() => ({
   provisionInstalledHostCredential: vi.fn(),
+  fetch: vi.fn(),
+  home: { path: null as string | null },
 }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => mocks.home.path ?? actual.homedir() };
+});
 
 vi.mock("../../host/credential-provisioning", () => ({
   provisionInstalledHostCredential: (options: {
@@ -254,6 +265,19 @@ async function runTokenLogin(): Promise<CommandResult> {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.home.path = await mkdtemp(join(tmpdir(), "traycer-cli-login-"));
+  mocks.fetch.mockReset();
+  mocks.fetch.mockImplementation(
+    async () =>
+      new Response(
+        JSON.stringify({
+          session_grant: "login-host-token",
+          session_grant_expires_in: 3600,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  );
+  vi.stubGlobal("fetch", mocks.fetch);
   provisionMock.mockReset();
   provisionMock.mockResolvedValue({ kind: "active", minted: true });
   startAuthMock.mockReset();
@@ -277,11 +301,26 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (lockPresentAtCleanup) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] login-host-credential cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms token-lock-at-entry=${lockPresentAtCleanup}`,
+  );
   await removeHostPid();
+  vi.unstubAllGlobals();
+  const home = mocks.home.path;
+  mocks.home.path = null;
+  if (home !== null) await rm(home, { recursive: true, force: true });
   if (realStdin !== undefined) {
     Object.defineProperty(process, "stdin", realStdin);
   }
-});
+}, 15_000);
 
 describe("traycer login credentials a host already running", () => {
   it("does not expose the account id when the identity has no email or name", async () => {
@@ -310,6 +349,44 @@ describe("traycer login credentials a host already running", () => {
       workUnits: null,
     });
     expectOnlyBrowserOpens();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(
+      await readFile(hostTokensPath(config.environment), "utf8"),
+    ).toContain("login-host-token");
+  });
+
+  it("removes the prior account's host tokens when login switches accounts", async () => {
+    await writeHostPid(process.pid);
+    identityMock.mockResolvedValue({
+      kind: "valid",
+      user: userWith("old-user", "old@traycer.ai", "Old"),
+    });
+    pollMock.mockResolvedValue({
+      kind: "authorized",
+      token: "old-sign-in-token",
+      refreshToken: "old-refresh-token",
+    });
+    await loginCommand(makeCtx());
+
+    identityMock.mockResolvedValue({
+      kind: "valid",
+      user: userWith("new-user", "new@traycer.ai", "New"),
+    });
+    pollMock.mockResolvedValue({
+      kind: "authorized",
+      token: "new-sign-in-token",
+      refreshToken: "new-refresh-token",
+    });
+    await loginCommand(makeCtx());
+
+    const tokens = JSON.parse(
+      await readFile(hostTokensPath(config.environment), "utf8"),
+    );
+    expect(tokens).not.toHaveProperty("users.old-user");
+    expect(tokens).toHaveProperty(
+      "users.new-user.host-1.token",
+      "login-host-token",
+    );
   });
 
   it("stays quiet when the running host already holds a credential", async () => {
@@ -343,10 +420,14 @@ describe("traycer login credentials a host already running", () => {
   });
 
   it("keeps exit 0 and names traycer host doctor when the running host is unreachable", async () => {
+    const startedAt = performance.now();
     await writeHostPid(process.pid);
     provisionMock.mockResolvedValue({ kind: "unreachable" });
 
     const result = await loginCommand(makeCtx());
+    console.info(
+      `[timing] login-host-unreachable command-settled-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.human).toBe(UNREACHABLE_LINE);

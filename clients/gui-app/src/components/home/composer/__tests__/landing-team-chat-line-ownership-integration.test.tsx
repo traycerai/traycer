@@ -134,8 +134,15 @@ async function createOwnerHarness(input: {
   });
   await directory.start();
 
+  const hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }> = [];
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
