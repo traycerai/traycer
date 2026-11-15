@@ -225,3 +225,15 @@ export async function pastTheDebounce(app: App): Promise<void> {
     app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS * 3,
   );
 }
+
+/**
+ * Lets queued tasks and promises run, the clock untouched, until `condition`
+ * holds; the case's timeout bounds the wait. What it waits on can depend on the
+ * machine (a digest settles on a thread pool, not on a turn of the event
+ * loop), so it counts no turns.
+ */
+export async function untilClockless(condition: () => boolean): Promise<void> {
+  while (!condition()) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}

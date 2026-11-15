@@ -49,6 +49,7 @@ import {
   storeImageBytes,
   storedDrafts,
   waitForStore,
+  untilClockless,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 
@@ -1351,5 +1352,116 @@ describe("a wipe of the image database under a running window", () => {
     expect(
       JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
     ).toContain(IMAGE_B64);
+  });
+});
+
+describe("a page hide that left an image out of a draft, and the page stays", () => {
+  const IMAGE_STORE = "@/lib/composer/landing-image-store";
+  const IMAGES_DB = "traycer-gui-app:default:landing-images";
+
+  /** Lets the held put end. */
+  let releaseHeldPut = (): void => undefined;
+
+  afterEach(() => {
+    releaseHeldPut();
+    holds.afterByteWrite = null;
+    holds.byteWritten = (): void => undefined;
+  });
+
+  interface CountedPuts {
+    readonly app: App;
+    /** How many puts of an image have ended. */
+    readonly ended: () => number;
+  }
+
+  /** The app restarted with every put of an image counted when it ends; the puts themselves are the real ones. */
+  async function restartCountingPuts(): Promise<CountedPuts> {
+    let ended = 0;
+    vi.doMock(IMAGE_STORE, async (importOriginal) => {
+      const real = await importOriginal<typeof LandingImageStore>();
+      return {
+        ...real,
+        putImage: (bytes: ImageBytes): Promise<string> =>
+          real.putImage(bytes).finally(() => {
+            ended += 1;
+          }),
+      };
+    });
+    onTestFinished(() => {
+      vi.doUnmock(IMAGE_STORE);
+    });
+    return { app: await restart(), ended: () => ended };
+  }
+
+  function typeImage(target: App, text: string): void {
+    target.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text,
+      content: boxDoc(text, [INLINE_IMAGE]),
+      held: [],
+    });
+  }
+
+  function storedChannel(target: App): string {
+    return JSON.stringify(storedDrafts(target)?.[BOT_ID]?.channel ?? null);
+  }
+
+  /**
+   * The channel's draft of an image is being written, the image's put held
+   * inside the image store (the bytes are written, the put does not end), and
+   * a newer draft of the same image waits: the page hides, and the newer draft
+   * is written without the image.
+   */
+  async function pageHidesOverAHeldPut(counted: CountedPuts): Promise<void> {
+    const byteWritten = new Promise<void>((resolve) => {
+      holds.byteWritten = resolve;
+    });
+    holds.afterByteWrite = new Promise<void>((resolve) => {
+      releaseHeldPut = resolve;
+    });
+    typeImage(counted.app, "pic");
+    await vi.advanceTimersByTimeAsync(300);
+    await byteWritten;
+    typeImage(counted.app, "pic again");
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedChannel(counted.app)).toContain("pic again");
+    expect(storedChannel(counted.app)).not.toContain("imageAttachment");
+  }
+  /** The image's hash as the stored draft names it, once it does. */
+  function namedHash(target: App): string | null {
+    return /"hash":"([0-9a-f]{64})"/.exec(storedChannel(target))?.[1] ?? null;
+  }
+
+  it("writes the image once the put that was holding it ends, with no further edit, when the page hide came first", async () => {
+    const counted = await restartCountingPuts();
+    app = counted.app;
+    await pageHidesOverAHeldPut(counted);
+
+    releaseHeldPut();
+    await untilClockless(() => counted.ended() === 1);
+    await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => namedHash(app) !== null);
+
+    const hash = namedHash(app) ?? "";
+    expect(app.imageRoots().has(hash)).toBe(true);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+  });
+
+  it("writes the image through the follow-up write whose put joins the put still held, and keeps the image's roots and bytes", async () => {
+    const counted = await restartCountingPuts();
+    app = counted.app;
+    await pageHidesOverAHeldPut(counted);
+    // The follow-up asks for the image's put while the first is still open:
+    // the image store's own in-flight put and its reservation count join them.
+    await vi.advanceTimersByTimeAsync(300);
+
+    releaseHeldPut();
+    await untilClockless(() => counted.ended() === 2);
+    await untilClockless(() => namedHash(app) !== null);
+
+    const hash = namedHash(app) ?? "";
+    expect(app.imageRoots().has(hash)).toBe(true);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
   });
 });

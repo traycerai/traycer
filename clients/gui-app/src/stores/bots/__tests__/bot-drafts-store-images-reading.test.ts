@@ -23,6 +23,7 @@ import {
   storeDraftsAsLeft,
   storedDrafts,
   waitForStore,
+  untilClockless,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import type { StoredBoxDraft } from "@/lib/bots/bot-box-draft-storage";
@@ -44,6 +45,8 @@ const images = vi.hoisted(() => ({
   puts: new Map<string, PromiseWithResolvers<void>>(),
   /** The hashes the drafts asked the image store to put, one entry per call. */
   putCalls: [] as string[],
+  /** The hashes whose puts have ended, one entry per call. */
+  putDone: [] as string[],
   deletions: { count: 0, listeners: [] as Array<() => void> },
 }));
 
@@ -66,6 +69,7 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
       const hash = await real.sha256Hex(bytes);
       images.putCalls.push(hash);
       await images.puts.get(hash)?.promise;
+      images.putDone.push(hash);
       return hash;
     },
     landingImageDeletions: () => images.deletions.count,
@@ -200,6 +204,7 @@ beforeEach(async () => {
   encodes.done = 0;
   images.puts.clear();
   images.putCalls.length = 0;
+  images.putDone.length = 0;
   images.deletions.count = 0;
   images.deletions.listeners.length = 0;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -289,14 +294,6 @@ function expectStored(
   expect(JSON.stringify(storedDrafts(started))).not.toContain("b64content");
 }
 
-/** Lets queued tasks and promises run, the clock untouched, until `condition` holds. */
-async function untilClockless(condition: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 100 && !condition(); turn += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  expect(condition()).toBe(true);
-}
-
 /**
  * Waits until `count` images read back from the image store have been
  * encoded: each one's hand-over, or its refusal, is over in the same turn, so
@@ -304,6 +301,15 @@ async function untilClockless(condition: () => boolean): Promise<void> {
  */
 async function untilEncoded(count: number): Promise<void> {
   await untilClockless(() => encodes.done === count);
+}
+
+/** How many times a put of `hash` has been asked for, and has ended. */
+function putsAsked(hash: string): number {
+  return images.putCalls.filter((asked) => asked === hash).length;
+}
+
+function putsEnded(hash: string): number {
+  return images.putDone.filter((ended) => ended === hash).length;
 }
 
 /** Types `text` into box `key`, as the person does. */
@@ -318,6 +324,41 @@ function type(
     content: boxDoc(text, extras),
     held: [],
   });
+}
+
+/**
+ * C holds two pasted images and the write storing them has the second's put
+ * held; A's box is handed over, and the page hides: the write waiting is
+ * written then, without the second image.
+ */
+async function pageHidesBeforeCsSecondImage(
+  started: App,
+): Promise<{ readonly firstHash: string; readonly secondHash: string }> {
+  const first = bytesOf(7, 8, 9);
+  const second = bytesOf(10, 11, 12);
+  const firstHash = await sha256Of(first);
+  const secondHash = await sha256Of(second);
+  holdPut(secondHash);
+  type(started, "c", "C with two images", [
+    pasted("c-1", first),
+    pasted("c-2", second),
+  ]);
+  await vi.advanceTimersByTimeAsync(300);
+  await untilClockless(
+    () =>
+      images.putCalls.includes(firstHash) &&
+      images.putCalls.includes(secondHash),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+
+  settleRead(HASH_A, BYTES_A);
+  await untilClockless(() => waitingBoxes(started).length === 0);
+  pageHides();
+
+  // The image whose put has not finished is left out of what is stored.
+  expectStored(started, { a: [HASH_A], c: [firstHash] });
+  expect(stored(started).a).toEqual(STORED_A);
+  return { firstHash, secondHash };
 }
 
 describe("the boxes' drafts while images they name are being read", () => {
@@ -512,7 +553,7 @@ describe("the boxes' drafts while images they name are being read", () => {
       holdPut(hash);
       type(started, "c", "C with an image", [pasted("c-1", bytes)]);
       await vi.advanceTimersByTimeAsync(300);
-      await vi.waitFor(() => expect(images.putCalls).toContain(hash));
+      await untilClockless(() => images.putCalls.includes(hash));
 
       settleRead(HASH_A, BYTES_A);
       await vi.waitFor(() => expect(waitingBoxes(started)).toEqual([]));
@@ -528,32 +569,80 @@ describe("the boxes' drafts while images they name are being read", () => {
       expectStored(started, { a: [HASH_A], c: [hash] });
     });
 
-    it("keeps the first image's hash, and the box as stored, when the page hides after the box was brought in and before the second image is stored", async () => {
+    it("keeps the first image's hash, and the box as stored, when the page hides after the box was brought in and before the second image is stored, and writes the second image's hash once it is stored, with no further edit", async () => {
       const started = await startOver({ a: STORED_A, c: STORED_C });
-      const first = bytesOf(7, 8, 9);
-      const second = bytesOf(10, 11, 12);
-      const firstHash = await sha256Of(first);
-      const secondHash = await sha256Of(second);
-      holdPut(secondHash);
-      type(started, "c", "C with two images", [
-        pasted("c-1", first),
-        pasted("c-2", second),
-      ]);
+      const { firstHash, secondHash } =
+        await pageHidesBeforeCsSecondImage(started);
+
+      releasePut(secondHash);
       await vi.advanceTimersByTimeAsync(300);
-      await vi.waitFor(() =>
-        expect(images.putCalls).toEqual(
-          expect.arrayContaining([firstHash, secondHash]),
-        ),
+      await untilClockless(() =>
+        JSON.stringify(stored(started).c ?? null).includes(secondHash),
       );
-      await vi.advanceTimersByTimeAsync(0);
 
-      settleRead(HASH_A, BYTES_A);
-      await untilClockless(() => waitingBoxes(started).length === 0);
-      pageHides();
-
-      // The image whose put has not finished is left out of what is stored.
-      expectStored(started, { a: [HASH_A], c: [firstHash] });
+      expectStored(started, { a: [HASH_A], c: [firstHash, secondHash] });
       expect(stored(started).a).toEqual(STORED_A);
+    });
+  });
+
+  describe("the write that follows a page hide that left an image out", () => {
+    /** The follow-up has asked for the held image's put again, and waits on it. */
+    async function followUpHeld(
+      started: App,
+    ): Promise<{ readonly firstHash: string; readonly secondHash: string }> {
+      const hashes = await pageHidesBeforeCsSecondImage(started);
+      await vi.advanceTimersByTimeAsync(300);
+      await untilClockless(() => putsAsked(hashes.secondHash) === 2);
+      return hashes;
+    }
+
+    it("does not bring back a box the person cleared while it waited, nor the old draft", async () => {
+      const started = await startOver({ a: STORED_A, c: STORED_C });
+      const { secondHash } = await followUpHeld(started);
+
+      started.drafts.getState().typeThreadBox(BOT_ID, "c", {
+        text: "",
+        content: null,
+        held: [],
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await untilClockless(() => stored(started).c === undefined);
+      releasePut(secondHash);
+      await untilClockless(() => putsEnded(secondHash) === 2);
+
+      expectStored(started, { a: [HASH_A] });
+      expect(stored(started).c).toBeUndefined();
+      expect(boxesOf(started).c).toBeUndefined();
+    });
+
+    it("does not bring back a bot forgotten while it waited", async () => {
+      const started = await startOver({ a: STORED_A, c: STORED_C });
+      const { secondHash } = await followUpHeld(started);
+
+      started.drafts.getState().forgetBot(BOT_ID);
+      releasePut(secondHash);
+      await untilClockless(() => putsEnded(secondHash) === 2);
+
+      // Before the forget's own write has passed its debounce.
+      expect(storedDrafts(started)?.[BOT_ID]).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(storedDrafts(started)?.[BOT_ID]).toBeUndefined();
+      expect(started.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
+    });
+
+    it("leaves the retiring account's key as the retirement wrote it, and writes nothing under the next account's, when the account retires while it waits", async () => {
+      const started = await startOver({ a: STORED_A, c: STORED_C });
+      const { secondHash } = await followUpHeld(started);
+
+      signIn(started, "user-next");
+      const written = localStorage.getItem(BOX_DRAFTS_KEY);
+      releasePut(secondHash);
+      await untilClockless(() => putsEnded(secondHash) === 2);
+      await vi.advanceTimersByTimeAsync(300);
+      await untilClockless(() => started.drafts.getState().ownDraftsRead);
+
+      expect(localStorage.getItem(BOX_DRAFTS_KEY)).toBe(written);
+      expect(localStorage.getItem(botBoxDraftsKey("user-next"))).toBeNull();
     });
   });
 
@@ -565,7 +654,7 @@ describe("the boxes' drafts while images they name are being read", () => {
       holdPut(hash);
       type(started, "c", "C with an image", [pasted("c-1", bytes)]);
       await vi.advanceTimersByTimeAsync(300);
-      await vi.waitFor(() => expect(images.putCalls).toContain(hash));
+      await untilClockless(() => images.putCalls.includes(hash));
       return hash;
     }
 
@@ -783,6 +872,60 @@ describe("the boxes' drafts while images they name are being read", () => {
     expect(stored(started).c?.text).toBe("C edited");
     expect(stored(started).a).toEqual(STORED_A);
     expectStored(started, { a: [HASH_A], c: [] });
+  });
+
+  it("brings no bot back that was forgotten while an older write was storing an image, and does not wait for the forget's own write", async () => {
+    const started = await startOver({ a: STORED_A, c: STORED_C });
+    const bytes = bytesOf(7, 8, 9);
+    const hash = await sha256Of(bytes);
+    holdPut(hash);
+    type(started, "c", "C with an image", [pasted("c-1", bytes)]);
+    await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => putsAsked(hash) === 1);
+
+    started.drafts.getState().forgetBot(BOT_ID);
+    releasePut(hash);
+    // Every landing takes the forgotten bot's stored boxes out, so A going is how the older write's landing shows.
+    await untilClockless(() => stored(started).a === undefined);
+
+    expect(storedDrafts(started)?.[BOT_ID]).toBeUndefined();
+  });
+
+  it("drops a box another window wrote for the bot after an older write landed, with the forget's own write", async () => {
+    const started = await startOver({ a: STORED_A, c: STORED_C });
+    const bytes = bytesOf(7, 8, 9);
+    const hash = await sha256Of(bytes);
+    holdPut(hash);
+    type(started, "c", "C with an image", [pasted("c-1", bytes)]);
+    await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => putsAsked(hash) === 1);
+    started.drafts.getState().forgetBot(BOT_ID);
+    releasePut(hash);
+    await untilClockless(() => stored(started).a === undefined);
+
+    // Another window writes a box of the bot after the older write landed.
+    localStorage.setItem(
+      BOX_DRAFTS_KEY,
+      JSON.stringify({
+        state: {
+          threadBoxes: {
+            [BOT_ID]: {
+              ...stored(started),
+              d: {
+                text: "Another window's draft",
+                content: boxDoc("Another window's draft", []),
+                seedId: 1,
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await untilClockless(() => storedDrafts(started)?.[BOT_ID] === undefined);
+
+    expect(storedDrafts(started)?.[BOT_ID]).toBeUndefined();
   });
 
   it("is admitted before any image settles, with the text-only box in place and the image box waiting by its stored text", async () => {

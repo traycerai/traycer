@@ -45,6 +45,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type MockInstance,
 } from "vitest";
 import {
   HostClient,
@@ -589,6 +590,7 @@ function channelBox(): HTMLElement {
 }
 
 beforeEach(() => {
+  rehydrations = vi.spyOn(useBotDraftsStore.persist, "rehydrate");
   installLegendListTestClock();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -631,17 +633,21 @@ beforeEach(() => {
   signInAs(ACCOUNT_A);
 });
 
+/** Every read of the stored drafts a case starts, as the drafts store reports it. */
+let rehydrations: MockInstance<typeof useBotDraftsStore.persist.rehydrate>;
+
 afterEach(async () => {
   // Every image read a case held ends before its tree goes, so it cannot
-  // land in the next case's store.
+  // land in the next case's store: the drafts store's own reads are what
+  // end, each only once every box of it is handed over or refused.
   for (const gate of channelHandles.imageGates.values()) gate.resolve();
+  const reads = rehydrations.mock.results.flatMap((result) =>
+    result.type === "return" ? [result.value] : [],
+  );
   await act(async () => {
-    await vi.waitFor(() => {
-      const drafts = useBotDraftsStore.getState();
-      expect(drafts.ownDraftsRead).toBe(true);
-      expect(drafts.boxesReading).toEqual({});
-    });
+    await Promise.allSettled(reads.map((read) => Promise.resolve(read)));
   });
+  rehydrations.mockRestore();
   endBotTabSurfaceCase(queryClient);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1);

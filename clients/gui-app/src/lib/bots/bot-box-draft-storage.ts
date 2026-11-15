@@ -277,19 +277,23 @@ export function botBoxDraftCleared(botId: string, key: string): void {
 }
 
 /**
- * The bot is gone: the next write drops all its boxes, another window's
- * included, and the images its boxes kept that this window could not show.
- * Called before the drafts store's change that forgets it, which is then
- * written even where this window held none of the bot's boxes.
+ * The bot is gone: each write drops all its boxes, another window's included,
+ * and the images its boxes kept that this window could not show, until one
+ * whose drafts were taken after this has landed; a write whose drafts are
+ * older writes none of the boxes they hold for it. Called before the drafts
+ * store's change that forgets it, which is then written even where this
+ * window held none of the bot's boxes.
  */
 export function botBoxDraftsForgotten(botId: string): void {
-  writer.forgotten.add(botId);
+  // Numbered before the store's change: the write of it is the first to know.
+  writer.handOvers += 1;
+  writer.forgotten.set(botId, writer.handOvers);
   writer.lastThreadBoxes = null;
   for (const [box, unresolved] of writer.unresolved) {
     if (unresolved.botId === botId) writer.unresolved.delete(box);
   }
-  // Every write drops the bot from here on, whatever its drafts held: none of
-  // its boxes is left for a write that holds it.
+  // None of its boxes is left for a write that holds it: one whose drafts are
+  // newer holds none, and one whose drafts are older writes none.
   for (const [box, handed] of writer.handedOver) {
     if (handed.botId === botId) writer.handedOver.delete(box);
   }
@@ -340,7 +344,10 @@ export function stopBotBoxDraftWrites(): void {
  * images already stored, whose hashes it keeps for the writes after it, the
  * next page hide's included. Written from what was being written, that write
  * still lands after it, with all its images, where the page is still there;
- * written from what was waiting, the older write being stored never lands.
+ * written from what was waiting, the older write being stored never lands,
+ * and where an image was left out, what was waiting waits once more, its
+ * drafts as they were, to store it, unless a change or a newer write
+ * replaces it first.
  */
 function flushPendingBotBoxDraftWrite(): void {
   if (writer.stopped) return;
@@ -353,11 +360,13 @@ function flushPendingBotBoxDraftWrite(): void {
     writer.inFlight = null;
     writer.inFlightHashByInline = new Map();
   }
-  land(
+  const leftOut = land(
     write,
     (b64content) =>
       hashByInline.get(b64content) ?? inFlightHashByInline.get(b64content),
   );
+  // Once only: a write that lands from the wait does not wait again.
+  if (pending !== null && leftOut) schedule(pending);
 }
 
 /** A write of the boxes' drafts: under which key, and what. */
@@ -369,10 +378,11 @@ export interface PendingWrite {
 /** A write as it waits and lands, with what its drafts knew when they were taken. */
 interface QueuedWrite extends PendingWrite {
   /**
-   * How many boxes reads had handed over one by one (`writer.handOvers`)
-   * when its drafts were taken, kept as they were through every wait, retry
-   * and page hide: it leaves each box handed over after them, and what is
-   * owed to that box, to a write whose drafts hold it.
+   * How many boxes reads had handed over one by one, and bots had been
+   * forgotten (`writer.handOvers`), when its drafts were taken, kept as they
+   * were through every wait, retry and page hide: it leaves each box handed
+   * over after them, and what is owed to that box, to a write whose drafts
+   * hold it, and writes no box of a bot forgotten after them.
    */
   readonly knows: number;
 }
@@ -428,7 +438,8 @@ const writer: {
   gone: Map<string, GoneImages>;
   /**
    * Counts the boxes reads handed over one by one, each as its own images
-   * were read back; never reset, so a write's drafts tell what they knew.
+   * were read back, and the bots forgotten; never reset, so a write's drafts
+   * tell what they knew.
    */
   handOvers: number;
   /**
@@ -442,8 +453,12 @@ const writer: {
    * boxes that differ from them onto what is stored.
    */
   baseline: StoredBoxDrafts;
-  /** The bots forgotten since the last write that landed: it drops all their boxes. */
-  forgotten: Set<string>;
+  /**
+   * By bot: each bot forgotten, and `writer.handOvers` as it was forgotten,
+   * until a write whose drafts were taken after it lands. Every write drops
+   * all the bot's boxes; one whose drafts are older writes none of them.
+   */
+  forgotten: Map<string, number>;
   /**
    * The boxes (`boxKeyOf`) the person cleared or sent since the last write
    * that landed: it writes each as this window holds it, whatever the
@@ -475,7 +490,7 @@ const writer: {
   handOvers: 0,
   handedOver: new Map(),
   baseline: {},
-  forgotten: new Set(),
+  forgotten: new Map(),
   cleared: new Map(),
   incomplete: new Map(),
   refused: new Set(),
@@ -599,20 +614,25 @@ async function writePending(): Promise<void> {
  * A box a read handed over after `write`'s drafts were taken is not one it
  * knows: it leaves the box as stored, and keeps for a write that holds it the
  * box's baseline, its read-back hashes, and the clear, gone images and retry
- * owed to it.
+ * owed to it. Nor does it write a box of a bot forgotten after them.
+ *
+ * Returns whether it landed with an image left out of a box it wrote.
  */
 function land(
   write: QueuedWrite,
   hashOf: (b64content: string) => string | undefined,
-): void {
-  const next = write.value.state.threadBoxes;
+): boolean {
+  const next = editableDrafts(write.value.state.threadBoxes);
+  for (const [botId, at] of writer.forgotten) {
+    if (at > write.knows) delete next[botId];
+  }
   const unknown = new Map<string, HandedOver>();
   for (const [box, handed] of writer.handedOver) {
     if (handed.at > write.knows) unknown.set(box, handed);
   }
   const unknownBaseline = withBoxesOf({}, writer.baseline, unknown.values());
   const hashByInline = new Map<string, string>();
-  for (const b64content of draftImages(write.value.state).keys()) {
+  for (const b64content of draftImages({ threadBoxes: next }).keys()) {
     const hash = hashOf(b64content);
     if (hash !== undefined) hashByInline.set(b64content, hash);
   }
@@ -634,10 +654,10 @@ function land(
   } catch (error) {
     // The boxes it did not change are unknown, so it cannot keep them.
     writeFailed(write, error);
-    return;
+    return false;
   }
   // A forgotten bot has no box handed over left (`botBoxDraftsForgotten`).
-  for (const botId of writer.forgotten) delete threadBoxes[botId];
+  for (const botId of writer.forgotten.keys()) delete threadBoxes[botId];
   // Before this write's own boxes, which replace a box it changed anyway.
   takeOutGoneImages(threadBoxes, partition, unknown);
   const incomplete = putChangedBoxes(threadBoxes, next, partition, unknown);
@@ -648,10 +668,13 @@ function land(
     );
   } catch (error) {
     writeFailed(write, error);
-    return;
+    return false;
   }
   writer.baseline = withBoxesOf(next, unknownBaseline, unknown.values());
-  writer.forgotten.clear();
+  // Kept until a write whose drafts know of the forget has landed.
+  writer.forgotten = new Map(
+    [...writer.forgotten].filter(([, at]) => at > write.knows),
+  );
   writer.cleared = onlyBoxes(writer.cleared, unknown);
   writer.gone = onlyBoxes(writer.gone, unknown);
   writer.incomplete = new Map([
@@ -659,6 +682,7 @@ function land(
     ...incomplete,
   ]);
   writer.handedOver = unknown;
+  return incomplete.size > 0;
 }
 
 /** `drafts`, each of `boxes` as `from` holds it, or taken out where it holds nothing. */
