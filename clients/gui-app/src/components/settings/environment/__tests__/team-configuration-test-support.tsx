@@ -105,6 +105,23 @@ export function requireTeamCloudAuth(): AuthService {
   return teamHostBoundary.auth;
 }
 
+export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  if (
+    teamHostBoundary.runtime === null ||
+    teamHostBoundary.directory === null ||
+    teamHostBoundary.auth === null
+  ) {
+    throw new Error("no team host binding mounted");
+  }
+  return {
+    runtime: teamHostBoundary.runtime,
+    hostClient: teamHostBoundary.runtime.hostClient,
+    directory: teamHostBoundary.directory,
+    auth: teamHostBoundary.auth,
+    hostId: null,
+  };
+}
+
 /**
  * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
  * the source it yields holds none, exactly as an inventory row naming it
