@@ -612,7 +612,9 @@ export type ListChatRecordsResponseV14 = z.infer<
  * it from the host that holds the chat). Set with the record and never patched
  * afterwards, so no list revision moves for it.
  */
-const chatRecordStarterUserIdSchema = z.string().min(1).optional();
+const chatRecordStarterUserIdSchema = lazySchema(() =>
+  z.string().min(1).optional(),
+);
 
 /** The `@1.5` row: the `@1.4` row plus `starterUserId`. */
 export const chatRecordSummaryV15Schema = lazySchema(() =>
