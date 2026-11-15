@@ -10,7 +10,7 @@
  */
 import { type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostNotificationsCloudFeedRow,
@@ -97,7 +97,6 @@ const mocks = vi.hoisted(() => {
     state,
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
-    openSession: vi.fn(),
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
     asked,
@@ -405,8 +404,6 @@ function HarnessBody(props: HarnessProps): ReactNode {
       boundHere={props.boundHere}
       active={active}
       notificationSubscriptions={props.notificationSubscriptions}
-      trunkChatId="bot-trunk"
-      onOpenSession={mocks.openSession}
       resolveMember={() => null}
       threads={props.threads}
     />
@@ -615,36 +612,7 @@ describe("<BotActivityPage /> subscriptions", () => {
     expect(screen.getByTestId("bot-activity-empty-art")).toBeTruthy();
   });
 
-  it("opens the session a subscription names", async () => {
-    const user = userEvent.setup();
-    render(
-      <Harness
-        threads={[]}
-        tasks={[]}
-        boundHere
-        notificationSubscriptions={[
-          {
-            target: { kind: "trunk" },
-            attentionOnly: false,
-            everySeconds: null,
-            since: null,
-            digests: null,
-          },
-        ]}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Open session" }));
-
-    expect(mocks.openSession).toHaveBeenCalledWith({
-      chatId: "bot-trunk",
-      threadId: null,
-      messageId: null,
-      sendPostId: null,
-    });
-  });
-
-  it("describes each subscription's target, filter, and digest cadence", () => {
+  it("describes each subscription as watching notifications, with its actual filter and nothing about target or cadence", () => {
     render(
       <Harness
         threads={[]}
@@ -671,16 +639,22 @@ describe("<BotActivityPage /> subscriptions", () => {
     expect(
       screen.getByRole("heading", { name: "Notification subscriptions" }),
     ).toBeTruthy();
-    expect(screen.getByText("Trunk")).toBeTruthy();
-    expect(screen.getByText("Thread: thread-1")).toBeTruthy();
-    expect(screen.getByText("Attention only")).toBeTruthy();
-    expect(screen.getByText("All notifications")).toBeTruthy();
-    expect(screen.getByText("Every hour")).toBeTruthy();
+    const region = screen.getByRole("region", {
+      name: "Notification subscriptions",
+    });
+    expect(within(region).getAllByText("Watching notifications")).toHaveLength(
+      2,
+    );
+    expect(within(region).getByText("Needs attention only")).toBeTruthy();
+    expect(within(region).getByText("All notifications")).toBeTruthy();
+    expect(region.textContent).not.toMatch(
+      /Trunk|Thread:|Every hour|Each burst/,
+    );
   });
 });
 
 describe("<BotActivityPage /> thread subscriptions", () => {
-  it("names threads by excerpt or thread ID without showing a shell section", () => {
+  it("shows a thread subscription as watching notifications, without its excerpt or thread ID and without a shell section", () => {
     const first = postThread();
     if (first.anchor === null) throw new Error("thread fixture has no anchor");
     const named = {
@@ -721,11 +695,15 @@ describe("<BotActivityPage /> thread subscriptions", () => {
       name: "Notification subscriptions",
     });
     expect(
-      within(subscriptions).getByText("Thread: Release discussion"),
-    ).toBeTruthy();
+      within(subscriptions).getAllByText("Watching notifications"),
+    ).toHaveLength(2);
     expect(
-      within(subscriptions).getByText("Thread: thread-fallback"),
+      within(subscriptions).getByText("Needs attention only"),
     ).toBeTruthy();
+    expect(within(subscriptions).getByText("All notifications")).toBeTruthy();
+    expect(subscriptions.textContent).not.toMatch(
+      /Thread:|Release discussion|thread-fallback/,
+    );
     expect(
       screen.queryByRole("region", { name: "Shells and monitors" }),
     ).toBeNull();
@@ -2452,11 +2430,11 @@ describe("<BotActivityPage /> an agent's host that cannot vouch", () => {
 });
 
 describe("<BotActivityPage /> badges and words", () => {
-  it("rule 5: a periodic task wears its cadence in words and its next check-in on the second line", () => {
+  it("rule 5: a periodic task wears its reporting cadence in words and its next check-in on the second line", () => {
     mount([periodic("t-every", {})], { boundHere: true });
 
     const badge = within(row("t-every")).getByTestId("bot-activity-every");
-    expect(badge.textContent).toBe("every 2 hours");
+    expect(badge.textContent).toBe("Reports every 2 hours");
     expect(
       within(row("t-every")).getByTestId("bot-activity-task-line").textContent,
     ).toContain("next check-in");
@@ -2530,7 +2508,7 @@ describe("<BotActivityPage /> badges and words", () => {
 });
 
 describe("<BotActivityPage /> actions", () => {
-  it("rule 7: a periodic task keeps Run now, Pause and Stop, bound here; no other row has them", async () => {
+  it("rule 7: a periodic task keeps Check in now, Pause reports and End reporting in its overflow, bound here; no other row has them", async () => {
     const user = userEvent.setup();
     mocks.state.supported = new Set([
       "bot.task.runNow",
@@ -2540,17 +2518,21 @@ describe("<BotActivityPage /> actions", () => {
     working({ "t-once": { working: ["a-1"], turn: ["a-1"] } });
     mount([periodic("t-every", {}), task("t-once", {})], { boundHere: true });
 
-    const every = within(row("t-every"));
-    expect(every.getByTestId("bot-task-run-now").textContent).toContain(
-      "Run now",
-    );
-    expect(every.getByTestId("bot-task-pause").textContent).toContain("Pause");
-    expect(every.getByTestId("bot-task-stop").textContent).toContain("Stop");
-    expect(within(row("t-once")).queryByTestId("bot-task-run-now")).toBeNull();
-    expect(within(row("t-once")).queryByTestId("bot-task-pause")).toBeNull();
-    expect(within(row("t-once")).queryByTestId("bot-task-stop")).toBeNull();
+    expect(
+      within(row("t-once")).queryByRole("button", {
+        name: "Reporting actions",
+      }),
+    ).toBeNull();
+    await openReportingMenu(user, "t-every");
+    expect(screen.getByRole("menuitem", { name: "Check in now" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Pause reports" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "End reporting…" }),
+    ).toBeTruthy();
 
-    await user.click(every.getByTestId("bot-task-run-now"));
+    await user.click(screen.getByRole("menuitem", { name: "Check in now" }));
     expect(mocks.actions).toEqual([
       {
         method: "bot.task.runNow",
@@ -2567,9 +2549,9 @@ describe("<BotActivityPage /> actions", () => {
     ]);
     mount([periodic("t-every", {})], { boundHere: false });
 
-    expect(screen.queryByTestId("bot-task-run-now")).toBeNull();
-    expect(screen.queryByTestId("bot-task-pause")).toBeNull();
-    expect(screen.queryByTestId("bot-task-stop")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reporting actions" }),
+    ).toBeNull();
   });
 
   it("rule 7: a click on a row's summary opens that task, and no row has a menu", async () => {
@@ -2610,7 +2592,7 @@ describe("<BotActivityPage /> actions", () => {
     }
   });
 
-  it("rule 7: the chevron and Run now, Pause and Stop do not open the task", async () => {
+  it("rule 7: the chevron and the overflow with its End confirmation do not open the task", async () => {
     const user = userEvent.setup();
     mocks.state.supported = new Set([
       "bot.task.runNow",
@@ -2622,17 +2604,307 @@ describe("<BotActivityPage /> actions", () => {
     ]);
     mount([periodic("t-every", {})], { boundHere: true });
 
-    const every = within(row("t-every"));
+    await user.click(
+      within(row("t-every")).getByTestId("bot-activity-task-chevron"),
+    );
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "Check in now" }));
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "Pause reports" }));
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "End reporting…" }));
+    await user.click(screen.getByRole("button", { name: "End reporting" }));
+
+    expect(mocks.actions.map((action) => action.method)).toEqual([
+      "bot.task.runNow",
+      "bot.task.setPaused",
+      "bot.task.stop",
+    ]);
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+});
+
+const REPORT_METHODS = [
+  "bot.task.runNow",
+  "bot.task.setPaused",
+  "bot.task.stop",
+] as const;
+
+/** Opens a row's reporting overflow menu, the one place its controls live. */
+async function openReportingMenu(
+  user: UserEvent,
+  taskId: string,
+): Promise<void> {
+  await user.click(
+    within(row(taskId)).getByRole("button", { name: "Reporting actions" }),
+  );
+}
+
+describe("<BotActivityPage /> watched-task reporting controls", () => {
+  it("says how often a task reports, and that a paused one is paused, with no inline buttons", () => {
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount(
+      [
+        periodic("t-every", {}),
+        periodic("t-paused", { pause: { byUserId: "user-ada", since: NOW } }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(row("t-every").textContent).toContain("Reports every 2 hours");
+    expect(row("t-paused").textContent).toContain("Reports paused");
+    expect(row("t-paused").textContent).not.toContain("Reports every");
     for (const testId of [
-      "bot-activity-task-chevron",
       "bot-task-run-now",
       "bot-task-pause",
       "bot-task-stop",
-    ]) {
-      await user.click(every.getByTestId(testId));
-    }
+    ])
+      expect(screen.queryByTestId(testId)).toBeNull();
+  });
+
+  it("does not promise a next check-in for a paused task that still carries a schedule", () => {
+    mount(
+      [
+        periodic("t-paused", {
+          pause: { byUserId: "user-ada", since: NOW },
+          nextAt: NOW + 3_600_000,
+        }),
+      ],
+      { boundHere: true },
+    );
+
+    const text = row("t-paused").textContent;
+    expect(text).toContain("Reports paused");
+    expect(text).not.toContain("next check-in");
+  });
+
+  it("holds Check in now, Pause reports and End reporting in the overflow, and says the menu changes reports only", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await openReportingMenu(user, "t-every");
+
+    expect(screen.getByRole("menuitem", { name: "Check in now" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Pause reports" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "End reporting…" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "These controls change reports only. The task and its agents can keep working.",
+      ),
+    ).toBeTruthy();
+    expect(mocks.actions).toEqual([]);
+  });
+
+  it("checks in now and pauses through the original mutations, and a paused task offers Resume reports", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "Check in now" }));
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "Pause reports" }));
+
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.runNow",
+        variables: { botId: BOT_ID, taskId: "t-every" },
+      },
+      {
+        method: "bot.task.setPaused",
+        variables: { botId: BOT_ID, taskId: "t-every", paused: true },
+      },
+    ]);
+  });
+
+  it("resumes a paused task's reports", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount(
+      [periodic("t-paused", { pause: { byUserId: "user-ada", since: NOW } })],
+      { boundHere: true },
+    );
+
+    await openReportingMenu(user, "t-paused");
+    expect(
+      screen.queryByRole("menuitem", { name: "Pause reports" }),
+    ).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Resume reports" }));
+
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.setPaused",
+        variables: { botId: BOT_ID, taskId: "t-paused", paused: false },
+      },
+    ]);
+  });
+
+  it("asks before ending reporting: Cancel makes no call, End reporting stops the task once", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "End reporting…" }));
+    expect(screen.getByText("End reporting?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "You can’t resume reports for this task. The task and its agents can keep working.",
+      ),
+    ).toBeTruthy();
+    expect(mocks.actions).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(mocks.actions).toEqual([]);
+
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "End reporting…" }));
+    await user.click(screen.getByRole("button", { name: "End reporting" }));
+
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.stop",
+        variables: { botId: BOT_ID, taskId: "t-every" },
+      },
+    ]);
+  });
+
+  it("keeps who paused a task and since when, and a queued check-in, in the menu rather than the row", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount(
+      [
+        periodic("t-paused", {
+          pause: { byUserId: "user-ada", since: NOW },
+          runRequest: {
+            byUserId: "user-ada",
+            requestedAt: NOW,
+            state: "requested",
+          },
+        }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(row("t-paused").textContent).not.toContain("Paused by");
+    expect(row("t-paused").textContent).not.toContain("Requested;");
+    await openReportingMenu(user, "t-paused");
+
+    expect(screen.getByText(/Paused by .+ since/)).toBeTruthy();
+    expect(
+      screen.getByText(/Requested; runs when the task next reports/),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Check in now" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  it("keeps the host and method gates: another host's tab, or a host without the method, offers no control", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount([periodic("t-every", {})], { boundHere: false });
+    expect(
+      screen.queryByRole("button", { name: "Reporting actions" }),
+    ).toBeNull();
+    cleanup();
+
+    mocks.state.supported = new Set(["bot.task.stop"]);
+    mount([periodic("t-every", {})], { boundHere: true });
+    await openReportingMenu(user, "t-every");
+    expect(screen.queryByRole("menuitem", { name: "Check in now" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /reports$/ })).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "End reporting…" }),
+    ).toBeTruthy();
+  });
+
+  it("does not open the task from the overflow, its menu items or the confirmation", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "End reporting…" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await openReportingMenu(user, "t-every");
+    await user.click(screen.getByRole("menuitem", { name: "Check in now" }));
+
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
+
+  it("says reporting ended for a stopped task, and its menu only explains that work may continue", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mount(
+      [
+        task("t-over", {
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "by-bot",
+          inputNeeded: [],
+        }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(endedRowFor("t-over").textContent).toContain("Reporting ended");
+    await user.click(
+      within(endedRowFor("t-over")).getByRole("button", {
+        name: "Reporting actions",
+      }),
+    );
+    expect(
+      screen.getByText(
+        "Reporting has ended. The task and its agents can keep working.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+});
+
+describe("<BotActivityPage /> watching notifications", () => {
+  it.each([
+    [true, "Needs attention only"],
+    [false, "All notifications"],
+  ] as const)(
+    "shows the actual setting (attention only: %s) with no target, cadence or session link, and calls nothing",
+    (attentionOnly, setting) => {
+      render(
+        <Harness
+          threads={[]}
+          tasks={[]}
+          boundHere
+          notificationSubscriptions={[
+            {
+              target: { kind: "trunk" },
+              attentionOnly,
+              everySeconds: null,
+              since: null,
+              digests: null,
+            },
+          ]}
+        />,
+      );
+
+      const region = screen.getByRole("region", {
+        name: "Notification subscriptions",
+      });
+      expect(region.textContent).toContain("Watching notifications");
+      expect(region.textContent).toContain(setting);
+      expect(region.textContent).not.toContain("Trunk");
+      expect(region.textContent).not.toContain("Each burst");
+      expect(screen.queryByRole("button", { name: "Open session" })).toBeNull();
+      expect(mocks.actions).toEqual([]);
+    },
+  );
 });
 
 describe("<BotActivityPage /> the task's agents", () => {
@@ -2773,7 +3045,7 @@ describe("<BotActivityPage /> an inspected task that ends", () => {
     expect(within(ended).getByText("Release agent")).toBeTruthy();
     expect(
       within(ended).getByTestId("bot-activity-ended-reason").textContent,
-    ).toBe("Tracking stopped");
+    ).toBe("Reporting ended");
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -2883,7 +3155,7 @@ describe("<BotActivityPage /> an inspected task that ends", () => {
     if (ended === undefined) throw new Error("no ended row for t-stopped");
     expect(
       within(ended).getByTestId("bot-activity-ended-reason").textContent,
-    ).toBe("Tracking stopped");
+    ).toBe("Reporting ended");
     expect(within(ended).queryByTestId("bot-activity-every")).toBeNull();
     expect(ended.textContent).not.toMatch(/next check-in|every \d/i);
   });

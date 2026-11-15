@@ -149,8 +149,6 @@ function mountOver(session: StubSession): void {
         notificationSubscriptions={
           subscription.snapshot.notificationSubscriptions
         }
-        trunkChatId="trunk-1"
-        onOpenSession={vi.fn()}
         resolveMember={() => null}
         threads={[]}
       />
@@ -208,8 +206,6 @@ function SwitchableTab(props: {
       notificationSubscriptions={
         subscription.snapshot.notificationSubscriptions
       }
-      trunkChatId="trunk-1"
-      onOpenSession={vi.fn()}
       resolveMember={() => null}
       threads={[]}
     />
@@ -341,7 +337,7 @@ describe("the Activity tab's recent tasks over a bot.subscribe snapshot", () => 
         (row) =>
           within(row).getByTestId("bot-activity-ended-reason").textContent,
       ),
-    ).toEqual(["Tracking stopped", "Tracking ended", "Check-in completed"]);
+    ).toEqual(["Reporting ended", "Tracking ended", "Check-in completed"]);
     expect(screen.queryByText("Gone")).toBeNull();
   });
 

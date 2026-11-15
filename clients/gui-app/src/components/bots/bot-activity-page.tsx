@@ -26,7 +26,6 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
-import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -47,10 +46,7 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
-import {
-  isPeriodicTask,
-  type BotActiveTask,
-} from "@/lib/bots/bot-activity-model";
+import type { BotActiveTask } from "@/lib/bots/bot-activity-model";
 import {
   botActivityMemberName,
   type BotMemberResolver,
@@ -110,8 +106,6 @@ export function BotActivityPage(props: {
   readonly active: BotActiveTasks;
   readonly roomFresh: boolean;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
-  readonly trunkChatId: string;
-  readonly onOpenSession: BotSessionOpen;
   /** Names the members who paused or ran something. */
   readonly resolveMember: BotMemberResolver;
   /** The bot's threads, as listed; `null` while the list is not read. */
@@ -233,9 +227,6 @@ export function BotActivityPage(props: {
             ? null
             : props.notificationSubscriptions
         }
-        trunkChatId={props.trunkChatId}
-        threads={props.threads}
-        onOpenSession={props.onOpenSession}
       />
     </section>
   );
@@ -563,8 +554,6 @@ function ActiveTaskRowBody(
             threads={props.threads}
           />
         </button>
-      </div>
-      <div className="flex flex-col gap-0.5 pl-7.5">
         <BotTaskControls
           botId={botId}
           hostId={hostId}
@@ -641,7 +630,6 @@ function TaskRowSummary(props: {
       ? null
       : props.rollup;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const interval = describeTaskInterval(task);
   return (
     <>
       <span className="flex min-w-0 items-center gap-2">
@@ -649,11 +637,6 @@ function TaskRowSummary(props: {
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
           {activityTaskTitle(props.title, props.titleState)}
         </span>
-        {interval === null ? null : (
-          <Badge variant="muted" size="xs" data-testid="bot-activity-every">
-            {interval}
-          </Badge>
-        )}
         {inputNeeded.length === 0 ? null : (
           <Badge
             variant="warning"
@@ -674,11 +657,7 @@ function TaskRowSummary(props: {
         data-testid="bot-activity-task-line"
       >
         <TaskSummaryWords entry={entry} rollup={rollup} />
-        {isPeriodicTask(task) && task.nextAt !== null ? (
-          <span className="tabular-nums">
-            next check-in {formatAbsoluteDateTime(task.nextAt)}
-          </span>
-        ) : null}
+        <TaskReportingSchedule task={task} />
         {props.agentsReadable || entry.band === "unknown" ? null : (
           <TaskHostOffline
             task={task}
@@ -692,6 +671,26 @@ function TaskRowSummary(props: {
           threads={props.threads}
         />
       </span>
+    </>
+  );
+}
+
+function TaskReportingSchedule(props: {
+  readonly task: BotTaskEntry;
+}): ReactNode {
+  const { task } = props;
+  const interval = describeTaskInterval(task);
+  if (interval === null) return null;
+  return (
+    <>
+      <span data-testid="bot-activity-every">
+        {task.pause === null ? `Reports ${interval}` : "Reports paused"}
+      </span>
+      {task.pause === null && task.nextAt !== null ? (
+        <span className="tabular-nums">
+          next check-in {formatAbsoluteDateTime(task.nextAt)}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -740,7 +739,7 @@ function TaskSummaryWords(props: {
   if (task.state !== "ended") return words;
   let reason = "Tracking ended";
   if (task.endedReason === "completed") reason = "Check-in completed";
-  else if (task.endedReason === "by-bot") reason = "Tracking stopped";
+  else if (task.endedReason === "by-bot") reason = "Reporting ended";
   const needsAttention =
     inputNeeded.length > 0 ||
     rollup?.kind === "failure" ||

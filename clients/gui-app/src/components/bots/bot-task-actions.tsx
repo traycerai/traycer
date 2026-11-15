@@ -1,8 +1,15 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { EllipsisVertical } from "lucide-react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   useBotTaskRunNowMutation,
   useBotTaskSetPausedMutation,
@@ -12,68 +19,52 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
-/**
- * An automation's controls on the bot's Activity page (Tracy Bots T92): who
- * paused it and since when, a Run now still to run, and Run now, Pause or
- * Resume, and Stop. The buttons show only while the tab's host runs the bot
- * and offers the method; what members did shows from any host.
- */
+/** Reporting controls stay bound to the host and methods that can perform them. */
 export function BotTaskControls(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly task: BotTaskEntry;
-  /** Whether the tab's host is the one running the bot. */
   readonly boundHere: boolean;
-  /** A member's name, as the environment's directory knows it. */
   readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { botId, hostId, task, boundHere, nameOf } = props;
-  const { pause, runRequest } = task;
-  const running = task.state === "tracking" && task.cadence.kind === "every";
-  return (
-    <>
-      {pause === null ? null : (
-        <span
-          data-testid="bot-task-paused"
-          className="text-ui-xs text-warning-foreground"
+  const { task, boundHere } = props;
+  if (task.state === "ended" && task.endedReason === "by-bot") {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Reporting actions"
+          >
+            <EllipsisVertical aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-[min(16rem,calc(100vw-2rem))]"
         >
-          Paused by {nameOf(pause.byUserId)} since{" "}
-          {formatAbsoluteDateTime(pause.since)}
-        </span>
-      )}
-      {runRequest === null ? null : (
-        <span
-          data-testid="bot-task-run-request"
-          data-state={runRequest.state}
-          className="text-ui-xs text-muted-foreground"
-        >
-          {runRequest.state === "running"
-            ? "Runs now"
-            : "Requested; runs when the task next reports"}
-          {pause === null ? null : ", then stays paused"}
-        </span>
-      )}
-      {running && boundHere ? (
-        <TaskActionButtons
-          botId={botId}
-          hostId={hostId}
-          taskId={task.taskId}
-          paused={pause !== null}
-          runWaiting={runRequest !== null}
-        />
-      ) : null}
-    </>
-  );
+          <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+            Reporting has ended. The task and its agents can keep working.
+          </p>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+  if (task.state !== "tracking" || task.cadence.kind !== "every" || !boundHere)
+    return null;
+  return <TaskActionMenu {...props} />;
 }
 
-function TaskActionButtons(props: {
+function TaskActionMenu(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly taskId: string;
-  readonly paused: boolean;
-  readonly runWaiting: boolean;
+  readonly task: BotTaskEntry;
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { botId, hostId, taskId, paused, runWaiting } = props;
+  const { botId, hostId, task, nameOf } = props;
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const client = useTabHostClient();
   const canRun = useHostMethodSupport(hostId, "bot.task.runNow") === true;
   const canPause = useHostMethodSupport(hostId, "bot.task.setPaused") === true;
@@ -83,74 +74,94 @@ function TaskActionButtons(props: {
   const stop = useBotTaskStopMutation(client);
   if (!canRun && !canPause && !canStop) return null;
   return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      {canRun ? (
-        <ActionButton
-          testId="bot-task-run-now"
-          label="Run now"
-          description={null}
-          pending={runNow.isPending}
-          disabled={runWaiting}
-          onClick={() => runNow.mutate({ botId, taskId })}
-        />
-      ) : null}
-      {canPause ? (
-        <ActionButton
-          testId="bot-task-pause"
-          label={paused ? "Resume" : "Pause"}
-          description={null}
-          pending={setPaused.isPending}
-          disabled={false}
-          onClick={() => setPaused.mutate({ botId, taskId, paused: !paused })}
-        />
-      ) : null}
-      {canStop ? (
-        <ActionButton
-          testId="bot-task-stop"
-          label="Stop"
-          description="Ends the automation. It can't be resumed."
-          pending={stop.isPending}
-          disabled={false}
-          onClick={() => stop.mutate({ botId, taskId })}
-        />
-      ) : null}
-    </span>
-  );
-}
-
-function ActionButton(props: {
-  readonly testId: string;
-  readonly label: string;
-  /** What the action does beyond its label, as its tooltip; `null` for none. */
-  readonly description: string | null;
-  readonly pending: boolean;
-  readonly disabled: boolean;
-  readonly onClick: () => void;
-}): ReactNode {
-  return (
-    <TooltipWrapper
-      label={props.description}
-      side="top"
-      sideOffset={6}
-      align={undefined}
-    >
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        data-testid={props.testId}
-        disabled={props.pending || props.disabled}
-        onClick={props.onClick}
-      >
-        {props.label}
-        {props.pending ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-      </Button>
-    </TooltipWrapper>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Reporting actions"
+          >
+            <EllipsisVertical aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-[min(16rem,calc(100vw-2rem))]"
+        >
+          <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+            These controls change reports only. The task and its agents can keep
+            working.
+          </p>
+          {task.pause === null ? null : (
+            <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+              Paused by {nameOf(task.pause.byUserId)} since{" "}
+              {formatAbsoluteDateTime(task.pause.since)}
+            </p>
+          )}
+          {task.runRequest === null ? null : (
+            <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+              {task.runRequest.state === "running"
+                ? "Runs now"
+                : "Requested; runs when the task next reports"}
+              {task.pause === null ? null : ", then stays paused"}
+            </p>
+          )}
+          <DropdownMenuSeparator />
+          {canRun ? (
+            <DropdownMenuItem
+              data-testid="bot-task-run-now"
+              disabled={runNow.isPending || task.runRequest !== null}
+              onSelect={() => runNow.mutate({ botId, taskId: task.taskId })}
+            >
+              Check in now
+            </DropdownMenuItem>
+          ) : null}
+          {canPause ? (
+            <DropdownMenuItem
+              data-testid="bot-task-pause"
+              disabled={setPaused.isPending}
+              onSelect={() =>
+                setPaused.mutate({
+                  botId,
+                  taskId: task.taskId,
+                  paused: task.pause === null,
+                })
+              }
+            >
+              {task.pause === null ? "Pause reports" : "Resume reports"}
+            </DropdownMenuItem>
+          ) : null}
+          {canStop ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                data-testid="bot-task-stop"
+                onSelect={() => setConfirmOpen(true)}
+              >
+                End reporting…
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="End reporting?"
+        description="You can’t resume reports for this task. The task and its agents can keep working."
+        cascadeSummary={null}
+        actionLabel="End reporting"
+        isPending={stop.isPending}
+        blockedReason={null}
+        onConfirm={() =>
+          stop.mutate(
+            { botId, taskId: task.taskId },
+            { onSuccess: () => setConfirmOpen(false) },
+          )
+        }
+      />
+    </>
   );
 }

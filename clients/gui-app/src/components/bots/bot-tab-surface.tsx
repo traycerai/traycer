@@ -1798,8 +1798,6 @@ function BotTabContent(props: {
                       notificationSubscriptions={
                         snapshot.notificationSubscriptions
                       }
-                      trunkChatId={snapshot.bot.trunkChatId}
-                      onOpenSession={openSession}
                       resolveMember={resolveMember}
                       threads={threads}
                     />

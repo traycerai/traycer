@@ -306,7 +306,7 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
     expect(pageText()).toContain("Status unknown");
     expect(pageText()).not.toContain("No activity yet");
     expect(screen.getByText("Notification subscriptions")).toBeTruthy();
-    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(screen.getByText("Watching notifications")).toBeTruthy();
     expect(pageText()).not.toContain("Subscriptions unavailable");
   });
 
@@ -319,7 +319,7 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
     await openActivity();
 
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
-    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(screen.getByText("Watching notifications")).toBeTruthy();
   });
 });
 
@@ -391,7 +391,7 @@ describe("<BotTabSurface /> Activity over the real stream hook, driven through o
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).toContain("Status unknown");
     expect(pageText()).not.toContain("No activity yet");
-    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(screen.getByText("Watching notifications")).toBeTruthy();
     expect(pageText()).not.toContain("Subscriptions unavailable");
   });
 });
@@ -471,7 +471,7 @@ describe("<BotTabSurface /> Activity while the serving host is unreachable but t
 
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).not.toContain("No activity yet");
-    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(screen.getByText("Watching notifications")).toBeTruthy();
     expect(pageText()).not.toContain("Subscriptions unavailable");
   });
 });
