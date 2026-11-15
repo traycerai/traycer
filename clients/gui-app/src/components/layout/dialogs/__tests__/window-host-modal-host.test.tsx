@@ -941,19 +941,14 @@ describe("<WindowHostModalHost />", () => {
         };
         sockets.push(failedSocket);
         queueMicrotask(() => {
-          failedSocket.onerror?.({ message: "relay network unavailable" });
-          const close = failedSocket.onclose;
-          if (close === null) {
+          const onerror = failedSocket.onerror;
+          if (onerror === null) {
             failedRedial.reject(
-              new Error("failed redial socket had no close handler"),
+              new Error("failed redial socket had no error handler"),
             );
             return;
           }
-          close({
-            code: 1006,
-            reason: "relay network unavailable",
-            wasClean: false,
-          });
+          onerror({ message: "relay network unavailable" });
           failedRedial.resolve();
         });
         return failedSocket;
