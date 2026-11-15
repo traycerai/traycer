@@ -255,9 +255,9 @@ describe("useProvidersPromoteToPersonal", () => {
         },
       });
       const invalidated = installListRead(result.host.queryClient);
-      let outcome: Awaited<
+      let outcome = null as Awaited<
         ReturnType<typeof result.rendered.result.current.mutateAsync>
-      >;
+      > | null;
 
       await act(async () => {
         outcome = await result.rendered.result.current.mutateAsync(
@@ -614,16 +614,16 @@ describe("useProvidersPromoteToPersonal", () => {
         },
       });
 
-      let outcome: Awaited<
+      let outcome = null as Awaited<
         ReturnType<typeof result.rendered.result.current.mutateAsync>
-      >;
+      > | null;
       await act(async () => {
         outcome = await result.rendered.result.current.mutateAsync(
           result.input,
         );
       });
 
-      expect(outcome!).toMatchObject({
+      expect(outcome).toMatchObject({
         kind: "refused",
         refreshLists: false,
       });
@@ -652,14 +652,14 @@ describe("useProvidersPromoteToPersonal", () => {
       },
     });
 
-    let outcome: Awaited<
+    let outcome = null as Awaited<
       ReturnType<typeof result.rendered.result.current.mutateAsync>
-    >;
+    > | null;
     await act(async () => {
       outcome = await result.rendered.result.current.mutateAsync(result.input);
     });
 
-    expect(outcome!).toMatchObject({
+    expect(outcome).toMatchObject({
       kind: "refused",
       text: "The host's refusal text.",
       refreshLists: false,

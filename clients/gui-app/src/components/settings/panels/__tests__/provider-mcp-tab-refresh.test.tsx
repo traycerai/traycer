@@ -26,7 +26,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
-import type { McpListData } from "@/hooks/providers/native-response-map";
+import type {
+  McpListData,
+  ProvidersListWireResponse,
+} from "@/hooks/providers/native-response-map";
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
@@ -201,7 +204,7 @@ type ListOutcome =
   | { readonly kind: "error"; readonly error: Error }
   | {
       readonly kind: "pending";
-      readonly promise: Promise<ProvidersListResponse>;
+      readonly promise: Promise<ProvidersListWireResponse>;
     };
 
 interface ListKey {
