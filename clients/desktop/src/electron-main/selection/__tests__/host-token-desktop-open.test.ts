@@ -303,8 +303,8 @@ describe("desktop main local streams open with host tokens", () => {
     async ({ owner, omitOwner, previousOwner, admitted }) => {
       const entryFor = (currentOwner: typeof owner): HostDirectoryEntry =>
         omitOwner
-          ? { ...mockLocalHostEntry }
-          : { ...mockLocalHostEntry, owner: currentOwner };
+          ? { ...LOCAL_HOST_AT_FLOOR }
+          : { ...LOCAL_HOST_AT_FLOOR, owner: currentOwner };
       const socketsBefore = FakeNativeWebSocket.instances.length;
 
       if (previousOwner !== undefined) {
