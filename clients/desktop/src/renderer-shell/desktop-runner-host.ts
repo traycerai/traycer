@@ -4,6 +4,10 @@ import type { TeamComputersResult } from "@traycer-clients/shared/host-client/te
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
@@ -285,6 +289,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     body: string,
   ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -1360,6 +1368,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     body: string,
   ): Promise<AutoPolicySaveResult> {
     return this.bridge.saveAutoPolicy(bearerToken, body);
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return this.bridge.attachTaskEnvironment(bearerToken, request);
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {

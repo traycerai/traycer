@@ -5,6 +5,10 @@ import {
 } from "@traycer-clients/shared/auth/sign-in-storage";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -3197,6 +3201,15 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.saveAutoPolicy(bearer, body);
+  }
+
+  /** Attaches a task to a team's environment on traycer-server, on the signed-in person's bearer. */
+  async attachTaskEnvironment(
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.attachTaskEnvironment(bearer, request);
   }
 
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {

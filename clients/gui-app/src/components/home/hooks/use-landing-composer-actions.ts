@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -445,6 +446,7 @@ export function useLandingComposerActions(
   const attachClient = useEpicAttachmentClient(target.client);
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const takeOperation = useEnvironmentCloud();
   const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
@@ -1735,6 +1737,8 @@ export function useLandingComposerActions(
       const handed = args.hand(epicId);
       if (handed === null) return null;
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in the attachment goes out on, taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const tabId = uuidv4();
       // The task opens at once, with no agent yet: its first one is created
       // on the sandbox once the agent the person asked for is ready there.
@@ -1832,6 +1836,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({
                 epicId,
                 teamId: settledAttachTeamId,
+                operation,
               });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
@@ -1852,6 +1857,7 @@ export function useLandingComposerActions(
       discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
+      takeOperation,
     ],
   );
 

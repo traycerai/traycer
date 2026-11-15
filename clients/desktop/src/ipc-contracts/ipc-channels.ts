@@ -91,6 +91,8 @@ export const RunnerHostInvoke = {
   listEnvironments: "runnerHost:environments:list",
   // The account's auto-approve policy (traycer-server `/api/traycer/auto-policy`), same reason.
   saveAutoPolicy: "runnerHost:autoPolicy:save",
+  // A task's team-environment attachment (traycer-server `/api/tasks/environment-attachment`), same reason.
+  attachTaskEnvironment: "runnerHost:tasks:attachEnvironment",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.

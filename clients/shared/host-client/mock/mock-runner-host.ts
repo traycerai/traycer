@@ -4,6 +4,11 @@ import {
   type AutoPolicySaveResult,
 } from "../auto-policy-save";
 import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "../task-environment-attachment";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "../environment-directory";
@@ -774,6 +779,19 @@ export class MockRunnerHost implements IRunnerHost {
       null,
       fetchEnvironmentTransport,
       body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
     );
   }
 

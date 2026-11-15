@@ -1041,7 +1041,9 @@ import {
   epicRevokeCollaboratorV11,
   epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
+  epicAttachEnvironmentUpgradeV10ToV20,
   epicAttachEnvironmentV10,
+  epicAttachEnvironmentV20,
   epicLocalHistoryReadV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
@@ -10362,6 +10364,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         0: {
           contract: epicAttachEnvironmentV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    // The prepare without the cloud attachment, which the app then makes on
+    // the person's sign-in. No downgrade to `@1.0`: a prepare cannot be sent
+    // as an attachment, nor an attachment answered as a prepare.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicAttachEnvironmentV20,
+          upgradeFromPreviousVersion: epicAttachEnvironmentUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},

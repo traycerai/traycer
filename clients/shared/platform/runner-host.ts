@@ -1,6 +1,10 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 import type { AutoPolicySaveResult } from "../host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "../host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type { TeamComputersResult } from "../host-client/team-computers";
@@ -526,6 +530,16 @@ export interface IRunnerHost {
     bearerToken: string,
     body: string,
   ): Promise<AutoPolicySaveResult>;
+  /**
+   * Attaches a task to a team's environment on traycer-server
+   * (`POST /api/tasks/environment-attachment`) with the user bearer, as
+   * `host-client/task-environment-attachment.ts` sends it. Run where the
+   * shell's other traycer-server calls run, for the same reason. Never throws.
+   */
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,

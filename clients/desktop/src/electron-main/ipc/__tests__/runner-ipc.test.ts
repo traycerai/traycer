@@ -830,6 +830,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.listSandboxes,
           RunnerHostInvoke.listEnvironments,
           RunnerHostInvoke.saveAutoPolicy,
+          RunnerHostInvoke.attachTaskEnvironment,
           RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.getTraycerModels,

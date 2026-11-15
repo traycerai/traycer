@@ -4,6 +4,11 @@ import {
   type AutoPolicySaveResult,
 } from "@traycer-clients/shared/host-client/auto-policy-save";
 import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "@traycer-clients/shared/host-client/environment-directory";
@@ -856,6 +861,19 @@ export class MobileRunnerHost implements IRunnerHost {
       null,
       nativeEnvironmentTransport,
       body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
     );
   }
 
