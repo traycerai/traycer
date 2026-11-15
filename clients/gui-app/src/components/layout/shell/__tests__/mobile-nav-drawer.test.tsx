@@ -1,10 +1,14 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useRef } from "react";
 
-import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type {
+  HistoryItem,
+  HistorySortOption,
+} from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -35,6 +39,8 @@ const testState: {
   backfillTasks: ReadonlyMap<string, ListTaskLight>;
   /** The id lists the activity projection asked that batch about. */
   backfillIdCalls: ReadonlyArray<string>[];
+  /** The sort `useHistoryQuery` reports as in effect; undefined echoes the search's. */
+  effectiveSort: HistorySortOption | undefined;
 } = {
   items: [],
   signOut: () => Promise.resolve(true),
@@ -49,6 +55,7 @@ const testState: {
   workingEpicIds: new Set<string>(),
   backfillTasks: new Map<string, ListTaskLight>(),
   backfillIdCalls: [],
+  effectiveSort: undefined,
 };
 
 const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
@@ -87,7 +94,7 @@ const trackMock = vi.hoisted(() => vi.fn());
 
 const refetch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => {
+  useHistoryQuery: (params: UseHistoryQueryParams) => {
     const hasMountedQuery = useRef(false);
     if (!hasMountedQuery.current) {
       hasMountedQuery.current = true;
@@ -99,6 +106,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
         totalCount: testState.items.length,
         hostRequiresCloudToList: testState.hostRequiresCloudToList,
       },
+      sort: testState.effectiveSort ?? params.search.sort,
+      createdSortAvailable: true,
       isPending: testState.isPending,
       cloudPagePending: testState.cloudPagePending,
       isFetching: false,
@@ -270,6 +279,7 @@ function historyItem(overrides: {
     taskType: "epic",
     title: overrides.title,
     initialUserPrompt: "",
+    createdAtMs: overrides.updatedAtMs,
     updatedAtMs: overrides.updatedAtMs,
     recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",
@@ -396,6 +406,7 @@ describe("MobileNavDrawer", () => {
     testState.workingEpicIds = new Set<string>();
     testState.backfillTasks = new Map<string, ListTaskLight>();
     testState.backfillIdCalls = [];
+    testState.effectiveSort = undefined;
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     testState.signOut = () => Promise.resolve(true);
     testState.openSettings = () => undefined;
@@ -1365,6 +1376,57 @@ describe("MobileNavDrawer", () => {
       // The projection may ask for an older pending active row, but never
       // fetches the already-listed task a second time.
       expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
+
+    describe("a saved created-desc sort", () => {
+      const runningMissingFromPage = () => {
+        testState.items = [
+          historyItem({
+            id: "a",
+            title: "stale",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+        ];
+        testState.workingEpicIds = new Set(["z"]);
+        testState.backfillTasks = new Map([
+          [
+            "z",
+            backfillTask({
+              id: "z",
+              title: "running",
+              updatedAtMs: NOW_MS - 90 * DAY_MS,
+            }),
+          ],
+        ]);
+        testState.activity = { z: "turn" };
+        useHistorySearchStore.setState({
+          search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+            sort: "created-desc",
+            sortExplicit: true,
+          }),
+        });
+      };
+
+      it("backfills a running task like Most recent when an older host reads it as recent", async () => {
+        runningMissingFromPage();
+        testState.effectiveSort = "recent";
+        renderDrawer();
+        const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+        expect(rows.length).toBe(2);
+        expect(rows[0]?.textContent).toContain("running");
+        expect(testState.backfillIdCalls.at(-1)).toContain("z");
+      });
+
+      it("does not backfill a running task while the host orders by creation", async () => {
+        runningMissingFromPage();
+        testState.effectiveSort = "created-desc";
+        renderDrawer();
+        const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+        expect(rows.length).toBe(1);
+        expect(testState.backfillIdCalls.at(-1)).not.toContain("z");
+      });
     });
 
     it("leaves the order alone while a search is active", async () => {

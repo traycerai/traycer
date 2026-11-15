@@ -139,9 +139,19 @@ describe("retryHostDoor", () => {
     expect(hostDoorStateFor(HOST_ID)).toEqual(state);
   });
 
-  it("runs only the subscribed owner for the retried host", async () => {
+  it("runs only the subscribed owner after reopening and keeps the door state", async () => {
+    signedInAsRetryUser();
+    const state = {
+      hostId: HOST_ID,
+      kind: "keys-unavailable",
+      detail: { code: "NETWORK_ERROR", doorReason: "keys_unavailable" },
+    } as const;
+    noteHostDoorState(state);
     const lane = armReopenLane(HOST_ID);
-    const hostOwner = vi.fn();
+    const hostOwner = vi.fn(() => {
+      expect(lane.reopenCount()).toBe(1);
+      expect(hostDoorStateFor(HOST_ID)).toEqual(state);
+    });
     const otherHostOwner = vi.fn();
     const removedOwner = vi.fn();
     ownerUnsubscribers.push(onHostDoorRetry(HOST_ID, hostOwner));
@@ -155,6 +165,6 @@ describe("retryHostDoor", () => {
     expect(otherHostOwner).not.toHaveBeenCalled();
     expect(removedOwner).not.toHaveBeenCalled();
     expect(lane.reopenCount()).toBe(1);
-    expect(hostDoorStateFor(HOST_ID)).toBeNull();
+    expect(hostDoorStateFor(HOST_ID)).toEqual(state);
   });
 });

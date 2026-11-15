@@ -55,14 +55,14 @@ vi.mock("sonner", () => ({
 const EMPTY_EDITOR_DOC = { type: "doc", content: [] };
 
 /**
- * The deleted `useComposerPasteAdapter`'s SIGNATURE, over the hook that ships.
+ * The paste hook that ships, `useComposerHashPaste`, taking an insertion
+ * callback and a file-path ingest instead of an editor handle.
  *
  * Almost everything in this file pins the shared BASE — drag depth and overlay
  * variants, clipboard and drop path resolution, the read timeout, the pending
  * gates, unmount liveness — which lives in `useComposerPasteEvents` and is
- * identical under any ingest. That coverage had no reason to die with the
- * base64 adapter, so the adapter's two-argument shape is reproduced here and
- * every assertion below is unchanged.
+ * identical under any ingest. This fixture lets a case drive that base with its
+ * own callbacks while the real hook runs underneath.
  *
  * `putImage` is doubled: these are not image-store pins, and the hash the job
  * lands is never asserted.
@@ -107,7 +107,7 @@ function useAdapterUnderTest(
   });
 }
 
-/** The deleted `useComposerPaste`'s signature, likewise over the shipping hook. */
+/** The paste hook that ships, with no file route and paths that reach the target. */
 function usePasteUnderTest(
   editorRef: { readonly current: ComposerPasteEditorHandle | null },
   fileDrops: IFileDropHost,

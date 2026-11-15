@@ -117,8 +117,16 @@ export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 export const listTasksSortSchemaV11 = lazySchema(() =>
   z.enum(["recent", "oldest", "title-asc", "title-desc", "relevance"]),
 );
-export const listTasksSortSchema = lazySchema(() =>
+export const listTasksSortSchemaPre110 = lazySchema(() =>
   z.enum([...listTasksSortSchemaV11.options, "last-viewed"]),
+);
+/**
+ * `created-desc` (`epic.listTasks@1.10`) orders by when the task was created,
+ * newest first. `oldest` is unrelated despite the name: it is least recently
+ * UPDATED, the reverse of the task-edit half of `recent`.
+ */
+export const listTasksSortSchema = lazySchema(() =>
+  z.enum([...listTasksSortSchemaPre110.options, "created-desc"]),
 );
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
@@ -1189,7 +1197,7 @@ export const listTasksRequestSchemaV11 = lazySchema(() =>
 );
 export const listTasksRequestSchemaPre13 = lazySchema(() =>
   listTasksRequestSchemaV11.extend({
-    sort: listTasksSortSchema.optional(),
+    sort: listTasksSortSchemaPre110.optional(),
   }),
 );
 export type ListTasksRequestPre13 = z.infer<typeof listTasksRequestSchemaPre13>;
@@ -1210,9 +1218,18 @@ export type ListTasksRequestPre16 = z.infer<typeof listTasksRequestSchemaPre16>;
  * that arrives after a local deletion must be merged against a fresh local
  * projection, which is work only the revalidation phase needs to request.
  */
-export const listTasksRequestSchema = lazySchema(() =>
+export const listTasksRequestSchemaPre110 = lazySchema(() =>
   listTasksRequestSchemaPre16.extend({
     localFirstPhase: z.enum(["initial", "revalidate"]).optional(),
+  }),
+);
+export type ListTasksRequestPre110 = z.infer<
+  typeof listTasksRequestSchemaPre110
+>;
+
+export const listTasksRequestSchema = lazySchema(() =>
+  listTasksRequestSchemaPre110.extend({
+    sort: listTasksSortSchema.optional(),
   }),
 );
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;

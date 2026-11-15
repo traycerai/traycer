@@ -2203,6 +2203,7 @@ describe("a send recovered without its message going back to a task", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: { target: NEW_TARGET, clientRequestId: null },
+      namedHostId: null,
       durability: "saved",
     });
     const composerSurface = composerSurfaceKey(null);

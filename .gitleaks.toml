@@ -134,6 +134,12 @@ regexes = ['''^sk_live_9f3a7c1d2e4b5a60$''']
 [[rules]]
 id = "generic-api-key"
 [[rules.allowlists]]
+description = "Synthetic bearer token returned by the stubbed refresh endpoint in the CLI install-auth test. Its exact value is a fixture, not a credential. The full-history Secret scan reads the unmerged branch that introduced it, so main needs this exception before that branch lands."
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^clients/traycer-cli/src/host/__tests__/install-auth\.test\.ts$''']
+regexes = ['''^second-401-rotated$''']
+[[rules.allowlists]]
 description = "The `EnvironmentSecretV12` TYPE NAME in the environment-secret test suites: a fixture declared as `const secret: EnvironmentSecretV12 = {` (or `secretSettingIt:` / `readonly secret:`) reads to the generic-api-key rule as a key named `secret` with the value `EnvironmentSecretV12`. A type annotation is never a credential. Scoped to the exact type name and the suites that declare such a fixture so unrelated findings stay reportable."
 condition = "AND"
 regexTarget = "secret"
@@ -156,3 +162,11 @@ paths = [
   '''^clients/gui-app/src/components/simulator-tile/__tests__/simulator-tile\.test\.tsx$''',
 ]
 regexes = ['''^Pixel_8_API_35_traycer_[23]$''']
+[[rules.allowlists]]
+description = "Privacy canary in the desktop runner-IPC suite: `TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9` is a made-up value named for what it is, set as the API key so the test can assert it stays out of main logs, bridge errors, and renderer results. The generic-api-key rule fires on the `apiKey` identifier; it is not an issued key. Rule-scoped like the entries above, so the exact source path and the exact value narrow it and any other value in that file still reports."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/ipc/__tests__/runner-ipc\.test\.ts$''',
+]
+regexes = ['''^TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9$''']
