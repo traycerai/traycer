@@ -1,19 +1,19 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   environmentListUpgradeV10ToV11,
   type EnvironmentDescriptorV11,
   type EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { requireTeamHostClient } from "./team-configuration-test-support";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "./team-configuration-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,19 +25,10 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 
-// The shared host client and the signed-in identity are the external
-// boundaries; the environment.list query, its cache and the rows are real.
-const boundary = vi.hoisted(() => ({
-  client: null as HostClient<HostRpcRegistry> | null,
-}));
 vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
-    ...actual,
-    useHostClient: () => {
-      if (boundary.client === null) throw new Error("no host client mounted");
-      return boundary.client;
-    },
+    ...(await importOriginal<typeof import("@/lib/host")>()),
+    useHostClient: () => requireTeamHostClient(),
   };
 });
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -94,37 +85,19 @@ type ListHandler = () => Promise<EnvironmentListResponseV11>;
 function mountClient(list: ListHandler): {
   readonly Wrapper: (p: { children: ReactNode }) => ReactNode;
 } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => list(),
   });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: { "environment.list": list },
-    }),
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  boundary.client = spine.createRequester(mockLocalHostEntry);
   return {
-    Wrapper: (props) => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
-    ),
+    Wrapper: harness.Wrapper,
   };
 }
 
-beforeEach(() => {
-  boundary.client = null;
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
 });
-afterEach(cleanup);
 
 describe("TeamRows", () => {
   function PickerHarness(props: {
@@ -158,6 +131,13 @@ describe("TeamRows", () => {
         ],
       }),
     );
+    useAuthStore.setState({
+      shareableTeams: [
+        { teamId: "team-admin", slug: "handle-admin", avatarUrl: null },
+        { teamId: "team-editor", slug: "handle-editor", avatarUrl: null },
+        { teamId: "team-viewer", slug: "handle-viewer", avatarUrl: null },
+      ],
+    });
     const onPick = vi.fn();
     render(<PickerHarness onPick={onPick} />, { wrapper: Wrapper });
 
@@ -332,7 +312,7 @@ describe("ConfigurationSourceBoundary", () => {
     );
   });
 
-  it("gives an @1.0 host's team no role", async () => {
+  it("gives an @1.0 host's team the viewer role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
@@ -346,7 +326,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|null|team",
+      "env-a|room-a|null|viewer|team",
     );
   });
 

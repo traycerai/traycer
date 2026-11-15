@@ -28,6 +28,11 @@ export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
   direction: "host-outdated",
 };
 
+export const REMOTE_HOST_UPDATE_DESCRIPTION =
+  "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.";
+
+export const HOST_UPDATE_PENDING_LABEL = "Update pending";
+
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;
   readonly clientAppVersion: string | null;

@@ -1,4 +1,7 @@
-import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
+import {
+  HOST_DOOR_STATE_POLICY,
+  type HostDoorState,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
@@ -41,8 +44,118 @@ import {
  *   host it is booting FOR the user. So during a first launch the authority
  *   names a host, ∅ is false, and a strictly-∅ modal would be invisible for
  *   exactly the state this surface is supposed to own.
+ * - `door-state` - the host this window would use is in a door state the
+ *   boards draw a cover for. The cover is exactly that state's: its words and
+ *   its buttons. It is not a failure of this app, so it offers no issue report
+ *   and no diagnostics of this machine's host.
  */
-export type WindowNarrationCause = "no-usable-host" | "cold-start";
+export type WindowNarrationCause =
+  | "no-usable-host"
+  | "cold-start"
+  | "door-state";
+
+/** The door states drawn as their own cover, each with the computer it is about. */
+type DoorCoverKind =
+  | "token-unavailable"
+  | "keys-unavailable"
+  | "clock-skew"
+  | "token-expired"
+  | "enrolment-broken"
+  | "membership-removed";
+
+type DoorCoverVariant = {
+  readonly kind: DoorCoverKind;
+  /** The computer the state is about: the one Retry re-opens. */
+  readonly hostId: string;
+};
+
+const DOOR_COVER_KINDS: ReadonlySet<string> = new Set<DoorCoverKind>([
+  "token-unavailable",
+  "keys-unavailable",
+  "clock-skew",
+  "token-expired",
+  "enrolment-broken",
+  "membership-removed",
+]);
+
+function isDoorCoverVariant(
+  variant: WindowNarrationVariant,
+): variant is DoorCoverVariant {
+  return DOOR_COVER_KINDS.has(variant.kind);
+}
+
+export function isDoorStateCoverVariant(
+  variant: WindowNarrationVariant,
+): variant is DoorStateCoverVariant {
+  return (
+    isDoorCoverVariant(variant) ||
+    variant.kind === "team-membership-required" ||
+    variant.kind === "not-admitted" ||
+    variant.kind === "host-claimed"
+  );
+}
+
+/** The door covers board C1 draws with a Retry: each says "then retry". */
+const DOOR_COVERS_WITH_RETRY: ReadonlySet<string> = new Set<DoorCoverKind>([
+  "keys-unavailable",
+  "clock-skew",
+  "token-expired",
+]);
+
+/** Whether a door cover offers Retry, which re-opens its computer now. */
+export function offersDoorRetry(
+  variant: WindowNarrationVariant,
+): variant is DoorCoverVariant {
+  return DOOR_COVERS_WITH_RETRY.has(variant.kind);
+}
+
+/** Who claimed a computer and the team it left, read from authn's claims. */
+export interface HostClaimFacts {
+  readonly claimantName: string;
+  readonly teamName: string;
+}
+
+/** Every cover a door state draws with its own words and buttons (board C1). */
+export type DoorStateCoverVariant =
+  | { readonly kind: "team-membership-required" }
+  | { readonly kind: "not-admitted" }
+  | ({ readonly kind: "host-claimed" } & HostClaimFacts)
+  | DoorCoverVariant;
+
+/**
+ * The cover one host's door state draws with its own words, or `null` when it
+ * draws none. A state the app does not get out of by itself (the policy's
+ * `retry` is `none`) covers outright: only a person or an Admin clears it. A
+ * state it retries on its own covers only while the host is not already
+ * serving. A claimed computer covers once `claim` names who claimed it, and
+ * until then keeps today's cover (board C30, row 14). An older host and an
+ * unrecognised reason have no cover of their own.
+ */
+export function ownDoorCover(
+  state: HostDoorState | null,
+  alreadyServing: boolean,
+  claim: HostClaimFacts | null,
+): DoorStateCoverVariant | null {
+  if (state === null) return null;
+  switch (state.kind) {
+    case "not-a-member":
+      return { kind: "team-membership-required" };
+    case "not-admitted":
+      return { kind: "not-admitted" };
+    case "membership-removed":
+      return { kind: state.kind, hostId: state.hostId };
+    case "host-claimed":
+      return claim === null ? null : { kind: "host-claimed", ...claim };
+    case "token-unavailable":
+    case "keys-unavailable":
+    case "clock-skew":
+    case "token-expired":
+    case "enrolment-broken":
+      return alreadyServing ? null : { kind: state.kind, hostId: state.hostId };
+    default:
+      return null;
+  }
+}
 
 /**
  * The three variants, and the actions each may offer.
@@ -54,9 +167,13 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
-  | { readonly kind: "team-membership-checking" }
-  | { readonly kind: "team-membership-required" }
-  | { readonly kind: "team-membership-unavailable" }
+  | DoorStateCoverVariant
+  /**
+   * The `offline` cover for a host whose refusal carries a reason this app
+   * does not know: a newer host, never an older one. Its own kind only so the
+   * card can show the refusal's code beneath the unchanged `offline` words.
+   */
+  | { readonly kind: "unrecognised-refusal"; readonly code: string }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -110,7 +227,16 @@ export type WindowNarrationState =
     };
 
 export interface WindowNarrationInput {
-  readonly localTeamAdmission?: LocalTeamAdmissionState | null;
+  /**
+   * Why this app cannot use the host that would serve this window (the
+   * effective host, else the target), or `null`.
+   */
+  readonly doorState?: HostDoorState | null;
+  /**
+   * Who claimed that host and from which team, once read, while its door
+   * state is `host-claimed`; `null` otherwise or until it is read.
+   */
+  readonly hostClaim?: HostClaimFacts | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
    *
@@ -379,29 +505,50 @@ export function hostUpdateActionApplies(
   );
 }
 
-/** Membership only owns the window when a remote host is not serving it. */
-function localTeamAdmissionVariant(
-  input: WindowNarrationInput,
-): WindowNarrationVariant | null {
-  if (
-    input.effectiveHostId !== null &&
-    input.effectiveHostId !== input.localHostId
-  ) {
-    return null;
-  }
-  if (input.localTeamAdmission === "required") {
-    return { kind: "team-membership-required" };
-  }
+/**
+ * The state's own cover is chosen by `ownDoorCover`. While nothing is
+ * serving, an older host draws its update cover; another state falls
+ * back to the "no host" cover, with an unrecognised reason's code beneath it.
+ */
+function doorStateCover(input: WindowNarrationInput): {
+  readonly cause: WindowNarrationCause;
+  readonly variant: WindowNarrationVariant;
+} | null {
+  const state = input.doorState ?? null;
+  if (state === null || !HOST_DOOR_STATE_POLICY[state.kind].blocks) return null;
   const alreadyServing =
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
+  const own = ownDoorCover(state, alreadyServing, input.hostClaim ?? null);
+  if (own !== null) return { cause: "door-state", variant: own };
   if (alreadyServing) return null;
-  if (input.localTeamAdmission === "unavailable") {
-    return { kind: "team-membership-unavailable" };
+  if (state.kind === "older-host") {
+    return {
+      cause: "no-usable-host",
+      variant: olderHostUpdateVariant(
+        state.hostId,
+        state.hostId === input.targetHostId,
+        null,
+      ),
+    };
   }
-  return input.localTeamAdmission === "checking"
-    ? { kind: "team-membership-checking" }
-    : null;
+  if (state.kind === "unrecognised-refusal" && state.detail !== null) {
+    return {
+      cause: "no-usable-host",
+      variant: { kind: "unrecognised-refusal", code: state.detail.code },
+    };
+  }
+  return { cause: "no-usable-host", variant: { kind: "offline" } };
+}
+
+/**
+ * The host whose door cover this narration draws, or `null` when it draws
+ * none. The narration's first arm, and the one fact the toast needs: a
+ * refusal it stays silent about must be one whose cover is on screen.
+ */
+export function doorCoverHostOf(input: WindowNarrationInput): string | null {
+  if (!input.attached || doorStateCover(input) === null) return null;
+  return input.effectiveHostId ?? input.targetHostId;
 }
 
 /**
@@ -416,10 +563,8 @@ export function deriveWindowNarration(
   input: WindowNarrationInput,
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
-  const admission = localTeamAdmissionVariant(input);
-  if (admission !== null) {
-    return { kind: "narrating", cause: "no-usable-host", variant: admission };
-  }
+  const doorCover = doorStateCover(input);
+  if (doorCover !== null) return { kind: "narrating", ...doorCover };
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived
   // from an account that owns no hosts - both are an empty lease list - and on

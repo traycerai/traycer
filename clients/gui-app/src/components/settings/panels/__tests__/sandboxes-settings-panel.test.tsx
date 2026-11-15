@@ -23,6 +23,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -128,6 +129,7 @@ const LISTED_CATALOGUE: SandboxCatalogue = {
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
+  fallbackBinding: null as FakeSandboxBinding | null,
   entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
   settingsItems: [] as readonly {
@@ -156,7 +158,18 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => mocks.binding,
+  useHostBinding: () => {
+    const authnBinding = requireTeamEnvironmentAuthnBinding();
+    const sandboxBinding = mocks.binding ?? mocks.fallbackBinding;
+    return {
+      ...authnBinding,
+      ...(sandboxBinding ?? {}),
+      auth: {
+        ...(sandboxBinding?.auth ?? {}),
+        ...authnBinding.auth,
+      },
+    };
+  },
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -539,6 +552,7 @@ function names(): string[] {
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
     mocks.binding = null;
+    mocks.fallbackBinding = createFakeSandboxBinding();
     mocks.entry = null;
     resetNegotiatedManifests();
     recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);

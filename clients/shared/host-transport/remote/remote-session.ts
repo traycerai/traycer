@@ -1,5 +1,8 @@
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
-import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import {
+  revalidateStream,
+  type StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
   RemoteSession as ProtocolRemoteSession,
@@ -14,6 +17,7 @@ import type {
   RemoteSessionAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
 import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -159,17 +163,15 @@ export interface RemoteSessionOptions<
   | "servedStreamMajors"
   | "unaryResponseMs"
 > {
-  readonly bearer: BearerSourceProvider;
-  readonly auth: StreamAuthRevalidator | null;
-  readonly evidence: TransportEvidenceReporter;
   /**
-   * `null` for a personal host: `OPEN` presents the user bearer. For a
-   * `kind: sandbox` host, the reader of the session grant minted with the
-   * current attach grant: `OPEN` presents it in `authz` v2 with an EMPTY
-   * bearer, and the session never sends a `CREDENTIAL_UPDATE` - no user
-   * credential reaches a sandbox.
+   * The host-only token, for every host kind: `OPEN` presents it in `authz`
+   * v2 with an EMPTY bearer, and a `CREDENTIAL_UPDATE` carries a renewed one
+   * in `bearer`. The sign-in token never reaches a host.
    */
-  readonly sessionGrant: (() => string | null) | null;
+  readonly hostToken: () => string | null;
+  readonly auth: StreamAuthRevalidator | null;
+  readonly door: SessionDoorObserver | null;
+  readonly evidence: TransportEvidenceReporter;
 }
 
 /**
@@ -239,37 +241,15 @@ function bearerReader(bearer: BearerSourceProvider): () => string | null {
   };
 }
 
-function createClientRemoteSessionAuth(
-  bearer: BearerSourceProvider,
-  auth: StreamAuthRevalidator | null | undefined,
-): RemoteSessionAuth {
-  const readBearer = bearerReader(bearer);
-  return {
-    missingOpenAuthCause: "missing-bearer",
-    readOpenAuth: () => {
-      const token = readBearer();
-      if (token === null) {
-        return null;
-      }
-      return { bearer: token, authz: null, fingerprint: token };
-    },
-    readCredentialUpdateBearer: readBearer,
-    currentFingerprint: readBearer,
-    revalidateForReconnect:
-      auth === null || auth === undefined
-        ? null
-        : () => auth.revalidateForReconnect(),
-  };
-}
-
-function createSessionGrantRemoteSessionAuth(
-  readSessionGrant: () => string | null,
+function createHostTokenRemoteSessionAuth(
+  readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
+  door: SessionDoorObserver | null,
 ): RemoteSessionAuth {
   return {
-    missingOpenAuthCause: "missing-session-grant",
+    missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
-      const grant = readSessionGrant();
+      const grant = readHostToken();
       if (grant === null) {
         return null;
       }
@@ -279,18 +259,15 @@ function createSessionGrantRemoteSessionAuth(
         fingerprint: grant,
       };
     },
-    readCredentialUpdateBearer: () => null,
-    // Unknown until the next attach mints one: the reader still holds the
-    // grant that was just refused, because only the next attach replaces it.
-    // A grant refusal is therefore never evidence of no progress. The loop
-    // stays bounded the way a rotating bearer's is (the reconnect backoff),
-    // and the `local-plane-retained` bound is untouched.
-    currentFingerprint: () => null,
-    // A refused session grant is recovered the way a refused bearer is: the
-    // user bearer that mints the next pair is revalidated, then the session
-    // redials and the provider mints a fresh attach and session grant.
+    readCredentialUpdateBearer: readHostToken,
+    currentFingerprint: readHostToken,
+    // `undefined` too: an untyped caller can omit the option, and a wrapper
+    // over nothing would turn "no revalidator" into an endless retry.
     revalidateForReconnect:
-      auth === null ? null : () => auth.revalidateForReconnect(),
+      auth === null || auth === undefined
+        ? null
+        : (refusal) => revalidateStream(auth, refusal),
+    ...(door === null ? {} : { door }),
   };
 }
 
@@ -312,7 +289,7 @@ function createClientPoolSessionAuth(
     readCredentialUpdateBearer: readBearer,
     currentFingerprint: readBearer,
     revalidateForReconnect:
-      auth === null ? null : () => auth.revalidateForReconnect(),
+      auth === null ? null : (refusal) => revalidateStream(auth, refusal),
   };
 }
 
@@ -349,13 +326,10 @@ function toProtocolSessionOptions<
       auth: createClientPoolSessionAuth(bearer, auth),
     };
   }
-  const { bearer, auth, sessionGrant, ...coreOptions } = options;
+  const { hostToken, auth, door, ...coreOptions } = options;
   return {
     ...coreOptions,
     ...clientWiring,
-    auth:
-      sessionGrant === null
-        ? createClientRemoteSessionAuth(bearer, auth)
-        : createSessionGrantRemoteSessionAuth(sessionGrant, auth),
+    auth: createHostTokenRemoteSessionAuth(hostToken, auth, door),
   };
 }
