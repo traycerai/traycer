@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ReactNode } from "react";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -31,9 +37,11 @@ const HOST_ID = "host-onboarding";
 const PERSONAL_ID = "env-personal";
 const TEAM_ID = "env-team";
 
-const hostBoundary = vi.hoisted((): {
-  client: HostClient<HostRpcRegistry> | null;
-} => ({ client: null }));
+const hostBoundary = vi.hoisted(
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+  } => ({ client: null }),
+);
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -45,9 +53,17 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
 }));
-vi.mock("@/components/settings/environment/use-hosts-running-configuration", () => ({
-  useHostsRunningPersonal: () => ({ hosts: [], state: "ready", collisions: [], retry: () => undefined }),
-}));
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
@@ -56,7 +72,11 @@ vi.mock("@/lib/sandboxes/staged-sandbox-in-window", () => ({
   useStagedSandboxInThisWindow: () => null,
 }));
 vi.mock("@/components/settings/move/this-computer", () => ({
-  useThisComputer: () => ({ hostId: null, hostName: "this computer", client: null }),
+  useThisComputer: () => ({
+    hostId: null,
+    hostName: "this computer",
+    client: null,
+  }),
 }));
 vi.mock("@/components/settings/move/use-this-computers-move", () => ({
   useThisComputersMove: () => "unknown",
@@ -89,33 +109,47 @@ const secret = {
 };
 
 const personalDirectory = {
-  environments: [{
-    environmentId: PERSONAL_ID,
-    ownerKind: "user",
-    ownerId: "user-1",
-    roomId: "room-personal",
-    label: "Personal",
-  }],
+  environments: [
+    {
+      environmentId: PERSONAL_ID,
+      ownerKind: "user",
+      ownerId: "user-1",
+      roomId: "room-personal",
+      label: "Personal",
+    },
+  ],
 };
 
 const teamDirectory = {
-  environments: [{
-    environmentId: TEAM_ID,
-    ownerKind: "organization",
-    ownerId: "team-1",
-    roomId: "room-team",
-    label: "Acme",
-  }],
+  environments: [
+    {
+      environmentId: TEAM_ID,
+      ownerKind: "organization",
+      ownerId: "team-1",
+      roomId: "room-team",
+      label: "Acme",
+    },
+  ],
 };
 
 let runtime: OwnEnvironmentAuthRuntime;
 let transport: OwnEnvironmentTransport;
 let route: OwnEnvironmentRoute;
 
-function mountGroup(handlers: MockHandlerMap<HostRpcRegistry>): void {
-  const client = buildEnvironmentClient({ hostId: HOST_ID, handlers }).client;
+function mountGroup(
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  hostBound = true,
+): void {
+  const client = hostBound
+    ? buildEnvironmentClient({ hostId: HOST_ID, handlers }).client
+    : null;
   hostBoundary.client = client;
-  recordNegotiatedHostMethods(HOST_ID, ["environment.status", "providers.list"]);
+  if (client !== null) {
+    recordNegotiatedHostMethods(HOST_ID, [
+      "environment.status",
+      "providers.list",
+    ]);
+  }
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -123,8 +157,18 @@ function mountGroup(handlers: MockHandlerMap<HostRpcRegistry>): void {
     <OwnEnvironmentAuthProvider binding={runtime.binding}>
       <QueryClientProvider client={queryClient}>
         <SetUpPersonalGroup surface="settings" />
+        <GuideSecretCard />
       </QueryClientProvider>
     </OwnEnvironmentAuthProvider>,
+  );
+}
+
+function GuideSecretCard(): ReactNode {
+  const checklist = useGettingStartedChecklist();
+  const done = checklist.entries.find((entry) => entry.card.id === "secret")
+    ?.presentation.done;
+  return (
+    <output data-testid="guide-secret-card">{String(done === true)}</output>
   );
 }
 
@@ -140,9 +184,10 @@ beforeEach(async () => {
     const environmentId = path.split("/")[4];
     if (path.endsWith("/hosts") && request.method === "GET") {
       return jsonResponse(200, {
-        hosts: environmentId === PERSONAL_ID || environmentId === TEAM_ID
-          ? [hostRecord]
-          : [],
+        hosts:
+          environmentId === PERSONAL_ID || environmentId === TEAM_ID
+            ? [hostRecord]
+            : [],
       });
     }
     if (path.endsWith("/members") && request.method === "GET") {
@@ -171,9 +216,10 @@ describe("Set up Personal's secret step through authn", () => {
   it("checks a live Personal secret even when the host does not serve the secrets-list method", async () => {
     const hostSecrets: string[] = [];
     const handlers: MockHandlerMap<HostRpcRegistry> = {
-      "environment.status": () => environmentStatusFixture({
-        principal: { kind: "personal" },
-      }),
+      "environment.status": () =>
+        environmentStatusFixture({
+          principal: { kind: "personal" },
+        }),
       "providers.list": () => ({ providers: [], native: null }),
       "environment.secrets.list": () => {
         hostSecrets.push("list");
@@ -183,10 +229,16 @@ describe("Set up Personal's secret step through authn", () => {
     mountGroup(handlers);
 
     await waitFor(() => {
-      expect(screen.getByTestId("set-up-personal-step").parentElement).toBeTruthy();
       expect(
-        screen.getByTestId("set-up-personal").querySelector('[data-step="secret"]')?.getAttribute("data-done"),
+        screen.getByTestId("set-up-personal-step").parentElement,
+      ).toBeTruthy();
+      expect(
+        screen
+          .getByTestId("set-up-personal")
+          .querySelector('[data-step="secret"]')
+          ?.getAttribute("data-done"),
       ).toBe("true");
+      expect(screen.getByTestId("guide-secret-card").textContent).toBe("true");
     });
     expect(authnRequestsFor("/" + PERSONAL_ID + "/secrets")).toEqual([
       "/api/v3/environments/" + PERSONAL_ID + "/secrets",
@@ -200,9 +252,10 @@ describe("Set up Personal's secret step through authn", () => {
     });
     const hostSecrets: string[] = [];
     const handlers: MockHandlerMap<HostRpcRegistry> = {
-      "environment.status": () => environmentStatusFixture({
-        principal: { kind: "team", teamName: "Acme" },
-      }),
+      "environment.status": () =>
+        environmentStatusFixture({
+          principal: { kind: "team", teamName: "Acme" },
+        }),
       "providers.list": () => ({ providers: [], native: null }),
       "environment.secrets.list": () => {
         hostSecrets.push("list");
@@ -215,7 +268,10 @@ describe("Set up Personal's secret step through authn", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("set-up-personal").querySelector('[data-step="secret"]')?.getAttribute("data-done"),
+        screen
+          .getByTestId("set-up-personal")
+          .querySelector('[data-step="secret"]')
+          ?.getAttribute("data-done"),
       ).toBe("true");
     });
     expect(authnRequestsFor("/" + TEAM_ID + "/secrets")).toEqual([
@@ -223,14 +279,34 @@ describe("Set up Personal's secret step through authn", () => {
     ]);
     expect(hostSecrets).toEqual([]);
   });
+  it("leaves the secret step unchecked and sends no list request without a host", async () => {
+    mountGroup({}, false);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("guide-secret-card").textContent).toBe("false");
+    });
+    expect(
+      transport.requests.some((request) =>
+        request.url.pathname.endsWith("/secrets"),
+      ),
+    ).toBe(false);
+    expect(
+      screen
+        .getByTestId("set-up-personal")
+        .querySelector('[data-step="secret"]')
+        ?.getAttribute("data-done"),
+    ).toBe("false");
+  });
+
   it("checks the Guide card from the same Personal authn list as the setup step", async () => {
     const hostSecrets: string[] = [];
     const client = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
-        "environment.status": () => environmentStatusFixture({
-          principal: { kind: "personal" },
-        }),
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "personal" },
+          }),
         "providers.list": () => ({ providers: [], native: null }),
         "environment.secrets.list": () => {
           hostSecrets.push("list");
@@ -239,16 +315,23 @@ describe("Set up Personal's secret step through authn", () => {
       },
     }).client;
     hostBoundary.client = client;
-    recordNegotiatedHostMethods(HOST_ID, ["environment.status", "providers.list"]);
+    recordNegotiatedHostMethods(HOST_ID, [
+      "environment.status",
+      "providers.list",
+    ]);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
     const wrapper = (props: { children: ReactNode }) => (
       <OwnEnvironmentAuthProvider binding={runtime.binding}>
-        <QueryClientProvider client={queryClient}>{props.children}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
       </OwnEnvironmentAuthProvider>
     );
-    const { result } = renderHook(() => useGettingStartedChecklist(), { wrapper });
+    const { result } = renderHook(() => useGettingStartedChecklist(), {
+      wrapper,
+    });
 
     await waitFor(() => {
       expect(
@@ -261,5 +344,4 @@ describe("Set up Personal's secret step through authn", () => {
     ]);
     expect(hostSecrets).toEqual([]);
   });
-
 });

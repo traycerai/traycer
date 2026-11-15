@@ -1,3 +1,9 @@
+interface BridgeHarness {
+  hostId: string;
+  methods: Set<string>;
+  client: HostClient<HostRpcRegistry> | null;
+}
+
 const harness = vi.hoisted((): BridgeHarness => ({
   hostId: "host-env",
   methods: new Set<string>(),
@@ -18,8 +24,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -32,6 +37,7 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   __resetSupportContextRegistryForTests,
   getSupportEnvironmentSection,
@@ -92,6 +98,12 @@ const SECRET: EnvironmentSecretV12 = {
   variables: [],
 };
 
+const SECOND_SECRET: EnvironmentSecretV12 = {
+  ...SECRET,
+  secretId: "sec-2",
+  name: "DATABASE_PASSWORD",
+};
+
 // Settled (enforced, every producer proven), so the bridge stops re-reading it.
 const ROTATION: Rotation = {
   rotationId: "rot-1",
@@ -117,11 +129,16 @@ const ROTATION: Rotation = {
   ],
 };
 
+const MOVING_ROTATION: Rotation = {
+  ...ROTATION,
+  state: "accepted",
+};
+
 let authRuntime: OwnEnvironmentAuthRuntime;
 let authnTransport: OwnEnvironmentTransport;
 let authnRoute: OwnEnvironmentRoute;
 
-function renderBridge(client: HostClient<HostRpcRegistry>): void {
+function renderBridge(client: HostClient<HostRpcRegistry>): QueryClient {
   harness.client = client;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -133,6 +150,21 @@ function renderBridge(client: HostClient<HostRpcRegistry>): void {
       </QueryClientProvider>
     </OwnEnvironmentAuthProvider>,
   );
+  return queryClient;
+}
+
+function replaceAuthnTransport(
+  route: OwnEnvironmentRoute,
+  environments: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly ownerKind: "user" | "organization";
+    readonly ownerId: string;
+    readonly roomId: string;
+    readonly label: string;
+  }>,
+): void {
+  authnTransport.restore();
+  authnTransport = installOwnEnvironmentTransport(route, { environments });
 }
 
 function isSecretsRead(pathname: string): boolean {
@@ -146,19 +178,21 @@ beforeEach(async () => {
     const path = request.url.pathname;
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/hosts") {
       return jsonResponse(200, {
-        hosts: [{
-          hostId: HOST_ID,
-          hostLabel: "window host",
-          hostPlatform: "linux",
-          enrolledByUserId: null,
-          kind: "personal",
-          boundAt: null,
-          reachable: true,
-          lastReportedAt: null,
-          applied: [],
-          hasLocalRow: null,
-          purgePending: false,
-        }],
+        hosts: [
+          {
+            hostId: HOST_ID,
+            hostLabel: "window host",
+            hostPlatform: "linux",
+            enrolledByUserId: null,
+            kind: "personal",
+            boundAt: null,
+            reachable: true,
+            lastReportedAt: null,
+            applied: [],
+            hasLocalRow: null,
+            purgePending: false,
+          },
+        ],
       });
     }
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/members") {
@@ -167,19 +201,24 @@ beforeEach(async () => {
     if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/secrets") {
       return jsonResponse(200, { removed: [], secrets: [SECRET] });
     }
-    if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation") {
+    if (
+      path ===
+      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation"
+    ) {
       return jsonResponse(200, { rotation: ROTATION, lastVerify: null });
     }
     return undefined;
   };
   authnTransport = installOwnEnvironmentTransport(authnRoute, {
-    environments: [{
-      environmentId: TEAM_ENV_ID,
-      ownerKind: "organization",
-      ownerId: "team-1",
-      roomId: "room-team",
-      label: "Acme",
-    }],
+    environments: [
+      {
+        environmentId: TEAM_ENV_ID,
+        ownerKind: "organization",
+        ownerId: "team-1",
+        roomId: "room-team",
+        label: "Acme",
+      },
+    ],
   });
   authRuntime = createOwnEnvironmentAuthRuntime();
   await signInOwnEnvironment(authRuntime);
@@ -190,6 +229,7 @@ afterEach(() => {
   authnTransport.restore();
   authRuntime.dispose();
   __resetSupportContextRegistryForTests();
+  vi.useRealTimers();
 });
 
 describe("SupportEnvironmentBridge", () => {
@@ -209,17 +249,132 @@ describe("SupportEnvironmentBridge", () => {
         status: "unavailable",
       });
     });
-    expect(authnTransport.requests.some((request) =>
-      isSecretsRead(request.url.pathname),
-    )).toBe(false);
+    expect(
+      authnTransport.requests.some((request) =>
+        isSecretsRead(request.url.pathname),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not read a null environment after every team host list excludes this host", async () => {
+    harness.methods.add("environment.status");
+    const environments = [
+      {
+        environmentId: TEAM_ENV_ID,
+        ownerKind: "organization" as const,
+        ownerId: "team-1",
+        roomId: "room-team",
+        label: "Acme",
+      },
+    ];
+    replaceAuthnTransport((request) => {
+      const path = request.url.pathname;
+      if (path.endsWith("/hosts")) return jsonResponse(200, { hosts: [] });
+      if (path.endsWith("/members")) {
+        return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
+      }
+      return undefined;
+    }, environments);
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "team", teamName: TEAM_NAME },
+          }),
+      },
+    });
+
+    renderBridge(client);
+
+    await waitFor(() => {
+      const field = getSupportEnvironmentSection();
+      expect(field.status).toBe("known");
+    });
+    expect(
+      authnTransport.requests.some((request) =>
+        isSecretsRead(request.url.pathname),
+      ),
+    ).toBe(false);
+    expect(getSupportEnvironmentSection()).toMatchObject({
+      status: "known",
+      value: { rotations: null },
+    });
+  });
+
+  it("does not read secrets when environment.status names no principal", async () => {
+    harness.methods.add("environment.status");
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({ principal: null }),
+      },
+    });
+
+    renderBridge(client);
+
+    await waitFor(() => {
+      const field = getSupportEnvironmentSection();
+      expect(field.status).toBe("known");
+    });
+    expect(
+      authnTransport.requests.some((request) =>
+        isSecretsRead(request.url.pathname),
+      ),
+    ).toBe(false);
+    expect(getSupportEnvironmentSection()).toMatchObject({
+      status: "known",
+      value: { rotations: null },
+    });
+  });
+
+  it("does not name secrets from a cold failed Personal directory read", async () => {
+    harness.methods.add("environment.status");
+    replaceAuthnTransport(
+      (request) =>
+        request.url.pathname === "/api/environments"
+          ? jsonResponse(503, {})
+          : undefined,
+      [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+        },
+      ],
+    );
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "personal" },
+          }),
+      },
+    });
+
+    renderBridge(client);
+
+    await waitFor(() => {
+      const field = getSupportEnvironmentSection();
+      expect(field.status).toBe("known");
+    });
+    expect(
+      authnTransport.requests.some((request) =>
+        isSecretsRead(request.url.pathname),
+      ),
+    ).toBe(false);
+    expect(getSupportEnvironmentSection()).toMatchObject({
+      status: "known",
+      value: { rotations: null },
+    });
   });
 
   it("writes a known section carrying the listed secret's name and its producers", async () => {
-    for (const method of [
-      "environment.status",
-      "environment.setup.attempts",
-      "environment.secrets.list",
-    ]) {
+    for (const method of ["environment.status", "environment.setup.attempts"]) {
       harness.methods.add(method);
     }
     const hostSecretReads: string[] = [];
@@ -294,18 +449,278 @@ describe("SupportEnvironmentBridge", () => {
     expect(JSON.stringify(section)).not.toContain(TEAM_NAME);
   });
 
-  it("keeps the environment.secrets.list support gate for this support report", async () => {
+  it("waits for the failed team host list and reads secrets only after its retry names env-b", async () => {
+    const environmentA = "env-team-a";
+    const environmentB = "env-team-b";
     harness.methods.add("environment.status");
-    harness.methods.add("environment.setup.attempts");
-    const hostSecretReads: string[] = [];
+    useAuthStore.setState({
+      shareableTeams: [
+        { teamId: "team-a", slug: "a", avatarUrl: null },
+        { teamId: "team-b", slug: "b", avatarUrl: null },
+      ],
+    });
+    let environmentBHostListFails = true;
+    const directory = {
+      environments: [
+        {
+          environmentId: environmentA,
+          ownerKind: "organization" as const,
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "A",
+        },
+        {
+          environmentId: environmentB,
+          ownerKind: "organization" as const,
+          ownerId: "team-b",
+          roomId: "room-b",
+          label: "B",
+        },
+      ],
+    };
+    authnTransport.restore();
+    authnTransport = installOwnEnvironmentTransport((request) => {
+      const path = request.url.pathname;
+      if (path.endsWith("/hosts")) {
+        if (path.includes(environmentB) && environmentBHostListFails) {
+          return jsonResponse(503, {});
+        }
+        return jsonResponse(200, {
+          hosts: path.includes(environmentB)
+            ? [
+                {
+                  hostId: HOST_ID,
+                  hostLabel: "window host",
+                  hostPlatform: "linux",
+                  enrolledByUserId: null,
+                  kind: "personal",
+                  boundAt: null,
+                  reachable: true,
+                  lastReportedAt: null,
+                  applied: [],
+                  hasLocalRow: null,
+                  purgePending: false,
+                },
+              ]
+            : [],
+        });
+      }
+      if (path.endsWith("/members")) {
+        return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
+      }
+      if (path.endsWith("/secrets/sec-1/rotation")) {
+        return jsonResponse(200, { rotation: ROTATION, lastVerify: null });
+      }
+      if (path.endsWith("/secrets")) {
+        return jsonResponse(200, { removed: [], secrets: [SECRET] });
+      }
+      return undefined;
+    }, directory);
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
-        "environment.status": () => environmentStatusFixture({}),
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "team", teamName: TEAM_NAME },
+          }),
+      },
+    });
+
+    const queryClient = renderBridge(client);
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryCache().findAll({
+          predicate: (query) =>
+            query.queryKey.includes("environment.host.list") &&
+            query.state.status === "error",
+        }),
+      ).toHaveLength(1);
+    });
+    expect(getSupportEnvironmentSection()).toMatchObject({
+      status: "known",
+      value: { rotations: null },
+    });
+    expect(
+      authnTransport.requests.some((request) =>
+        request.url.pathname.endsWith("/secrets"),
+      ),
+    ).toBe(false);
+
+    environmentBHostListFails = false;
+    await queryClient.refetchQueries({
+      predicate: (query) =>
+        query.queryKey.includes("environment.host.list") &&
+        query.state.status === "error",
+    });
+    await waitFor(() => {
+      const field = getSupportEnvironmentSection();
+      if (field.status !== "known") throw new Error("not known yet");
+      expect(field.value.rotations).toHaveLength(1);
+    });
+    expect(
+      authnTransport.requests.some(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + environmentB + "/secrets",
+      ),
+    ).toBe(true);
+    expect(
+      authnTransport.requests.some(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + environmentA + "/secrets",
+      ),
+    ).toBe(false);
+    expect(
+      authnTransport.requests.filter(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + environmentA + "/hosts",
+      ),
+    ).toHaveLength(1);
+    expect(
+      authnTransport.requests.filter(
+        (request) =>
+          request.url.pathname ===
+          "/api/v3/environments/" + environmentB + "/hosts",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("reads each rotation and polls only the moving one until it settles", async () => {
+    harness.methods.add("environment.status");
+    harness.methods.add("environment.setup.attempts");
+    const rotationReads = new Map<string, number>();
+    const environments = [
+      {
+        environmentId: TEAM_ENV_ID,
+        ownerKind: "organization" as const,
+        ownerId: "team-1",
+        roomId: "room-team",
+        label: "Acme",
+      },
+    ];
+    replaceAuthnTransport((request) => {
+      const path = request.url.pathname;
+      if (path.endsWith("/hosts")) {
+        return jsonResponse(200, {
+          hosts: [
+            {
+              hostId: HOST_ID,
+              hostLabel: "window host",
+              hostPlatform: "linux",
+              enrolledByUserId: null,
+              kind: "personal",
+              boundAt: null,
+              reachable: true,
+              lastReportedAt: null,
+              applied: [],
+              hasLocalRow: null,
+              purgePending: false,
+            },
+          ],
+        });
+      }
+      if (path.endsWith("/members")) {
+        return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
+      }
+      if (path.endsWith("/secrets")) {
+        return jsonResponse(200, {
+          removed: [],
+          secrets: [SECRET, SECOND_SECRET],
+        });
+      }
+      if (path.endsWith("/rotation")) {
+        const secretId = path.split("/")[5];
+        const count = (rotationReads.get(secretId) ?? 0) + 1;
+        rotationReads.set(secretId, count);
+        return jsonResponse(200, {
+          rotation:
+            secretId === "sec-1" && count === 1 ? MOVING_ROTATION : ROTATION,
+          lastVerify: null,
+        });
+      }
+      return undefined;
+    }, environments);
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "team", teamName: TEAM_NAME },
+          }),
         "environment.setup.attempts": () => ({ attempts: [] }),
+      },
+    });
+
+    vi.useFakeTimers();
+    renderBridge(client);
+
+    for (let turn = 0; turn < 20; turn += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    expect(rotationReads.get("sec-1")).toBe(1);
+    expect(rotationReads.get("sec-2")).toBe(1);
+    const field = getSupportEnvironmentSection();
+    if (field.status !== "known") throw new Error("the section is not known");
+    expect(field.value.rotations).toHaveLength(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(rotationReads.get("sec-1")).toBe(2);
+    expect(rotationReads.get("sec-2")).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(rotationReads.get("sec-1")).toBe(2);
+    expect(rotationReads.get("sec-2")).toBe(1);
+    expect(
+      authnTransport.requests.some((request) =>
+        request.url.pathname.endsWith("/secrets/rotation"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reads Personal secrets through authn when the host serves status but does not advertise secrets list", async () => {
+    harness.methods.add("environment.status");
+    harness.methods.add("environment.setup.attempts");
+    expect(harness.methods.has("environment.secrets.list")).toBe(false);
+    replaceAuthnTransport(
+      () => undefined,
+      [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+        },
+      ],
+    );
+    const hostReads: string[] = [];
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "personal" },
+            reachability: "connected",
+          }),
+        "environment.setup.attempts": () => {
+          hostReads.push("attempts");
+          return { attempts: [] };
+        },
         "environment.secrets.list": () => {
-          hostSecretReads.push("list");
+          hostReads.push("list");
           return { removed: [], secrets: [SECRET] };
+        },
+        "environment.secrets.rotation": () => {
+          hostReads.push("rotation");
+          return { rotation: ROTATION, lastVerify: null };
         },
       },
     });
@@ -313,12 +728,23 @@ describe("SupportEnvironmentBridge", () => {
     renderBridge(client);
 
     await waitFor(() => {
-      expect(getSupportEnvironmentSection().status).toBe("known");
+      const field = getSupportEnvironmentSection();
+      if (field.status !== "known") throw new Error("not known yet");
+      expect(field.value.rotations).toHaveLength(1);
     });
-    expect(authnTransport.requests.some((request) =>
-      isSecretsRead(request.url.pathname),
-    )).toBe(false);
-    expect(hostSecretReads).toEqual([]);
+    const field = getSupportEnvironmentSection();
+    if (field.status !== "known") throw new Error("the section is not known");
+    expect(field.value.principal).toBe("personal");
+    expect(field.value.setupAttempts).toEqual([]);
+    expect(hostReads).toEqual([]);
+    expect(
+      authnTransport.requests
+        .filter((request) => request.url.pathname.includes("/secrets"))
+        .map((request) => request.url.pathname),
+    ).toEqual([
+      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets",
+      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation",
+    ]);
   });
 
   it("carries the host's reach denials and served task when it serves environment.reachDiagnostics", async () => {

@@ -55,6 +55,7 @@ const PROFILE = {
 export interface OwnEnvironmentTransportRequest {
   readonly url: URL;
   readonly method: string;
+  readonly body: BodyInit | null;
   readonly signal: AbortSignal | undefined;
 }
 
@@ -69,7 +70,7 @@ export interface OwnEnvironmentTransport {
 
 export function installOwnEnvironmentTransport(
   route: OwnEnvironmentRoute,
-  directory: unknown = { environments: [] },
+  directory: unknown,
 ): OwnEnvironmentTransport {
   const originalFetch = globalThis.fetch;
   const requests: OwnEnvironmentTransportRequest[] = [];
@@ -77,6 +78,7 @@ export function installOwnEnvironmentTransport(
     const request: OwnEnvironmentTransportRequest = {
       url: new URL(String(input)),
       method: init?.method ?? "GET",
+      body: init?.body ?? null,
       signal: init?.signal ?? undefined,
     };
     requests.push(request);
@@ -179,30 +181,34 @@ export function createOwnEnvironmentAuthRuntime(): OwnEnvironmentAuthRuntime {
 export async function signInOwnEnvironment(
   runtime: OwnEnvironmentAuthRuntime,
 ): Promise<void> {
+  await signInOwnEnvironmentAs(runtime, "user-1", "user-1-token");
+}
+
+export async function signInOwnEnvironmentAs(
+  runtime: OwnEnvironmentAuthRuntime,
+  userId: string,
+  token: string,
+): Promise<void> {
   await runtime.auth.signIn();
   runtime.runnerHost.deviceFlow.emitResult({
     kind: "authorized",
-    token: "user-1-token",
-    refreshToken: "user-1-token-refresh",
+    token,
+    refreshToken: token + "-refresh",
   });
   await waitFor(() => {
-    if (
-      runtime.auth.getCurrentSessionSnapshot().token !== "user-1-token"
-    ) {
+    if (runtime.auth.getCurrentSessionSnapshot().token !== token) {
       throw new Error("authn sign-in has not settled");
     }
   });
   useAuthStore.setState({
     status: "signed-in",
     profile: {
-      userId: "user-1",
+      userId,
       userName: "Test User",
       email: "test@example.com",
     },
-    contextMetadata: { userId: "user-1", username: "test-user" },
-    shareableTeams: [
-      { teamId: "team-1", slug: "acme", avatarUrl: null },
-    ],
+    contextMetadata: { userId, username: "test-user" },
+    shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
   });
 }
 
