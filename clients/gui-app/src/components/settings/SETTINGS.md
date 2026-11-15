@@ -6065,10 +6065,10 @@ wrap`). Each row names the account its first usable match runs on, the
     items reads on every host, plus the environment list and that
     environment's host list.
   - The page mounts the section once per environment pick: in
-    `PersonalPageFrame` Personal and a team are different frames, and a
-    team's `CloudPageFrame` and every page's `ConfigurationSourceBoundary` are
-    keyed by the environment, so picking another environment starts the
-    section over. A hold or a save
+    `PersonalPageFrame` Personal and a team are different frames, so a switch
+    between them remounts by element type, and a team's `CloudPageFrame` and a
+    cloud-read page's `ConfigurationSourceBoundary` are keyed by the
+    environment, so picking another environment starts the section over. A hold or a save
     in flight does not carry across a switch: on return the row shows what
     the read says. That is a stated limit, and a rare one: it takes a switch
     away and back within the few seconds of a save. A
