@@ -69,6 +69,17 @@ import type {
   setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
 import type {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  parseBotDeleteRequest,
+  parseBotUpdateReplyModeRequest,
+  parseBotUpdateRunSettingsRequest,
+} from "../ipc-parsers";
+import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
@@ -180,6 +191,21 @@ const setSlackAppDmsViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+const updateBotRunSettingsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof updateBotRunSettingsViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
+const updateBotReplyModeViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof updateBotReplyModeViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
+const deleteBotViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof deleteBotViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -233,6 +259,11 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
   setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
+}));
+vi.mock("@traycer-clients/shared/host-client/bot-setup", () => ({
+  updateBotRunSettingsViaHttp: updateBotRunSettingsViaHttpMock,
+  updateBotReplyModeViaHttp: updateBotReplyModeViaHttpMock,
+  deleteBotViaHttp: deleteBotViaHttpMock,
 }));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
@@ -1411,6 +1442,98 @@ describe("RunnerIpcBridge", () => {
       handler(bareEvent(), "bearer-1", { botId: "bot-1" }),
     ).rejects.toThrow();
     expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("sends the three bot writes through the HTTP transport and reports parser paths without values", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const runSettings = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      harness: "claude",
+      model: "model-1",
+      effort: null,
+      profile: null,
+    };
+    const replyMode = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      replyMode: "direct",
+    };
+    const deletion = { botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+
+    const runHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.updateBotRunSettings,
+    );
+    const replyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.updateBotReplyMode,
+    );
+    const deleteHandler = ipcMainState.handlers.get(RunnerHostInvoke.deleteBot);
+    if (
+      runHandler === undefined ||
+      replyHandler === undefined ||
+      deleteHandler === undefined
+    ) {
+      throw new Error("bot setup handler missing");
+    }
+    await runHandler(bareEvent(), "bearer-1", runSettings);
+    await replyHandler(bareEvent(), "bearer-1", replyMode);
+    await deleteHandler(bareEvent(), "bearer-1", deletion);
+
+    expect(updateBotRunSettingsViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      runSettings,
+    );
+    expect(updateBotReplyModeViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      replyMode,
+    );
+    expect(deleteBotViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      deletion,
+    );
+
+    const runError = (() => {
+      try {
+        parseBotUpdateRunSettingsRequest({ ...runSettings, model: "" });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("invalid run settings were accepted");
+    })();
+    expect(String(runError)).toContain("updateBotRunSettings.request.model");
+    expect(String(runError)).not.toContain('""');
+    expect(() =>
+      parseBotUpdateReplyModeRequest({ ...replyMode, replyMode: "sideways" }),
+    ).toThrow("updateBotReplyMode.request.replyMode");
+    const deleteError = (() => {
+      try {
+        parseBotDeleteRequest({ botId: "private-invalid-id" });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("invalid bot id was accepted");
+    })();
+    expect(String(deleteError)).toContain("deleteBot.request.botId");
+    expect(String(deleteError)).not.toContain("private-invalid-id");
     bridge.dispose();
   });
 

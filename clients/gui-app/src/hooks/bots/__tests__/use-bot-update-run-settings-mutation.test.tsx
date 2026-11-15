@@ -10,10 +10,15 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotRecord,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
+import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
 // The window's binding: only its session service is read by this write.
 const binding = vi.hoisted(
@@ -37,6 +42,42 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
 import { useBotUpdateRunSettingsMutation } from "@/hooks/bots/use-bot-mutations";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+const SNAPSHOT_BOT: BotRecord = {
+  botId: BOT_ID,
+  environmentId: "env-team",
+  createdByUserId: "user-1",
+  title: "Release Bot",
+  harness: "claude",
+  model: "model-old",
+  effort: null,
+  profile: null,
+  trunkChatId: "trunk-1",
+  boundHostId: "host-local",
+  hostEpoch: 1,
+  createdAt: 1_000,
+  archivedAt: null,
+  directive: null,
+  replyMode: "thread",
+  appConversationChatId: "app-chat-1",
+};
+
+function snapshot(
+  bot: BotRecord,
+  boundHostId: string,
+): BotSubscriptionSnapshot {
+  return {
+    bot,
+    tasks: [],
+    openRequestCount: 1,
+    conversationsRevision: 2,
+    boundHost: { hostId: boundHostId, epoch: 1, isThisHost: true },
+    activity: null,
+    notificationSubscriptions: null,
+    surfaceActions: null,
+    stoppedNotificationWatches: null,
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -72,6 +113,35 @@ describe("useBotUpdateRunSettingsMutation", () => {
     );
     queryClient.setQueryData(listKey, { bots: [], mainBotIds: {} });
     queryClient.setQueryData(otherHostListKey, { bots: [], mainBotIds: {} });
+    const firstSnapshot = botQueryKeys.subscription({
+      hostId: "host-local",
+      botId: BOT_ID,
+    });
+    const secondSnapshot = botQueryKeys.subscription({
+      hostId: "host-other",
+      botId: BOT_ID,
+    });
+    const differentBot = botQueryKeys.subscription({
+      hostId: "host-other",
+      botId: "bot-other",
+    });
+    queryClient.setQueryData(
+      firstSnapshot,
+      snapshot(SNAPSHOT_BOT, "host-local"),
+    );
+    queryClient.setQueryData(
+      secondSnapshot,
+      snapshot({ ...SNAPSHOT_BOT, boundHostId: "host-other" }, "host-other"),
+    );
+    const otherBotRecord = {
+      ...SNAPSHOT_BOT,
+      botId: "bot-other",
+      title: "Other Bot",
+    };
+    queryClient.setQueryData(
+      differentBot,
+      snapshot(otherBotRecord, "host-other"),
+    );
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}
@@ -101,5 +171,27 @@ describe("useBotUpdateRunSettingsMutation", () => {
     expect(queryClient.getQueryState(otherHostListKey)?.isInvalidated).toBe(
       true,
     );
+    expect(
+      queryClient.getQueryData<BotSubscriptionSnapshot>(firstSnapshot),
+    ).toMatchObject({
+      bot: { ...SNAPSHOT_BOT, ...request, replyMode: "thread" },
+      openRequestCount: 1,
+      conversationsRevision: 2,
+      boundHost: { hostId: "host-local", epoch: 1, isThisHost: true },
+    });
+    expect(
+      queryClient.getQueryData<BotSubscriptionSnapshot>(secondSnapshot),
+    ).toMatchObject({
+      bot: {
+        ...SNAPSHOT_BOT,
+        ...request,
+        replyMode: "thread",
+        boundHostId: "host-other",
+      },
+      boundHost: { hostId: "host-other", epoch: 1, isThisHost: true },
+    });
+    expect(
+      queryClient.getQueryData<BotSubscriptionSnapshot>(differentBot),
+    ).toEqual(snapshot(otherBotRecord, "host-other"));
   });
 });

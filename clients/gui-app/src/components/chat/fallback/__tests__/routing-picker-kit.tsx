@@ -308,11 +308,14 @@ export const kit = {
   mutationFails: false,
   // The host's sentence refusing a bot-row write; `null` takes the write.
   botWriteRefusal: null as string | null,
+  realBotWrite: false,
+  queryClient: null as import("@tanstack/react-query").QueryClient | null,
+  botWriteBinding: null as object | null,
   deferResponses: false,
   pendingResponses: [] as Array<() => void>,
   // What the two publishers received.
-  confirmed: [] as unknown[],
-  unattended: [] as unknown[],
+  confirmed: new Array<unknown>(),
+  unattended: new Array<unknown>(),
   toast: vi.fn<(message: string) => void>(),
   // The providers list.
   providers: [] as ProviderCliState[],
@@ -344,6 +347,9 @@ export function resetKit(): void {
   kit.mutationResult = { outcome: "applied", detail: null };
   kit.mutationFails = false;
   kit.botWriteRefusal = null;
+  kit.realBotWrite = false;
+  kit.queryClient = null;
+  kit.botWriteBinding = null;
   kit.deferResponses = false;
   kit.pendingResponses = [];
   kit.confirmed = [];
@@ -820,10 +826,17 @@ const WRITE_SIGN_IN = { isCurrent: () => true };
  * mounted, as TanStack's `mutateAsync` does. `deferResponses` holds its
  * answer like theirs.
  */
-export function botMutationsModule<T extends object>(actual: T) {
+export function botMutationsModule<
+  T extends {
+    readonly useBotUpdateRunSettingsMutation: () => unknown;
+  },
+>(actual: T) {
   return {
     ...actual,
     useBotUpdateRunSettingsMutation: () => {
+      if (kit.realBotWrite) {
+        return actual.useBotUpdateRunSettingsMutation();
+      }
       const [pending, setPending] = useState(false);
       return {
         mutateAsync: (variables: Record<string, unknown>) => {

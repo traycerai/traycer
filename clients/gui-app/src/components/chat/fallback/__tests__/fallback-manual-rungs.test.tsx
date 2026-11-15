@@ -14,8 +14,11 @@ import type {
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
+import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
 import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
 import { AGENT_FAILURE_REASONS } from "@traycer/protocol/persistence/epic/content-blocks";
+import { recordFailedTurnRefusal } from "@/components/chat/fallback/failed-turn-actions";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
@@ -121,7 +124,7 @@ const harness = vi.hoisted(() => {
     mutate: vi.fn(),
     // `useIsMutatingOf`'s answer, and the filters it was asked with.
     mutating: 0,
-    mutatingArgs: [] as unknown[],
+    mutatingArgs: new Array<unknown>(),
     // Every props object the stubbed chooser rendered with, newest last.
     pickerProps: [] as ComponentProps<typeof RoutingDestinationPicker>[],
     openSettings: vi.fn(),
@@ -171,6 +174,47 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
  */
 const modelLabelOverride = vi.hoisted(() => ({
   value: null as ReadonlyMap<string, string> | null,
+}));
+
+const botSwitchGate = vi.hoisted(() => ({
+  botList: undefined as
+    | {
+        readonly bots: ReadonlyArray<{
+          readonly botId: string;
+          readonly environmentId: string;
+        }>;
+      }
+    | undefined,
+  environments: undefined as
+    | {
+        readonly environments: ReadonlyArray<{
+          readonly environmentId: string;
+          readonly ownerKind: "team" | "user";
+          readonly effectiveRole:
+            | "admin"
+            | "editor"
+            | "viewer"
+            | "owner"
+            | null;
+        }>;
+      }
+    | undefined,
+  botListReads: 0,
+  environmentListEnabled: [] as boolean[],
+}));
+
+vi.mock("@/hooks/bots/use-bot-list-query", () => ({
+  useBotListQuery: (_client: unknown, enabled: boolean) => {
+    if (enabled) botSwitchGate.botListReads += 1;
+    return { data: botSwitchGate.botList };
+  },
+}));
+
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: (enabled: boolean) => {
+    botSwitchGate.environmentListEnabled.push(enabled);
+    return { data: botSwitchGate.environments };
+  },
 }));
 
 vi.mock(
@@ -444,6 +488,41 @@ function renderActions(turnId: string) {
   );
 }
 
+function botActionsTree(turnId: string, surfaceBotId: string) {
+  return (
+    <BotIdentityContext
+      value={{ botId: surfaceBotId, title: "Release Bot", owner: null }}
+    >
+      <TabHostProvider hostId={HOST_ID}>
+        <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+          <FallbackManualRungActions turnId={turnId} />
+        </ChatTranscriptProvider>
+      </TabHostProvider>
+    </BotIdentityContext>
+  );
+}
+
+function renderBotActions(turnId: string) {
+  return render(botActionsTree(turnId, EPIC_ID));
+}
+
+function MayChangeProbe(props: { readonly environmentId: string | null }) {
+  return (
+    <output data-testid="may-change-answer">
+      {String(useBotMayChange(props.environmentId))}
+    </output>
+  );
+}
+
+function setBotEnvironmentRole(
+  environmentId: string,
+  role: "admin" | "editor" | "viewer",
+): void {
+  botSwitchGate.environments = {
+    environments: [{ environmentId, ownerKind: "team", effectiveRole: role }],
+  };
+}
+
 describe("FallbackManualRungActions", () => {
   beforeEach(() => {
     harness.mutate.mockReset();
@@ -471,6 +550,10 @@ describe("FallbackManualRungActions", () => {
     // Pass-through by default, so every model string pinned below reads back
     // the tuple it was seeded with.
     modelLabelOverride.value = null;
+    botSwitchGate.botList = undefined;
+    botSwitchGate.environments = undefined;
+    botSwitchGate.botListReads = 0;
+    botSwitchGate.environmentListEnabled.length = 0;
   });
 
   afterEach(() => {
@@ -508,6 +591,219 @@ describe("FallbackManualRungActions", () => {
     expect(text).not.toContain("rate_limit");
     // The retired text-link entry into settings is gone from this card.
     expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+    expect(botSwitchGate.botListReads).toBe(0);
+    expect(botSwitchGate.environmentListEnabled).toEqual([]);
+  });
+
+  it("offers Switch and retry to an Editor on the bot's chat", () => {
+    botSwitchGate.botList = {
+      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+    };
+    setBotEnvironmentRole("env-a", "editor");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+    expect(lastPickerProps().triggerLabel).toBe("Switch to…");
+    expect(botSwitchGate.botListReads).toBe(1);
+    expect(botSwitchGate.environmentListEnabled).toEqual([true]);
+  });
+
+  it("hides Switch for a Viewer while Retry and Wait stay, with the first remaining action filled", () => {
+    botSwitchGate.botList = {
+      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+    };
+    setBotEnvironmentRole("env-a", "viewer");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    const { container } = renderBotActions(TURN_ID);
+    const row = screen.getByTestId("failed-turn-actions");
+    const buttons = within(row).getAllByRole("button");
+
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+      "Retry",
+    ]);
+    expect(
+      buttons.map((button) => button.getAttribute("data-variant")),
+    ).toEqual(["default", "outline"]);
+    expect(container.textContent).toBe(
+      `Wait until ${formatClockTime(RESETS_AT)}Retry`,
+    );
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+  });
+
+  it("keeps Switch hidden while the bot list or the environment role is unresolved", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(botSwitchGate.botListReads).toBe(1);
+    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
+  });
+
+  it("does not ask for an environment when the answered bot list has no matching bot", () => {
+    botSwitchGate.botList = { bots: [] };
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
+  });
+
+  it("treats a different surface bot as an ordinary chat and makes no role reads", () => {
+    botSwitchGate.botList = {
+      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+    };
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    render(botActionsTree(TURN_ID, "different-bot"));
+
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+    expect(botSwitchGate.botListReads).toBe(0);
+    expect(botSwitchGate.environmentListEnabled).toEqual([]);
+  });
+
+  it("hides Switch for an unknown environment role and follows a late role change", () => {
+    botSwitchGate.botList = {
+      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+    };
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    const view = renderBotActions(TURN_ID);
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    botSwitchGate.environments = {
+      environments: [
+        {
+          environmentId: "env-other",
+          ownerKind: "team",
+          effectiveRole: "admin",
+        },
+      ],
+    };
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+
+    setBotEnvironmentRole("env-a", "editor");
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+
+    setBotEnvironmentRole("env-a", "viewer");
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+  });
+
+  it("does not let an Editor's role restore Switch after the refusal removes it", () => {
+    botSwitchGate.botList = {
+      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+    };
+    setBotEnvironmentRole("env-a", "editor");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+    act(() => {
+      recordFailedTurnRefusal({ hostId: HOST_ID, chatId: CHAT_ID }, TURN_ID, {
+        text: "The chat moved on.",
+        remaining: "none",
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "The chat moved on.",
+    );
+  });
+
+  it("keeps useBotMayChange false without an environment id and applies the real role rule when one arrives", () => {
+    const view = render(<MayChangeProbe environmentId={null} />);
+
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
+    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
+
+    botSwitchGate.environments = {
+      environments: [
+        { environmentId: "env-a", ownerKind: "user", effectiveRole: "owner" },
+      ],
+    };
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "admin");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "editor");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "viewer");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
+
+    botSwitchGate.environments = { environments: [] };
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
   });
 
   // The policy's wait cap reaches seven days, so "Wait until" needs its
