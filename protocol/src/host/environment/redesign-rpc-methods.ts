@@ -56,6 +56,7 @@ import {
   environmentMembersRemoveV10,
   environmentMembersSeatsV10,
   environmentMembersSetRoleV10,
+  environmentPreviewLocalFactsV10,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   environmentMoveAcceptV10,
@@ -496,6 +497,19 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentMembersRemovePreviewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.previewLocalFacts": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentPreviewLocalFactsV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -510,6 +510,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.plans.list": "pool-only",
   "environment.plans.unlink": "pool-only",
   "environment.plans.unlinkPreview": "pool-only",
+  "environment.previewLocalFacts": "target-host",
   "environment.providers.list": "pool-only",
   "environment.providers.removeProfile": "pool-only",
   "environment.providers.renameProfile": "pool-only",

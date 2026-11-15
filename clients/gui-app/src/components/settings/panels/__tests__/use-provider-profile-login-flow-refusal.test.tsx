@@ -26,6 +26,10 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import {
+  awaitLoginTestAnswer,
+  type AwaitLoginTestAnswer,
+} from "./provider-profile-login-flow-test-support";
 import { appLogger } from "@/lib/logger";
 import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
 import {
@@ -61,10 +65,7 @@ type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
+type AwaitLoginResponse = AwaitLoginTestAnswer;
 type SubmitLoginCodeRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.submitLoginCode"
@@ -116,15 +117,15 @@ function startedAnswer(
 }
 
 function awaitAnswer(
-  overrides: Partial<AwaitLoginResponse>,
+  overrides: Partial<Omit<AwaitLoginTestAnswer, "signInRecordingEnded">>,
 ): AwaitLoginResponse {
-  return {
+  return awaitLoginTestAnswer({
     state: null,
     existingProfileId: null,
     codeRejected: false,
     refusal: null,
     ...overrides,
-  };
+  });
 }
 
 function queryClientWrapper(): (props: {
