@@ -122,7 +122,7 @@ type HostResponse = {
   readonly error: {
     readonly code: string;
     readonly message: string;
-    readonly holders: unknown | undefined;
+    readonly holders: unknown;
   } | null;
 };
 
@@ -508,6 +508,14 @@ function SessionView(props: {
   readonly showToaster: boolean;
 }): ReactNode {
   const [open, setOpen] = useState(true);
+  let afterStop: ReactNode = null;
+  if (!open) {
+    afterStop = props.showListAfterStop ? (
+      <PersonalListConsumer client={props.client} />
+    ) : (
+      <p data-testid="stop-complete">stop complete</p>
+    );
+  }
   return (
     <>
       <StopSharingSession
@@ -517,13 +525,7 @@ function SessionView(props: {
         open={open}
         onOpenChange={setOpen}
       />
-      {!open ? (
-        props.showListAfterStop ? (
-          <PersonalListConsumer client={props.client} />
-        ) : (
-          <p data-testid="stop-complete">stop complete</p>
-        )
-      ) : null}
+      {afterStop}
       {props.showToaster ? <Toaster /> : null}
     </>
   );
@@ -1012,10 +1014,7 @@ describe("StopSharingSession over the real remote session", () => {
       screen.getByTestId("personal-leave-accounts").querySelectorAll("p"),
     )
       .map((paragraph) => paragraph.textContent)
-      .filter(
-        (text): text is string =>
-          text?.startsWith("Sign in to each account") === true,
-      );
+      .filter((text) => text.startsWith("Sign in to each account"));
     expect(guidance).toEqual([
       "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Codex asks for a new sign-in.",
     ]);
@@ -1028,13 +1027,13 @@ describe("StopSharingSession over the real remote session", () => {
       folder("codex", "other-work", "Other work", "offered"),
       folder("claude-code", "read-only", "Read-only", "not-needed"),
     ];
-    const harness = makeHarness(({ method }) =>
-      method === "environment.move.stopPreview"
-        ? successful(preview(rows))
-        : method === "providers.list"
-          ? successful(providerList([]))
-          : failed("E_UNEXPECTED", `unexpected method: ${method}`),
-    );
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") {
+        return successful(preview(rows));
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
     await renderSession(harness.client, {
       showListAfterStop: false,
       showToaster: false,
@@ -1045,10 +1044,7 @@ describe("StopSharingSession over the real remote session", () => {
       screen.getByTestId("personal-leave-accounts").querySelectorAll("p"),
     )
       .map((paragraph) => paragraph.textContent)
-      .filter(
-        (text): text is string =>
-          text?.startsWith("Sign in to each account") === true,
-      );
+      .filter((text) => text.startsWith("Sign in to each account"));
     expect(guidance).toEqual([
       "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Codex asks for a new sign-in.",
       "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Claude Code asks for a new sign-in.",
@@ -1408,13 +1404,13 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
   );
 
   it("refuses Stop below 1.1 on the redialed connection through the real sheet mutation", async () => {
-    const harness = makeHarness(({ method }) =>
-      method === "environment.move.stopPreview"
-        ? successful(preview([]))
-        : method === "environment.move.stop"
-          ? successful(stopped())
-          : failed("E_UNEXPECTED", `unexpected method: ${method}`),
-    );
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") {
+        return successful(preview([]));
+      }
+      if (method === "environment.move.stop") return successful(stopped());
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
     cacheProvidersList(harness, []);
     await renderSession(harness.client, {
       showListAfterStop: false,
