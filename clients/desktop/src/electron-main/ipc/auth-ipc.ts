@@ -2,6 +2,7 @@ import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/ho
 import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
 import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
+import { saveAutoPolicyViaHttp } from "@traycer-clients/shared/host-client/auto-policy-save";
 import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
@@ -199,6 +200,21 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         fetchEnvironmentTransport,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.saveAutoPolicy,
+    async (_event, bearerToken: unknown, body: unknown) => {
+      assertString(bearerToken, "saveAutoPolicy.bearerToken");
+      assertString(body, "saveAutoPolicy.body");
+      return saveAutoPolicyViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        body,
       );
     },
   );

@@ -1,20 +1,43 @@
-import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import { use } from "react";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type {
   AutoPolicyGetResponseV11,
   AutoPolicySetRequest,
   AutoPolicySetResponse,
 } from "@traycer/protocol/host/auto-mode/contracts";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
+import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { refreshConnectedAccountSettings } from "@/lib/host/refresh-connected-account-settings";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
   autoModeMutationKeys,
   autoPolicyWriteScope,
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+
+const METHOD = "autoPolicy.set";
 
 type SetAutoPolicyContext = {
   readonly hostId: string | null;
@@ -27,16 +50,95 @@ type SetAutoPolicyContext = {
 };
 
 /**
- * Saves the account's auto-mode policy through the surface's host.
+ * The code the host's `autoPolicy.set` gave the same answer from the server
+ * (`cloudErrorFromResponse`): a refused sign-in is `UNAUTHORIZED`, a refused
+ * person `FORBIDDEN`, and every other failure a plain `RPC_ERROR`, so the
+ * toast reads exactly what it read for the host's call.
+ */
+type SaveFailureKind = Exclude<AutoPolicySaveResult["kind"], "ok">;
+
+const FAILURE_CODE: Readonly<Record<SaveFailureKind, RpcErrorCode>> = {
+  unauthorized: "UNAUTHORIZED",
+  forbidden: "FORBIDDEN",
+  refused: "RPC_ERROR",
+  no_response: "RPC_ERROR",
+};
+
+function saveFailure(kind: SaveFailureKind): HostRpcError {
+  return new HostRpcError({
+    code: FAILURE_CODE[kind],
+    message: `${METHOD}: the save was refused`,
+    requestId: "",
+    method: METHOD,
+    fatalDetails: null,
+  });
+}
+
+/** The server's epoch-millisecond stamp as the ISO string the host answered with. */
+function isoFromEpochMs(updatedAt: number): string | null {
+  if (!Number.isFinite(updatedAt)) return null;
+  const date = new Date(updatedAt);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+interface SignInSave {
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  /** The client today's `autoPolicy.set` is sent on, and its host. */
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly viewerId: string;
+  readonly stream: StreamRuntimeBinding | null;
+}
+
+/**
+ * The save on the person's own sign-in, then the refresh: first on the
+ * computer the host's call would have gone to, when it is not one of the
+ * window's own connections (the server pool), then once on each computer the
+ * window is connected to. Every refresh has answered before this does, so the
+ * policy read that follows is the saved one.
+ */
+async function saveOnSignIn(
+  { binding, client, hostId, viewerId, stream }: SignInSave,
+  body: string,
+): Promise<AutoPolicySetResponse> {
+  const { onOriginSignIn } = binding.auth.environmentCloud();
+  if (!onOriginSignIn()) throw saveFailure("no_response");
+  const result = await binding.auth.saveAutoPolicy(body);
+  if (result.kind !== "ok") throw saveFailure(result.kind);
+  if (binding.directory.findById(hostId) === null) {
+    await client
+      .request(hostAccountSettingsRefreshV10.method, {})
+      .catch(() => undefined);
+  }
+  if (onOriginSignIn()) {
+    await refreshConnectedAccountSettings(
+      binding,
+      stream,
+      viewerId,
+      onOriginSignIn,
+    );
+  }
+  return { updatedAt: isoFromEpochMs(result.updatedAt) };
+}
+
+/**
+ * Saves the account's auto-mode policy.
  *
- * Last-write-wins on the server, so the ORDER these reach the host is the
- * client's job, and `autoPolicyWriteScope` is the thing that does it. `fifo` in
- * the method policy table is NOT: the coordinator's queue key carries the
- * params, so two saves carrying two different bodies sit in two queues and
- * race - what `fifo` buys is that an identical repeat lands rather than being
+ * Where the computer this save goes to has completed its handshake and
+ * advertises `host.accountSettings.refresh@1.0`, the app saves on the
+ * person's own sign-in and then asks that computer, and each one it is
+ * connected to, to refresh. Anywhere else (no handshake yet, the method
+ * missing) the save is the host's `autoPolicy.set`, as before, so a computer
+ * that cannot refresh keeps the policy it was told.
+ *
+ * Last-write-wins on the server, so the ORDER these reach it is the client's
+ * job, and `autoPolicyWriteScope` is the thing that does it. `fifo` in the
+ * method policy table is NOT: the coordinator's queue key carries the params,
+ * so two saves carrying two different bodies sit in two queues and race -
+ * what `fifo` buys is that an identical repeat lands rather than being
  * coalesced. This hook must also never be given a "skip if one is in flight"
- * guard, which would drop the newest text; the scope HOLDS the newer save until
- * the older one settles rather than dropping it.
+ * guard, which would drop the newest text; the scope HOLDS the newer save
+ * until the older one settles rather than dropping it.
  *
  * The read cache is written from the response rather than invalidated: the
  * body is the one just sent and `updatedAt` is the server's new stamp, so the
@@ -53,17 +155,17 @@ export function useAutoPolicySetMutation(): UseMutationResult<
 > {
   // The account's policy is the pool's family (see `usePoolTierHostClient`).
   const client = usePoolTierHostClient(useHostClient());
+  const binding = useHostBinding();
+  const stream = use(StreamRuntimeContext);
   const queryClient = useQueryClient();
   const viewerUserId = useCloudChatViewerId();
-  return useHostMutation<
-    HostRpcRegistry,
-    "autoPolicy.set",
+  return useMutation<
+    AutoPolicySetResponse,
+    HostRpcError,
+    AutoPolicySetRequest,
     SetAutoPolicyContext
   >({
-    client,
-    method: "autoPolicy.set",
-    mapVariables: (variables) => variables,
-    options: {
+    ...withHostMutationLifecycleBoundary(METHOD, {
       mutationKey: autoModeMutationKeys.setPolicy(),
       // One queue for the whole app, not one per host: the policy is one
       // account-wide record, and a save routed through host A must still be
@@ -111,9 +213,10 @@ export function useAutoPolicySetMutation(): UseMutationResult<
             updatedAt: data.updatedAt,
             source: previous?.source ?? "account",
             // A completed write is the strongest evidence of a current record
-            // there is - the host wrote it and seeded its own cache with it -
-            // so this is the one place a `stale` or `unreadable` read state is
-            // legitimately replaced rather than carried forward.
+            // there is - the server has it and the host has either seeded its
+            // own cache with it or dropped its copy - so this is the one place
+            // a `stale` or `unreadable` read state is legitimately replaced
+            // rather than carried forward.
             readState: "fresh",
             // Carried, not re-derived: the shipped rules are bundled with the
             // host and have nothing to do with this write. Dropping them here
@@ -130,6 +233,24 @@ export function useAutoPolicySetMutation(): UseMutationResult<
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't save the Auto mode policy."),
-    },
+    }),
+    mutationFn: (variables) =>
+      withHostMutationErrorBoundary(METHOD, () => {
+        const hostId = client.getActiveHostId() ?? null;
+        if (
+          binding === null ||
+          hostId === null ||
+          readHostMethodSchemaVersion(
+            hostId,
+            hostAccountSettingsRefreshV10.method,
+          ) === null
+        ) {
+          return client.request(METHOD, variables);
+        }
+        return saveOnSignIn(
+          { binding, client, hostId, viewerId: viewerUserId, stream },
+          variables.body,
+        );
+      }),
   });
 }

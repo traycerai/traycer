@@ -240,6 +240,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
     listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

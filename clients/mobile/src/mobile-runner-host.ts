@@ -1,5 +1,9 @@
 import { nativeEnvironmentTransport } from "./native-environment-transport";
 import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "@traycer-clients/shared/host-client/environment-directory";
@@ -839,6 +843,19 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       nativeEnvironmentTransport,
+    );
+  }
+
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      body,
     );
   }
 

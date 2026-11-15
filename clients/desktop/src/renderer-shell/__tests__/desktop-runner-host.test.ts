@@ -145,6 +145,7 @@ function buildFakeBridge(
       detail: "test",
     }),
     listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
