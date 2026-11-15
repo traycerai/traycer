@@ -1,11 +1,12 @@
 import { act, cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import type {
   AuthSessionSnapshot,
   RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
 import type {
+  DesktopAuthSessionRefusalReason,
   DesktopLocalAuthSessionRestoreResult,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
@@ -17,6 +18,19 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast }));
+
+// The wake signal the bridge resends on while it holds the local computer.
+const wake = vi.hoisted((): { listener: (() => void) | null } => ({
+  listener: null,
+}));
+vi.mock("@/lib/host/wake-reconnect", () => ({
+  onWakeReconnect: (listener: () => void) => {
+    wake.listener = listener;
+    return () => {
+      wake.listener = null;
+    };
+  },
+}));
 
 const mockUseAuthService = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/host", () => ({ useAuthService: mockUseAuthService }));
@@ -54,6 +68,9 @@ const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
 /** What the cross-window revoke channel says about a refusal. */
 type RevocationScope = "user-epoch" | null;
 
+/** What the next `restoreLocal` answers; `pending` waits for `resolveRestore`. */
+type RestoreAnswer = DesktopLocalAuthSessionRestoreResult | Error | "pending";
+
 type RenderWithFakesOptions = {
   readonly replayOutboundSnapshot?: AuthSessionSnapshot;
   readonly deferSet?: boolean;
@@ -86,6 +103,17 @@ interface AuthSessionBridgeTestHarness {
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
+  /** What the next `set` answers; `pending` waits for `resolveSet`. */
+  readonly answerSetWith: (
+    answer: DesktopAuthSessionSetResult | "pending",
+  ) => void;
+  readonly answerRestoreWith: (answer: RestoreAnswer) => void;
+  readonly resolveRestore: (
+    result: DesktopLocalAuthSessionRestoreResult,
+  ) => void;
+  /** The session the sign-in service reports now (what a resend hands over). */
+  readonly setCurrentSession: (snapshot: AuthSessionSnapshot) => void;
+  readonly revalidate: Mock<() => Promise<unknown>>;
   readonly revoke: Mock<
     (rejectedToken: string, revocation: RevocationScope) => Promise<void>
   >;
@@ -122,6 +150,12 @@ function renderWithFakes(
     | ((resolution: AuthSessionSetResolution) => void)
     | null = null;
   let mainSnapshot = SIGNED_OUT_DESKTOP_SNAPSHOT;
+  let setAnswer: DesktopAuthSessionSetResult | "pending" = setResult;
+  let restoreAnswer: RestoreAnswer = "restored";
+  let resolveRestorePromise:
+    | ((result: DesktopLocalAuthSessionRestoreResult) => void)
+    | null = null;
+  let currentSession: AuthSessionSnapshot = SIGNED_IN_SNAPSHOT;
   const inboundDispose = vi.fn(() => {
     inboundListener = null;
   });
@@ -132,6 +166,7 @@ function renderWithFakes(
   const ingest = vi.fn((_snapshot: AuthSessionSnapshot): Promise<void> =>
     Promise.resolve(),
   );
+  const revalidate = vi.fn((): Promise<unknown> => Promise.resolve(null));
   const ingestRevoked = vi.fn(
     (_rejectedToken: string, _revocation: RevocationScope): void => undefined,
   );
@@ -158,6 +193,8 @@ function renderWithFakes(
       };
     },
     getIdentityGeneration: () => 0,
+    getCurrentSessionSnapshot: () => currentSession,
+    revalidateCurrentContext: revalidate,
     ingestProjectedSessionSnapshot: ingest,
     ingestCloudAuthorizationRevoked: ingestRevoked,
   });
@@ -166,11 +203,11 @@ function renderWithFakes(
     Promise.resolve(),
   );
   const set = vi.fn((snapshot: DesktopAuthSessionSnapshot) => {
-    if (!options.deferSet) {
-      if (setResult.outcome === "accepted") {
+    if (!options.deferSet && setAnswer !== "pending") {
+      if (setAnswer.outcome === "accepted") {
         mainSnapshot = snapshot;
       }
-      return Promise.resolve(setResult);
+      return Promise.resolve(setAnswer);
     }
     return new Promise<DesktopAuthSessionSetResult>((resolve, reject) => {
       resolveSetPromise = (resolution) => {
@@ -187,8 +224,18 @@ function renderWithFakes(
   });
   const get = vi.fn(() => Promise.resolve(mainSnapshot));
   const restoreLocal = vi.fn(
-    (_expected: { readonly userId: string; readonly token: string }) =>
-      Promise.resolve("restored" as const),
+    (_expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<DesktopLocalAuthSessionRestoreResult> => {
+      if (restoreAnswer === "pending") {
+        return new Promise((resolve) => {
+          resolveRestorePromise = resolve;
+        });
+      }
+      if (restoreAnswer instanceof Error) return Promise.reject(restoreAnswer);
+      return Promise.resolve(restoreAnswer);
+    },
   );
   mockUseWindowsBridge.mockReturnValue({
     authSession: {
@@ -234,6 +281,23 @@ function renderWithFakes(
       resolveSetPromise = null;
     },
     set,
+    answerSetWith: (answer) => {
+      setAnswer = answer;
+    },
+    answerRestoreWith: (answer) => {
+      restoreAnswer = answer;
+    },
+    resolveRestore: (result) => {
+      if (resolveRestorePromise === null) {
+        throw new Error("restoreLocal is not pending");
+      }
+      resolveRestorePromise(result);
+      resolveRestorePromise = null;
+    },
+    setCurrentSession: (snapshot) => {
+      currentSession = snapshot;
+    },
+    revalidate,
     revoke,
     unmount: rendered.unmount,
     emitInbound: (snapshot) => {
@@ -609,5 +673,380 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     });
     expect(harness.ingest).not.toHaveBeenCalled();
     expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+const NO_KEYS: DesktopAuthSessionSetResult = {
+  outcome: "refused",
+  reason: "key-source-unavailable",
+};
+const ACCEPTED: DesktopAuthSessionSetResult = { outcome: "accepted" };
+const refused = (
+  reason: DesktopAuthSessionRefusalReason,
+): DesktopAuthSessionSetResult => ({ outcome: "refused", reason });
+
+/** Every refusal that is a statement about the token, never a missing key source. */
+const TOKEN_REFUSALS: readonly Exclude<
+  DesktopAuthSessionRefusalReason,
+  "key-source-unavailable"
+>[] = [
+  "bad-signature",
+  "unknown-signing-key",
+  "expired",
+  "malformed-token",
+  "unsupported-algorithm",
+  "issuer-mismatch",
+  "audience-mismatch",
+  "subject-mismatch",
+];
+
+const RESEND_MS = 60_000;
+const FRESH_SNAPSHOT: AuthSessionSnapshot = {
+  ...SIGNED_IN_SNAPSHOT,
+  token: "refreshed-token",
+};
+const SIGNED_OUT_SNAPSHOT: AuthSessionSnapshot = {
+  status: "signed-out",
+  token: null,
+  profile: null,
+  contextMetadata: null,
+};
+
+const READ_FAILED_TOAST =
+  "Traycer could not read your local session. Reload the window to try again.";
+const RESTORE_FAILED_TOAST =
+  "Traycer could not restore your local session. Reload the window to try again.";
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await drainMicrotasks();
+  });
+}
+
+async function tick(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+/** The window at a cold start with no network: main cannot reach its keys. */
+async function startOffline(
+  options: RenderWithFakesOptions,
+): Promise<AuthSessionBridgeTestHarness> {
+  const harness = renderWithFakes(NO_KEYS, options);
+  harness.setCurrentSession(SIGNED_IN_SNAPSHOT);
+  harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+  await settle();
+  return harness;
+}
+
+describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing keys", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    toast.warning.mockClear();
+    vi.useRealTimers();
+  });
+
+  it("restores the local computer without a toast", async () => {
+    const harness = await startOffline({});
+
+    expect(harness.set).toHaveBeenCalledTimes(1);
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    expect(harness.restoreLocal).toHaveBeenCalledWith({
+      userId: SIGNED_IN_SNAPSHOT.profile?.userId,
+      token: SIGNED_IN_TOKEN,
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("starts one restore for two refusals in quick succession", async () => {
+    const harness = renderWithFakes(NO_KEYS, {});
+    harness.answerRestoreWith("pending");
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+
+    expect(harness.set).toHaveBeenCalledTimes(2);
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it.each(TOKEN_REFUSALS)(
+    "restores nothing and tells the person for a token refused as %s",
+    async (reason) => {
+      const harness = renderWithFakes(refused(reason), {});
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await settle();
+
+      expect(harness.restoreLocal).not.toHaveBeenCalled();
+      expect(toast.warning).toHaveBeenCalledTimes(1);
+      const [message] = toast.warning.mock.calls[0] ?? [];
+      expect(message).toContain("could not verify this sign-in");
+      await tick(RESEND_MS * 3);
+      expect(harness.set).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("says the local session could not be read when the restore answers unavailable, and does not hold", async () => {
+    const harness = renderWithFakes(NO_KEYS, {});
+    harness.answerRestoreWith("unavailable");
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledWith(READ_FAILED_TOAST);
+    await tick(RESEND_MS * 3);
+    expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the local session could not be restored when the restore throws, and does not hold", async () => {
+    const harness = renderWithFakes(NO_KEYS, {});
+    harness.answerRestoreWith(new Error("ipc closed"));
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledWith(RESTORE_FAILED_TOAST);
+    await tick(RESEND_MS * 3);
+    expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hold before the restore has answered", async () => {
+    const harness = renderWithFakes(NO_KEYS, {});
+    harness.answerRestoreWith("pending");
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+
+    await tick(RESEND_MS * 3);
+
+    expect(harness.set).toHaveBeenCalledTimes(1);
+    harness.resolveRestore("restored");
+    await settle();
+    await tick(RESEND_MS);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands the session over again each minute while it holds, and verification ends the hold", async () => {
+    const harness = await startOffline({});
+    harness.answerSetWith(ACCEPTED);
+
+    await tick(RESEND_MS);
+
+    expect(harness.set).toHaveBeenCalledTimes(2);
+    expect(harness.set).toHaveBeenLastCalledWith({
+      status: "signed-in",
+      token: SIGNED_IN_TOKEN,
+      profile: SIGNED_IN_SNAPSHOT.profile,
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+    await tick(RESEND_MS * 5);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the hold, silently and with no second restore, when a resend is refused for the keys again", async () => {
+    const harness = await startOffline({});
+
+    await tick(RESEND_MS);
+    await tick(RESEND_MS);
+
+    expect(harness.set).toHaveBeenCalledTimes(3);
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("starts no timer for a session main verified at once", async () => {
+    const harness = renderWithFakes(ACCEPTED, {});
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    await settle();
+
+    await tick(RESEND_MS * 5);
+
+    expect(harness.set).toHaveBeenCalledTimes(1);
+    expect(harness.restoreLocal).not.toHaveBeenCalled();
+  });
+
+  it("ends the hold, and its timer, on a sign-out", async () => {
+    const harness = await startOffline({});
+    harness.answerSetWith(ACCEPTED);
+
+    harness.emitOutbound(SIGNED_OUT_SNAPSHOT);
+    await settle();
+    expect(harness.set).toHaveBeenCalledTimes(2);
+    await tick(RESEND_MS * 5);
+
+    expect(harness.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends the hold's timer on unmount", async () => {
+    const harness = await startOffline({});
+
+    harness.unmount();
+    await tick(RESEND_MS * 5);
+
+    expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a hand-over while the last one is still in flight", async () => {
+    const harness = await startOffline({});
+    harness.answerSetWith("pending");
+
+    await tick(RESEND_MS);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+    await tick(RESEND_MS * 3);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+
+    harness.resolveSet({ kind: "resolve", result: NO_KEYS });
+    await settle();
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    await tick(RESEND_MS);
+    expect(harness.set).toHaveBeenCalledTimes(3);
+  });
+
+  it("hands the session over again on a wake signal while it holds, and only then", async () => {
+    const harness = await startOffline({});
+    expect(wake.listener).not.toBeNull();
+
+    act(() => wake.listener?.());
+    await settle();
+    expect(harness.set).toHaveBeenCalledTimes(2);
+
+    harness.answerSetWith(ACCEPTED);
+    act(() => wake.listener?.());
+    await settle();
+    expect(harness.set).toHaveBeenCalledTimes(3);
+
+    act(() => wake.listener?.());
+    await settle();
+    expect(harness.set).toHaveBeenCalledTimes(3);
+  });
+
+  describe("once main's keys are back and it judges the held session", () => {
+    it("asks the sign-in service once, and tells the person once, whatever the number of ticks", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("expired"));
+
+      await tick(RESEND_MS);
+      await tick(RESEND_MS);
+      await tick(RESEND_MS);
+
+      expect(harness.revalidate).toHaveBeenCalledTimes(1);
+      expect(toast.warning).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells the person once for a verdict authn cannot settle, and does not ask it", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("malformed-token"));
+
+      await tick(RESEND_MS);
+      await tick(RESEND_MS);
+
+      expect(harness.revalidate).not.toHaveBeenCalled();
+      expect(toast.warning).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads a refreshed token as a new verdict", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("expired"));
+      await tick(RESEND_MS);
+      expect(harness.revalidate).toHaveBeenCalledTimes(1);
+
+      harness.setCurrentSession(FRESH_SNAPSHOT);
+      harness.emitOutbound(FRESH_SNAPSHOT);
+      await settle();
+
+      expect(harness.revalidate).toHaveBeenCalledTimes(2);
+    });
+
+    it("ends with main verified after authn refreshes the session, with no act by the person", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("expired"));
+      harness.revalidate.mockImplementation(async () => {
+        harness.setCurrentSession(FRESH_SNAPSHOT);
+        harness.answerSetWith(ACCEPTED);
+        harness.emitOutbound(FRESH_SNAPSHOT);
+      });
+
+      await tick(RESEND_MS);
+      await settle();
+
+      expect(harness.set).toHaveBeenLastCalledWith({
+        status: "signed-in",
+        token: FRESH_SNAPSHOT.token,
+        profile: FRESH_SNAPSHOT.profile,
+      });
+      const handedOver = harness.set.mock.calls.length;
+      await tick(RESEND_MS * 5);
+      expect(harness.set).toHaveBeenCalledTimes(handedOver);
+    });
+
+    it("ends signed out when authn rejects the session", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("expired"));
+      harness.revalidate.mockImplementation(async () => {
+        harness.setCurrentSession(SIGNED_OUT_SNAPSHOT);
+        harness.answerSetWith(ACCEPTED);
+        harness.emitOutbound(SIGNED_OUT_SNAPSHOT);
+      });
+
+      await tick(RESEND_MS);
+      await settle();
+
+      expect(harness.set).toHaveBeenLastCalledWith({
+        status: "signed-out",
+        token: null,
+        profile: null,
+      });
+      const handedOver = harness.set.mock.calls.length;
+      await tick(RESEND_MS * 5);
+      expect(harness.set).toHaveBeenCalledTimes(handedOver);
+    });
+
+    it("hands the same session over on the next tick when authn accepts it", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("unknown-signing-key"));
+      await tick(RESEND_MS);
+      expect(harness.revalidate).toHaveBeenCalledTimes(1);
+
+      harness.answerSetWith(ACCEPTED);
+      await tick(RESEND_MS);
+
+      expect(harness.set).toHaveBeenLastCalledWith({
+        status: "signed-in",
+        token: SIGNED_IN_TOKEN,
+        profile: SIGNED_IN_SNAPSHOT.profile,
+      });
+      const handedOver = harness.set.mock.calls.length;
+      await tick(RESEND_MS * 5);
+      expect(harness.set).toHaveBeenCalledTimes(handedOver);
+    });
+
+    it("keeps the hold and its timer when authn cannot be reached", async () => {
+      const harness = await startOffline({});
+      harness.answerSetWith(refused("expired"));
+      harness.revalidate.mockRejectedValue(new Error("network down"));
+
+      await tick(RESEND_MS);
+      await tick(RESEND_MS);
+
+      expect(harness.set).toHaveBeenCalledTimes(3);
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not sign a second window out when main publishes its local fallback", async () => {
+    const harness = await startOffline({});
+
+    harness.emitInbound(UNVERIFIED_DESKTOP_SNAPSHOT);
+    await settle();
+
+    expect(harness.ingest).not.toHaveBeenCalled();
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
   });
 });
