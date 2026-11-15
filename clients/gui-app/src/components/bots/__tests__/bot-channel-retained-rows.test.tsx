@@ -520,6 +520,92 @@ describe("<BotChannelView /> rows another account fetched", () => {
     ).toBe("server");
   });
 
+  /** A different answer, so a mark set at its settling would show. */
+  const RENAMED_LIST = {
+    conversations: [{ ...CHANNEL_LIST.conversations[0], title: "Renamed" }],
+  };
+
+  /** A recoverable failure of the channel's read, asked for once. */
+  async function failChannelRead(): Promise<void> {
+    script.conversationList = () =>
+      Promise.reject(hostFailure("RPC_ERROR", CHANNEL_READ));
+    await refetchRead(queryClient, CHANNEL_READ);
+  }
+
+  it("withholds the rows an earlier bot lifetime fetched when the account goes to another and back, in two changes, and a failure follows", async () => {
+    signInAs("user-a");
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+
+    act(() => signInAs("user-b"));
+    act(() => signInAs("user-a"));
+    await failChannelRead();
+
+    expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+    expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+    expect(
+      screen.getByTestId("bot-channel-error").getAttribute("data-failure"),
+    ).toBe("server");
+  });
+
+  it("withholds the rows an earlier bot lifetime fetched when both account changes fall in one synchronous batch, and a failure follows", async () => {
+    signInAs("user-a");
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+
+    act(() => {
+      signInAs("user-b");
+      signInAs("user-a");
+    });
+    await failChannelRead();
+
+    expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+    expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+    expect(
+      screen.getByTestId("bot-channel-error").getAttribute("data-failure"),
+    ).toBe("server");
+  });
+
+  it("stops drawing the stale rows of an earlier bot lifetime the moment a synchronous batch takes the account away and back, before any refetch answers", async () => {
+    signInAs("user-a");
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+    await failChannelRead();
+    // The same lifetime still: the rows stand under the line.
+    expect(screen.getByTestId("bot-channel-stale")).toBeDefined();
+    expect(screen.getByText(POST_FIRST_LINE)).toBeDefined();
+
+    act(() => {
+      signInAs("user-b");
+      signInAs("user-a");
+    });
+
+    expect(
+      screen.queryByText(POST_FIRST_LINE),
+      "rows of the earlier lifetime are still drawn as readable stale rows",
+    ).toBeNull();
+    expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+  });
+
+  it("CONTROL: shows the rows under the stale line again when a fresh answer came in the new lifetime and a failure follows", async () => {
+    signInAs("user-a");
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+
+    act(() => signInAs("user-b"));
+    act(() => signInAs("user-a"));
+    script.conversationList = () => Promise.resolve(RENAMED_LIST);
+    await refetchRead(queryClient, CHANNEL_READ);
+    await failChannelRead();
+
+    expect(screen.getByText(POST_FIRST_LINE)).toBeDefined();
+    expect(
+      screen.getByTestId("bot-channel-stale").getAttribute("data-failure"),
+    ).toBe("server");
+    expect(screen.queryByTestId("bot-channel-error")).toBeNull();
+  });
+
   describe("a read's retry, waiting in its backoff across an account change", () => {
     let timers: QueryTimers;
 
