@@ -1476,10 +1476,10 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("conversation-app");
   });
 
-  it("names the channel's members from the bot's environment when the tab's host lists them", () => {
+  it("names the channel's members from the bot's environment through authn", () => {
     render(surface());
 
-    expect(mocks.supportQueries).toContainEqual({
+    expect(mocks.supportQueries).not.toContainEqual({
       hostId: TAB_HOST,
       method: "environment.members",
     });
@@ -1492,11 +1492,14 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("Tess Teammate");
   });
 
-  it("leaves the members unresolved on a host without environment.members", () => {
-    mocks.state.membersSupport = false;
+  it("leaves the members unresolved while authn membership is unavailable", () => {
+    mocks.state.membersReadAvailable = false;
     render(surface());
 
-    expect(mocks.membersQueries.every((q) => !q.enabled)).toBe(true);
+    expect(mocks.membersQueries).toContainEqual({
+      environmentId: "env-team",
+      enabled: true,
+    });
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-teammate-name"),
     ).toBe("unresolved");

@@ -28,7 +28,10 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  withHostQueryErrorBoundary,
+  withHostMutationErrorBoundary,
+} from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import type {
@@ -625,7 +628,7 @@ export function useHostMutation<
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables, mutationContext) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)
@@ -751,7 +754,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)

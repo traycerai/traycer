@@ -18,6 +18,15 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 const hostMock = vi.hoisted(
   (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
 );
+const toastErrorMock = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: toastErrorMock,
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -61,6 +70,10 @@ import type {
   EnvironmentReviewEntryV12,
   EnvironmentStatusResponse,
 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
@@ -75,6 +88,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -97,6 +111,8 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostMock.binding = null;
   navigateToSettingsSectionMock.mockReset();
+  toastErrorMock.mockReset();
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 function FakePanel(): ReactNode {
@@ -115,6 +131,7 @@ interface FrameOptions {
   readonly runnerHost: IRunnerHost | null;
   /** `true` stands up a grant minter, so a write's grant is observable. */
   readonly mintsGrants: boolean;
+  readonly auth: { readonly environmentCloud: () => EnvironmentCloud } | null;
 }
 
 const SHELL_PAGE: FrameOptions = {
@@ -123,6 +140,7 @@ const SHELL_PAGE: FrameOptions = {
   windowHostId: ACCESS_HOST_ID,
   runnerHost: null,
   mintsGrants: true,
+  auth: null,
 };
 
 /**
@@ -176,19 +194,22 @@ function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
 
 function renderPage(host: AccessHost, options: FrameOptions): void {
   recordNegotiatedHostMethods(options.windowHostId, options.methods);
-  hostMock.binding = options.mintsGrants
-    ? {
-        auth: {
-          mintExecutableWriteGrant: () =>
-            Promise.resolve({
-              kind: "ok" as const,
-              grant: "grant-1",
-              expiresInSeconds: 600,
-            }),
-          getCredentialGeneration: () => 0,
-        },
-      }
-    : null;
+  hostMock.binding =
+    options.auth !== null
+      ? { auth: options.auth }
+      : options.mintsGrants
+        ? {
+            auth: {
+              mintExecutableWriteGrant: () =>
+                Promise.resolve({
+                  kind: "ok" as const,
+                  grant: "grant-1",
+                  expiresInSeconds: 600,
+                }),
+              getCredentialGeneration: () => 0,
+            },
+          }
+        : null;
   // These cases are about a host's own pages, which a Local row reads.
   useSettingsEnvironmentPickStore.setState({
     pick: {
@@ -225,6 +246,86 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
       </ScopedHostRuntime>
     </QueryClientProvider>,
   );
+}
+
+const PERSONAL_ENVIRONMENTS = [
+  {
+    environmentId: "environment-personal",
+    ownerKind: "user" as const,
+    ownerId: "user-me",
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner" as const,
+    kind: "personal" as const,
+    hostCount: 1,
+    providerHandle: null,
+  },
+];
+
+function undoAuthnCloud(
+  code: string,
+  requests: EnvironmentTransportRequest[],
+): EnvironmentCloud {
+  return {
+    authnBaseUrl: "https://authn.example.test",
+    bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+    onOriginSignIn: () => true,
+    transport: async (request) => {
+      requests.push(request);
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path.endsWith("/notices")) {
+        return {
+          status: 200,
+          text: JSON.stringify({
+            notices: [
+              {
+                kind: "variable",
+                key: "LOG_LEVEL",
+                os: null,
+                revision: 1,
+                writtenAt: 1,
+                source: "dashboard",
+                hostId: null,
+                hostName: null,
+                displaced: "previous",
+              },
+            ],
+          }),
+        };
+      }
+      if (request.method === "GET" && path.endsWith("/review")) {
+        return {
+          status: 200,
+          text: JSON.stringify({ review: null }),
+        };
+      }
+      if (request.method === "POST" && path.endsWith("/changes/1/undo")) {
+        return { status: 403, text: JSON.stringify({ code }) };
+      }
+      return { status: 404, text: JSON.stringify({ error: "not found" }) };
+    },
+  };
+}
+
+function renderUndoAuthnPage(code: string): EnvironmentTransportRequest[] {
+  const requests: EnvironmentTransportRequest[] = [];
+  const cloud = undoAuthnCloud(code, requests);
+  const host = hostWith(
+    {},
+    {
+      environments: PERSONAL_ENVIRONMENTS,
+    },
+  );
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+  renderPage(host, {
+    ...SHELL_PAGE,
+    mintsGrants: false,
+    auth: { environmentCloud: () => cloud },
+  });
+  return requests;
 }
 
 /** A held entry as an `environment.review@1.2` host sends it. */
@@ -377,6 +478,46 @@ describe("a Personal page's convergence notices", () => {
 });
 
 describe("Undo on a notice", () => {
+  it("shows the permission toast for authn's non-grant 403", async () => {
+    const requests = renderUndoAuthnPage("forbidden");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalled();
+    });
+    expect(toastErrorMock.mock.calls[0]?.[0]).toBe(
+      "This change needs permission.",
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        url: "https://authn.example.test/api/v3/environments/environment-personal/changes/1/undo",
+        body: { kind: "variable", key: "LOG_LEVEL", os: null },
+      }),
+    );
+  });
+
+  it("keeps the row's confirmation line for authn's grant 403", async () => {
+    const requests = renderUndoAuthnPage("executable_write_needs_grant");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(
+      (await screen.findByTestId("personal-notice-refusal")).textContent,
+    ).toBe(
+      "Couldn't undo: it needs your confirmation. Sign in again and retry.",
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        url: "https://authn.example.test/api/v3/environments/environment-personal/changes/1/undo",
+        body: { kind: "variable", key: "LOG_LEVEL", os: null },
+      }),
+    );
+  });
+
   it("sends environment.undo with the notice id and the grant", async () => {
     const host = hostWith({}, { notices: [noticeFixture({})] });
     renderPage(host, SHELL_PAGE);

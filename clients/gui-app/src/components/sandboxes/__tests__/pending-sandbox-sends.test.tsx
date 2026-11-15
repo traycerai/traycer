@@ -12,7 +12,7 @@ import {
   NO_AGENT_SENTENCE,
   type HostAnswers,
   mocks,
-  environmentListClientHosts,
+  environmentListEnabledCalls,
   mirrorMountHosts,
   NEW_TARGET,
   RESUME_TARGET,
@@ -4906,6 +4906,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     return sandboxSummaryFixture({
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
+      environmentId: "env-team",
       state,
       guestConfigured: true,
     });
@@ -5017,7 +5018,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mirrorMountHosts.length = 0;
-    environmentListClientHosts.length = 0;
+    environmentListEnabledCalls.length = 0;
     mountInTileBoundTo(TILE_HOST);
     await screen.findByTestId("sandbox-setup-line");
 
@@ -5026,10 +5027,9 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
-    // The actions' own host-scoped read went out on the sandbox's host client,
-    // not the tile's...
-    expect(environmentListClientHosts).toContain(SANDBOX_HOST);
-    expect(environmentListClientHosts).not.toContain(TILE_HOST);
+    // The action's environment-list read stays app-scoped while the sandbox's
+    // own mirror remains independent of the tile's binding.
+    expect(environmentListEnabledCalls).toContain(true);
     // ...and no mirror of this tile's drafts was mounted for it.
     expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });

@@ -10,7 +10,16 @@ import {
 } from "@traycer/protocol/host/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  hostTokenBearer,
+  hostTokenSessionAuth,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   fetchRegisteredHostsViaHttp,
@@ -20,10 +29,8 @@ import {
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import {
-  createRemoteHostTransport,
-  remoteOpenAuthFor,
-} from "@traycer-clients/shared/host-transport/remote/index";
+import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -231,7 +238,11 @@ export function createBrowserSessionsHostDirectory(
     },
     endpoint: (hostId) => {
       const entry = localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null;
-      if (entry === null) return null;
+      if (
+        entry === null ||
+        hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+      )
+        return null;
       return { hostId, websocketUrl: entry.websocketUrl };
     },
     resolve: async (hostId) => {
@@ -273,26 +284,27 @@ export interface BrowserSessionsTransportDeps {
   /** Re-read on every (re)dial, so a host that moved is followed. */
   readonly endpoint: () => HostTransportEndpoint | null;
   readonly appVersion: string | null;
+  /** Main's host-only tokens: the only credential this stream sends a host. */
+  readonly hostTokens: HostTokenSource;
 }
 
 /**
  * One `browser.sessions` transport, owned by main.
  *
- * `auth: null` and `hostCredentialMint: null` are the two deliberate
- * differences from the renderer's durable transport, and both are for the same
- * reason: those recoveries are app-wide single-flight machinery that lives in
- * the renderer, and a second implementation here would double-spend a
- * single-use refresh token or race a concurrent mint. What main loses is
- * self-healing on an `UNAUTHORIZED`: the stream goes terminal, the renderer
- * sees `failed`, and its own `retry()` re-opens on the bearer the renderer has
- * meanwhile rotated into this process. Since the bearer is read LIVE off the
- * desktop auth session, that retry dials with the fresh credential.
+ * It opens with main's host-only token for the target and recovers a refused
+ * or expired one by minting again in main; it never refreshes the sign-in
+ * token, which is the renderer's single-flight machinery. A refusal it cannot
+ * recover (an older host's, a person not admitted) ends the stream: the
+ * renderer sees `failed` and its own `retry()` re-opens it.
+ * `hostCredentialMint: null` because provisioning the host's own credential is
+ * the renderer's too.
  */
 export function openBrowserSessionsTransport(
   target: HostDirectoryEntry,
   userId: string,
   deps: BrowserSessionsTransportDeps,
 ): BrowserSessionsHostTransport | null {
+  if (hostDirectoryEntryNeedsUpdate(target, MINIMUM_HOST_VERSION)) return null;
   const clientIdentity: FirstPartyClientIdentity = {
     kind: "desktop",
     compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
@@ -322,9 +334,9 @@ export function openBrowserSessionsTransport(
       authnBaseUrl: deps.authnBaseUrl(),
       hostPublicKey: lane.entry.publicKey,
       bearer: deps.bearer,
-      // The lane excludes a sandbox, so this is always a personal host's
-      // user-bearer OPEN.
-      openAuth: "user-bearer",
+      hostTokens: deps.hostTokens,
+      door: null,
+      onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
       auth: null,
       clock: null,
@@ -336,9 +348,6 @@ export function openBrowserSessionsTransport(
       clientIdentity,
       // The jar stream re-snapshots on replay, so the wake sweep may probe it.
       proactiveWakeEligible: true,
-      // A personal host takes the user bearer on OPEN and offers no member
-      // credential capability.
-      mintMemberCredential: null,
     });
     if (remote === null) return null;
     remote.session.start();
@@ -353,9 +362,24 @@ export function openBrowserSessionsTransport(
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
     endpoint: deps.endpoint,
-    bearer: deps.bearer,
+    bearer: hostTokenBearer(
+      deps.hostTokens,
+      deps.bearer,
+      target.hostId,
+      ignoreHostTokenState,
+    ),
     userId,
-    auth: null,
+    ...hostTokenSessionAuth(
+      {
+        tokens: deps.hostTokens,
+        currentUserId: () => deps.bearer()?.identity.userId ?? null,
+        hostId: target.hostId,
+        signInRecovery: null,
+        onState: ignoreHostTokenState,
+        now: Date.now,
+      },
+      null,
+    ),
     clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
@@ -369,13 +393,22 @@ export function openBrowserSessionsTransport(
     maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity,
   });
+  // A renewed token reaches the open stream in place.
+  const stopRenewals = deps.hostTokens.subscribe((change) => {
+    if (change.userId === userId && change.hostId === target.hostId)
+      client.notifyBearerRotated();
+  });
   return {
     wsStreamClient: client,
     close: () => {
+      stopRenewals();
       client.close("browser-sessions-stream-closed");
     },
   };
 }
+
+/** Main draws no state of a host; the renderer's own connections raise it. */
+function ignoreHostTokenState(): void {}
 
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes
@@ -395,7 +428,7 @@ function jarTransportLane(target: HostDirectoryEntry):
   if (
     target.kind === "remote" &&
     isRemoteHostDirectoryEntry(target) &&
-    remoteOpenAuthFor(target) === "user-bearer"
+    isPersonalRemoteHost(target)
   ) {
     return { kind: "personal-remote", entry: target };
   }

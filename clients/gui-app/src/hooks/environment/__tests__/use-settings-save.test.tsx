@@ -171,19 +171,22 @@ function row(
   value: string,
   revision: number,
 ): AuthnItemRow {
-  return itemRow("env_override", ITEM_KEY, os, { value }, revision);
+  return itemRow(
+    { kind: "env_override", key: ITEM_KEY },
+    os,
+    { value },
+    revision,
+  );
 }
 
 function itemRow(
-  kind: string,
-  key: string,
+  identity: Pick<AuthnItemRow, "kind" | "key">,
   os: AuthnItemRow["os"],
   value: AuthnItemRow["value"],
   revision: number,
 ): AuthnItemRow {
   return {
-    kind,
-    key,
+    ...identity,
     os,
     value,
     revision,
@@ -238,6 +241,16 @@ function profileCliState(profile: ProviderProfile): ProviderCliState {
     loginCapability: null,
     availabilityPending: false,
     profiles: [profile],
+  };
+}
+
+function providerMutationState(
+  providerId: ProviderCliState["providerId"],
+): ProviderCliState {
+  return {
+    ...profileCliState(editableManagedProfile(false)),
+    providerId,
+    profiles: [],
   };
 }
 
@@ -323,6 +336,61 @@ interface SaveHarness {
   readonly dispose: () => void;
 }
 
+function hostListAnswer(state: MutableAuthnState): EnvironmentTransportAnswer {
+  if (state.failHosts) return { status: 503, text: "" };
+  return {
+    status: 200,
+    text: JSON.stringify({
+      hosts: state.hostListed
+        ? [
+            {
+              hostId: HOST_ID,
+              sharingGeneration: SHARING_GENERATION,
+              hostPlatform: "darwin-arm64",
+            },
+          ]
+        : [],
+    }),
+  };
+}
+
+async function itemListAnswer(
+  request: EnvironmentTransportRequest,
+  state: MutableAuthnState,
+): Promise<EnvironmentTransportAnswer> {
+  const kind = new URL(request.url).searchParams.get("kind");
+  if (kind === "env_override") {
+    state.itemsStarted.resolve(undefined);
+    if (state.itemsGate !== null) return state.itemsGate.promise;
+    if (state.failItems) return { status: 503, text: "" };
+  }
+  const readGate = state.itemReadGates.shift();
+  if (readGate !== undefined) {
+    const answer = await readGate.promise;
+    state.itemReadResponsesReturned += 1;
+    return answer;
+  }
+  const items =
+    kind === "env_override" ? state.rows : (state.rowsByKind[kind ?? ""] ?? []);
+  return { status: 200, text: JSON.stringify({ items }) };
+}
+
+async function reviewApplyAnswer(
+  state: MutableAuthnState,
+): Promise<EnvironmentTransportAnswer> {
+  if (state.reviewPostGate !== null) return state.reviewPostGate.promise;
+  if (state.rowsByKindAfterApply !== null) {
+    state.rowsByKind = state.rowsByKindAfterApply;
+    state.rowsByKindAfterApply = null;
+  }
+  if (state.revisionAfterApply !== null && state.valueAfterApply !== null) {
+    state.rows = [
+      row("macos", state.valueAfterApply, state.revisionAfterApply),
+    ];
+  }
+  return state.reviewPostAnswer;
+}
+
 function makeSaveHarness(overrides: {
   readonly rows?: readonly AuthnItemRow[];
   readonly hostListed?: boolean;
@@ -392,61 +460,16 @@ function makeSaveHarness(overrides: {
     transport: async (request) => {
       authnRequests.push(request);
       if (request.url.includes("/hosts?include=binding")) {
-        if (state.failHosts) return { status: 503, text: "" };
-        return {
-          status: 200,
-          text: JSON.stringify({
-            hosts: state.hostListed
-              ? [
-                  {
-                    hostId: HOST_ID,
-                    sharingGeneration: SHARING_GENERATION,
-                    hostPlatform: "darwin-arm64",
-                  },
-                ]
-              : [],
-          }),
-        };
+        return hostListAnswer(state);
       }
       if (request.url.includes("/items?kind=")) {
-        const kind = new URL(request.url).searchParams.get("kind");
-        if (kind === "env_override") {
-          state.itemsStarted.resolve(undefined);
-          if (state.itemsGate !== null) return state.itemsGate.promise;
-          if (state.failItems) return { status: 503, text: "" };
-        }
-        const readGate = state.itemReadGates.shift();
-        if (readGate !== undefined) {
-          const answer = await readGate.promise;
-          state.itemReadResponsesReturned += 1;
-          return answer;
-        }
-        const items =
-          kind === "env_override"
-            ? state.rows
-            : (state.rowsByKind[kind ?? ""] ?? []);
-        return { status: 200, text: JSON.stringify({ items }) };
+        return itemListAnswer(request, state);
       }
       if (request.url.includes("/review?include=operation")) {
         return state.reviewAnswer;
       }
       if (request.method === "POST" && request.url.includes("/review/")) {
-        if (state.reviewPostGate !== null) {
-          return state.reviewPostGate.promise;
-        }
-        if (state.rowsByKindAfterApply !== null) {
-          state.rowsByKind = state.rowsByKindAfterApply;
-          state.rowsByKindAfterApply = null;
-        }
-        if (
-          state.revisionAfterApply !== null &&
-          state.valueAfterApply !== null
-        ) {
-          state.rows = [
-            row("macos", state.valueAfterApply, state.revisionAfterApply),
-          ];
-        }
-        return state.reviewPostAnswer;
+        return reviewApplyAnswer(state);
       }
       throw new Error(`Unexpected authn route: ${request.method}`);
     },
@@ -517,11 +540,11 @@ function makeSaveHarness(overrides: {
         captureSave("providers.setEnvOverride", request);
         if (state.failSave) throw new Error("Test host write failed");
         hostEvents.push("answer:providers.setEnvOverride");
-        return { state: {} as never };
+        return { state: providerMutationState(request.providerId) };
       },
       "providers.deleteEnvOverride": (request) => {
         captureSave("providers.deleteEnvOverride", request);
-        return { state: {} as never };
+        return { state: providerMutationState(request.providerId) };
       },
       "config.shell.get": () => {
         hostRequests.push("config.shell.get");
@@ -547,19 +570,19 @@ function makeSaveHarness(overrides: {
       },
       "config.shell.set": (request) => {
         captureSave("config.shell.set", request);
-        return {} as never;
+        return { path: request.path, args: request.args };
       },
       "config.shell.add": (request) => {
         captureSave("config.shell.add", request);
-        return {} as never;
+        return { path: request.path, entries: [] };
       },
       "config.shell.remove": (request) => {
         captureSave("config.shell.remove", request);
-        return {} as never;
+        return { removed: true, path: request.path };
       },
       "config.shell.revertArgs": (request) => {
         captureSave("config.shell.revertArgs", request);
-        return {} as never;
+        return { path: request.path, reverted: true };
       },
       "providers.setPackPolicy": (request) => {
         captureSave("providers.setPackPolicy", request);
@@ -569,11 +592,11 @@ function makeSaveHarness(overrides: {
         captureSave("providers.usePackVersion", request);
         return {
           result: { ok: true, pinnedVersion: request.version },
-        } as never;
+        };
       },
       "providers.setEnabled": (request) => {
         captureSave("providers.setEnabled", request);
-        return {} as never;
+        return { state: providerMutationState(request.providerId) };
       },
     },
   });
@@ -648,6 +671,7 @@ function makeSaveHarness(overrides: {
     requestCoordinator: null,
     selectedHostId: () => state.localHostId,
     connectionRegistry: null,
+    onHostTokenRenewal: () => undefined,
   });
   const binding: HostRuntimeBinding<HostRpcRegistry> = {
     runtime,
@@ -842,13 +866,14 @@ function variableProposalForEdit(
   };
 }
 
-function variableReviewAnswerForEdit(
-  heldId: string,
-  operation: "put" | "delete",
-  heldValue: string,
-  liveRevision: number | null,
-  liveValue: string | null,
-): EnvironmentTransportAnswer {
+function variableReviewAnswerForEdit(options: {
+  readonly heldId: string;
+  readonly operation: "put" | "delete";
+  readonly heldValue: string;
+  readonly liveRevision: number | null;
+  readonly liveValue: string | null;
+}): EnvironmentTransportAnswer {
+  const { heldId, operation, heldValue, liveRevision, liveValue } = options;
   const live =
     liveRevision === null
       ? null
@@ -900,7 +925,12 @@ async function invokeShellSave(
     });
     await finished.promise;
   });
-  if (saveError !== undefined) throw saveError;
+  if (saveError !== undefined) {
+    if (saveError instanceof Error) throw saveError;
+    const message =
+      typeof saveError === "string" ? saveError : JSON.stringify(saveError);
+    throw new Error(message);
+  }
 }
 
 function reviewApplyRequests(
@@ -1115,7 +1145,7 @@ describe("settings-save callers", () => {
       { wrapper: harness.wrapper },
     );
     await waitForPreparedReads(harness, "env_override");
-    const sent = vi.fn(async () => "host-answered");
+    const sent = vi.fn(() => Promise.resolve("host-answered"));
 
     const pending = await result.current(
       {
@@ -1494,8 +1524,7 @@ describe("settings-save callers", () => {
       rowsByKind: {
         shell: [
           itemRow(
-            "shell",
-            "shell",
+            { kind: "shell", key: "shell" },
             "macos",
             {
               path: "/bin/zsh",
@@ -1538,9 +1567,16 @@ describe("settings-save callers", () => {
       result.current.revertShellArgs("/bin/zsh", callbacks),
     );
 
-    const selections = harness.savePayloads.map(
-      ({ request }) => (request as { readonly selection: unknown }).selection,
-    );
+    const selections = harness.savePayloads.map(({ request }) => {
+      if (
+        typeof request !== "object" ||
+        request === null ||
+        !("selection" in request)
+      ) {
+        throw new Error("Expected shell save to state its selection");
+      }
+      return request.selection;
+    });
     const bash = { path: "/bin/bash", args: ["-x"] };
     const fish = {
       path: "/bin/fish",
@@ -1587,8 +1623,7 @@ describe("settings-save callers", () => {
 
   it("remembers the policy stated by pack policy callers", async () => {
     const packRow = itemRow(
-      "pack_policy",
-      "pack-a",
+      { kind: "pack_policy", key: "pack-a" },
       null,
       {
         pinnedVersion: "1.2.0",
@@ -1663,8 +1698,7 @@ describe("settings-save callers", () => {
       rowsByKind: {
         managed_profile: [
           itemRow(
-            "managed_profile",
-            MANAGED_PROFILE_KEY,
+            { kind: "managed_profile", key: MANAGED_PROFILE_KEY },
             null,
             profileValue,
             3,
@@ -1708,16 +1742,31 @@ describe("settings-save callers", () => {
       "providers.setEnabled",
     ]);
     expect(
-      harness.savePayloads.map(
-        ({ request }) =>
-          (
-            request as {
-              readonly profileAction: {
-                readonly environmentProfileId: string | null;
-              };
-            }
-          ).profileAction.environmentProfileId,
-      ),
+      harness.savePayloads.map(({ request }) => {
+        if (
+          typeof request !== "object" ||
+          request === null ||
+          !("profileAction" in request)
+        ) {
+          throw new Error("Expected profile save to state its action");
+        }
+        const { profileAction } = request;
+        if (
+          typeof profileAction !== "object" ||
+          profileAction === null ||
+          !("environmentProfileId" in profileAction)
+        ) {
+          throw new Error("Expected profile save action to name its profile");
+        }
+        const { environmentProfileId } = profileAction;
+        if (
+          environmentProfileId !== null &&
+          typeof environmentProfileId !== "string"
+        ) {
+          throw new Error("Expected profile id to be a string or null");
+        }
+        return environmentProfileId;
+      }),
     ).toEqual(["p1", "p1"]);
     expect(harness.recordsAtSend[0]).toMatchObject({
       kind: "managed_profile",
@@ -1743,8 +1792,7 @@ describe("settings-save callers", () => {
       rowsByKind: {
         managed_profile: [
           itemRow(
-            "managed_profile",
-            MANAGED_PROFILE_KEY,
+            { kind: "managed_profile", key: MANAGED_PROFILE_KEY },
             null,
             profileValue,
             3,
@@ -1794,8 +1842,7 @@ describe("settings-save callers", () => {
       rowsByKind: {
         managed_profile: [
           itemRow(
-            "managed_profile",
-            MANAGED_PROFILE_KEY,
+            { kind: "managed_profile", key: MANAGED_PROFILE_KEY },
             null,
             profileValue,
             3,
@@ -1888,7 +1935,7 @@ describe("settings-save callers", () => {
       await reopenedEditor.result.current.mutateAsync(setRequest("new-value"));
     });
     const remembered = records()[0];
-    expect(remembered?.expectedLiveRevision).toBe(4);
+    expect(remembered.expectedLiveRevision).toBe(4);
     expect(harness.hostRequests).not.toContain("environment.proposals");
 
     act(() => harness.setLocalHostId(HOST_ID));
@@ -1911,9 +1958,7 @@ describe("settings-save callers", () => {
         request.method === "POST" && request.url.includes("/review/"),
     );
     const applyBody =
-      typeof applyRequest?.body === "string"
-        ? JSON.parse(applyRequest.body)
-        : applyRequest?.body;
+      applyRequest === undefined ? undefined : requestBody(applyRequest);
     expect(applyBody).toMatchObject({
       revision: 9,
       expectedLiveRevision: 4,
@@ -2016,8 +2061,7 @@ describe("settings-save callers", () => {
     secondSaveWhileApplyHeld: boolean,
   ): Promise<void> {
     const initialRow = itemRow(
-      "setup_script",
-      "setup",
+      { kind: "setup_script", key: "setup" },
       "macos",
       { text: "original" },
       1,
@@ -2045,8 +2089,7 @@ describe("settings-save callers", () => {
       text: JSON.stringify({
         code: "revision_conflict",
         current: itemRow(
-          "setup_script",
-          "setup",
+          { kind: "setup_script", key: "setup" },
           "macos",
           { text: "teammate" },
           2,
@@ -2080,7 +2123,12 @@ describe("settings-save callers", () => {
     harness.state.rowsByKind = {
       ...harness.state.rowsByKind,
       setup_script: [
-        itemRow("setup_script", "setup", "macos", { text: "teammate" }, 2),
+        itemRow(
+          { kind: "setup_script", key: "setup" },
+          "macos",
+          { text: "teammate" },
+          2,
+        ),
       ],
     };
 
@@ -2386,7 +2434,12 @@ describe("settings-save callers", () => {
     const harness = makeSaveHarness({
       rowsByKind: {
         variable: [
-          itemRow("variable", ROW_ORDER_KEY, "macos", { value: "original" }, 1),
+          itemRow(
+            { kind: "variable", key: ROW_ORDER_KEY },
+            "macos",
+            { value: "original" },
+            1,
+          ),
         ],
       },
       localHostId: HOST_ID,
@@ -2415,8 +2468,7 @@ describe("settings-save callers", () => {
       firstOperation === "put"
         ? [
             itemRow(
-              "variable",
-              ROW_ORDER_KEY,
+              { kind: "variable", key: ROW_ORDER_KEY },
               "macos",
               { value: firstValue },
               2,
@@ -2427,13 +2479,13 @@ describe("settings-save callers", () => {
       "00000000-0000-4000-8000-000000000071",
       firstOperation,
     );
-    harness.state.reviewAnswer = variableReviewAnswerForEdit(
-      "held-first-row-order-write",
-      firstOperation,
-      firstValue,
-      1,
-      "original",
-    );
+    harness.state.reviewAnswer = variableReviewAnswerForEdit({
+      heldId: "held-first-row-order-write",
+      operation: firstOperation,
+      heldValue: firstValue,
+      liveRevision: 1,
+      liveValue: "original",
+    });
     harness.state.rowsByKindAfterApply = { variable: firstRowsAfterApply };
     await invokeShellSave((callbacks) => {
       if (firstOperation === "put") {
@@ -2454,8 +2506,7 @@ describe("settings-save callers", () => {
       secondOperation === "put"
         ? [
             itemRow(
-              "variable",
-              ROW_ORDER_KEY,
+              { kind: "variable", key: ROW_ORDER_KEY },
               "macos",
               { value: secondValue },
               3,
@@ -2466,13 +2517,13 @@ describe("settings-save callers", () => {
       "00000000-0000-4000-8000-000000000072",
       secondOperation,
     );
-    harness.state.reviewAnswer = variableReviewAnswerForEdit(
-      "held-second-row-order-write",
-      secondOperation,
-      secondValue,
-      firstOperation === "put" ? 2 : null,
-      firstOperation === "put" ? firstValue : null,
-    );
+    harness.state.reviewAnswer = variableReviewAnswerForEdit({
+      heldId: "held-second-row-order-write",
+      operation: secondOperation,
+      heldValue: secondValue,
+      liveRevision: firstOperation === "put" ? 2 : null,
+      liveValue: firstOperation === "put" ? firstValue : null,
+    });
     harness.state.rowsByKindAfterApply = { variable: secondRowsAfterApply };
     await invokeShellSave((callbacks) => {
       if (secondOperation === "put") {
@@ -2697,7 +2748,13 @@ describe("settings-save callers", () => {
     expect(
       harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
     ).toEqual([3, 4]);
-    expect(requestBody(reviewApplyRequests(harness)[1])).toMatchObject({
+    const secondApplyRequest = reviewApplyRequests(harness).at(1);
+    expect(secondApplyRequest).toBeDefined();
+    expect(
+      secondApplyRequest === undefined
+        ? undefined
+        : requestBody(secondApplyRequest),
+    ).toMatchObject({
       revision: 9,
       expectedLiveRevision: 4,
     });
