@@ -167,6 +167,7 @@ const WAIT_SESSION_IDENTITY = {
   epicId: "epic-test",
   chatId: "chat-test",
   hostId: HOST_ID,
+  snapshotHostId: HOST_ID,
   userId: "owner-wait-test",
 };
 let waitSessionHarness: LegacyChatSessionHarness | null = null;

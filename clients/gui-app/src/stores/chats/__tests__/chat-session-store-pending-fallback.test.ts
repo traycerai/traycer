@@ -42,6 +42,7 @@ const LEGACY_IDENTITY = {
   epicId: EPIC_ID,
   chatId: CHAT_ID,
   hostId: "host-a",
+  snapshotHostId: "test-host",
   userId: OWNER_ID,
 };
 

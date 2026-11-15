@@ -39,6 +39,11 @@ import { MOVE_ERROR_FALLBACKS } from "../profile-move-copy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { ProfileMoveDialog } from "../profile-move-dialog";
+import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const sonnerErrors = vi.hoisted(() => ({
   error: vi.fn<(message: ReactNode) => string>(() => "toast-id"),
@@ -286,6 +291,7 @@ function moveFloorFailure(
 
 afterEach(() => {
   cleanup();
+  useComposerDraftStore.setState({ drafts: {} });
   sonnerErrors.error.mockClear();
 });
 
@@ -295,6 +301,72 @@ afterAll(() => {
 });
 
 describe("ProfileMoveDialog", () => {
+  it("preserves the typed composer draft through a waiting profile move", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness({
+      preview: () => PREVIEW,
+      commit: skippedBotResult,
+    });
+    const chatId = AGENT_ROW.agentId;
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRef: ComposerDraftSelectionRef = { current: null };
+    const composer = (
+      <ComposerDraftEditorHarness
+        chatId={chatId}
+        epicId={AGENT_ROW.epicId}
+        hostId={HOST_ID}
+        editorRef={editorRef}
+        selectionRef={selectionRef}
+      />
+    );
+    const view = render(<>{composer}</>, { wrapper: harness.Wrapper });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "test" }),
+      "unsent profile move line",
+    );
+    const observe = () =>
+      observeComposerDraft(
+        chatId,
+        editorRef,
+        screen.getByTestId("composer-editor"),
+      );
+    const before = observe();
+    expect(before.editorJSON).toBe(before.draftJSON);
+    expect(before.visibleText).toBe("unsent profile move line");
+
+    view.rerender(
+      <>
+        {composer}
+        {dialogElement(harness, vi.fn())}
+      </>,
+    );
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    const during = observe();
+    expect(during).toEqual(before);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+    await screen.findByText("Moved 1 to Destination profile.");
+
+    const after = observe();
+    expect(after).toEqual(before);
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.requests[0]?.targets).toEqual([
+      {
+        kind: "agent",
+        epicId: AGENT_ROW.epicId,
+        agentId: AGENT_ROW.agentId,
+      },
+      { kind: "bot", botId: BOT_ROW.botId },
+    ]);
+  });
+
   it("counts previewed agents and bots, excludes terminals, and commits exactly the confirmed refs", async () => {
     const user = userEvent.setup();
     const harness = createHarness({

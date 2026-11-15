@@ -16,6 +16,7 @@ export interface ChatSessionTestIdentity {
   readonly epicId: string;
   readonly chatId: string;
   readonly hostId: string;
+  readonly snapshotHostId: string;
   readonly userId: string;
 }
 
@@ -76,7 +77,7 @@ function emptyChat(identity: ChatSessionTestIdentity): Chat {
     id: identity.chatId,
     parentId: null,
     userId: identity.userId,
-    hostId: "test-host",
+    hostId: identity.snapshotHostId,
     title: "Host Chat",
     createdAt: 1,
     updatedAt: 1,

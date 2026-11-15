@@ -109,7 +109,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -119,6 +119,7 @@ import {
   within,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   afterAll,
   afterEach,
@@ -143,6 +144,11 @@ import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const HOST_ID = "switch-computer";
 const SOURCE_ID = "source-profile";
@@ -177,6 +183,8 @@ interface SwitchHarnessInput {
   readonly commitResults: ProvidersCommitProfileMoveResponse["results"];
   readonly supportedMoves: boolean;
   readonly failFirstCommit: boolean;
+  readonly composer: ReactNode | null;
+  readonly managedProfileInitiallyOpen: boolean;
 }
 
 interface SwitchHarness {
@@ -186,6 +194,17 @@ interface SwitchHarness {
   readonly startRequests: StartRequest[];
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
   readonly commitRequests: ProvidersCommitProfileMoveRequest[];
+  openManage(): void;
+}
+
+interface SwitchHarnessController {
+  openManage: (() => void) | null;
+}
+
+interface SwitchHarnessSceneProps {
+  readonly input: SwitchHarnessInput;
+  readonly selected: Mock<(profileId: string | null) => void>;
+  readonly controller: SwitchHarnessController;
 }
 
 interface MoveDialogInput {
@@ -209,6 +228,7 @@ afterEach(() => {
   authServiceForTest?.dispose();
   authServiceForTest = null;
   useProviderProfileAddFlowStore.getState().close();
+  useComposerDraftStore.setState({ drafts: {} });
   clientMock.current = null;
   toastFallbacks.values.length = 0;
   resetNegotiatedManifests();
@@ -301,8 +321,9 @@ function ManagedProfileEntry(props: {
   readonly profiles: readonly ProviderProfile[];
   readonly startInReauth: boolean;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const [open, setOpen] = useState(true);
   return (
     <ProfileEditDialog
       state={props.state}
@@ -312,14 +333,43 @@ function ManagedProfileEntry(props: {
       oauthUnavailableHint={null}
       startInReauth={props.startInReauth}
       isLocalHost
-      open={open}
-      onOpenChange={setOpen}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
       remainingProfilesAfterRemoval={[]}
       onSelectedProfileIdChange={props.onSelectedProfileIdChange}
       profileEnablementAvailable
       profileEnablementPending={() => false}
       onSetProfileEnabled={() => undefined}
     />
+  );
+}
+
+function SwitchHarnessScene(props: SwitchHarnessSceneProps): ReactNode {
+  const [managedProfileOpen, setManagedProfileOpen] = useState(
+    props.input.managedProfileInitiallyOpen,
+  );
+  useLayoutEffect(() => {
+    props.controller.openManage = () => setManagedProfileOpen(true);
+    return () => {
+      props.controller.openManage = null;
+    };
+  }, [props.controller]);
+  const source = props.input.before.find((row) => row.profileId === SOURCE_ID);
+  if (source === undefined) throw new Error("The source profile is missing");
+  return (
+    <>
+      {props.input.composer}
+      <ManagedProfileEntry
+        state={provider("claude-code", [...props.input.before])}
+        profile={source}
+        profiles={props.input.before}
+        startInReauth={props.input.entry === "reauth"}
+        onSelectedProfileIdChange={props.selected}
+        open={managedProfileOpen}
+        onOpenChange={setManagedProfileOpen}
+      />
+      <ProviderProfileAddFlowHost />
+    </>
   );
 }
 
@@ -409,19 +459,15 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     listBody(input.offers, input.before),
   );
   const selected = vi.fn<(profileId: string | null) => void>();
-  const source = input.before.find((row) => row.profileId === SOURCE_ID);
-  if (source === undefined) throw new Error("The source profile is missing");
+  const controller: SwitchHarnessController = { openManage: null };
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ManagedProfileEntry
-          state={provider("claude-code", [...input.before])}
-          profile={source}
-          profiles={input.before}
-          startInReauth={input.entry === "reauth"}
-          onSelectedProfileIdChange={selected}
+        <SwitchHarnessScene
+          input={input}
+          selected={selected}
+          controller={controller}
         />
-        <ProviderProfileAddFlowHost />
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -432,6 +478,11 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     startRequests,
     previewRequests,
     commitRequests,
+    openManage: () => {
+      const openManage = controller.openManage;
+      if (openManage === null) throw new Error("Manage dialog is not mounted");
+      openManage();
+    },
   };
 }
 
@@ -577,10 +628,84 @@ function successfulSwitchInput(
     commitResults,
     supportedMoves: true,
     failFirstCommit: false,
+    composer: null,
+    managedProfileInitiallyOpen: true,
   };
 }
 
 describe("Switch account moves only previewed work", () => {
+  it("preserves typed composer text through the integrated switch move flow", async () => {
+    const user = userEvent.setup();
+    const target = agentTarget(
+      "epic-composer-draft",
+      "agent-composer-draft",
+      "Waiting agent",
+      "idle",
+    );
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [target],
+    };
+    const results: ProvidersCommitProfileMoveResponse["results"] = [
+      {
+        outcome: "moved",
+        target: agentRef(target.epicId, target.agentId),
+        row: target,
+      },
+    ];
+    const chatId = target.agentId;
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRef: ComposerDraftSelectionRef = { current: null };
+    const composer = (
+      <ComposerDraftEditorHarness
+        chatId={chatId}
+        epicId={target.epicId}
+        hostId={HOST_ID}
+        editorRef={editorRef}
+        selectionRef={selectionRef}
+      />
+    );
+    const harness = renderSwitchHarness({
+      ...successfulSwitchInput(preview, results),
+      composer,
+      managedProfileInitiallyOpen: false,
+    });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "test" }),
+      "unsent switch move line",
+    );
+    const observe = () =>
+      observeComposerDraft(
+        chatId,
+        editorRef,
+        screen.getByTestId("composer-editor"),
+      );
+    const before = observe();
+    expect(before.editorJSON).toBe(before.draftJSON);
+    expect(before.visibleText).toBe("unsent switch move line");
+
+    act(() => harness.openManage());
+    await screen.findByRole("dialog", { name: "Edit profile" });
+    await loginIntoSwitchDialog();
+    await screen.findByText("Move work from Work?");
+    await screen.findByRole("button", { name: "Move 1" });
+    const during = observe();
+    expect(during).toEqual(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+    await screen.findByText("Moved 1 to New account.");
+    const after = observe();
+    expect(after).toEqual(before);
+    expect(harness.previewRequests).toHaveLength(1);
+    expect(harness.commitRequests).toHaveLength(1);
+    expect(harness.commitRequests[0]?.targets).toEqual([
+      agentRef(target.epicId, target.agentId),
+    ]);
+  });
+
   it("opens global Add from Manage, waits for the answer, and sends only preview refs for agents and bots", async () => {
     const idle = agentTarget("epic-idle", "agent-idle", "Idle agent", "idle");
     const running = agentTarget(
@@ -806,6 +931,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     await loginIntoSwitchDialog();
@@ -833,6 +960,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     await loginIntoSwitchDialog();
@@ -859,6 +988,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     expect(
@@ -1111,6 +1242,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: false,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     expect(
