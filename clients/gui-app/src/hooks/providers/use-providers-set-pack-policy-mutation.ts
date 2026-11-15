@@ -11,6 +11,11 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+
+/** The item a pack save writes. */
+const PACK_SAVE_KINDS = ["pack_policy"] as const;
 
 type SetPackPolicyMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.setPackPolicy">,
@@ -35,6 +40,8 @@ export function useProvidersSetPackPolicyForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): SetPackPolicyMutationResult {
   const queryClient = useQueryClient();
+  const prepareSave = useSettingsSave(client, PACK_SAVE_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostMutation<
     HostRpcRegistry,
     "providers.setPackPolicy",
@@ -43,6 +50,15 @@ export function useProvidersSetPackPolicyForClient(
     client,
     method: "providers.setPackPolicy",
     mapVariables: (variables) => variables,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "providers.setPackPolicy", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     options: {
       mutationKey: providersMutationKeys.setPackPolicy(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),

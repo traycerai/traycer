@@ -15,6 +15,8 @@ import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -122,6 +124,8 @@ function SetupScripts(): ReactNode {
   );
 }
 
+const SAVED_KINDS = ["setup_script"] as const;
+
 function SetupScriptEditor(props: {
   readonly os: Exclude<EnvironmentOs, "any">;
   readonly label: string;
@@ -130,8 +134,20 @@ function SetupScriptEditor(props: {
   const saved = props.script?.text ?? "";
   const [text, setText] = useState(saved);
   const queryClient = useQueryClient();
-  const put = useHostScopedMutationForClient(useHostClient(), {
+  const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
+  const put = useHostScopedMutationForClient(client, {
     method: "environment.setup.put",
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "environment.setup.put", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",
     invalidateMethods: [

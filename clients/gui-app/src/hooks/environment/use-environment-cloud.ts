@@ -256,6 +256,11 @@ interface UseEnvironmentCloudMutationArgs<
     | ((variables: RequestOfMethod<HostRpcRegistry, Method>) => Captured)
     | undefined;
   readonly silentCodes?: readonly HostRpcError["code"][];
+  /**
+   * The sign-in a write armed before it was made, taken once by that write:
+   * it is sent on that operation instead of one begun now. Null: begin now.
+   */
+  readonly takeOrigin?: (() => EnvironmentCloud | null) | undefined;
 }
 
 /**
@@ -284,7 +289,14 @@ export function useEnvironmentCloudMutation<
     HostScopedMutationContext<Captured>
   >({
     mutationKey: args.mutationKey,
-    mutationFn: (request) => begin()(method, request),
+    mutationFn: (request) => {
+      const origin = args.takeOrigin?.() ?? null;
+      const send =
+        origin === null
+          ? begin()
+          : beginEnvironmentCloudOperation(() => origin);
+      return send(method, request);
+    },
     onMutate: (variables) => ({
       hostId: null,
       // `undefined` is what `Captured` IS when no capture was asked for; the
