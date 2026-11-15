@@ -751,7 +751,7 @@ function providerKeyHandlers(
       environmentStatusFixture({
         principal: { kind: "team", teamName: "Acme" },
       }),
-    "providers.list": () => ({ providers: [row] }),
+    "providers.list": () => ({ providers: [row], native: null }),
     "providers.beginApiKeyChange": () => begin,
     "providers.settleApiKeyChange": () => ({
       state: row,
