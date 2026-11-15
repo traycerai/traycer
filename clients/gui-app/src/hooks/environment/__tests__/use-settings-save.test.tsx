@@ -49,6 +49,7 @@ import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRpcShellConfigController } from "@/components/settings/panels/shell/use-rpc-shell-config-controller";
+import type { ShellConfigController } from "@/components/settings/panels/shell/shell-config-controller";
 import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
 import {
   useSettingsSave,
@@ -1640,7 +1641,7 @@ describe("settings-save callers", () => {
     async function saveShell(
       shellConfig: ConfigShellGetResponseV11,
       invoke: (
-        controller: ReturnType<typeof useRpcShellConfigController>,
+        controller: ShellConfigController,
         callbacks: ShellCallbacks,
       ) => void,
     ) {
