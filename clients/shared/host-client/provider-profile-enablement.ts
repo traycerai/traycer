@@ -49,7 +49,7 @@ const itemsSchema = z.object({
 });
 
 /** A revision-checked edit on the person's session; no retry or local write. */
-export async function setProfileRecordEnabledViaHttp(
+export function setProfileRecordEnabledViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
   environmentId: string,

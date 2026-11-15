@@ -47,7 +47,6 @@ import { TeamPlans } from "./team-plans";
 import {
   TeamProviderRecordsContext,
   useTeamProviderRecordsRead,
-  useTeamProviderRecords,
 } from "./team-provider-records";
 import { TeamSyncedProviderProfiles } from "./team-synced-provider-profiles";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
@@ -214,7 +213,6 @@ function TeamProvidersView(props: {
     harness,
     onOutcome,
   } = props;
-  const records = useTeamProviderRecords();
   const source = useConfigurationSource();
   return (
     <SettingsPanelShell
@@ -275,15 +273,22 @@ function TeamProvidersView(props: {
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
                 <TeamPlans providerId={providerId} adminNames={adminNames} />
-                {records === null ? (
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamSyncedProviderProfiles
+                    providerId={providerId}
+                    onOutcome={onOutcome}
+                    fallback={
+                      <ConfigurationProfiles
+                        providerLabel={providerDisplayName(providerId)}
+                        profiles={profiles}
+                        onOutcome={onOutcome}
+                      />
+                    }
+                  />
+                ) : (
                   <ConfigurationProfiles
                     providerLabel={providerDisplayName(providerId)}
                     profiles={profiles}
-                    onOutcome={onOutcome}
-                  />
-                ) : (
-                  <TeamSyncedProviderProfiles
-                    providerId={providerId}
                     onOutcome={onOutcome}
                   />
                 )}

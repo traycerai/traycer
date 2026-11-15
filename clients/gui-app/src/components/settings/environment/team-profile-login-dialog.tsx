@@ -10,6 +10,7 @@ import type {
   ProviderId,
   ProviderProfile,
   ProviderCliState,
+  ProviderLoginTargetRefusal,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   AddProviderProfileDialog,
@@ -30,7 +31,10 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import {
+  useHostNegotiatedMethodVersion,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -44,8 +48,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useCanEditConfiguration } from "./configuration-source";
+import {
+  useTeamProviderRecords,
+  type TeamProviderRecords,
+} from "./team-provider-records";
 import { usePickedTeamLabel } from "./team-pick-label";
+import { teamSignInRefusalText } from "./team-profile-login-copy";
 import { TeamProfileLoginResult } from "./team-profile-login-result";
+
+const TEAM_SIGN_IN_AWAIT_LOGIN_MINOR = 5;
 
 interface TeamLoginProps {
   readonly providerId: ProviderId;
@@ -72,13 +84,19 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
     client,
     "providers.awaitLogin",
   );
-  const belowFloor =
-    client === null ||
-    (startVersion !== null &&
-      awaitVersion !== null &&
-      !providerLoginDestinationSupported(client));
+  const canManage = useCanEditConfiguration();
+  const records = useTeamProviderRecords();
+  const refusalReason = teamLoginRefusal({
+    client,
+    startVersion,
+    awaitVersion,
+    canManage,
+    records,
+    providerId: props.providerId,
+    profileId: props.profile?.profileId ?? null,
+  });
   const catalog = useProvidersListForClient(client, {
-    enabled: client !== null && !belowFloor,
+    enabled: client !== null && refusalReason === null,
     subscribed: true,
   });
   const state = catalog.data?.providers.find(
@@ -86,7 +104,11 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   );
   const teamName = usePickedTeamLabel(props.environmentId);
   if (teamName === null) return null;
-  if (state === undefined || belowFloor)
+  const refusal =
+    refusalReason === null
+      ? null
+      : teamSignInRefusalText(refusalReason, teamName);
+  if (state === undefined || refusal !== null)
     return (
       <Dialog
         open
@@ -100,11 +122,14 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
               {props.profile === null ? "Add a profile" : "Sign in again"}
             </DialogTitle>
           </DialogHeader>
-          {catalog.isPending && client !== null && !belowFloor ? (
+          {catalog.isPending && client !== null && refusal === null ? (
             <MutedAgentSpinner />
           ) : (
             <>
-              <p>{`This computer can't sign in for ${teamName}. Use another computer.`}</p>
+              <p>
+                {refusal ??
+                  `This computer can't sign in for ${teamName}. Use another computer.`}
+              </p>
               <Button type="button" onClick={props.onClose}>
                 Done
               </Button>
@@ -147,6 +172,47 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
         targetResult={renderTeamAddLoginResult}
       />
     </TeamAddLoginContext.Provider>
+  );
+}
+
+function teamLoginRefusal(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly startVersion: NegotiatedMethodVersion;
+  readonly awaitVersion: NegotiatedMethodVersion;
+  readonly canManage: boolean;
+  readonly records: TeamProviderRecords | null;
+  readonly providerId: ProviderId;
+  readonly profileId: string | null;
+}): ProviderLoginTargetRefusal | null {
+  if (!input.canManage) return "not-authorized";
+  if (input.records === null) return "target-unavailable";
+  if (
+    input.profileId !== null &&
+    !input.records.readPending &&
+    !input.records.readFailed &&
+    !input.records.providers.some(
+      (provider) =>
+        provider.providerId === input.providerId &&
+        provider.profiles.some(
+          (profile) => profile.profileId === input.profileId,
+        ),
+    )
+  )
+    return "target-removed";
+  return teamComputerTooOld(input) ? "unsupported-computer" : null;
+}
+
+function teamComputerTooOld(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly startVersion: NegotiatedMethodVersion;
+  readonly awaitVersion: NegotiatedMethodVersion;
+}): boolean {
+  if (input.client === null) return true;
+  if (input.startVersion === null || input.awaitVersion === null) return false;
+  if (input.awaitVersion === false) return true;
+  return (
+    !providerLoginDestinationSupported(input.client) ||
+    input.awaitVersion.minor < TEAM_SIGN_IN_AWAIT_LOGIN_MINOR
   );
 }
 

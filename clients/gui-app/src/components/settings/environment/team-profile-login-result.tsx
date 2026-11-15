@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   ProviderId,
   ProviderProfile,
-  ProviderLoginTargetRefusal,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   alreadySignedInAsText,
@@ -12,6 +11,7 @@ import {
   profileNotChangedText,
   SIGN_IN_UNPROVEN_TEXT,
 } from "@/components/providers/profile-sync-copy";
+import { teamSignInRefusalText } from "./team-profile-login-copy";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -87,8 +87,6 @@ export function TeamProfileLoginResult(
       );
     case "signed-in":
     case "already-signed-in":
-      if (props.entryProfile !== null && outcome.kind === "already-signed-in")
-        return <TeamLegacyLoginResult {...props} result={result} />;
       return (
         <TeamNamedLoginResult
           {...props}
@@ -269,23 +267,19 @@ function TeamNamedLoginResult(props: {
     }
     setSaving(true);
     setSaveFailed(false);
-    try {
-      const saved = await colorWrite.save(
-        props.environmentId,
-        providerId,
-        profileId,
-        color,
-      );
-      if (!saved) {
-        setSaveFailed(true);
-        return;
-      }
-      done();
-    } catch {
+    const saved = await colorWrite.save(
+      props.environmentId,
+      providerId,
+      profileId,
+      color,
+    );
+    if (!mounted.current) return;
+    setSaving(false);
+    if (!saved) {
       setSaveFailed(true);
-    } finally {
-      setSaving(false);
+      return;
     }
+    done();
   };
   useEffect(() => {
     if (profile === null || props.already || autoCommitted.current) return;
@@ -372,6 +366,14 @@ function TeamNamedSuccessFooter(props: {
   readonly onDone: () => void;
   readonly saving: boolean;
 }): ReactNode {
+  if (props.already && props.sameSource)
+    return (
+      <ResultFooter
+        message={alreadySignedInAsText(props.profile.label)}
+        onDone={props.onDone}
+        action={null}
+      />
+    );
   if (props.already && props.legacy)
     return (
       <>
@@ -392,14 +394,6 @@ function TeamNamedSuccessFooter(props: {
           }
         />
       </>
-    );
-  if (props.already && props.sameSource)
-    return (
-      <ResultFooter
-        message={alreadySignedInAsText(props.profile.label)}
-        onDone={props.onDone}
-        action={null}
-      />
     );
   if (props.already)
     return (
@@ -443,24 +437,6 @@ function teamRecordingEndedText(
   if (reason === "unavailable")
     return teamSignInRefusalText("target-unavailable", teamName);
   return "Sign-in did not finish. Retry when you are ready.";
-}
-
-function teamSignInRefusalText(
-  reason: ProviderLoginTargetRefusal | "offer-refused",
-  teamName: string,
-): string {
-  switch (reason) {
-    case "not-authorized":
-      return `Only admins and editors of ${teamName} can sign in for it.`;
-    case "target-unavailable":
-      return `${teamName} can't take this sign-in right now. Nothing was changed.`;
-    case "target-removed":
-      return "Was removed";
-    case "offer-refused":
-      return `This account couldn't be added to ${teamName}. Nothing was changed.`;
-    default:
-      return `This computer can't sign in for ${teamName}. Use another computer.`;
-  }
 }
 
 function findTeamLoginProfile(

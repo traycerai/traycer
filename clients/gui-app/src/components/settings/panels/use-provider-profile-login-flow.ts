@@ -1353,11 +1353,12 @@ export function useProviderDestinationLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
-            if (target !== null && result.profileOutcome != null) {
+            const receivedOutcome = result.profileOutcome ?? null;
+            if (target !== null && receivedOutcome !== null) {
               setState({
                 ...result,
                 kind: "target-outcome",
-                profileOutcome: result.profileOutcome,
+                profileOutcome: receivedOutcome,
                 admissionId: nextProfileId,
               });
               return;
@@ -1366,7 +1367,7 @@ export function useProviderDestinationLoginFlow(
               target !== null || profileOutcomes === null
                 ? null
                 : resolveProfileOutcome(
-                    result.profileOutcome ?? null,
+                    receivedOutcome,
                     mode,
                     () =>
                       (result.state?.profiles ?? []).map((profile) =>
@@ -1393,13 +1394,14 @@ export function useProviderDestinationLoginFlow(
               awaitOnce();
               return;
             }
-            const resolution =
-              target === null && mode === "reauth" && existingProfileId === null
-                ? classifyAmbientAwaitResult(result)
-                : classifyProfileAwaitResult(
-                    result,
-                    target === null ? nextProfileId : awaitProfileId,
-                  );
+            const resolution = classifyFlowAwaitResult({
+              result,
+              target,
+              mode,
+              existingProfileId,
+              nextProfileId,
+              awaitProfileId,
+            });
             if (resolution.kind === "codeRejected") {
               restart("codeRejected");
               return;
@@ -1855,4 +1857,24 @@ function loginHandle(
   return target === null && mode === "reauth"
     ? existingProfileId
     : returnedProfileId;
+}
+
+function classifyFlowAwaitResult(input: {
+  readonly result: AwaitLoginResult;
+  readonly target: ProviderLoginTarget | null;
+  readonly mode: ProviderProfileLoginFlowMode;
+  readonly existingProfileId: string | null;
+  readonly nextProfileId: string | null;
+  readonly awaitProfileId: string | null;
+}): AwaitLoginResolution {
+  if (
+    input.target === null &&
+    input.mode === "reauth" &&
+    input.existingProfileId === null
+  )
+    return classifyAmbientAwaitResult(input.result);
+  return classifyProfileAwaitResult(
+    input.result,
+    input.target === null ? input.nextProfileId : input.awaitProfileId,
+  );
 }

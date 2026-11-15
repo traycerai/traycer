@@ -25,7 +25,10 @@ import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "./configuration-source";
-import { useTeamProviderRecords } from "./team-provider-records";
+import {
+  useTeamProviderRecords,
+  type TeamProviderRecords,
+} from "./team-provider-records";
 import { TeamProfileEditor } from "./team-profile-editor";
 import { TeamProfileLoginDialog } from "./team-profile-login-dialog";
 import { SwitchAccountMoveDialog } from "@/components/providers/switch-account-move-dialog";
@@ -35,6 +38,7 @@ import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamSyncedProviderProfiles(props: {
   readonly providerId: ProviderId;
+  readonly fallback: ReactNode;
   readonly onOutcome: (
     result: EnvironmentConfigurationItemWriteResponse,
   ) => void;
@@ -78,9 +82,9 @@ export function TeamSyncedProviderProfiles(props: {
     readonly switchSource: ProviderProfile | null;
   } | null>(null);
   const [session, setSession] = useState(0);
-  if (records === null || source.kind !== "pool") return null;
+  if (source.kind !== "pool") return null;
   const { profiles, selected, edited } = teamProfileSelection(
-    records.providers,
+    records?.providers ?? [],
     props.providerId,
     pickedId,
     editing,
@@ -96,43 +100,22 @@ export function TeamSyncedProviderProfiles(props: {
     if (!canEdit || put.isPending || profileId === null) return;
     put.mutate({ environmentId: source.environmentId, profileId, enabled });
   };
-  if (records.readPending) return <MutedAgentSpinner />;
-  if (records.readFailed)
-    return (
-      <TeamReadFailed
-        message={PROVIDER_STATE_UNREADABLE_COPY}
-        onRetry={() => void records.reread()}
-      />
-    );
   return (
-    <section className="flex min-w-0 flex-col gap-2">
-      <h2 className="text-ui-sm font-medium">Profiles</h2>
-      {selected === null ? (
-        <p className="text-ui-sm text-muted-foreground">No profiles yet</p>
-      ) : (
-        <TeamSelectedProviderProfile
-          providerLabel={providerDisplayName(props.providerId)}
-          profile={selected}
-          profiles={profiles}
-          canEdit={canEdit}
-          pending={put.isPending}
-          onSelect={setPickedId}
-          onSetEnabled={setEnabled}
-          onSignIn={() => startLogin(selected, null)}
-          onManage={() => setEditing(selected)}
-        />
-      )}
-      {canEdit ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="self-start"
-          onClick={() => startLogin(null, null)}
-        >
-          Add a profile
-        </Button>
-      ) : null}
+    <>
+      <TeamProviderProfileRows
+        records={records}
+        fallback={props.fallback}
+        providerLabel={providerDisplayName(props.providerId)}
+        selected={selected}
+        profiles={profiles}
+        canEdit={canEdit}
+        pending={put.isPending}
+        onSelect={setPickedId}
+        onSetEnabled={setEnabled}
+        onSignIn={() => startLogin(selected, null)}
+        onManage={() => setEditing(selected)}
+        onAdd={() => startLogin(null, null)}
+      />
       {canEdit && edited !== null ? (
         <TeamProfileEditor
           key={edited.profileId}
@@ -151,7 +134,7 @@ export function TeamSyncedProviderProfiles(props: {
           }}
         />
       ) : null}
-      {canEdit && login !== null ? (
+      {login !== null ? (
         <TeamProfileLoginDialog
           key={session}
           providerId={props.providerId}
@@ -176,6 +159,63 @@ export function TeamSyncedProviderProfiles(props: {
           onDone={() => setMove(null)}
         />
       )}
+    </>
+  );
+}
+
+function TeamProviderProfileRows(props: {
+  readonly records: TeamProviderRecords | null;
+  readonly fallback: ReactNode;
+  readonly providerLabel: string;
+  readonly selected: ProviderProfile | null;
+  readonly profiles: readonly ProviderProfile[];
+  readonly canEdit: boolean;
+  readonly pending: boolean;
+  readonly onSelect: (profileId: string | null) => void;
+  readonly onSetEnabled: (profileId: string | null, enabled: boolean) => void;
+  readonly onSignIn: () => void;
+  readonly onManage: () => void;
+  readonly onAdd: () => void;
+}): ReactNode {
+  const records = props.records;
+  if (records === null) return props.fallback;
+  if (records.readPending) return <MutedAgentSpinner />;
+  if (records.readFailed)
+    return (
+      <TeamReadFailed
+        message={PROVIDER_STATE_UNREADABLE_COPY}
+        onRetry={() => void records.reread()}
+      />
+    );
+  return (
+    <section className="flex min-w-0 flex-col gap-2">
+      <h2 className="text-ui-sm font-medium">Profiles</h2>
+      {props.selected === null ? (
+        <p className="text-ui-sm text-muted-foreground">No profiles yet</p>
+      ) : (
+        <TeamSelectedProviderProfile
+          providerLabel={props.providerLabel}
+          profile={props.selected}
+          profiles={props.profiles}
+          canEdit={props.canEdit}
+          pending={props.pending}
+          onSelect={props.onSelect}
+          onSetEnabled={props.onSetEnabled}
+          onSignIn={props.onSignIn}
+          onManage={props.onManage}
+        />
+      )}
+      {props.canEdit ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={props.onAdd}
+        >
+          Add a profile
+        </Button>
+      ) : null}
     </section>
   );
 }

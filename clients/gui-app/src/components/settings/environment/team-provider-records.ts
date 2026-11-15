@@ -4,7 +4,7 @@ import {
   useCallback,
   useSyncExternalStore,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
@@ -53,21 +53,27 @@ export function useTeamProviderRecordsRead(): TeamProviderRecords | null {
     windowAttended,
   );
   useRereadConfigurationOnFocus(environmentId);
-  const list = useQuery({
-    queryKey: authQueryKeys.environmentProfileRecords(environmentId, viewerId),
-    enabled: environmentId !== null && viewerId.length > 0 && authorized,
-    queryFn: async ({ signal }): Promise<EnvironmentProfileRecords> => {
-      if (environmentId === null)
-        throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
-      const result = await auth.readProfileRecords(environmentId, signal);
-      if (result.kind !== "ok") throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
-      return result.list;
-    },
-    retry: false,
-    refetchInterval: attended ? 5_000 : false,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: false,
-  });
+  const list = useQuery(
+    queryOptions({
+      queryKey: authQueryKeys.environmentProfileRecords(
+        environmentId,
+        viewerId,
+      ),
+      enabled: environmentId !== null && viewerId.length > 0 && authorized,
+      queryFn: async ({ signal }): Promise<EnvironmentProfileRecords> => {
+        if (environmentId === null)
+          throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
+        const result = await auth.readProfileRecords(environmentId, signal);
+        if (result.kind !== "ok")
+          throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
+        return result.list;
+      },
+      retry: false,
+      refetchInterval: attended ? 5_000 : false,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: false,
+    }),
+  );
   const refetch = list.refetch;
   const reread = useCallback(async () => {
     const answer = await refetch();
