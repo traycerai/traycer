@@ -17,7 +17,6 @@ export function PlansCard(props: {
   readonly canAdminister: boolean;
   readonly adminNames: readonly string[];
   readonly isPending: boolean;
-  readonly onLink: (() => void) | null;
   readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
   const [pickedId, setPickedId] = useState<string | null>(null);
@@ -43,13 +42,12 @@ export function PlansCard(props: {
         canAdminister={props.canAdminister}
         isPending={props.isPending}
         selected={selected}
-        onLink={props.onLink}
         onPreviewUnlink={props.onPreviewUnlink}
       />
       {quota === null ? null : (
         <p className="text-ui-xs text-muted-foreground">{quota}</p>
       )}
-      {!props.canAdminister && props.onLink !== null ? (
+      {!props.canAdminister && props.onPreviewUnlink !== null ? (
         <p className="text-ui-xs text-muted-foreground">
           {askAnAdminLine(props.adminNames)}
         </p>
@@ -87,25 +85,13 @@ function PlanActionRow(props: {
   readonly canAdminister: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
-  readonly onLink: (() => void) | null;
   readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
-  const onLink = props.onLink;
   const onPreviewUnlink = props.onPreviewUnlink;
-  if (!props.canAdminister || onLink === null || onPreviewUnlink === null)
-    return null;
+  if (!props.canAdminister || onPreviewUnlink === null) return null;
   const selected = props.selected;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        disabled={props.isPending}
-        onClick={onLink}
-      >
-        Link a plan
-      </Button>
       {selected === null ? null : (
         <Button
           type="button"

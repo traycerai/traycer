@@ -176,6 +176,21 @@ function renderSection(input: {
 }
 
 describe("ProviderProfileScopedSection offersSignIns", () => {
+  it("calls Add a profile from its button", async () => {
+    const harness = renderSection({
+      offers: true,
+      row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
+      signedOut: true,
+      onHostOnly: true,
+      advertiseLink: true,
+    });
+    const button = await screen.findByRole("button", { name: "Add a profile" });
+    fireEvent.click(button);
+    expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
+    expect(harness.startLogins()).toBe(0);
+    expect(harness.listCalls()).toBe(1);
+  });
+
   it("offers Sign in to use everywhere on a signed-out terminal row when the fact is true", async () => {
     const harness = renderSection({
       offers: true,

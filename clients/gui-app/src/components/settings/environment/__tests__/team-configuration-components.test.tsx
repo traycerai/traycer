@@ -22,7 +22,6 @@ function renderPlans(overrides: {
   canAdminister: boolean;
   plans?: readonly ConfigurationPlan[];
   adminNames?: readonly string[];
-  onLink?: () => void;
   onPreviewUnlink?: (plan: ConfigurationPlan) => void;
 }): void {
   render(
@@ -32,7 +31,6 @@ function renderPlans(overrides: {
       canAdminister={overrides.canAdminister}
       adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
       isPending={false}
-      onLink={overrides.onLink ?? vi.fn()}
       onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
     />,
   );
@@ -73,9 +71,6 @@ describe("PlansCard", () => {
     renderPlans({ canAdminister: true, plans: [] });
 
     expect(screen.getByText("No plans linked.")).toBeTruthy();
-    const link = screen.getByRole("button", { name: "Link a plan" });
-    expect(link.getAttribute("data-size")).toBe("xs");
-    expect(link.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
@@ -101,7 +96,6 @@ describe("PlansCard", () => {
         canAdminister
         adminNames={["Ada"]}
         isPending={false}
-        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
@@ -136,7 +130,6 @@ describe("PlansCard", () => {
         canAdminister={false}
         adminNames={["Ada"]}
         isPending={false}
-        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
@@ -162,7 +155,6 @@ describe("PlansCard", () => {
         canAdminister
         adminNames={["Ada"]}
         isPending={false}
-        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
@@ -173,15 +165,10 @@ describe("PlansCard", () => {
 
   it("hands the plan to the preview callback when an admin clicks Unlink", () => {
     const onPreviewUnlink = vi.fn();
-    const onLink = vi.fn();
-    renderPlans({ canAdminister: true, onPreviewUnlink, onLink });
+    renderPlans({ canAdminister: true, onPreviewUnlink });
 
     fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
     expect(onPreviewUnlink).toHaveBeenCalledExactlyOnceWith(plan);
-    expect(onLink).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: /link a plan/i }));
-    expect(onLink).toHaveBeenCalledOnce();
   });
 
   it("never offers to add a profile", () => {

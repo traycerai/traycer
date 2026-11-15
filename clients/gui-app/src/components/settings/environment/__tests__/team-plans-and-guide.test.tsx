@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { negotiateMethods } from "./mcp-skills-test-support";
@@ -31,27 +30,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
 }));
-// The link dialog imports the hook from the runtime module itself.
-vi.mock("@/lib/host/runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
-vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/chats/use-cloud-chat-queries")
-  >()),
-  useCloudChatViewerId: () => "user-me",
-}));
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId === null ? null : requireTeamHostClient(),
-}));
-
-// Opening a URL is the external egress; the link dialog only needs the opener.
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => () => Promise.resolve(),
-}));
-
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
@@ -62,7 +40,6 @@ afterEach(() => {
   resetTeamPageHarness();
   resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({ pick: null });
-  useProviderLinkDialogStore.setState({ target: null });
 });
 
 const host: EnvironmentHostRecordV12 = {
@@ -339,25 +316,6 @@ describe("TeamPlans", () => {
       });
     },
   );
-
-  it("opens the link dialog on this team's environment", async () => {
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.plans.list": () => plans,
-      "environment.list": () => environmentList,
-    });
-    render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
-      wrapper: harness.Wrapper,
-    });
-
-    await userEvent.click(
-      await screen.findByRole("button", { name: /link a plan/i }),
-    );
-    expect(useProviderLinkDialogStore.getState().target).toMatchObject({
-      providerId: "claude-code",
-      profileId: null,
-      environmentId: "env-a",
-    });
-  });
 });
 
 describe("TeamGuide", () => {
