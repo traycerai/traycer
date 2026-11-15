@@ -151,9 +151,10 @@ function renderWithFakes(
   let mainSnapshot = SIGNED_OUT_DESKTOP_SNAPSHOT;
   let setAnswer: DesktopAuthSessionSetResult | "pending" = setResult;
   let restoreAnswer: RestoreAnswer = "restored";
-  let resolveRestorePromise:
-    | ((result: DesktopLocalAuthSessionRestoreResult) => void)
-    | null = null;
+  // Every restore still waiting, oldest first.
+  const pendingRestores: Array<
+    (result: DesktopLocalAuthSessionRestoreResult) => void
+  > = [];
   let currentSession: AuthSessionSnapshot = SIGNED_IN_SNAPSHOT;
   const inboundDispose = vi.fn(() => {
     inboundListener = null;
@@ -229,7 +230,7 @@ function renderWithFakes(
     }): Promise<DesktopLocalAuthSessionRestoreResult> => {
       if (restoreAnswer === "pending") {
         return new Promise((resolve) => {
-          resolveRestorePromise = resolve;
+          pendingRestores.push(resolve);
         });
       }
       if (restoreAnswer instanceof Error) return Promise.reject(restoreAnswer);
@@ -287,11 +288,11 @@ function renderWithFakes(
       restoreAnswer = answer;
     },
     resolveRestore: (result) => {
-      if (resolveRestorePromise === null) {
+      const resolvePending = pendingRestores.shift();
+      if (resolvePending === undefined) {
         throw new Error("restoreLocal is not pending");
       }
-      resolveRestorePromise(result);
-      resolveRestorePromise = null;
+      resolvePending(result);
     },
     setCurrentSession: (snapshot) => {
       currentSession = snapshot;
@@ -996,8 +997,12 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       expect(harness.set).toHaveBeenCalledTimes(handedOver);
     });
 
-    it("asks for the local restore and hands over no more when authn rejects the held session and the service demotes it to unverified", async () => {
-      const harness = await startOffline({});
+    it("ends the hold and asks for one local restore when authn rejects the held session and the service demotes it to unverified", async () => {
+      const harness = renderWithFakes(NO_KEYS, {});
+      const timersBeforeHold = vi.getTimerCount();
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await settle();
+      expect(vi.getTimerCount()).toBe(timersBeforeHold + 1);
       harness.answerSetWith(refused("bad-signature"));
       // What the service projects when authn refuses the refresh: the session
       // stays as the local plane's identity (`unverified`), not a sign-out.
@@ -1010,16 +1015,45 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       await tick(RESEND_MS);
       await settle();
       expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(timersBeforeHold);
       const handedOver = harness.set.mock.calls.length;
 
       await tick(RESEND_MS * 5);
 
       expect(harness.set).toHaveBeenCalledTimes(handedOver);
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
       expect(harness.set).not.toHaveBeenCalledWith({
         status: "signed-out",
         token: null,
         profile: null,
       });
+    });
+
+    it("forms the hold from the second restore when a demotion and a new sign-in overtake the first", async () => {
+      const harness = renderWithFakes(NO_KEYS, {});
+      harness.answerRestoreWith("pending");
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await settle();
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+
+      // The service demotes the session, then signs the same one in again.
+      harness.emitOutbound(UNVERIFIED_SNAPSHOT);
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await settle();
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
+
+      // The first answers late and is ignored; the second forms the hold.
+      harness.resolveRestore("superseded");
+      await settle();
+      await tick(RESEND_MS * 3);
+      expect(harness.set).toHaveBeenCalledTimes(2);
+
+      harness.resolveRestore("restored");
+      await settle();
+      await tick(RESEND_MS);
+
+      expect(harness.set).toHaveBeenCalledTimes(3);
+      expect(toast.warning).not.toHaveBeenCalled();
     });
 
     it("hands the same session over on the next tick when authn accepts it", async () => {
