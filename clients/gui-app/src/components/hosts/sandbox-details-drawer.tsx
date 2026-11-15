@@ -154,13 +154,10 @@ function SandboxDetailsSections(props: {
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
-  const configuration = sandboxConfigurationOf(
-    summary,
-    configurations.configurations,
-  );
-  const buysTeamCredits = useOffersAddCredits(
-    configuration ?? { kind: "personal" },
-  );
+  // `null` while whose sandbox it is is not known: nobody can buy, and no
+  // amount is told as the person's own.
+  const configuration = sandboxConfigurationOf(summary, configurations);
+  const buysTeamCredits = useOffersAddCredits(configuration);
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,

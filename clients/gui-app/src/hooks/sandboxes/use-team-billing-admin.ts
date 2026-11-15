@@ -74,15 +74,17 @@ export function useTeamBillingAdmin(teamId: string | null): boolean {
 /**
  * Whether "Add credits ↗" is offered for a configuration: always for the
  * person's own credits, and for a team's only to its Admin, the one seat the
- * team's billing page lets buy.
+ * team's billing page lets buy. `null` is a sandbox whose owner the app does
+ * not know: nobody is offered it until it is known.
  */
 export function useOffersAddCredits(
   configuration:
     | { readonly kind: "personal" }
-    | { readonly kind: "team"; readonly teamId: string },
+    | { readonly kind: "team"; readonly teamId: string }
+    | null,
 ): boolean {
   const admin = useTeamBillingAdmin(
-    configuration.kind === "team" ? configuration.teamId : null,
+    configuration?.kind === "team" ? configuration.teamId : null,
   );
-  return configuration.kind === "personal" || admin;
+  return configuration?.kind === "personal" || admin;
 }

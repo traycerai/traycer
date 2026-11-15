@@ -17,7 +17,7 @@ import {
   sandboxFailureMessageFor,
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
-import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -54,9 +54,10 @@ export function useSandboxOperationFailure(
 ): ReactNode {
   const { operation, onRetry } = props;
   const hostConfiguration = useSandboxHostConfiguration(props.hostId ?? null);
-  const configuration = props.configuration ??
-    hostConfiguration ?? { kind: "personal" };
-  const billingUrl = useConfigurationBillingUrl(configuration);
+  // `null` while neither the surface nor the directory says whose sandbox it
+  // is: nothing is offered or said as the person's own until one does.
+  const configuration = props.configuration ?? hostConfiguration;
+  const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
   const offersAddCredits = useOffersAddCredits(configuration);
   if (operation?.kind !== "failed") return null;
@@ -79,12 +80,16 @@ export function useSandboxOperationFailure(
       <span className="text-muted-foreground">
         {`Support reference: ${operation.reference}`}
       </span>
-      {creditFailure === null || !offersAddCredits ? null : (
+      {creditFailure === null ||
+      !offersAddCredits ||
+      configuration === null ? null : (
         <Button
           type="button"
           variant="link"
           size="inline-xs"
-          onClick={() => void openLink(billingUrl, "account", null)}
+          onClick={() =>
+            void openLink(billingUrlOf(configuration), "account", null)
+          }
         >
           {ADD_CREDITS_LINK}
         </Button>
@@ -120,7 +125,7 @@ export function useSandboxOperationFailure(
 function operationFailureLine(
   operation: Extract<SandboxRowOperation, { kind: "failed" }>,
   name: string,
-  configuration: StageConfiguration,
+  configuration: StageConfiguration | null,
   offersAddCredits: boolean,
 ): string {
   const failed = sandboxVerbFailureLine(operation.verb, name);
@@ -130,7 +135,7 @@ function operationFailureLine(
     operation.error.message,
     {
       buysTeamCredits: offersAddCredits,
-      teamName: configuration.kind === "team" ? configuration.teamName : null,
+      teamName: configuration?.kind === "team" ? configuration.teamName : null,
     },
   );
   return `${failed}. ${sentence}`;

@@ -39,10 +39,7 @@ export function useChatSandboxState(
     sandbox.frozen
   ) {
     // The state is known without the configuration; only its bill waits.
-    const configuration = sandboxConfigurationOf(
-      sandbox,
-      configurations.configurations,
-    );
+    const configuration = sandboxConfigurationOf(sandbox, configurations);
     return {
       kind: "resting",
       sandbox,

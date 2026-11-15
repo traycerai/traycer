@@ -27,7 +27,7 @@ import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 export function SandboxFailedChatActions(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const environments = useEnvironmentListQuery(
     useTabHostClient(),
     props.summary.environmentId !== null,
@@ -55,9 +55,8 @@ export function SandboxFailedRowActions(props: {
   readonly configuration: SandboxPageConfiguration | null;
 }): ReactNode {
   const { summary, configuration } = props;
-  const buysTeamCredits = useOffersAddCredits(
-    configuration ?? { kind: "personal" },
-  );
+  // Not known whose sandbox it is: worded as for someone who cannot buy.
+  const buysTeamCredits = useOffersAddCredits(configuration);
   const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);

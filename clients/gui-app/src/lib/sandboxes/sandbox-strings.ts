@@ -265,9 +265,16 @@ export function teamCreditsRanOutLine(teamName: string): string {
   return `${teamPossessive(teamName)} credits ran out.`;
 }
 
+/**
+ * A frozen sandbox, said with no remedy: the wake toast's title, and the
+ * whole sentence where the reader cannot buy its credits and the app does not
+ * know whose sandbox it is.
+ */
+export const SANDBOX_OUT_OF_CREDITS = "This sandbox is out of credits.";
+
 /** After "Couldn't resume build-box." on a team's sandbox row. */
 export function teamSandboxOutOfCreditsLine(teamName: string): string {
-  return `This sandbox is out of credits. ${teamPossessive(teamName)} bundle is out.`;
+  return `${SANDBOX_OUT_OF_CREDITS} ${teamPossessive(teamName)} bundle is out.`;
 }
 
 /** A chat's title when a team's sandbox ran out of credits mid-turn. */
@@ -486,12 +493,21 @@ export function teamCreditsShortLine(
   return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }
 
+/** The team's name where the configuration is a known team's, else `null`. */
+function knownTeamName(
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  return configuration?.kind === "team" ? configuration.teamName : null;
+}
+
 /**
  * A spend refusal names the pot checked, with amounts rounded up for top-up.
  * Sentence/clause context is independent of whether this starts or wakes.
+ * `configuration` is `null` where the app does not know whose sandbox it is;
+ * it then reads as no team configuration known.
  */
 export function sandboxCreditShortLine(
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,
   options: SandboxCreditLineOptions,
@@ -508,17 +524,18 @@ export function sandboxCreditShortLine(
   // directory had no row) still says it was the team's, never the person's.
   // A member's allowance is the member's own; the team's credits are the
   // team's, whoever woke the sandbox.
+  const teamName = knownTeamName(configuration);
   let pot = `${whose} credits`;
   if (allowance) {
     pot =
-      configuration.kind === "team"
-        ? `${whose} ${configuration.teamName} allowance`
-        : `${whose} team allowance`;
+      teamName === null
+        ? `${whose} team allowance`
+        : `${whose} ${teamName} allowance`;
   } else if (creditSource === "team") {
     pot =
-      configuration.kind === "team"
-        ? `${teamPossessive(configuration.teamName)} credits`
-        : `${whose} team's credits`;
+      teamName === null
+        ? `${whose} team's credits`
+        : `${teamPossessive(teamName)} credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)

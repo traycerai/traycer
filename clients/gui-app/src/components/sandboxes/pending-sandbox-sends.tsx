@@ -1,6 +1,7 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { unnamedTeamCreditsRanOut } from "@/components/hosts/sandbox-card-model";
 import {
   useComposerSurfaceHostKey,
   useComposerSurfaceHostPin,
@@ -102,7 +103,7 @@ import {
   useSandboxVerb,
   type SandboxVerbOutcome,
 } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
-import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   sandboxConfigurationOf,
@@ -2534,12 +2535,14 @@ function PendingDispatchCreditsLine(props: {
   readonly kind: PendingSandboxSendRequest["kind"];
   readonly row: SandboxSummary;
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const configuration = sandboxConfigurationOf(props.row, configurations);
-  const offersAddCredits = useOffersAddCredits(
-    configuration ?? { kind: "personal" },
-  );
-  if (configuration?.kind === "team" && !offersAddCredits)
+  const offersAddCredits = useOffersAddCredits(configuration);
+  // A team's row whose team the app cannot name reads as the sandbox page's
+  // header does for it.
+  if (configuration === null)
+    return unnamedTeamCreditsRanOut(configurations.complete);
+  if (configuration.kind === "team" && !offersAddCredits)
     return teamCreditsRanOutLine(configuration.teamName);
   return pendingDispatchLineCopy(props.kind, "credits");
 }
@@ -2551,19 +2554,17 @@ function PendingDispatchRemedy(props: {
   readonly row: SandboxSummary | null;
   readonly failure: "credits" | "settings";
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const configuration =
     props.row === null
       ? null
       : sandboxConfigurationOf(props.row, configurations);
-  const billingUrl = useConfigurationBillingUrl(
-    configuration ?? { kind: "personal" },
-  );
+  const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
-  // A team's credits are offered to its Admin only; anyone else gets Details.
+  // A team's credits are offered to its Admin only, and nothing is offered
+  // while whose sandbox it is is not known; anyone else gets Details.
   const addCredits =
-    useOffersAddCredits(configuration ?? { kind: "personal" }) &&
-    props.failure === "credits";
+    useOffersAddCredits(configuration) && props.failure === "credits";
   if (props.failure === "settings" && props.row !== null)
     return (
       <SandboxRetryApplyingButton
@@ -2580,7 +2581,7 @@ function PendingDispatchRemedy(props: {
         if ((useAuthStore.getState().profile?.userId ?? null) !== props.userId)
           return;
         if (addCredits && configuration !== null)
-          void openLink(billingUrl, "account", null);
+          void openLink(billingUrlOf(configuration), "account", null);
         else openSandboxDetails(props.id);
       }}
     >

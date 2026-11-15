@@ -22,6 +22,7 @@ import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  SANDBOX_OUT_OF_CREDITS,
   sandboxCreditShortLine,
   teamPossessive,
   type SandboxConfigurationCopy,
@@ -224,9 +225,13 @@ async function runSharedWake(
   return { outcome: await attempt.outcome, joined: false };
 }
 
+/**
+ * `configuration` is `null` where the directory cannot say whose sandbox it
+ * is: nothing is then said as the person's own credits.
+ */
 function toastWakeOutcome(
   outcome: SandboxWakeOutcome,
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
 ): void {
   switch (outcome.kind) {
     case "awake":
@@ -234,7 +239,12 @@ function toastWakeOutcome(
     case "refused":
       // A team sandbox's wake is on the team's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
-      toast.warning("This sandbox is out of credits.", {
+      // Whose sandbox it is not known, the title says it alone.
+      if (configuration === null) {
+        toast.warning(SANDBOX_OUT_OF_CREDITS);
+        return;
+      }
+      toast.warning(SANDBOX_OUT_OF_CREDITS, {
         description:
           configuration.kind === "team"
             ? `${teamPossessive(configuration.teamName)} bundle is out.`
@@ -335,10 +345,16 @@ export function startSandboxWake(
   const entry = directory.findById(hostId);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const configuration: SandboxConfigurationCopy =
-    facts !== null && facts.ownerTeamName !== null
-      ? { kind: "team", teamName: facts.ownerTeamName }
-      : { kind: "personal" };
+  // A sandbox row with no team owner is the person's own (an owner a server
+  // did not send reads so too, as the host list reads it); no row at all says
+  // nothing about whose it is.
+  let configuration: SandboxConfigurationCopy | null = null;
+  if (facts !== null) {
+    configuration =
+      facts.ownerTeamName === null
+        ? { kind: "personal" }
+        : { kind: "team", teamName: facts.ownerTeamName };
+  }
   return runSandboxWake({ client, binding, hostId, configuration, gesture });
 }
 
@@ -346,7 +362,7 @@ function runSandboxWake(input: {
   readonly client: QueryClient;
   readonly binding: SandboxWakeBinding;
   readonly hostId: string;
-  readonly configuration: SandboxConfigurationCopy;
+  readonly configuration: SandboxConfigurationCopy | null;
   readonly gesture: SandboxVerbGesture | null;
 }): Promise<SandboxWakeOutcome | null> {
   const { client, binding, hostId, configuration, gesture } = input;

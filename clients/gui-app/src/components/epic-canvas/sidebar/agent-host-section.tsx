@@ -231,10 +231,7 @@ function hoverConfiguration(
   if (sandbox.environmentId === null) {
     return { label: "unknown", ownership: "unknown" };
   }
-  const configuration = sandboxConfigurationOf(
-    sandbox,
-    configurations.configurations,
-  );
+  const configuration = sandboxConfigurationOf(sandbox, configurations);
   if (configuration?.kind === "team") {
     return { label: configuration.teamName, ownership: "team" };
   }

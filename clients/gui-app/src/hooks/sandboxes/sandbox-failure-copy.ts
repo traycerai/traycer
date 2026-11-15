@@ -17,6 +17,7 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  SANDBOX_OUT_OF_CREDITS,
   TEAM_CREDITS_DONT_COVER_AN_HOUR,
   teamSandboxOutOfCreditsLine,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -141,7 +142,11 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
   }
 }
 
-/** Who reads a failure: whether they can buy the team's credits, and the team's name if it is a team's. */
+/**
+ * Who reads a failure: whether they can buy the sandbox's credits, and the
+ * team's name if it is a team's. Where the app does not know whose sandbox it
+ * is, nobody can buy and there is no name.
+ */
 export interface SandboxFailureReader {
   readonly buysTeamCredits: boolean;
   readonly teamName: string | null;
@@ -149,11 +154,11 @@ export interface SandboxFailureReader {
 
 /**
  * A failure's sentence as its reader reads it. Someone who cannot buy the
- * team's credits is not told to add them: a refusal for want of the team's
- * credits reads its first sentence alone, and a team's sandbox refused for
- * being out of credits says whose bundle is out. Every other failure, and
- * every one read by someone who can buy, is `message`, the sentence its
- * error carries.
+ * credits is not told to add them: a refusal for want of the team's credits
+ * reads its first sentence alone, and a sandbox refused for being out of
+ * credits says whose bundle is out, or, with no team's name to give, only
+ * that it is out of credits. Every other failure, and every one read by
+ * someone who can buy, is `message`, the sentence its error carries.
  */
 export function sandboxFailureMessageFor(
   failure: SandboxControlFailure,
@@ -161,12 +166,10 @@ export function sandboxFailureMessageFor(
   reader: SandboxFailureReader,
 ): string {
   if (reader.buysTeamCredits || failure.kind !== "refused") return message;
-  if (
-    failure.code === SANDBOX_REFUSAL_CODE_FROZEN &&
-    reader.teamName !== null &&
-    reader.teamName.length > 0
-  ) {
-    return teamSandboxOutOfCreditsLine(reader.teamName);
+  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
+    return reader.teamName !== null && reader.teamName.length > 0
+      ? teamSandboxOutOfCreditsLine(reader.teamName)
+      : SANDBOX_OUT_OF_CREDITS;
   }
   const teamCreditRefusal =
     failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&

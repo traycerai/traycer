@@ -609,19 +609,36 @@ export function sandboxHeaderNeedsRepair(
  */
 const TEAM_CREDITS_RAN_OUT_UNNAMED = "Your team's credits ran out";
 
-/** The host page offers only Destroy when credits run out, so names no wake remedy. */
+/**
+ * Whose credits ran out on a team's frozen sandbox whose team the app cannot
+ * name: nothing while the person's teams have not all answered (one still out
+ * or failed), then the unnamed words. The sandbox page's header and a pending
+ * send's line both say it through this.
+ */
+export function unnamedTeamCreditsRanOut(
+  teamsAnswered: boolean,
+): string | null {
+  return teamsAnswered ? TEAM_CREDITS_RAN_OUT_UNNAMED : null;
+}
+
+/**
+ * The host page offers only Destroy when credits run out, so names no wake
+ * remedy. `null` while a team's sandbox has no name to give yet.
+ */
 export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,
   teamOwned: boolean,
   teamName: string | null,
-): string {
-  let credits = "Your credits ran out";
+  teamsAnswered: boolean,
+): string | null {
+  let credits: string | null = "Your credits ran out";
   if (teamOwned) {
     credits =
       teamName === null
-        ? TEAM_CREDITS_RAN_OUT_UNNAMED
+        ? unnamedTeamCreditsRanOut(teamsAnswered)
         : `${teamPossessive(teamName)} credits ran out`;
   }
+  if (credits === null) return null;
   const frozenAt = summary?.frozenAt ?? null;
   const destroyAt =
     summary?.destroyAt ??
