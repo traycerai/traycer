@@ -165,12 +165,18 @@ vi.mock("@/lib/host", async (importOriginal) => {
     }),
   };
 });
-vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/chats/use-cloud-chat-queries")
-  >()),
-  useCloudChatViewerId: () => "user-me",
-}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
+  return {
+    ...actual,
+    // The signed-in viewer, which a case changes under a mounted page; the
+    // other cases set none and read as this one.
+    useCloudChatViewerId: () => actual.useCloudChatViewerId() || "user-me",
+  };
+});
 
 beforeEach(() => {
   hoisted.toasts.length = 0;
@@ -981,6 +987,117 @@ describe("a team the environment list no longer carries", () => {
       // harness refetches more than the design asks for. That is the frozen
       // clock's arithmetic, not the page's behaviour, and the counts are
       // asserted where they mean something — against a running clock.
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // An answer is evidence only about the entry that gave it, and the boundary
+  // is not keyed by the viewer: an account switch with Settings open keeps
+  // what the page held. The clock is frozen so that both viewers' membership
+  // answers carry one stamp, and only the invitations entry's identity tells
+  // the first viewer's answer from the second's.
+  it("does not credit one viewer's invitations answer to the next viewer", async () => {
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: "env-a" },
+      });
+      const listed = { current: [PERSONAL, team("editor")] };
+      const invitedA: { current: readonly EnvironmentInvitation[] } = {
+        current: [],
+      };
+      const readB = Promise.withResolvers<EnvironmentInvitationsListResponse>();
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.list": () => ({ environments: [...listed.current] }),
+      });
+      // A held clock makes every entry stale at once, so the harness would
+      // refetch forever; the staleness is restored by hand.
+      harness.queryClient.setDefaultOptions({
+        queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
+      });
+      useAuthStore.setState({
+        contextMetadata: { userId: "user-a", username: "user-a" },
+      });
+      answerInvitations(() =>
+        useAuthStore.getState().contextMetadata?.userId === "user-b"
+          ? readB.promise
+          : { invitations: [...invitedA.current] },
+      );
+      render(
+        <HeldValueHostRuntime>
+          <ConfigurationSourceBoundary
+            section={null}
+            target={{ kind: "team", environmentId: "env-a" }}
+          >
+            <Probe />
+          </ConfigurationSourceBoundary>
+        </HeldValueHostRuntime>,
+        { wrapper: harness.Wrapper },
+      );
+      await screen.findByTestId("probe");
+
+      // The first viewer is removed and invited back, and their entry answers.
+      listed.current = [PERSONAL];
+      invitedA.current = [INVITATION];
+      await act(() =>
+        harness.queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey.includes("environment.list"),
+        }),
+      );
+      expect(
+        await screen.findByRole("button", { name: "Review" }),
+      ).toBeTruthy();
+
+      // The second viewer signs in under the mounted page. Their list answers
+      // with no team, and their invitations entry has not answered.
+      act(() => {
+        useAuthStore.setState({
+          contextMetadata: { userId: "user-b", username: "user-b" },
+        });
+      });
+      await waitFor(() =>
+        expect(
+          harness.queryClient
+            .getQueryCache()
+            .getAll()
+            .some(
+              (query) =>
+                query.queryKey.includes("environment.list") &&
+                query.queryKey.includes("user-b") &&
+                query.state.status === "success",
+            ),
+        ).toBe(true),
+      );
+      expect(
+        await screen.findByText("These settings are no longer available."),
+      ).toBeTruthy();
+
+      // The first viewer's answer says nothing about the second's entry: no
+      // removal is claimed and the selection stays.
+      expect(hoisted.toasts).toEqual([]);
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-a",
+      });
+
+      // Once the second viewer's own entry answers that nothing invites them,
+      // the removal is real.
+      act(() => {
+        readB.resolve({ invitations: [] });
+      });
+      await waitFor(() =>
+        expect(hoisted.toasts).toEqual([
+          {
+            message: "You're no longer in Acme.",
+            options: { id: "environment-left:env-a" },
+          },
+        ]),
+      );
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
     } finally {
       clock.mockRestore();
     }
