@@ -126,7 +126,6 @@ function mountPanel(
               onClose={vi.fn()}
               onEditPost={vi.fn()}
               onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
               landOn={null}
               quote={null}
             />
@@ -177,20 +176,15 @@ async function expectFollowedByChoice(user: UserEvent): Promise<void> {
 }
 
 describe("<BotThreadPanel /> the thread's follow menu", () => {
-  it("puts Thread actions after Thread session in the header, and shows no follow state while the menu is closed", async () => {
+  it("keeps Thread actions as the header's only thread control, and shows no follow state while the menu is closed", async () => {
     mountPanel({ [THREAD_ID]: MANUAL_FOLLOW });
 
     const actions = await screen.findByRole("button", {
       name: "Thread actions",
     });
-    const session = screen.getByRole("button", { name: "Thread session" });
     const header = screen.getByRole("banner");
-    expect(header.contains(session)).toBe(true);
     expect(header.contains(actions)).toBe(true);
-    expect(
-      session.compareDocumentPosition(actions) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Thread session" })).toBeNull();
     expect(within(header).queryByText(/Following/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
   });

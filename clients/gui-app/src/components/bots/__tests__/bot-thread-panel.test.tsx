@@ -544,7 +544,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 onClose={vi.fn()}
                 onEditPost={onEditPost}
                 onOpenTurn={onOpenTurn}
-                onOpenSession={vi.fn()}
                 landOn={panelLanding}
                 quote={null}
               />
@@ -2251,32 +2250,29 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   });
 });
 
-describe("<BotThreadPanel /> the thread's tasks", () => {
-  function task(
-    taskId: string,
-    overrides: Partial<BotTaskEntry>,
-  ): BotTaskEntry {
-    return {
-      taskId,
-      cadence: { kind: "on-completion" },
-      lastCheckinAt: null,
-      lastCheckin: null,
-      nextAt: null,
-      state: "tracking",
-      endedReason: null,
-      createdByUserId: null,
-      spun: true,
-      label: null,
-      originRequestId: null,
-      createdByChatId: THREAD_ID,
-      inputNeeded: null,
-      pause: null,
-      stop: null,
-      runRequest: null,
-      ...overrides,
-    };
-  }
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "on-completion" },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: THREAD_ID,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
+    ...overrides,
+  };
+}
 
+describe("<BotThreadPanel /> the thread's tasks", () => {
   it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
     // The thread hangs off a member's post, whose row id its request names.
     const postId = conversationRequestMessageId("req-1");
@@ -2389,6 +2385,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
   it("becomes one row while its box has the focus, keeps the draft and the focused field, and restores with the keyboard down", async () => {
     const user = userEvent.setup();
+    panelTasks = [task("task-watch", { originRequestId: "req-1" })];
     mountPanel(listed("user-teammate"), [botReply(null)]);
     const box = boxInput("Reply in the thread");
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
@@ -2402,7 +2399,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
     await user.click(box);
     typeInto(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-session")).toBe(false);
+    expect(shown("bot-thread-tasks")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
     expect(boxInput("Reply in the thread")).toBe(box);
@@ -2411,7 +2408,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-session")).toBe(true);
+    expect(shown("bot-thread-tasks")).toBe(true);
   });
 });
 
