@@ -8,11 +8,11 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  * provider as the value (it feeds the dot's tooltip), or `null` when the task
  * holds imported work from MORE THAN ONE provider.
  *
- * The neutral value stopped being an edge case when import moved to one task
- * per repository: a person who ran both Claude and Codex in the same checkout
- * now gets one task holding both, and last-write-wins on the harness would put
- * "Imported from Codex" on a task that is half Claude's. `null` is the honest
- * answer there, and the dot says so without naming a provider.
+ * Import makes one task per session, so a new import marks each task with the
+ * one provider it came from. `null` stays for entries saved by a build that
+ * grouped sessions by repository, where one task could hold both Claude and
+ * Codex work and last-write-wins on the harness would put "Imported from Codex"
+ * on a task that is half Claude's. The dot says so without naming a provider.
  *
  * This is the task list's unread dot for imports: deliberately app-local
  * client state rather than notifications - fifty feed entries per import run
