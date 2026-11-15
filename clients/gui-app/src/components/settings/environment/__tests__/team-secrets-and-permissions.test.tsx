@@ -666,7 +666,10 @@ describe("TeamPermissions", () => {
           items: [policy(3, "Allow reads")],
         }),
         "environment.members": () => members,
-        "environment.configuration.policy.put": () => ({ outcome: "saved" }),
+        "environment.configuration.policy.put": () => ({
+          outcome: "saved",
+          reason: null,
+        }),
       });
       render(<TeamPermissions>{null}</TeamPermissions>, {
         wrapper: harness.Wrapper,
@@ -715,8 +718,11 @@ describe("TeamPermissions", () => {
   );
 
   it("keeps an unrecognized team role read-only", async () => {
+    const viewerSource = poolSource("viewer");
+    if (viewerSource.kind !== "pool")
+      throw new Error("the team source was not a pool configuration");
     const harness = mountTeamPage(
-      { ...poolSource("viewer"), effectiveRole: null },
+      { ...viewerSource, effectiveRole: null },
       {
         "environment.configuration.items": () => ({
           items: [policy(3, "Allow reads")],
