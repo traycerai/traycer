@@ -62,6 +62,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HOST_METHOD_POLL_TABLE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { signedInEnvironmentCloud } from "@/components/settings/panels/__tests__/signed-in-environment-cloud";
 
 type PutRequest = RequestOfMethod<HostRpcRegistry, "environment.setup.put">;
 
@@ -99,6 +100,8 @@ interface RigOptions {
   readonly failAttempts: boolean;
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: SetupScript | null;
+  /** The host completes a write on a computer bound to no configuration. */
+  readonly localOnly: boolean;
 }
 
 const DEFAULT_RIG: RigOptions = {
@@ -108,6 +111,7 @@ const DEFAULT_RIG: RigOptions = {
   failScripts: false,
   failAttempts: false,
   dashboardWins: null,
+  localOnly: false,
 };
 
 function attempt(
@@ -157,6 +161,9 @@ function renderPage(options: RigOptions): Rig {
       const next = { os: request.os, text: request.text, revision };
       if (index === -1) scripts.push(next);
       else scripts[index] = next;
+      if (options.localOnly) {
+        return Promise.resolve({ outcome: "local_only" as const });
+      }
       return Promise.resolve({ outcome: "saved" as const, revision });
     },
     "environment.setup.attempts": () => {
@@ -198,6 +205,7 @@ function renderPage(options: RigOptions): Rig {
           expiresInSeconds: 600,
         }),
       getCredentialGeneration: () => 0,
+      environmentCloud: signedInEnvironmentCloud,
     },
   };
   const queryClient = new QueryClient({
@@ -342,6 +350,23 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       expectedRevision: null,
       executableWriteGrant: "grant-1",
     });
+  });
+
+  it("completes a save the host answers local_only without drawing a notice", async () => {
+    const rig = renderPage({ ...DEFAULT_RIG, scripts: [MAC], localOnly: true });
+    await screen.findByRole("tab", { name: "macOS" });
+
+    fireEvent.change(scriptField("macOS"), { target: { value: "mine" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => {
+      expect(rig.puts).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(saveButton().hasAttribute("disabled")).toBe(true);
+    });
+    expect(scriptField("macOS").value).toBe("mine");
+    await settle();
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it("a save that lost to a dashboard change shows the stale notice and the latest script", async () => {

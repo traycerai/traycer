@@ -49,7 +49,10 @@ import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRpcShellConfigController } from "@/components/settings/panels/shell/use-rpc-shell-config-controller";
-import { sendFollowedSave } from "@/lib/environment/settings-save-follow";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+} from "@/lib/environment/settings-save-follow";
 import {
   useSettingsSave,
   useSettingsItemExists,
@@ -264,7 +267,7 @@ function renderManagedProfileDialog(
           />
         </TooltipProvider>
       ),
-    }) as ReactNode,
+    }),
   );
 }
 
@@ -289,6 +292,8 @@ interface MutableAuthnState {
   reviewPostGate: Deferred<EnvironmentTransportAnswer> | null;
   itemReadGates: Deferred<EnvironmentTransportAnswer>[];
   setupScripts: SetupScript[];
+  /** The host completes a setup script save on a computer bound to no configuration. */
+  setupLocalOnly: boolean;
   originSignInChecks: number;
   itemReadResponsesReturned: number;
   revisionAfterApply: number | null;
@@ -358,6 +363,7 @@ function makeSaveHarness(overrides: {
     reviewPostGate: null,
     itemReadGates: [],
     setupScripts: [],
+    setupLocalOnly: false,
     originSignInChecks: 0,
     itemReadResponsesReturned: 0,
     revisionAfterApply: null,
@@ -501,6 +507,7 @@ function makeSaveHarness(overrides: {
       "environment.setup.put": (request) => {
         captureSave("environment.setup.put", request);
         hostEvents.push("answer:environment.setup.put");
+        if (state.setupLocalOnly) return { outcome: "local_only" };
         return {
           outcome: "saved",
           revision: (request.expectedRevision ?? 0) + 1,
@@ -522,11 +529,11 @@ function makeSaveHarness(overrides: {
       },
       "config.shell.listDetected": () => {
         hostRequests.push("config.shell.listDetected");
-        return { shells: [] } as never;
+        return { shells: [] };
       },
       "config.env.list": () => {
         hostRequests.push("config.env.list");
-        return { entries: [] } as never;
+        return { entries: [] };
       },
       "config.env.set": (request) => {
         captureSave("config.env.set", request);
@@ -1118,7 +1125,7 @@ describe("settings-save callers", () => {
       OTHER_HOST_ID,
       harness.environmentCloud(),
     );
-    const answer = await sendFollowedSave(pending, sent);
+    const answer = await sendFollowedSave(pending, sent, everyAnswerProposes);
 
     expect(answer).toBe("host-answered");
     expect(sent).toHaveBeenCalledTimes(1);
@@ -2128,6 +2135,73 @@ describe("settings-save callers", () => {
     ]);
   }
 
+  it("settles a setup save the host answers local_only as not proposed, and reads no proposals for it", async () => {
+    const harness = makeSaveHarness({
+      rowsByKind: {
+        setup_script: [
+          itemRow("setup_script", "setup", "macos", { text: "original" }, 1),
+        ],
+      },
+      localHostId: HOST_ID,
+    });
+    harness.state.setupScripts = [
+      { os: "macos", text: "original", revision: 1 },
+    ];
+    harness.state.setupLocalOnly = true;
+    render(harness.wrapper({ children: <MachineSetupSettingsPanel /> }));
+    await waitFor(() => {
+      expect(
+        harness.authnRequests.some((request) =>
+          request.url.includes("/items?kind=setup_script"),
+        ),
+      ).toBe(true);
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    // A remembered save is reconciled as its host connects, before it is sent,
+    // so the host proposes only from its answer on.
+    const proposed = setupProposalForEdit(
+      "00000000-0000-4000-8000-000000000051",
+    );
+    Object.defineProperty(harness.state, "proposals", {
+      get: () =>
+        harness.hostEvents.includes("answer:environment.setup.put")
+          ? proposed
+          : { proposals: [] },
+    });
+    harness.state.reviewAnswer = setupReviewAnswerForEdit(
+      "held-local-only",
+      "script A",
+      1,
+      "original",
+    );
+    const setupReads = (): number =>
+      harness.hostRequests.filter((call) => call === "environment.setup.get")
+        .length;
+    const readsBeforeSave = setupReads();
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "macOS setup script" }),
+      { target: { value: "script A" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(harness.saveRequests).toEqual(["environment.setup.put"]);
+      expect(setupReads()).toBeGreaterThan(readsBeforeSave);
+    });
+    await waitFor(() =>
+      expect(useSettingsSaveMemoryStore.getState().inFlight).toEqual({}),
+    );
+
+    const answerIndex = harness.hostEvents.indexOf(
+      "answer:environment.setup.put",
+    );
+    expect(answerIndex).toBeGreaterThan(-1);
+    expect(harness.hostEvents.slice(answerIndex)).not.toContain(
+      "read:environment.proposals",
+    );
+    expect(reviewApplyRequests(harness)).toEqual([]);
+  });
+
   it("keeps a typed setup script on its original base when a teammate wins before apply", async () => {
     await runSetupConflict(false);
   });
@@ -2623,7 +2697,7 @@ describe("settings-save callers", () => {
     expect(
       harness.recordsAtSend.map((record) => record?.expectedLiveRevision),
     ).toEqual([3, 4]);
-    expect(requestBody(reviewApplyRequests(harness)[1]!)).toMatchObject({
+    expect(requestBody(reviewApplyRequests(harness)[1])).toMatchObject({
       revision: 9,
       expectedLiveRevision: 4,
     });
