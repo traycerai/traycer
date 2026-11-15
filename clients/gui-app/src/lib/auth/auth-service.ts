@@ -4,18 +4,6 @@ import {
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import {
-  readProfileRecordsViaHttp,
-  signOutProfileRecordViaHttp,
-  removeProfileRecordViaHttp,
-  nameProfileRecordViaHttp,
-  profileRecordActionFailure,
-  type ProfileRecordClient,
-  type ProfileRecordListResult,
-  type ProfileRecordActionResult,
-  type ProfileRecordNameResult,
-  type ProfileRecordNameChange,
-} from "@traycer-clients/shared/host-client/profile-record-actions";
-import {
   setProfileRecordEnabledViaHttp,
   setProfileRecordColorViaHttp,
   type ProfileRecordColorClient,

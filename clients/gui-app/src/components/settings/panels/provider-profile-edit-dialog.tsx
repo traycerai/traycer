@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useClearProviderProfileApiKey } from "@/hooks/providers/use-clear-provider-profile-api-key-mutation";
 import { useSetProviderProfileApiKey } from "@/hooks/providers/use-set-provider-profile-api-key-mutation";
-import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useAccountProfileRecolorForClient } from "@/hooks/providers/use-account-profile-recolor";
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useNameProfileRecordForClient } from "@/hooks/providers/use-name-profile-record-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
@@ -744,7 +744,11 @@ export function ProfileEditDialog(props: {
   };
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useProfileRename(providerId, props.profile);
-  const recolorProfile = useRecolorProviderProfile();
+  const recolorProfile = useAccountProfileRecolorForClient(
+    hostClient,
+    providerId,
+    props.profile,
+  );
   const [switchingAccountOverride, setSwitchingAccount] = useState<
     boolean | null
   >(null);
