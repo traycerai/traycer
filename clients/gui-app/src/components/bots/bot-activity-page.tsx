@@ -7,6 +7,7 @@ import {
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import type { TaskContextResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
@@ -142,12 +143,7 @@ export function BotActivityPage(props: {
       {active.rows.length === 0 &&
       props.roomFresh &&
       props.notificationSubscriptions?.length === 0 ? (
-        <p
-          className="py-1 text-ui-xs text-muted-foreground"
-          data-testid="bot-activity-empty"
-        >
-          No activity yet
-        </p>
+        <ActivityEmptyState />
       ) : null}
       {active.rows.length > 0 ? (
         <>
@@ -168,6 +164,10 @@ export function BotActivityPage(props: {
                     contexts.tasksById.get(entry.task.taskId)?.epic?.light
                       ?.title ?? null
                   }
+                  titleState={taskTitleState(
+                    contexts.resolutionsById.get(entry.task.taskId),
+                    contexts.pendingTaskIds.has(entry.task.taskId),
+                  )}
                   threads={props.threads}
                 />
               </li>
@@ -187,6 +187,97 @@ export function BotActivityPage(props: {
       />
     </section>
   );
+}
+
+function ActivityEmptyState(): ReactNode {
+  return (
+    <div
+      data-testid="bot-activity-empty"
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-8 text-center"
+    >
+      <svg
+        data-testid="bot-activity-empty-art"
+        aria-hidden="true"
+        className="size-24 text-muted-foreground"
+        viewBox="0 0 116 98"
+        fill="none"
+      >
+        <rect
+          x="15"
+          y="18"
+          width="78"
+          height="53"
+          rx="8"
+          stroke="currentColor"
+          strokeOpacity=".22"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="23"
+          y="25"
+          width="78"
+          height="53"
+          rx="8"
+          fill="var(--background)"
+          stroke="currentColor"
+          strokeOpacity=".55"
+          strokeWidth="1.5"
+        />
+        <circle cx="39" cy="43" r="5" stroke="currentColor" strokeWidth="1.5" />
+        <path
+          d="M49 41h31M49 47h21M34 60h5M46 60h34"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeOpacity=".7"
+        />
+        <circle
+          cx="87"
+          cy="70"
+          r="12"
+          fill="var(--background)"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path
+          d="m82 70 3 3 6-6"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div className="space-y-1">
+        <p className="text-ui-sm font-medium">No activity yet</p>
+        <p className="max-w-sm text-ui-sm text-muted-foreground">
+          Keep track of work Tracy is handling. Tasks and updates that need your
+          attention will appear here.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+type TaskTitleState = "loading" | "denied" | "absent" | "unknown";
+
+function activityTaskTitle(
+  title: string | null,
+  state: TaskTitleState,
+): string {
+  if (title !== null) return displayTitle(title, "epic");
+  if (state === "loading") return "Loading task title…";
+  if (state === "denied" || state === "absent") return "Task unavailable";
+  return "Task";
+}
+
+function taskTitleState(
+  result: TaskContextResult | undefined,
+  pending: boolean,
+): TaskTitleState {
+  if (result?.status === "confirmed-absent") return "absent";
+  if (result?.status === "unknown" && result.reason === "denied")
+    return "denied";
+  return pending ? "loading" : "unknown";
 }
 
 /** One agent the row's glyph rolls up, with what it holds unread or pending. */
@@ -290,6 +381,7 @@ type ActiveTaskRowProps = {
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
+  readonly titleState: TaskTitleState;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 };
 
@@ -409,6 +501,7 @@ function ActiveTaskRowBody(
             hostId={hostId}
             entry={entry}
             title={props.title}
+            titleState={props.titleState}
             rollup={rollup}
             agentsReadable={agents !== null}
             threads={props.threads}
@@ -478,6 +571,7 @@ function TaskRowSummary(props: {
   readonly hostId: string;
   readonly entry: BotActiveTask;
   readonly title: string | null;
+  readonly titleState: TaskTitleState;
   readonly rollup: ChatDescendantStatusRollup | null;
   /** Whether this window holds the task's session, which names its agents. */
   readonly agentsReadable: boolean;
@@ -509,7 +603,7 @@ function TaskRowSummary(props: {
           </span>
         )}
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {props.title === null ? "Task" : displayTitle(props.title, "epic")}
+          {activityTaskTitle(props.title, props.titleState)}
         </span>
         {interval === null ? null : (
           <Badge variant="muted" size="xs" data-testid="bot-activity-every">
@@ -526,6 +620,11 @@ function TaskRowSummary(props: {
           </Badge>
         )}
       </span>
+      {props.title === null && props.titleState === "denied" ? (
+        <span className="pl-5.5 text-ui-xs text-muted-foreground">
+          The task may no longer be available to you.
+        </span>
+      ) : null}
       <span
         className="flex min-w-0 flex-wrap gap-x-1.5 pl-5.5 text-ui-xs text-muted-foreground"
         data-testid="bot-activity-task-line"
