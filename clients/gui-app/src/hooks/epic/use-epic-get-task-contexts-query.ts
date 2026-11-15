@@ -5,6 +5,7 @@ import {
   isFoundTaskContext,
   type GetTaskContextsResponse,
   type ListTaskLight,
+  type TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -32,6 +33,8 @@ export interface EpicTaskContextRefetchBatch {
 
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  readonly resolutionsById: ReadonlyMap<string, TaskContextResult>;
+  readonly pendingTaskIds: ReadonlySet<string>;
   /** Refreshes each mounted context batch once, including inside staleTime. */
   readonly refetch: () => Promise<void>;
   /** Individual query batches so shared History scopes can dedupe by key. */
@@ -142,7 +145,7 @@ export function useEpicGetTaskContextsForClient(
       enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
-    combine: combineTaskContextResults,
+    combine: (results) => combineTaskContextResults(results, requests),
   });
   return {
     ...combined,
@@ -155,15 +158,27 @@ export function useEpicGetTaskContextsForClient(
 
 function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
+  requests: ReadonlyArray<{
+    readonly params: { readonly taskIds: readonly string[] };
+  }>,
 ): CombinedTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
+  const resolutionsById = new Map<string, TaskContextResult>();
+  const pendingTaskIds = new Set<string>();
   const localHomedTaskIds = new Set<string>();
   const batchRefetches = results.map((result) => async () => {
     await result.refetch();
   });
-  for (const result of results) {
-    if (result.data === undefined) continue;
+  for (const [index, result] of results.entries()) {
+    if (result.data === undefined) {
+      if (result.isFetching) {
+        for (const taskId of requests[index]?.params.taskIds ?? [])
+          pendingTaskIds.add(taskId);
+      }
+      continue;
+    }
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
+      resolutionsById.set(taskId, resolution);
       if (isFoundTaskContext(resolution)) {
         const recentAt = result.data.recentAtByTaskId?.[taskId];
         tasksById.set(
@@ -180,6 +195,8 @@ function combineTaskContextResults(
   }
   return {
     tasksById,
+    resolutionsById,
+    pendingTaskIds,
     refetch: async () => {
       await Promise.all(batchRefetches.map((refetch) => refetch()));
     },
