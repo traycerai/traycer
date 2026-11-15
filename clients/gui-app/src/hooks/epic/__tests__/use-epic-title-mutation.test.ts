@@ -11,6 +11,7 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -136,21 +137,29 @@ describe("useEpicUpdateTitle", () => {
 
   it("shows fallback on generic error", () => {
     renderUseEpicUpdateTitle(new QueryClient());
-    capturedOptions.onError?.({
-      code: "RPC_ERROR",
-      message: "test",
-      fatalDetails: null,
-    });
+    capturedOptions.onError?.(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "test",
+        requestId: "request-epic-title-generic",
+        method: "epic.updateTitle",
+        fatalDetails: null,
+      }),
+    );
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
 
-  it("shows sign-in copy for UNAUTHORIZED", () => {
+  it("shows the caller fallback for UNAUTHORIZED while signed in", () => {
     renderUseEpicUpdateTitle(new QueryClient());
-    capturedOptions.onError?.({
-      code: "UNAUTHORIZED",
-      message: "test",
-      fatalDetails: null,
-    });
-    expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
+    capturedOptions.onError?.(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "test",
+        requestId: "request-epic-title-unauthorized",
+        method: "epic.updateTitle",
+        fatalDetails: null,
+      }),
+    );
+    expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
 });

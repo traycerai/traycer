@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { usePhaseMigrateToEpic } from "@/hooks/migration/use-phase-migrate-to-epic-mutation";
 
 const testState = vi.hoisted(() => ({
@@ -13,11 +14,7 @@ const testState = vi.hoisted(() => ({
       variables: { readonly phaseId: string },
       ctx: { readonly hostId: string | null },
     ) => void;
-    readonly onError?: (error: {
-      readonly code: string;
-      readonly message: string;
-      readonly fatalDetails: null;
-    }) => void;
+    readonly onError?: (error: HostRpcError) => void;
   } | null,
   getActiveHostId: vi.fn(() => "host-active-1"),
   invalidateQueries: vi.fn(),
@@ -88,11 +85,15 @@ describe("usePhaseMigrateToEpic", () => {
   it("uses host error mapping on RPC failure", () => {
     renderHook(() => usePhaseMigrateToEpic("phase-1"));
 
-    testState.capturedOptions?.onError?.({
-      code: "UNAUTHORIZED",
-      message: "missing user",
-      fatalDetails: null,
-    });
+    testState.capturedOptions?.onError?.(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "missing user",
+        requestId: "request-phase-migrate",
+        method: "phase.migrateToEpic",
+        fatalDetails: null,
+      }),
+    );
 
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
   });
