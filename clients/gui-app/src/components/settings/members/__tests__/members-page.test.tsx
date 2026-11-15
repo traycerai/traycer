@@ -23,6 +23,20 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MembersPage } from "@/components/settings/members/members-page";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 
+// The toast surface is the one external boundary a removal's outcome reaches:
+// a completed removal says so, and a failed one raises a banner instead.
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("sonner")>()),
+  toast: {
+    success: toasts.success,
+    error: toasts.error,
+    info: vi.fn(),
+    warning: vi.fn(),
+    message: vi.fn(),
+    dismiss: vi.fn(),
+  },
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -44,6 +58,8 @@ afterEach(() => {
   useAuthStore.setState({ profile: null });
   useSelectionAuthorityStore.getState().reset();
   useHostNotificationsStore.setState({ byId: {} });
+  toasts.success.mockReset();
+  toasts.error.mockReset();
 });
 
 const TEAM: EnvironmentDescriptorV11 = {
@@ -76,10 +92,8 @@ function member(
 }
 
 /**
- * The account's teams as the app has them at sign-in (the environment list
- * joins the viewer's role and the team's handle from them as its first read
- * starts), and the window's own host as one of the team's computers, which is
- * the only one that counts a removed member's work.
+ * The window's own host as the effective one, which counts a removed member's
+ * work when authn's host list names it one of the team's computers.
  */
 function seedAccount(): void {
   useSelectionAuthorityStore.setState({
@@ -87,6 +101,11 @@ function seedAccount(): void {
   });
 }
 
+/**
+ * The account's teams as the app has them at sign-in: the environment list
+ * joins the viewer's role and the team's handle from them as its first read
+ * starts.
+ */
 function seedTeams(): void {
   useAuthStore.setState({
     shareableTeams: [{ teamId: TEAM.ownerId, slug: "acme", avatarUrl: null }],
@@ -769,7 +788,9 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          return { outcome: "revoked" };
+          // authn's answer for an accepted member's removal: the commit
+          // already made, with the operation's id.
+          return { outcome: "pending", receiptId: "receipt-1" };
         },
       },
     );
@@ -785,6 +806,11 @@ describe("MembersPage removal", () => {
     expect(harness.paramsOf("environment.members.remove")).toEqual([
       { environmentId: "env-a", userId: "u-priya" },
     ]);
+    // The removal is shown as done, not as failed.
+    expect(toasts.success.mock.calls[0]?.[0]).toBe("Member removed");
+    expect(toasts.error).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("members-banner")).toBeNull();
+    expect(screen.queryByTestId("members-remove-refusal")).toBeNull();
   });
 
   it("shows the list's own failure when the read after a removal fails", async () => {
@@ -800,7 +826,9 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          return { outcome: "revoked" };
+          // authn's answer for an accepted member's removal: the commit
+          // already made, with the operation's id.
+          return { outcome: "pending", receiptId: "receipt-1" };
         },
       },
     );
@@ -812,6 +840,10 @@ describe("MembersPage removal", () => {
 
     expect(await screen.findByTestId("members-read-failed")).toBeTruthy();
     expect(screen.queryByText(/removing/iu)).toBeNull();
+    // The removal itself was done; only the read after it failed.
+    expect(toasts.success.mock.calls[0]?.[0]).toBe("Member removed");
+    expect(toasts.error).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("members-banner")).toBeNull();
   });
 });
 
