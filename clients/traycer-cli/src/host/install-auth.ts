@@ -872,11 +872,13 @@ async function giveInstalledHostToTeam(
     target,
     attemptId,
   );
-  if (binding === null || !cloud.onOriginSignIn())
-    throw teamTransferNotConfirmed();
+  // The sign-in as the adapter holds it now: its one refresh may have rotated
+  // the token the command started with.
+  const token = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
+  if (binding === null || token === null) throw teamTransferNotConfirmed();
   const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
-    auth.token,
+    token,
     endpoint.hostId,
   );
   if (
