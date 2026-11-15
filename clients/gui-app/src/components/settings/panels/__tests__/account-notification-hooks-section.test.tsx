@@ -189,7 +189,9 @@ describe("account notification hooks", () => {
     );
     rerender(<AccountNotificationHooksSection account={shownAccount} />);
 
-    expect(await within(firstDialog).findByRole("alert")).toHaveTextContent(
+    expect(
+      (await within(firstDialog).findByRole("alert")).textContent,
+    ).toContain(
       "Cloud service is temporarily unavailable. Please try again shortly.",
     );
     fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
@@ -197,6 +199,10 @@ describe("account notification hooks", () => {
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
     );
     fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(saveMutation.reset).toHaveBeenCalledTimes(2));
+    // The mocked mutation needs the same parent render that useMutation emits
+    // after reset(), so the new dialog receives the cleared error prop.
+    rerender(<AccountNotificationHooksSection account={shownAccount} />);
     const secondDialog = await screen.findByTestId(
       "confirm-destructive-dialog",
     );

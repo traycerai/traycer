@@ -178,14 +178,14 @@ function cloudFor(session: SignInFixture): EnvironmentCloud {
       kind: "cloud",
       getBearerToken: () => session.bearer,
     },
-    transport: async (request) => {
+    transport: (request) => {
       originFixtures.requests.push({ signInId: session.signInId, request });
       if (request.url.endsWith("/api/v3/user/notification-settings"))
-        return {
+        return Promise.resolve({
           status: 200,
           text: JSON.stringify(accountResponse),
-        };
-      return { status: 204, text: "" };
+        });
+      return Promise.resolve({ status: 204, text: "" });
     },
     onOriginSignIn: () => session.active,
   };
@@ -212,8 +212,6 @@ function makeMutationClient(
         const gate = gates[index];
         const started = starts[index];
         index += 1;
-        if (gate === undefined || started === undefined)
-          throw new Error("No onMutate gate was prepared.");
         started.resolve(undefined);
         await gate.promise;
       },
@@ -442,33 +440,46 @@ describe("notification save sign-in ownership", () => {
       onError: vi.fn(),
       onSettled: vi.fn(),
     };
-    let firstOutcome: Promise<AccountNotificationSettingsResponse | null> | null =
-      null;
+    const firstOutcomes: Array<
+      Promise<AccountNotificationSettingsResponse | null>
+    > = [];
     act(() => {
-      firstOutcome = result.current.mutateAsync(request, firstCallbacks).then(
-        (response) => response,
-        () => null,
+      firstOutcomes.push(
+        result.current.mutateAsync(request, firstCallbacks).then(
+          (response) => response,
+          () => null,
+        ),
       );
     });
     await act(async () => firstStarted.promise);
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+    });
+    const firstVariables = result.current.variables;
 
     oldSession.active = false;
     const reenteredSession = signIn("session-b", "same-account");
     expect(reenteredSession.accountId).toBe(oldSession.accountId);
     originFixtures.cloud = cloudFor(reenteredSession);
-    let secondOutcome: Promise<AccountNotificationSettingsResponse> | null =
-      null;
+    const secondOutcomes: Array<Promise<AccountNotificationSettingsResponse>> =
+      [];
     act(() => {
-      secondOutcome = result.current.mutateAsync(request, secondCallbacks);
+      secondOutcomes.push(result.current.mutateAsync(request, secondCallbacks));
     });
     await act(async () => secondStarted.promise);
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+      expect(result.current.variables).not.toBe(firstVariables);
+    });
+    const secondVariables = result.current.variables;
+    const firstOutcome = firstOutcomes[0];
+    const secondOutcome = secondOutcomes[0];
 
     firstGate.resolve(undefined);
-    if (firstOutcome === null)
-      throw new Error("The first matrix save did not start.");
     await act(async () => firstOutcome);
 
     expect(result.current.isPending).toBe(true);
+    expect(result.current.variables).toBe(secondVariables);
     expect(result.current.variables).toEqual(request);
     expect(firstCallbacks.onSuccess).not.toHaveBeenCalled();
     expect(firstCallbacks.onError).not.toHaveBeenCalled();
@@ -476,8 +487,6 @@ describe("notification save sign-in ownership", () => {
     expect(originFixtures.requests).toEqual([]);
 
     secondGate.resolve(undefined);
-    if (secondOutcome === null)
-      throw new Error("The second matrix save did not start.");
     await act(async () => secondOutcome);
 
     expect(

@@ -269,7 +269,8 @@ function HostBindingCapture(props: {
   ) => void;
 }) {
   const binding = useHostBinding();
-  useEffect(() => props.onBinding(binding), [binding, props.onBinding]);
+  const { onBinding } = props;
+  useEffect(() => onBinding(binding), [binding, onBinding]);
   return null;
 }
 
@@ -630,11 +631,11 @@ describe("computer hook saves and the host's answered account part", () => {
       },
     });
     useAuthStore.setState({ status: "signed-in" });
-    let capturedBinding: HostRuntimeBinding<HostRpcRegistry> | null = null;
+    const capturedBindings: HostRuntimeBinding<HostRpcRegistry>[] = [];
     const onBinding = (
       binding: HostRuntimeBinding<HostRpcRegistry> | null,
     ): void => {
-      capturedBinding = binding;
+      if (binding !== null) capturedBindings.push(binding);
     };
     const wrapper = (props: { readonly children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>
@@ -652,9 +653,8 @@ describe("computer hook saves and the host's answered account part", () => {
     await screen.findByTestId("notification-hook-row-convert-this-hook");
     await convertCommandHookToHttp();
     await waitFor(() => expect(saves).toHaveLength(1));
-    await waitFor(() => expect(capturedBinding).not.toBeNull());
-    if (capturedBinding === null)
-      throw new Error("The host runtime binding was not captured.");
+    await waitFor(() => expect(capturedBindings.length).toBeGreaterThan(0));
+    const capturedBinding = capturedBindings[0];
     const directoryList = vi.spyOn(capturedBinding.directory, "list");
     const initialListCalls = directoryList.mock.calls.length;
 
@@ -693,14 +693,20 @@ describe("computer hook saves and the host's answered account part", () => {
       within(firstDialog).getByRole("button", { name: "Delete" }),
     );
 
-    expect(await within(firstDialog).findByRole("alert")).toHaveTextContent(
+    expect(
+      (await within(firstDialog).findByRole("alert")).textContent,
+    ).toContain(
       "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
-    await screen.findByTestId("notification-hook-row-keep-local-hook");
+    fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    const remainingRow = await screen.findByTestId(
+      "notification-hook-row-keep-local-hook",
+    );
     fireEvent.click(
-      within(
-        screen.getByTestId("notification-hook-row-keep-local-hook"),
-      ).getByRole("button", { name: "Delete" }),
+      within(remainingRow).getByRole("button", { name: "Delete" }),
     );
     const secondDialog = await screen.findByTestId(
       "confirm-destructive-dialog",

@@ -274,7 +274,9 @@ describe("team Notification hooks page", () => {
       within(firstDialog).getByRole("button", { name: "Delete" }),
     );
 
-    expect(await within(firstDialog).findByRole("alert")).toHaveTextContent(
+    expect(
+      (await within(firstDialog).findByRole("alert")).textContent,
+    ).toContain(
       "Cloud service is temporarily unavailable. Please try again shortly.",
     );
     expect(

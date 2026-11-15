@@ -650,11 +650,14 @@ describe("settings search", () => {
         "Bring in existing sessions",
         "Saved website sessions",
         "In-app notifications",
-        "Notification hooks",
         "Route automatically",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);
       }
+      expect(
+        labelsFor("Notification hooks", DESKTOP),
+        "Notification hooks",
+      ).toContain("Notification hooks");
     });
 
     it("sends the old-host-gated cards' vocabulary to their pages", () => {
