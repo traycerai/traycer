@@ -340,18 +340,17 @@ export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
 ): string {
-  return sandboxRowShapeAndCostLine(summary, configuration, configuration);
+  return sandboxRowShapeAndCostLine(summary, configuration);
 }
 
 /**
- * The same line for a row whose credits may not be the page's:
- * `configuration` is the page's, `credits` whose credits the row is on, and
- * `null` where that is not known leaves the funding clause out (on an
- * Automations row, everything but what it cannot run).
+ * The same line for a row whose credits may not be the page's: `credits` is
+ * whose credits the row is on, and `null` where that is not known leaves the
+ * funding clause out (on an Automations row, everything but what it cannot
+ * run).
  */
 export function sandboxRowShapeAndCostLine(
   summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
   credits: SandboxPageConfiguration | null,
 ): string {
   if (summary.kind === "automation") {

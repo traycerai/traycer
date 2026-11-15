@@ -1051,7 +1051,7 @@ function SandboxListRow(props: {
             viewerUserId={viewerUserId}
           />
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sandboxRowShapeAndCostLine(summary, configuration, credits)}
+            {sandboxRowShapeAndCostLine(summary, credits)}
           </p>
           {clock === null ? null : (
             <p
