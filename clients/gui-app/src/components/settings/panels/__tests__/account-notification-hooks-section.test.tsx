@@ -83,7 +83,7 @@ afterEach(() => {
   cleanup();
   saveMutation.mutate.mockClear();
   saveMutation.error = null;
-  saveMutation.reset.mockClear();
+  saveMutation.reset.mockReset();
 });
 
 describe("account notification hooks", () => {
@@ -166,6 +166,9 @@ describe("account notification hooks", () => {
   });
 
   it("shows a failed Delete only in its confirmation and not in a new Delete opening", async () => {
+    saveMutation.reset.mockImplementation(() => {
+      saveMutation.error = null;
+    });
     const shownAccount = {
       ...account,
       settings: { ...accountSettings, hooks: [literalHook] },

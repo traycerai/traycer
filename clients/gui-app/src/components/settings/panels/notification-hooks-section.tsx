@@ -285,6 +285,7 @@ type EditorState = { readonly kind: "closed" } | OpenEditorState;
 interface DeleteState {
   readonly hook: HookEntry;
   readonly snapshot: HookSnapshot;
+  readonly saveError: string | null;
 }
 
 type SaveOrigin =
@@ -370,9 +371,15 @@ function HooksEditor(props: {
             else if (origin.kind === "delete")
               setPendingDelete((current) =>
                 current === origin.opening
-                  ? { ...current, snapshot: saved }
+                  ? { ...current, snapshot: saved, saveError: message }
                   : current,
               );
+          } else if (origin.kind === "delete") {
+            setPendingDelete((current) =>
+              current === origin.opening
+                ? { ...current, saveError: message }
+                : current,
+            );
           } else {
             closeSubmittedOpening();
           }
@@ -450,7 +457,7 @@ function HooksEditor(props: {
                   );
                 }}
                 onDelete={() => {
-                  setPendingDelete({ hook, snapshot });
+                  setPendingDelete({ hook, snapshot, saveError: null });
                 }}
               />
             ))}
@@ -510,7 +517,14 @@ function HooksEditor(props: {
               { kind: "delete", opening: pendingDelete },
             );
           }}
-        />
+        >
+          {props.saveHooks.isPending ||
+          pendingDelete.saveError === null ? null : (
+            <p role="alert" className="px-5 pb-5 text-ui-sm text-destructive">
+              {pendingDelete.saveError}
+            </p>
+          )}
+        </ConfirmDestructiveDialog>
       )}
     </ManagerShell>
   );
