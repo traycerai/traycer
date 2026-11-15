@@ -118,6 +118,9 @@ const directory = vi.hoisted(() => ({
       },
     },
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
+  // What the window's narration reads off the directory.
+  hasConcludedDiscovery: () => true,
+  getLocalHostId: (): string | null => null,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -197,20 +200,25 @@ vi.mock(
   },
 );
 
-// Counts every attempt to open a transport, whether the opener refuses it or
-// not: "no further attempt" is the claim of the ladder cases.
-vi.mock("@/lib/host/durable-stream-transport", async (importOriginal) => {
+// Counts every attempt to open a transport, whether the real opener refuses it
+// or not: "no further attempt" is the claim of the ladder cases.
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
   const actual =
     await importOriginal<
-      typeof import("@/lib/host/durable-stream-transport")
+      typeof import("@/lib/host/use-durable-stream-transport")
     >();
+  const { useMemo } = await import("react");
   return {
     ...actual,
-    openDurableStreamTransport: (
-      params: Parameters<typeof actual.openDurableStreamTransport>[0],
-    ) => {
-      seams.openAttempts.push(params.target.hostId);
-      return actual.openDurableStreamTransport(params);
+    useDurableStreamTransportFactory: () => {
+      const real = actual.useDurableStreamTransportFactory();
+      return useMemo(
+        () => (hostId: string) => {
+          seams.openAttempts.push(hostId);
+          return real(hostId);
+        },
+        [real],
+      );
     },
   };
 });
