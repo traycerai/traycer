@@ -8,7 +8,7 @@ export const TEAM_NOTIFICATION_HOOKS = defineSettingsSection(
     page: {
       availableWhen: alwaysAvailable,
       label: TEAM_NOTIFICATION_HOOKS_COPY.title,
-      description: null,
+      description: "",
       keywords: ["team", "webhook", "HTTP", "headers"],
     },
   },

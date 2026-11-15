@@ -53,11 +53,15 @@ function deferred<T>() {
 }
 
 function remoteIdentity(userId: string): RemoteSessionIdentity {
+  const hostPublicKey = remoteHost.publicKey;
+  const relayAttachUrl = remoteHost.websocketUrl;
+  if (hostPublicKey === null || relayAttachUrl === null)
+    throw new Error("The remote fixture needs a public key and relay address.");
   return {
     hostId: remoteHost.hostId,
     userId,
-    hostPublicKey: remoteHost.publicKey,
-    relayAttachUrl: remoteHost.websocketUrl,
+    hostPublicKey,
+    relayAttachUrl,
     authRecovery: "revalidate",
     authEpoch: "notification-refresh-context",
     openAuth: "user-bearer",
