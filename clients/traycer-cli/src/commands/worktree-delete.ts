@@ -1,7 +1,13 @@
+import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "../internal/local-open-auth";
+  requireCliHostSession,
+  type CliHostSession,
+} from "../internal/cli-host-tokens";
+import {
+  hostTokenFailureCliError,
+  signedOutCliError,
+} from "../internal/host-door-words";
+import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
 import { randomUUID } from "node:crypto";
 import {
   hostStreamRpcRegistry,
@@ -18,10 +24,7 @@ import type {
   WorktreeDeleteDeclinedKind,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import {
-  MutableBearerLease,
-  readLeaseBearer,
-} from "../../../shared/auth/bearer-source";
+import { readLeaseBearer } from "../../../shared/auth/bearer-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
@@ -136,18 +139,36 @@ async function runWorktreeDelete(
   ctx: CommandContext,
 ): Promise<WorktreeDeleteOutcome> {
   const auth = await resolveHostAuth();
-  if (auth === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
-  }
+  if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
-  const lease = new MutableBearerLease(auth.token, auth.userId);
+  const session = await requireCliHostSession(
+    auth,
+    endpoint.hostId,
+    hostTokenFailureCliError,
+  );
+  try {
+    return await deleteWithHostToken(
+      worktreePath,
+      ctx,
+      endpoint,
+      session,
+      auth.authnBaseUrl,
+    );
+  } finally {
+    session.dispose();
+  }
+}
+
+async function deleteWithHostToken(
+  worktreePath: string,
+  ctx: CommandContext,
+  endpoint: HostTransportEndpoint,
+  session: CliHostSession,
+  authnBaseUrl: string,
+): Promise<WorktreeDeleteOutcome> {
+  const lease = session.signInLease;
+  const bearer = session.bearer;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
-    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     // The host this endpoint already resolves to. Safe even where `endpoint` is
     // re-resolved later in the run: the seed is consulted only before this
@@ -155,8 +176,8 @@ async function runWorktreeDelete(
     // one, and the latch closes it for good after that.
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
-    bearer: () => lease,
-    userId: lease.identity.userId,
+    bearer: () => bearer,
+    userId: bearer.identity.userId,
     auth: null,
     clock: null,
     // Provisioning rides along here too. It used to be opted out because a
@@ -165,7 +186,7 @@ async function runWorktreeDelete(
     // reports `missing` triggers it - a host that already holds a credential is
     // left alone.
     hostCredentialMint: createCliHostCredentialMintFlow({
-      authnBaseUrl: auth.authnBaseUrl,
+      authnBaseUrl,
       // Read through the lease each time rather than capturing `auth.token`: a
       // rotation during the delete must not leave the mint on a dead bearer.
       bearer: () => readLeaseBearer(lease),
