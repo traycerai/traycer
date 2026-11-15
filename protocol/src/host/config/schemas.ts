@@ -536,7 +536,8 @@ export type ConfigBrowserSetResponse = z.infer<
  * Reads whether the configuration this host runs lets its agents take part in
  * its shared memories. Unlike the switches above this is not machine-global:
  * it belongs to the configuration, so the answer is about the one the host
- * serves now, and a host serving none answers `false`.
+ * serves now. A host serving none answers the value saved on this computer,
+ * `false` when nothing was saved, with `revision` and `environmentId` null.
  */
 export const configAgentMemoriesGetRequestSchema = emptyRequestSchema;
 export type ConfigAgentMemoriesGetRequest = z.infer<
