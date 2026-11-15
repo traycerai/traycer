@@ -413,9 +413,12 @@ function renderTabOnTheWindowsComputer(): void {
   );
 }
 
-function renderTabOnAnotherComputer(): void {
-  // The tab's own computer, not the window's: the create-host seed names it.
-  markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
+  // The tab's own computer, not the window's: the create-host seed names it,
+  // and the window's computer is then the tab's original host. Without the
+  // seed the tab simply follows the effective computer.
+  if (hasOriginalHost) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+  else seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -484,10 +487,10 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     setMobileApp(false);
   });
 
-  it("shows Host update needed with one Update now and no Retry", async () => {
+  it("shows Host update needed, Update now and Open on original host, and no Retry", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
 
     publishTabRow("1.5.4");
@@ -506,17 +509,35 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
   });
 
+  it("shows Update now alone when the tab has no original host", async () => {
+    installStreams();
+    publishTabRow("2.0.0");
+    renderTabOnAnotherComputer(false);
+    await waitForTaskShown();
+
+    publishTabRow("1.5.4");
+
+    const card = await screen.findByTestId("epic-repoint-failure");
+    expect(within(card).getByText("Host update needed")).toBeTruthy();
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Update now"]);
+  });
+
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     expect(seams.openAttempts).toEqual([TAB_HOST_ID]);
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
-    // Two local refusals after the mount: the release's own reacquire, and the
-    // one run the controller's run key starts when its demand segment moves to
-    // "wants". Nothing follows, and neither is dialled.
+    // Two refusals, both local, before any dial: the run key's demand segment
+    // moves once after a failed rebuild that follows a release, and that move
+    // starts one more run (epic-session-controller.ts, the run key). Below the
+    // floor no ladder follows.
     const attemptsAtFailure = [...seams.openAttempts];
     expect(attemptsAtFailure).toEqual([TAB_HOST_ID, TAB_HOST_ID, TAB_HOST_ID]);
 
@@ -538,7 +559,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
   it("acquires once and shows the task again when the row rises back to the floor", async () => {
     const streams = installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
@@ -556,7 +577,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
   it("opens Settings, Host, Updates for the tab's computer from Update now", async () => {
     installStreams();
     publishTabRow("2.0.0");
-    renderTabOnAnotherComputer();
+    renderTabOnAnotherComputer(true);
     await waitForTaskShown();
     publishTabRow("1.5.4");
     const card = await screen.findByTestId("epic-repoint-failure");
