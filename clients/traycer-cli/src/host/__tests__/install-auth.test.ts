@@ -17,6 +17,7 @@ import {
   writeCredentialsFile,
 } from "@traycer/protocol/config/credentials";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type { HostPidMetadata } from "../pid-metadata";
 import type { HealthProbeOptions } from "../../service/health-probe";
@@ -57,12 +58,39 @@ const mocks = vi.hoisted(() => ({
   replacementMetadata: null as HostPidMetadata | null,
   credentialsPath: "",
   legacyHost: null as LegacyTeamHost | null,
+  validateIdentityMock: vi.fn(),
+  createStoreBackedRevalidatorMock: vi.fn(),
+  revalidateCurrentContextMock: vi.fn(),
+  refreshOutcome: "rotated" as "rotated" | "rejected" | "network-error",
+  refreshedToken: "refreshed-bearer",
 }));
 
 vi.mock("../../internal/host-auth", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../internal/host-auth")>();
   return { ...actual, resolveHostAuth: mocks.resolveHostAuthMock };
+});
+
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    validateAuthTokenIdentityAccessOnly: mocks.validateIdentityMock,
+  };
+});
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createStoreBackedRevalidator: (
+      ...args: Parameters<typeof actual.createStoreBackedRevalidator>
+    ) => mocks.createStoreBackedRevalidatorMock(...args),
+  };
 });
 
 vi.mock("../pid-metadata", async (importOriginal) => {
@@ -163,6 +191,7 @@ import type { HostCredentialProvisionOutcome } from "../credential-provisioning"
 import type { CommandContext } from "../../runner/runner";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
 const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
 let caseCredentialsRoot = "";
@@ -293,6 +322,54 @@ function storedAuth(): {
   };
 }
 
+function signInUser(input: {
+  readonly personalEnvironmentId: string | null;
+  readonly teams: readonly {
+    readonly teamId: string;
+    readonly environmentId: string;
+    readonly slug: string | null;
+  }[];
+}): AuthenticatedUser {
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    user: { ...base.user, id: "member-1" },
+    environments: {
+      personal: input.personalEnvironmentId,
+      teams: input.teams.map(({ teamId, environmentId }) => ({
+        teamId,
+        environmentId,
+      })),
+    },
+    teamSubscriptions: input.teams
+      .filter((team) => team.slug !== null)
+      .map(
+        ({ teamId, slug }) =>
+          ({
+            team: { id: teamId, slug },
+          }) as AuthenticatedUser["teamSubscriptions"][number],
+      ),
+  };
+}
+
+function defaultSignInUser(): AuthenticatedUser {
+  return signInUser({
+    personalEnvironmentId: "environment-personal",
+    teams: [
+      {
+        teamId: "organization-acme",
+        environmentId: teamEnvironment.environmentId,
+        slug: "acme",
+      },
+      {
+        teamId: "organization-label-collision",
+        environmentId: collidingLabelEnvironment.environmentId,
+        slug: "other-team",
+      },
+    ],
+  });
+}
+
 function hostPidMetadata(overrides: Partial<HostPidMetadata>): HostPidMetadata {
   return {
     pid: 4100,
@@ -312,6 +389,8 @@ describe("install auth helpers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.legacyHost = null;
+    mocks.refreshOutcome = "rotated";
+    mocks.refreshedToken = "refreshed-bearer";
     mocks.resolveEndpointMock.mockResolvedValue({
       hostId: "host-local",
       websocketUrl: "ws://127.0.0.1:1/rpc",
@@ -383,6 +462,23 @@ describe("install auth helpers", () => {
       authnBaseUrl: "https://authn.test",
       userId: "member-1",
     });
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: defaultSignInUser(),
+    });
+    mocks.createStoreBackedRevalidatorMock.mockImplementation(
+      (args: { readonly lease: { rotate(token: string): void } }) => {
+        mocks.revalidateCurrentContextMock.mockImplementation(async () => {
+          if (mocks.refreshOutcome === "rotated") {
+            args.lease.rotate(mocks.refreshedToken);
+          }
+          return mocks.refreshOutcome;
+        });
+        return {
+          revalidateCurrentContext: mocks.revalidateCurrentContextMock,
+        };
+      },
+    );
     mocks.readHostOwnershipMock.mockResolvedValue(
       hostOwnership({ kind: "user", id: "member-1" }, "personal"),
     );
@@ -451,7 +547,7 @@ describe("install auth helpers", () => {
 
     expect(progress).toHaveBeenCalledWith({
       stage: "host-team",
-      message: "Restarting Traycer on this computer to run as Acme…",
+      message: "Restarting Traycer on this computer to run as acme…",
       percent: null,
       bytes: null,
       totalBytes: null,
@@ -485,7 +581,7 @@ describe("install auth helpers", () => {
     });
     expect(legacyHost.requests).toEqual([]);
     expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
-    expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
   });
 
   it("reports the team transfer through host use progress", async () => {
@@ -509,7 +605,7 @@ describe("install auth helpers", () => {
 
     expect(progress).toHaveBeenCalledWith({
       stage: "host-team",
-      message: "Restarting Traycer on this computer to run as Acme…",
+      message: "Restarting Traycer on this computer to run as acme…",
       percent: null,
       bytes: null,
       totalBytes: null,
@@ -524,7 +620,7 @@ describe("install auth helpers", () => {
     expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
   });
 
-  it("prefers an exact team slug when another team's display label collides", async () => {
+  it("uses the sign-in team's slug when host environment labels collide", async () => {
     const token = "pre-existing-token";
     await writeStoredCredentials(token);
     mocks.callHostRpcMock.mockImplementation((method: string) => {
@@ -559,6 +655,9 @@ describe("install auth helpers", () => {
       ),
     ).resolves.toEqual(teamBinding);
 
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+
     expect(
       mocks.callHostRpcAtResolvedEndpointMock,
     ).toHaveBeenCalledExactlyOnceWith(
@@ -582,7 +681,7 @@ describe("install auth helpers", () => {
     );
   });
 
-  it("still accepts a team's canonical environment id as the selector", async () => {
+  it("matches a team's canonical environment id as the selector", async () => {
     await writeStoredCredentials("pre-existing-token");
     mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
@@ -606,6 +705,8 @@ describe("install auth helpers", () => {
       ),
     ).resolves.toEqual(teamBinding);
 
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
+
     expect(
       mocks.callHostRpcAtResolvedEndpointMock,
     ).toHaveBeenCalledExactlyOnceWith(
@@ -624,6 +725,77 @@ describe("install auth helpers", () => {
         },
       }),
     );
+  });
+
+  it("prefers an exact environment id over another team's colliding slug", async () => {
+    await writeStoredCredentials("pre-existing-token");
+    const user = signInUser({
+      personalEnvironmentId: null,
+      teams: [
+        {
+          teamId: "organization-exact-id",
+          environmentId: "shared-selector",
+          slug: "exact-id-team",
+        },
+        {
+          teamId: "organization-slug-match",
+          environmentId: "environment-slug-match",
+          slug: "shared-selector",
+        },
+      ],
+    });
+    mocks.validateIdentityMock.mockResolvedValue({ kind: "valid", user });
+    mocks.callHostRpcAtResolvedEndpointMock.mockResolvedValueOnce({
+      ...teamBinding,
+      environment: {
+        ...teamEnvironment,
+        environmentId: "shared-selector",
+        ownerId: "organization-exact-id",
+        label: "exact-id-team",
+      },
+    });
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-exact-id", name: "Exact ID" },
+          "personal",
+        ),
+      );
+
+    await completeTeamInstall(
+      "shared-selector",
+      { preflight: signedIn(), inlineSignInToken: null },
+      vi.fn(),
+    );
+
+    expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledWith(
+      "environment.host.bind",
+      { environmentId: "shared-selector" },
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+  });
+
+  it("asks for a team slug while the sign-in has no environments yet", async () => {
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signInUser({ personalEnvironmentId: null, teams: [] }),
+    });
+
+    await expect(buildHostUseCommand("acme")(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "Enter the slug of a team you belong to, as shown in its dashboard address.",
+      exitCode: 1,
+    });
+    expect(mocks.resolveEndpointMock).not.toHaveBeenCalled();
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+    expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
   });
 
   it("lists the signed-in teams and binds the selected team before clearing an inline-created sign-in", async () => {
@@ -656,9 +828,8 @@ describe("install auth helpers", () => {
       vi.fn(),
     );
 
-    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
-      "environment.list",
-    ]);
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
     expect(
       mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
         ([method]) => method,
@@ -696,10 +867,10 @@ describe("install auth helpers", () => {
       "host-local",
     );
     const ownershipReads = mocks.readHostOwnershipMock.mock.invocationCallOrder;
-    const listCalls = mocks.callHostRpcMock.mock.invocationCallOrder;
+    const identityReads = mocks.validateIdentityMock.mock.invocationCallOrder;
     const bindCalls =
       mocks.callHostRpcAtResolvedEndpointMock.mock.invocationCallOrder;
-    expect(listCalls[0]).toBeLessThan(ownershipReads[0] ?? Infinity);
+    expect(identityReads[0]).toBeLessThan(ownershipReads[0] ?? Infinity);
     expect(ownershipReads[0]).toBeLessThan(bindCalls[0] ?? Infinity);
     expect(ownershipReads[1]).toBeGreaterThan(bindCalls[0] ?? -Infinity);
     expect(credentialsAtOwnerChecks).toEqual([token, token]);
@@ -795,9 +966,8 @@ describe("install auth helpers", () => {
     resolveRead(teamBinding);
     await expect(operation).resolves.toEqual(teamBinding);
 
-    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
-      "environment.list",
-    ]);
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
     const bindCalls = mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
       ([method]) => method === "environment.host.bind",
     );
