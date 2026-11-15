@@ -16,7 +16,20 @@ import {
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -29,6 +42,16 @@ const mocks = vi.hoisted(() => ({
   tabHostId: vi.fn<() => string | null>(),
 }));
 
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({
     requestWithResponseTimeout: mocks.requestWithResponseTimeout,
@@ -37,6 +60,14 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => mocks.tabHostId(),
 }));
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
 
 // A spy, so a test can see whether a failed await raised the "Couldn't confirm
 // sign-in." toast. Everything else the module exports stays real.
@@ -49,17 +80,54 @@ vi.mock("@/lib/host-error-toast", async (importOriginal) => {
 import {
   useProvidersAwaitLogin,
   useProvidersAwaitLoginForClient,
+  type AwaitLoginAnswer,
   type AwaitLoginVariables,
 } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
+afterEach(() => {
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
+});
 
 type ProvidersListResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.list"
 >;
+type AwaitLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
 type ProviderListEntry = ProvidersListResponse["providers"][number];
+
+function unfinishedAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
+  };
+}
+
+function ordinaryAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+  };
+}
 
 // The real @2.1 echo shape: `loginCapability` is PRESENT but frozen at v4.0,
 // which has no `terminalLogin` key at all - not `null`, genuinely absent.
@@ -343,6 +411,213 @@ describe("useProvidersAwaitLogin overlay merge", () => {
 
     expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useProvidersAwaitLogin sign-in request recording", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  it("records a matching 200 receipt before awaiting again with its operation id", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(ordinaryAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      1,
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      2,
+      "providers.awaitLogin",
+      {
+        providerId: "copilot",
+        profileId: null,
+        recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+      },
+      expect.any(Number),
+    );
+  });
+
+  const RECORDING_END_CASES = [
+    {
+      name: "a 403",
+      reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+      reason: "forbidden",
+    },
+    {
+      name: "a 404",
+      reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+      reason: "unavailable",
+    },
+    { name: "no answer", reply: noAnswerReply(), reason: "unavailable" },
+    {
+      name: "a 401",
+      reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+      reason: "session-ended",
+    },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+    readonly reason: "forbidden" | "unavailable" | "session-ended";
+  }>;
+
+  it.each(RECORDING_END_CASES)(
+    "returns the unfinished answer after $name",
+    async (testCase) => {
+      mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+        unfinishedAwaitAnswer(),
+      );
+      const fetchHarness = activeSignInFetch;
+      if (fetchHarness === null)
+        throw new Error("sign-in request fetch harness is missing");
+      fetchHarness.enqueue(testCase.reply);
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useProvidersAwaitLogin(), {
+        wrapper,
+      });
+
+      let answer: AwaitLoginAnswer | undefined;
+      await act(async () => {
+        answer = await result.current.mutateAsync({
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: false,
+        });
+      });
+
+      expect(answer).toEqual({
+        ...unfinishedAwaitAnswer(),
+        signInRecordingEnded: testCase.reason,
+      });
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+        "providers.awaitLogin",
+        { providerId: "copilot", profileId: null },
+        expect.any(Number),
+      );
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("ends on a duplicate id without sending another await", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      unfinishedAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends when the computer asks again for the recorded id after a 200", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(unfinishedAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's await unchanged and makes no recording call", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      ordinaryAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(
+      mocks.requestWithResponseTimeout.mock.calls[0]?.[1],
+    ).not.toHaveProperty("recordedOperationId");
+    expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
   });
 });
 

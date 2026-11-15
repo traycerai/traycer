@@ -262,14 +262,17 @@ const providerMocks = vi.hoisted(() => {
     liveClient: null as HostClient<HostRpcRegistry> | null,
     useRealProfileEnablementMutation: false,
     realStartLogin: false,
+    signInRecordingService: {
+      recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+    },
     setSelectionMutate: vi.fn(),
     addCustomPathMutate: vi.fn(),
     removeCustomPathMutate: vi.fn(),
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
     setProfileEnabledMutate: vi.fn(),
-    setProfileRecordEnabled: vi.fn<SetProfileRecordEnabled>(async () => ({
-      kind: "ok",
-    })),
+    setProfileRecordEnabled: vi.fn<SetProfileRecordEnabled>(() =>
+      Promise.resolve({ kind: "ok" }),
+    ),
     refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
     setApiKeyMutate: vi.fn(),
     clearApiKeyMutate: vi.fn(),
@@ -964,6 +967,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
     useAuthService: () => ({
+      ...providerMocks.signInRecordingService,
       setProfileRecordEnabled: providerMocks.setProfileRecordEnabled,
     }),
   };
@@ -979,6 +983,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     // one is what lets the provider actually wrap the shell, which is the only
     // way the wrong-host regression can observe anything at all.
     useHostBinding: () => providerMocks.ambientBinding,
+    useAuthService: () => providerMocks.signInRecordingService,
   };
 });
 
@@ -2151,10 +2156,17 @@ describe("<ProvidersSettingsPanel />", () => {
       offersSignIns: true,
       providersListMinor: 12,
       statusVersion: { major: 1, minor: 1 },
-      status: async () =>
-        environmentStatusFixture({ principal: { kind: "personal" } }),
-      binding: async () =>
-        accountEnablementBinding("record-settings-host", "record-environment"),
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding(
+            "record-settings-host",
+            "record-environment",
+          ),
+        ),
     });
     const triggerButton = await screen.findByRole("button", {
       name: "Claude Code profile: Work",
@@ -2220,10 +2232,14 @@ describe("<ProvidersSettingsPanel />", () => {
       offersSignIns: true,
       providersListMinor: 12,
       statusVersion: { major: 1, minor: 1 },
-      status: async () =>
-        environmentStatusFixture({ principal: { kind: "personal" } }),
-      binding: async () =>
-        accountEnablementBinding("record-manage-host", "record-environment"),
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding("record-manage-host", "record-environment"),
+        ),
     });
     await waitFor(() =>
       expect(
@@ -2269,12 +2285,10 @@ describe("<ProvidersSettingsPanel />", () => {
       offersSignIns: true,
       providersListMinor: 12,
       statusVersion: null,
-      status: async () => {
-        throw new Error("Unexpected environment status request");
-      },
-      binding: async () => {
-        throw new Error("Unexpected environment binding request");
-      },
+      status: () =>
+        Promise.reject(new Error("Unexpected environment status request")),
+      binding: () =>
+        Promise.reject(new Error("Unexpected environment binding request")),
     });
     const triggerButton = await screen.findByRole("button", {
       name: "Claude Code profile: Work",
@@ -2327,10 +2341,14 @@ describe("<ProvidersSettingsPanel />", () => {
       offersSignIns: undefined,
       providersListMinor: 11,
       statusVersion: { major: 1, minor: 1 },
-      status: async () =>
-        environmentStatusFixture({ principal: { kind: "personal" } }),
-      binding: async () =>
-        accountEnablementBinding("record-legacy-host", "record-environment"),
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding("record-legacy-host", "record-environment"),
+        ),
     });
     const triggerButton = await screen.findByRole("button", {
       name: "Claude Code profile: Work",
@@ -2381,12 +2399,16 @@ describe("<ProvidersSettingsPanel />", () => {
       offersSignIns: true,
       providersListMinor: 12,
       statusVersion: { major: 1, minor: 1 },
-      status: async () =>
-        environmentStatusFixture({ principal: { kind: "personal" } }),
-      binding: async () =>
-        accountEnablementBinding(
-          "record-provider-off-host",
-          "record-environment",
+      status: () =>
+        Promise.resolve(
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        ),
+      binding: () =>
+        Promise.resolve(
+          accountEnablementBinding(
+            "record-provider-off-host",
+            "record-environment",
+          ),
         ),
     });
     const triggerButton = await screen.findByRole("button", {
@@ -2446,10 +2468,17 @@ describe("<ProvidersSettingsPanel />", () => {
         offersSignIns: true,
         providersListMinor: 12,
         statusVersion: { major: 1, minor: 1 },
-        status: async () =>
-          environmentStatusFixture({ principal: { kind: "personal" } }),
-        binding: async () =>
-          accountEnablementBinding(`record-${kind}-host`, "record-environment"),
+        status: () =>
+          Promise.resolve(
+            environmentStatusFixture({ principal: { kind: "personal" } }),
+          ),
+        binding: () =>
+          Promise.resolve(
+            accountEnablementBinding(
+              `record-${kind}-host`,
+              "record-environment",
+            ),
+          ),
       });
       const triggerButton = await screen.findByRole("button", {
         name: "Claude Code profile: Work",
@@ -2524,37 +2553,40 @@ describe("<ProvidersSettingsPanel />", () => {
         offersSignIns: true,
         providersListMinor: 12,
         statusVersion,
-        status:
-          mode === "pending"
-            ? () => pendingStatus
-            : mode === "own-settings"
-              ? async () =>
-                  environmentStatusFixture({
-                    principal: null,
-                    planes: {
-                      records: "local",
-                      broker: "local",
-                      room: "local",
-                    },
-                  })
-              : mode === "failed"
-                ? async () =>
-                    environmentStatusFixture({
-                      principal: { kind: "personal" },
-                    })
-                : async () => {
-                    throw new Error("Environment status must not be requested");
-                  },
-        binding:
-          mode === "failed"
-            ? async () => {
-                throw new Error("Environment binding unavailable");
-              }
-            : async () =>
-                accountEnablementBinding(
-                  `record-${mode}-host`,
-                  "record-environment",
-                ),
+        status: () => {
+          if (mode === "pending") return pendingStatus;
+          if (mode === "own-settings") {
+            return Promise.resolve(
+              environmentStatusFixture({
+                principal: null,
+                planes: {
+                  records: "local",
+                  broker: "local",
+                  room: "local",
+                },
+              }),
+            );
+          }
+          if (mode === "failed") {
+            return Promise.resolve(
+              environmentStatusFixture({ principal: { kind: "personal" } }),
+            );
+          }
+          return Promise.reject(
+            new Error("Environment status must not be requested"),
+          );
+        },
+        binding: () => {
+          if (mode === "failed") {
+            return Promise.reject(new Error("Environment binding unavailable"));
+          }
+          return Promise.resolve(
+            accountEnablementBinding(
+              `record-${mode}-host`,
+              "record-environment",
+            ),
+          );
+        },
       });
       const triggerButton = await screen.findByRole("button", {
         name: "Claude Code profile: Work",
@@ -2592,7 +2624,10 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.setProfileRecordEnabled).not.toHaveBeenCalled();
       expect(providerMocks.setProfileEnabledMutate).not.toHaveBeenCalled();
       if (mode === "pending") {
-        await act(async () => finishPendingStatus());
+        await act(() => {
+          finishPendingStatus();
+          return pendingStatus;
+        });
         await waitFor(() =>
           expect(
             fixture.pageQueryClient.getQueryState(fixture.bindingQueryKey)
@@ -2857,9 +2892,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setProfileEnabledMutate.mockReset();
     providerMocks.setProfileRecordEnabled.mockReset();
-    providerMocks.setProfileRecordEnabled.mockImplementation(async () => ({
-      kind: "ok",
-    }));
+    providerMocks.setProfileRecordEnabled.mockResolvedValue({ kind: "ok" });
     providerMocks.setEnvOverrideMutate.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
     providerMocks.startLoginMutate.mockReset();

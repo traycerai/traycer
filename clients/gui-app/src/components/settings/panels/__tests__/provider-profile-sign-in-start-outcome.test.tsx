@@ -34,6 +34,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // on `requestWithResponseTimeout`, which no flow in this suite uses).
 const host = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+  signInRecordingService: {
+    recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+  },
   requestWithOptions:
     vi.fn<
       (
@@ -52,13 +55,31 @@ vi.mock("@/lib/host", async (importOriginal) => {
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
   });
-  return { ...actual, useHostClient: () => client };
+  return {
+    ...actual,
+    useHostClient: () => client,
+    useAuthService: () => host.signInRecordingService,
+  };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useAuthService: () => host.signInRecordingService,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
+}));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
 }));
 // A spy, so a test can see which link a button sent the user to.
 const links = vi.hoisted(() => ({

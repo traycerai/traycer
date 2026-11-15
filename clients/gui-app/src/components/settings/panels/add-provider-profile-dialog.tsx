@@ -60,6 +60,7 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useNameProfileRecordForClient } from "@/hooks/providers/use-name-profile-record-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -263,7 +264,6 @@ function ProviderProfileSignInDialog({
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
-  const renameProfile = useRenameProviderProfileForClient(client);
   const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const hostBlock = providerHostBlock(state, "sign-in-and-enable");
   const macosBlock = hostBlock?.kind === "macos" ? hostBlock : null;
@@ -297,6 +297,12 @@ function ProviderProfileSignInDialog({
     profileOutcomes,
     target,
     client,
+  );
+  const renameProfile = useAddProfileRename(
+    client,
+    state.providerId,
+    flow.state,
+    offersSignIns,
   );
   const targetTerminal = destinationResult(flow.state);
   const trimmedLabel = label.trim();
@@ -1534,6 +1540,26 @@ function resolveDialogLockState({
     finalizing,
     dismissalLocked: commitPending || finalizing || identityCompletionPending,
   };
+}
+
+/** Only a named sign-in outcome makes the naming step a record action. */
+function useAddProfileRename(
+  client: HostClient<HostRpcRegistry> | null,
+  providerId: ProviderCliState["providerId"],
+  flowState: ProviderProfileLoginFlowState,
+  offersSignIns: boolean,
+) {
+  const local = useRenameProviderProfileForClient(client);
+  const recordProfileId =
+    offersSignIns && flowState.kind === "identity"
+      ? flowState.recordProfileId
+      : null;
+  const record = useNameProfileRecordForClient(
+    client,
+    providerId,
+    recordProfileId !== null,
+  );
+  return recordProfileId === null ? local : record;
 }
 
 interface NamingStepState {

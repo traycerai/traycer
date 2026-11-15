@@ -17,6 +17,7 @@ import type { RemovedProviderProfile } from "@/components/providers/provider-pro
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 /** The `providers.list` envelope a test's fake computer returns. */
 export interface ProfileListAnswer {
@@ -150,19 +151,10 @@ export function createProfileListHost(input: {
   function exposeEnvironmentBinding(): void {
     messenger.setHandlers({
       ...handlers,
-      "environment.status": () => ({
-        principal: { kind: "team", teamName: "Test team" },
-        reachability: "connected",
-        bindingGeneration: null,
-        desiredRevision: null,
-        receivedRevision: null,
-        appliedRevision: null,
-        receiptAgeMs: null,
-        items: [],
-        pendingUploads: [],
-        setup: null,
-        remoteAccess: "off",
-      }),
+      "environment.status": () =>
+        environmentStatusFixture({
+          principal: { kind: "team", teamName: "Test team" },
+        }),
       "environment.host.read": () => ({
         hostId: mockLocalHostEntry.hostId,
         environment: {
@@ -175,6 +167,7 @@ export function createProfileListHost(input: {
         explicit: true,
         enrolledByUserId: "user-profile-fixture",
         canUnbind: false,
+        sharingGeneration: null,
       }),
     });
   }

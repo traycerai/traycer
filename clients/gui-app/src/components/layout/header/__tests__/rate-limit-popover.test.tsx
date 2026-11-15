@@ -294,7 +294,14 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({
+      setProfileRecordEnabled: () =>
+        Promise.reject(new Error("Unexpected profile availability write")),
+    }),
+  };
 });
 vi.mock(
   "@/hooks/providers/use-providers-refresh-profile-status-mutation",

@@ -129,6 +129,7 @@ export type ProviderProfileLoginFlowState =
   | {
       readonly kind: "identity";
       readonly profileId: string;
+      readonly recordProfileId: string | null;
       readonly profile: ProviderProfile;
       readonly profiles: readonly ProviderProfile[];
       readonly existingProfileId: string | null;
@@ -312,6 +313,7 @@ type AwaitLoginResolution =
   | {
       readonly kind: "authenticated";
       readonly payload: {
+        readonly recordProfileId: null;
         readonly profile: ProviderProfile;
         readonly profiles: readonly ProviderProfile[];
         readonly existingProfileId: string | null;
@@ -383,7 +385,7 @@ export function classifyProfileAwaitResult(
   if (profile !== null && profile.auth.status === "authenticated") {
     return {
       kind: "authenticated",
-      payload: { profile, profiles, existingProfileId },
+      payload: { profile, profiles, existingProfileId, recordProfileId: null },
     };
   }
   if (result.codeRejected) return { kind: "codeRejected" };
@@ -736,6 +738,7 @@ export function useProviderDestinationLoginFlow(
   // arbiter after success already latched) and needs it without a second
   // copy of `result` in scope.
   const successPayloadRef = useRef<{
+    readonly recordProfileId: string | null;
     readonly profile: ProviderProfile;
     readonly profiles: readonly ProviderProfile[];
     readonly existingProfileId: string | null;
@@ -1067,6 +1070,7 @@ export function useProviderDestinationLoginFlow(
         setState({
           kind: "identity",
           profileId: payload.profile.profileId,
+          recordProfileId: payload.recordProfileId,
           profile: payload.profile,
           profiles: payload.profiles,
           existingProfileId: payload.existingProfileId,
@@ -1109,6 +1113,7 @@ export function useProviderDestinationLoginFlow(
       if (outcome.kind === "signed-in") {
         awaitOutcomeRef.current = "authenticated";
         successPayloadRef.current = {
+          recordProfileId: outcome.profile.profileId,
           profile: outcome.profile,
           profiles: outcome.profiles,
           existingProfileId: null,

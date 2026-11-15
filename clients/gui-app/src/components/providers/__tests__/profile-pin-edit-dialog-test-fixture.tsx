@@ -1,5 +1,4 @@
 import { render } from "@testing-library/react";
-import type { RefObject } from "react";
 import type {
   RequestOfMethod,
   ResponseOfMethod,
@@ -7,7 +6,6 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
 import {
   pinProfile,
   providerState,
@@ -19,12 +17,12 @@ import {
 } from "@/components/providers/__tests__/profile-pin-host-fixture";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
-import { useProfileRecordEnvironmentId } from "@/hooks/providers/use-profile-record-environment-id";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { profileUsesRecord } from "@/components/providers/provider-profile-model";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-
-const INPUT_REF: RefObject<HTMLInputElement | null> = { current: null };
+import {
+  ListedDropdown,
+  RecordEnvironmentIdReadout,
+} from "@/components/providers/__tests__/profile-pin-edit-dialog-test-consumers";
 
 export function profileListAnswer(
   profiles: readonly ProviderProfile[],
@@ -123,46 +121,6 @@ export function mountProfileEditDialog(input: {
     </host.Wrapper>,
   );
   return host;
-}
-
-function ListedDropdown(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string;
-  readonly activeProfileId: string;
-}) {
-  const list = useProvidersListForClient(props.client, {
-    enabled: true,
-    subscribed: true,
-  });
-  const state = list.data?.providers.find(
-    (provider) => provider.providerId === "opencode",
-  );
-  if (state === undefined) return null;
-  return (
-    <PickerProfileDropdown
-      providerId="opencode"
-      providerLabel="OpenCode"
-      profiles={state.profiles}
-      activeProfileId={props.activeProfileId}
-      onSelectProfile={() => undefined}
-      onCreateProfile={() => undefined}
-      createProfileDisabled={false}
-      createProfileDisabledReason={undefined}
-      shortcutHintForIndex={() => null}
-      profileEnablementPending={() => false}
-      contentContainer={null}
-      inputRef={INPUT_REF}
-      runTargetHostId={props.hostId}
-      admissionByProfileId={null}
-    />
-  );
-}
-
-function RecordEnvironmentIdReadout(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-}) {
-  const environmentId = useProfileRecordEnvironmentId(props.client, true);
-  return <output>{environmentId}</output>;
 }
 
 function methodVersion(method: string): {

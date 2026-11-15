@@ -43,12 +43,14 @@ export async function createProfileRecordAuthFixture(
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((input, init) => {
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input.url;
+      let url: string;
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.href;
+      } else {
+        url = input.url;
+      }
       if (url === VALIDATION_URL) {
         const user = userWith(
           userSubscription({
