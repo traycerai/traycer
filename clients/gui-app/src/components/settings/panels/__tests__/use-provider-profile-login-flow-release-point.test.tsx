@@ -20,6 +20,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import {
+  awaitLoginTestAnswer,
+  type AwaitLoginTestAnswer,
+} from "./provider-profile-login-flow-test-support";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
   useProviderProfileLoginFlow,
@@ -73,10 +77,7 @@ type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
+type AwaitLoginResponse = AwaitLoginTestAnswer;
 type SubmitLoginCodeRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.submitLoginCode"
@@ -155,12 +156,12 @@ function startedAnswer(profileId: string | null): StartLoginResponse {
 /** `awaitLogin` resolving with nothing authenticated: the sign-in did not
  *  complete, which is a failure for a named profile and a quiet return to
  *  `start` for the ambient reauth. */
-const NOT_AUTHENTICATED_ANSWER: AwaitLoginResponse = {
+const NOT_AUTHENTICATED_ANSWER: AwaitLoginResponse = awaitLoginTestAnswer({
   state: null,
   existingProfileId: null,
   codeRejected: false,
   refusal: null,
-};
+});
 
 /** `awaitLogin` resolving with the awaited profile signed in: the sign-in
  *  completed, and the flow moves to `identity`. */
@@ -185,7 +186,7 @@ function authenticatedAnswer(profileId: string): AwaitLoginResponse {
     accentColor: null,
     ambientDriftNotice: null,
   };
-  return {
+  return awaitLoginTestAnswer({
     state: {
       providerId: PROVIDER_ID,
       enabled: true,
@@ -210,7 +211,7 @@ function authenticatedAnswer(profileId: string): AwaitLoginResponse {
     existingProfileId: null,
     codeRejected: false,
     refusal: null,
-  };
+  });
 }
 
 function queryClientWrapper(): (props: {

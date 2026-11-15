@@ -369,20 +369,13 @@ describe("targeted sign-in in the Add dialog", () => {
     ).toEqual([]);
   });
 
-  it("forwards the old await keys when a targeted answer has no profile outcome", async () => {
+  it("forwards all await keys for an existing authenticated profile with no outcome", async () => {
     const awaitAnswer: AwaitAnswer = {
       state: provider("claude-code", [providerProfile()]),
-      existingProfileId: "existing-row",
-      codeRejected: true,
-      refusal: {
-        reason: "The provider refused this sign-in.",
-        actionUrl: null,
-      },
-      installation: {
-        kind: "waiting-for-readers",
-        admissionId: "install-admission",
-        count: 2,
-      },
+      existingProfileId: "work",
+      codeRejected: false,
+      refusal: null,
+      installation: null,
       profileOutcome: null,
     };
     const harness = renderDestinationDialog({
