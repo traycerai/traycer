@@ -108,6 +108,17 @@ const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
 ].sort();
 
 describe("host RPC routing table", () => {
+  it("does not route retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
+  });
+
   it("routes every client method and leaves exactly the retained profile-sync methods unrouted", () => {
     const protocolRetained = Object.keys(PROFILE_SYNC_LINK_RPC_METHODS).sort();
     const clientUnary = Object.keys(hostRpcRegistry)

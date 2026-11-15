@@ -140,6 +140,17 @@ const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
 
 describe("host method poll policy table", () => {
+  it("has no policy entries for retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(HOST_METHOD_POLL_TABLE, method)).toBe(false);
+    }
+  });
+
   it("has exactly the client-routable host method keys", () => {
     expect(() =>
       assertExactHostMethodPollTableKeys(HOST_METHOD_POLL_TABLE),
