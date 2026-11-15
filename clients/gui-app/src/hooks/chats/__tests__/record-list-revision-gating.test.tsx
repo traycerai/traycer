@@ -13,8 +13,7 @@
  * Record-list transitions are driven through explicit invalidation
  * (`invalidateEpicChatRecords` / `invalidateEpicTuiAgentRecords`) rather than
  * waiting for the 20s poll interval. The target retry case advances a fake
- * clock beyond its former retry budget to prove no timer retries between
- * list answers. Each case asserts the
+ * clock to prove no timer retries between list answers. Each case asserts the
  * chat method's dispatches (the primary claim) and mirrors the same claim on
  * the terminal-agent method, since both hooks are mounted together and the
  * gating hook (`useRecordListStamp`) is shared code between them - a defect
@@ -2300,7 +2299,7 @@ describe("publication targets follow the real chat-record revision", () => {
     targetView.unmount();
   });
 
-  it("shares bounded retries, keeps the last good map, and waits for the next list answer past the old retry budget", async () => {
+  it("shares bounded retries and keeps the last good map without timer retries between list answers", async () => {
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
       publicationRedirectRevision: "redirect-r1",
