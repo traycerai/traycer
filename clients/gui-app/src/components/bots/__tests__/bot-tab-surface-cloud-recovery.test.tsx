@@ -431,15 +431,11 @@ describe("<BotTabSurface /> asks a transiently failed open again by itself", () 
     render(tree(true));
     expectReconnecting();
 
-    const mounted = opens();
-    await advance(2_499);
-    expect(opens()).toBe(mounted);
-    expectReconnecting();
-
+    // `Math.random` is 1, so each wait is its whole step, twice the last.
     const first = await untilAsked();
+    expect(first).toBeGreaterThanOrEqual(5_000);
     expectReconnecting();
-    const second = await untilAsked();
-    expect(second).toBeGreaterThan(first);
+    expect(await untilAsked()).toBe(first * 2);
     expectReconnecting();
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });

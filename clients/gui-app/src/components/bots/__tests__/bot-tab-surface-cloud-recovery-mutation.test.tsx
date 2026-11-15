@@ -845,7 +845,7 @@ describe("<BotTabSurface /> a ring around the start of an open", () => {
   });
 });
 
-describe("<BotTabSurface /> the tab's own re-ask while a ring's re-open is in flight", () => {
+describe("<BotTabSurface /> the tab's own re-ask when a ring's open comes first", () => {
   beforeEach(() => {
     vi.useFakeTimers({
       toFake: ["setTimeout", "clearTimeout"],
@@ -860,24 +860,26 @@ describe("<BotTabSurface /> the tab's own re-ask while a ring's re-open is in fl
     vi.useRealTimers();
   });
 
-  it("sends one bot.open, not two, when the backoff would have fired during the ring's open", async () => {
+  // Holding TanStack's notices from the ring to past the longest wait is the
+  // backoff coming due after the ring's open was sent and before React heard
+  // that it is pending.
+  it("sends only the ring's open when the backoff comes due before React hears it is pending", async () => {
     render(tree());
-    const mounted = await failMountOpensUntilReconnecting();
-    await waitForNoOpenInFlight();
-    const asked = opens.length;
-    expect(mounted).toBeGreaterThan(0);
-
-    await ringAsking(asked + 1);
+    await settleMountOpensUntilIdle((open) => open.reject(TRANSIENT));
+    expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy();
     const submitted = openSubmissions;
+    const asked = opens.length;
+
+    holdNotices();
+    ringDoorbell(TAB_HOST);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(openSubmissions).toBe(submitted + 1);
 
-    expect(openSubmissions).toBe(submitted);
-    expect(opens).toHaveLength(asked + 1);
-
+    releaseNotices();
     await settle(heldOpen(asked), (open) => open.resolve(SERVING));
     await waitFor(() => expectChannelOnly());
-    expect(opens).toHaveLength(asked + 1);
+    expect(openSubmissions).toBe(submitted + 1);
   });
 });

@@ -777,29 +777,33 @@ function BotTabBody(props: {
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
   const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
   // Transient failures in a row, which set the wait before the tab's own
-  // re-ask below.
+  // re-ask below; and whether an open is on its way, set in the step that
+  // sends it, a task before React hears it is pending. Only the latest
+  // open's callbacks run, and `bot.open` is FIFO, so its settling clears it.
   const transientFailures = useRef(0);
-  const sendOpen = useCallback(
-    () =>
-      openBot(
-        { botId },
-        {
-          onSuccess: (response) => {
-            transientFailures.current = 0;
-            setAnswer(response);
-            setOpenError(null);
-          },
-          onError: (error) => {
-            const transient = isTransientCloudFailure(error);
-            transientFailures.current = transient
-              ? transientFailures.current + 1
-              : 0;
-            setOpenError({ message: error.message, transient });
-          },
+  const openInFlight = useRef(false);
+  const sendOpen = useCallback(() => {
+    openInFlight.current = true;
+    openBot(
+      { botId },
+      {
+        onSuccess: (response) => {
+          openInFlight.current = false;
+          transientFailures.current = 0;
+          setAnswer(response);
+          setOpenError(null);
         },
-      ),
-    [botId, openBot],
-  );
+        onError: (error) => {
+          openInFlight.current = false;
+          const transient = isTransientCloudFailure(error);
+          transientFailures.current = transient
+            ? transientFailures.current + 1
+            : 0;
+          setOpenError({ message: error.message, transient });
+        },
+      },
+    );
+  }, [botId, openBot]);
   // An open the host failed only because it could not reach the cloud is
   // asked again once on each ring of that host's cloud-recovery doorbell. The
   // failure stands while a ring's open is in flight, so the hold does too. A
@@ -879,13 +883,16 @@ function BotTabBody(props: {
   // A transient failure is also asked again on the tab's own backoff, since
   // the host owes no ring for a lone 5xx. Only while the surface and the
   // window are in view, by the rule above; coming back into view re-opens.
-  // Each failure is a new `openError`, so each arms its own wait.
+  // Each failure is a new `openError`, so each arms its own wait. An open
+  // sent since the wait was armed answers for it, even one whose pending
+  // state has not rendered yet; its own failure arms the next wait.
   useEffect(() => {
     if (openError?.transient !== true || openPending || !paneVisible) {
       return undefined;
     }
     const timer = setTimeout(
       () => {
+        if (openInFlight.current) return;
         if (document.visibilityState === "visible") reopen();
       },
       botTabReopenDelayMs(transientFailures.current, () => Math.random()),
