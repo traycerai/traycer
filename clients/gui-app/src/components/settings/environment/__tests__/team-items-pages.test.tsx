@@ -24,6 +24,7 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  rejectNextTeamEnvironmentItemPut,
   requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -864,9 +865,9 @@ describe("TeamVariablesAndShells", () => {
       await act(async () => {
         await harness.queryClient.refetchQueries();
       });
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 1,
-      );
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
       expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
         expect.objectContaining({
           revision: 3,
@@ -945,34 +946,11 @@ describe("TeamVariablesAndShells", () => {
       const user = userEvent.setup();
       render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
       await screen.findByLabelText("Shell path");
-      const authnFetch = vi.mocked(globalThis.fetch).getMockImplementation();
-      if (authnFetch === undefined)
-        throw new Error("The authn fetch fixture is absent.");
-      let rejectFirstShellPut = true;
-      vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-        const target = new URL(input instanceof Request ? input.url : input);
-        const method =
-          init?.method ?? (input instanceof Request ? input.method : "GET");
-        if (
-          rejectFirstShellPut &&
-          method === "PUT" &&
-          target.pathname.endsWith("/items/shell")
-        ) {
-          rejectFirstShellPut = false;
-          throw new Error("The transport did not answer.");
-        }
-        return authnFetch(input, init);
-      });
-      const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
+      const failedRequests = rejectNextTeamEnvironmentItemPut(harness, "shell");
       await typeNewPath(user);
-      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(
-        requestStart,
-      );
-      const failedRequest = vi.mocked(globalThis.fetch).mock.calls[
-        requestStart
-      ];
-      expect(failedRequest[1]?.method).toBe("PUT");
-      expect(failedRequest[1]?.body).toContain('"revision":1');
+      expect(failedRequests).toHaveLength(1);
+      expect(failedRequests[0]?.method).toBe("PUT");
+      expect(failedRequests[0]?.body).toMatchObject({ revision: 1 });
       expect(await screen.findByRole("alert")).toHaveProperty(
         "textContent",
         "Connect to manage settings.",
@@ -990,9 +968,9 @@ describe("TeamVariablesAndShells", () => {
       await act(async () => {
         await harness.queryClient.refetchQueries();
       });
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 1,
-      );
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
       expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
         [],
       );

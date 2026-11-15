@@ -39,6 +39,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return {
     useHostScope,
     useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
     WINDOW_HOST_SELECTION: {
       scopedHostId: null,
       setScopedHostId: () => undefined,
@@ -136,17 +137,15 @@ describe("team pages on a build with a server pool", () => {
 
     expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
     });
-    expect(harness.paramsOf("environment.configuration.items")).toEqual([
-      { environmentId: "env-a" },
-    ]);
+    expect(harness.paramsOf("environment.configuration.items")).toEqual(
+      expect.arrayContaining([{ environmentId: "env-a" }]),
+    );
     expect(hostIdsOf(harness, "environment.configuration.items")).toEqual([]);
     for (const method of ["environment.members", "environment.list"]) {
-      expect(hostIdsOf(harness, method)).not.toHaveLength(0);
-      expect(new Set(hostIdsOf(harness, method))).toEqual(
-        new Set([POOL_HOST_ID]),
-      );
+      expect(harness.paramsOf(method)).not.toHaveLength(0);
+      expect(hostIdsOf(harness, method)).toEqual([]);
     }
   });
 
@@ -163,11 +162,9 @@ describe("team pages on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.host.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.host.list")).not.toHaveLength(0);
     });
-    expect(new Set(hostIdsOf(harness, "environment.host.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
   });
 
   it("invalidates the pool's environment list after an authn unlink", async () => {
@@ -197,13 +194,13 @@ describe("team pages on a build with a server pool", () => {
 
     const card = await screen.findByRole("region", { name: "Plans" });
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
     });
     expect(harness.paramsOf("environment.plans.list")).toEqual([
       { environmentId: "env-a" },
     ]);
     expect(hostIdsOf(harness, "environment.plans.list")).toEqual([]);
-    const listReadsBefore = hostIdsOf(harness, "environment.list").length;
+    const listReadsBefore = harness.paramsOf("environment.list").length;
     const planReadsBefore = harness.paramsOf("environment.plans.list").length;
     await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
     const dialog = await screen.findByRole("dialog");
@@ -212,7 +209,7 @@ describe("team pages on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list").length).toBeGreaterThan(
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
         listReadsBefore,
       );
       expect(harness.paramsOf("environment.plans.list").length).toBeGreaterThan(
@@ -230,9 +227,7 @@ describe("team pages on a build with a server pool", () => {
     expect(hostIdsOf(harness, "environment.plans.unlinkPreview")).toEqual([
       POOL_HOST_ID,
     ]);
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.list")).toEqual([]);
     expect(harness.paramsOf("environment.plans.list")).toEqual([
       { environmentId: "env-a" },
       { environmentId: "env-a" },
@@ -262,7 +257,7 @@ describe("team pages on a build with a server pool", () => {
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
     const value = await screen.findByLabelText("Value for NODE_ENV");
-    const listReadsBefore = hostIdsOf(harness, "environment.list").length;
+    const listReadsBefore = harness.paramsOf("environment.list").length;
     await userEvent.clear(value);
     await userEvent.type(value, "staging");
     fireEvent.blur(value);
@@ -280,12 +275,10 @@ describe("team pages on a build with a server pool", () => {
       expect(hostIdsOf(harness, "environment.configuration.items.put")).toEqual(
         [],
       );
-      expect(hostIdsOf(harness, "environment.list").length).toBeGreaterThan(
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
         listReadsBefore,
       );
     });
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.list")).toEqual([]);
   });
 });

@@ -591,7 +591,10 @@ describe("TeamTextItems accepted writes", () => {
       value: { value: "submitted" },
       original: variable("development", 1),
     };
-    const rejectedRequests = rejectNextTeamEnvironmentItemPut(harness);
+    const rejectedRequests = rejectNextTeamEnvironmentItemPut(
+      harness,
+      "variable",
+    );
     const firstWrites = getWrites();
     await act(async () => {
       await firstWrites.write(submitted);
@@ -756,7 +759,10 @@ describe("TeamTextItems accepted writes", () => {
     await waitFor(() => expect(delayedReadStarted).toBe(true));
     const submittedField = nodeValue();
     await userEvent.type(submittedField, "!");
-    const rejectedRequests = rejectNextTeamEnvironmentItemPut(harness);
+    const rejectedRequests = rejectNextTeamEnvironmentItemPut(
+      harness,
+      "variable",
+    );
     commitNodeValue();
     expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(
       "textContent",
@@ -843,7 +849,7 @@ describe("TeamTextItems accepted writes", () => {
     });
     const page = render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("first");
-    rejectNextTeamEnvironmentItemPut(harness);
+    rejectNextTeamEnvironmentItemPut(harness, "variable");
     commitNodeValue();
 
     expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(

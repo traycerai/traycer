@@ -237,6 +237,7 @@ export interface TeamPageHarness {
 
 export function rejectNextTeamEnvironmentItemPut(
   harness: TeamPageHarness,
+  kind: string,
 ): EnvironmentTransportRequest[] {
   const cloud = harness.auth.environmentCloud();
   const rejectedRequests: EnvironmentTransportRequest[] = [];
@@ -247,7 +248,7 @@ export function rejectNextTeamEnvironmentItemPut(
       if (
         rejectNextPut &&
         request.method === "PUT" &&
-        new URL(request.url).pathname.endsWith("/items/variable")
+        new URL(request.url).pathname.endsWith(`/items/${kind}`)
       ) {
         rejectNextPut = false;
         rejectedRequests.push(request);

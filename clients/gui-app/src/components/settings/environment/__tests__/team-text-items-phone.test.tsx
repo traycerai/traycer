@@ -504,7 +504,10 @@ describe("TeamTextItems on a phone", () => {
     fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
       target: { value: "draft" },
     });
-    const failedRequests = rejectNextTeamEnvironmentItemPut(harness);
+    const failedRequests = rejectNextTeamEnvironmentItemPut(
+      harness,
+      "variable",
+    );
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     expect(
