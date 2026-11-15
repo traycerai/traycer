@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import {
+  SANDBOX_FROZEN_MESSAGE,
+  SANDBOX_OUT_OF_CREDITS,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import { refusedFrozenSandboxFatal } from "@traycer-clients/shared/test-fixtures/frozen-sandbox-fatal";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -768,6 +778,66 @@ describe("useGitListChangedFilesSubscription", () => {
     expect(error.message).toContain("UNAUTHORIZED");
     expect(result.current.isPending).toBe(false);
     expect(session.closed).toBe(true);
+  });
+
+  describe("a session ended by a refused frozen-sandbox mint", () => {
+    afterEach(() => {
+      resetHostDirectoryRows();
+    });
+
+    it.each([
+      [
+        "a team's sandbox",
+        sandboxHostEntry("host1", { id: "team-1", name: "Acme" }),
+        SANDBOX_OUT_OF_CREDITS,
+      ],
+      [
+        "the reader's own sandbox",
+        sandboxHostEntry("host1", null),
+        SANDBOX_FROZEN_MESSAGE,
+      ],
+    ])(
+      "prints the fatal's reason as it is for %s",
+      async (_label, row, reason) => {
+        installHostDirectoryRows([row]);
+        const fatal = await refusedFrozenSandboxFatal("host1");
+        const { result } = renderHook(
+          () =>
+            useGitListChangedFilesSubscription({
+              hostId: "host1",
+              runningDir: "/repo",
+              ignoreWhitespace: false,
+              enabled: true,
+            }),
+          { wrapper: createWrapper() },
+        );
+        await waitFor(() => {
+          expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+        });
+        const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+        });
+        if (!session) throw new Error("Session should exist");
+
+        act(() => {
+          session.emitStatus("closed", { kind: "fatalError", details: fatal });
+        });
+
+        await waitFor(() => {
+          expect(result.current.error).not.toBeNull();
+        });
+        const error = result.current.error;
+        if (error === null || error.type !== "error") {
+          throw new Error("Expected an error event");
+        }
+        expect(fatal.reason).toBe(reason);
+        expect(error.message).toBe(
+          `The Git changes stream failed (SANDBOX_FROZEN): ${reason}`,
+        );
+      },
+    );
   });
 
   it("waits for a replacement client and recovers without surfacing CLIENT_CLOSED", async () => {

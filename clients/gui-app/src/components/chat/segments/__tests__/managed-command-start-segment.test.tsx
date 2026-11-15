@@ -94,7 +94,9 @@ function treeWithoutTranscript(node: ReactNode): ReactNode {
 
 function tree(node: ReactNode): ReactNode {
   return (
-    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: "host-1" }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_ID, hostId: "host-1", payerHostId: "host-1" }}
+    >
       {treeWithoutTranscript(node)}
     </ChatTranscriptProvider>
   );

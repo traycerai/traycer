@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
@@ -9,13 +10,35 @@ import { HostIdentityCard } from "@/components/settings/host-scope/host-identity
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 
-afterEach(cleanup);
+const auth = vi.hoisted(() => ({
+  marker: "sandbox-header-auth",
+  fetchAuthenticatedUser: vi.fn((): Promise<AuthenticatedUser | null> =>
+    Promise.resolve(null),
+  ),
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useAuthService: () => auth,
+  useHostBinding: () => ({ auth }),
+}));
+
+afterEach(() => {
+  cleanup();
+  auth.fetchAuthenticatedUser.mockReset();
+  auth.fetchAuthenticatedUser.mockResolvedValue(null);
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+});
 
 function sandboxHost(
   state: "awake" | "suspended",
   health: "offline" | "online",
   frozen: boolean,
+  ownerKind: "user" | "team" | "unknown",
 ): HostScopeOption {
   return hostScopeOptionFixture({
     hostId: "sbx-a",
@@ -42,7 +65,7 @@ function sandboxHost(
       state,
       frozen,
       summary: null,
-      ownerKind: "unknown",
+      ownerKind,
       teamOwned: false,
     },
   });
@@ -53,11 +76,13 @@ function teamSandboxHost(
   health: "offline" | "online",
   frozen: boolean,
 ): HostScopeOption {
-  const host = sandboxHost(state, health, frozen);
+  const host = sandboxHost(state, health, frozen, "user");
   return {
     ...host,
     sandbox:
-      host.sandbox === null ? null : { ...host.sandbox, teamOwned: true },
+      host.sandbox === null
+        ? null
+        : { ...host.sandbox, teamOwned: true, ownerKind: "team" },
   };
 }
 
@@ -70,34 +95,47 @@ interface CardExtra {
   readonly costLine?: ReactNode;
 }
 
-function renderCard(host: HostScopeOption, extra: CardExtra | null): void {
+function renderCardWithTeamName(
+  host: HostScopeOption,
+  extra: CardExtra | null,
+  teamName: string | null,
+): void {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
-    <TooltipProvider delayDuration={0}>
-      <HostIdentityCard
-        host={host}
-        displayName={host.name}
-        version={host.version}
-        nameAction={null}
-        nameInput={null}
-        busy={extra?.busy ?? false}
-        busySessionCount={extra?.busySessionCount ?? null}
-        busyBreakdown={extra?.busyBreakdown ?? null}
-        actions={null}
-        healthAction={extra?.healthAction ?? null}
-        lifecycleLine={extra?.lifecycleLine ?? null}
-        costLine={extra?.costLine}
-      >
-        {host.sandbox === null ? null : (
-          <SandboxHeaderNotices sandbox={host.sandbox} teamName={null} />
-        )}
-      </HostIdentityCard>
-    </TooltipProvider>,
+    <QueryClientProvider client={client}>
+      <TooltipProvider delayDuration={0}>
+        <HostIdentityCard
+          host={host}
+          displayName={host.name}
+          version={host.version}
+          nameAction={null}
+          nameInput={null}
+          busy={extra?.busy ?? false}
+          busySessionCount={extra?.busySessionCount ?? null}
+          busyBreakdown={extra?.busyBreakdown ?? null}
+          actions={null}
+          healthAction={extra?.healthAction ?? null}
+          lifecycleLine={extra?.lifecycleLine ?? null}
+          costLine={extra?.costLine}
+        >
+          {host.sandbox === null ? null : (
+            <SandboxHeaderNotices sandbox={host.sandbox} teamName={teamName} />
+          )}
+        </HostIdentityCard>
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
+}
+
+function renderCard(host: HostScopeOption, extra: CardExtra | null): void {
+  renderCardWithTeamName(host, extra, null);
 }
 
 describe("<HostIdentityCard /> a sandbox's state word against its health", () => {
   it("shows the health, not Awake, for an awake sandbox that cannot be reached", () => {
-    renderCard(sandboxHost("awake", "offline", false), null);
+    renderCard(sandboxHost("awake", "offline", false, "user"), null);
 
     expect(screen.queryByTestId("host-identity-sandbox-state")).toBeNull();
     expect(screen.getByTestId("host-identity-health").textContent).toBe(
@@ -106,7 +144,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
   });
 
   it("shows Suspended, and no health word, for a suspended sandbox that cannot be reached", () => {
-    renderCard(sandboxHost("suspended", "offline", false), null);
+    renderCard(sandboxHost("suspended", "offline", false, "user"), null);
 
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Suspended",
@@ -115,7 +153,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
   });
 
   it("keeps the Awake word for an awake sandbox that is reachable", () => {
-    renderCard(sandboxHost("awake", "online", false), null);
+    renderCard(sandboxHost("awake", "online", false, "user"), null);
 
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Awake",
@@ -123,8 +161,8 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(screen.queryByTestId("host-identity-health")).toBeNull();
   });
 
-  it("shows Out of credits beside the suspended state for a frozen sandbox", () => {
-    renderCard(sandboxHost("suspended", "offline", true), null);
+  it("shows Personal's frozen credits beside the state when its owner is known", () => {
+    renderCard(sandboxHost("suspended", "offline", true, "user"), null);
 
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Suspended",
@@ -138,12 +176,64 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     );
   });
 
-  it("shows the frozen word beside the state for a team sandbox", () => {
+  it("does not assign frozen credits to Personal while the sandbox owner is unknown", () => {
+    renderCard(sandboxHost("suspended", "offline", true, "unknown"), null);
+
+    expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(
+      screen.getByTestId("host-identity-sandbox-state").parentElement
+        ?.textContent,
+    ).toContain(HOST_FROZEN_WORD);
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
+  });
+
+  it("names the unnamed team's frozen credits beside the state once the person's teams have answered", async () => {
+    // The person is signed in with no teams, so every team has answered.
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer", username: "viewer" },
+    });
+    auth.fetchAuthenticatedUser.mockResolvedValue(
+      createAuthenticatedUserFixture(undefined),
+    );
     const host = teamSandboxHost("suspended", "online", true);
     renderCard(host, null);
 
     const state = screen.getByTestId("host-identity-sandbox-state");
     expect(state.parentElement?.textContent).toContain(HOST_FROZEN_WORD);
+    expect(
+      (await screen.findByTestId("sandbox-card-state-line")).textContent,
+    ).toBe("Your team's credits ran out");
+  });
+
+  it("says nothing of the unnamed team's frozen credits until the person's teams have answered", () => {
+    const host = teamSandboxHost("suspended", "online", true);
+    renderCard(host, null);
+
+    expect(
+      screen.getByTestId("host-identity-sandbox-state").parentElement
+        ?.textContent,
+    ).toContain(HOST_FROZEN_WORD);
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
+  });
+
+  it("uses the known team name when the creator-less summary is a team sandbox", () => {
+    const host = sandboxHost("suspended", "online", true, "team");
+    renderCardWithTeamName(
+      {
+        ...host,
+        sandbox:
+          host.sandbox === null ? null : { ...host.sandbox, teamOwned: false },
+      },
+      null,
+      "Acme",
+    );
+
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
+      "Acme's credits ran out",
+    );
   });
 
   it("makes the full busy breakdown available by keyboard through its tooltip", async () => {
@@ -155,7 +245,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     };
     const label = "2 agents · 1 terminal agent · 3 terminals working";
     const visible = "2 agents · 1 terminal agent · 3 terminals";
-    const host = sandboxHost("awake", "online", false);
+    const host = sandboxHost("awake", "online", false, "user");
 
     renderCard(host, {
       busy: true,
@@ -201,7 +291,7 @@ describe("<HostIdentityCard /> the name row and the fact line", () => {
     expect(factLine().textContent).not.toContain("Computer");
 
     cleanup();
-    renderCard(sandboxHost("awake", "online", false), null);
+    renderCard(sandboxHost("awake", "online", false, "user"), null);
     const sandboxRow = screen.getByTestId("host-identity-name-row");
     expect(within(sandboxRow).getByText("Sandbox")).toBeTruthy();
     expect(
