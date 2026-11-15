@@ -53,13 +53,21 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { AuthorityBoundAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { RemoteAccessState } from "@traycer/protocol/host/environment-schemas";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import {
+  createRetryingMessenger,
+  DEFAULT_TRANSPORT_RETRY_POLICY,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   accessHostDirectoryEntryFor,
   buildAccessHost,
+  buildAccessHostWithMessenger,
   fakeEnvironmentCloud,
   resetAccessHostDirectoryEntry,
   setAccessHostDirectoryEntry,
@@ -77,8 +85,10 @@ import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-cl
 import {
   HostRpcError,
   RetryableTransportError,
+  type IHostMessenger,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostRpcRegistry } from "@/lib/host";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
@@ -143,6 +153,53 @@ function hostWithRemoteAccess(remoteAccess: RemoteAccessState): AccessHost {
   return buildAccessHost({
     status: environmentStatusFixture({ remoteAccess }),
   });
+}
+
+function hostWithLocalRefreshTransportFailure(failure: HostRpcError): {
+  readonly host: AccessHost;
+  readonly retryDelays: number[];
+  readonly authRevalidations: number[];
+} {
+  const retryDelays: number[] = [];
+  const authRevalidations: number[] = [];
+  const wrapMessenger = (
+    hostMessenger: IHostMessenger<HostRpcRegistry>,
+  ): {
+    messenger: IHostMessenger<HostRpcRegistry>;
+    singleAttemptMessenger: IHostMessenger<HostRpcRegistry>;
+  } => {
+    const auth: AuthorityBoundAuthRevalidator = {
+      revalidateExpectedBearer: () => {
+        authRevalidations.push(1);
+        return Promise.resolve("rotated");
+      },
+    };
+    return {
+      messenger: createRetryingMessenger(
+        createAuthAwareMessenger(hostMessenger, auth, "always"),
+        {
+          ...DEFAULT_TRANSPORT_RETRY_POLICY,
+          sleep: (ms) => {
+            retryDelays.push(ms);
+            return Promise.resolve();
+          },
+          random: () => 0.5,
+        },
+      ),
+      singleAttemptMessenger: hostMessenger,
+    };
+  };
+  return {
+    host: buildAccessHostWithMessenger(
+      {
+        status: environmentStatusFixture({ remoteAccess: "off" }),
+        statusRefreshError: failure,
+      },
+      wrapMessenger,
+    ),
+    retryDelays,
+    authRevalidations,
+  };
 }
 
 function renderTab(
@@ -473,7 +530,15 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
         status: 200,
         body: { viewer: { effectiveRole } },
       };
-      await rereadStatus(queryClient, host);
+      const beforeRoleRead = targetMemberReads().length;
+      await act(async () => {
+        await queryClient.invalidateQueries({
+          queryKey: ["host", "authn", "environment.list"],
+        });
+      });
+      await waitFor(() =>
+        expect(targetMemberReads().length).toBeGreaterThan(beforeRoleRead),
+      );
       const control = await screen.findByRole("button", { name: "Turn on" });
       expect(control.closest("[inert]")).toBeNull();
     }
@@ -502,17 +567,35 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       body: { viewer: { effectiveRole: "viewer" } },
     };
     const beforeViewerRead = targetMemberReads().length;
-    await rereadStatus(queryClient, host);
-    expect(targetMemberReads().length).toBeGreaterThan(beforeViewerRead);
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["host", "authn", "environment.list"],
+      });
+    });
+    await waitFor(() =>
+      expect(targetMemberReads().length).toBeGreaterThan(beforeViewerRead),
+    );
     noSwitch();
 
     targetRoleAnswer = { status: 500, body: {} };
-    await rereadStatus(queryClient, host);
+    const beforeUnknownRoleRead = targetMemberReads().length;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["host", "authn", "environment.list"],
+      });
+    });
+    await waitFor(() =>
+      expect(targetMemberReads().length).toBeGreaterThan(beforeUnknownRoleRead),
+    );
     noSwitch();
 
     failDirectoryRead = true;
     const beforeDirectoryRead = directoryReads;
-    await rereadStatus(queryClient, host);
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["host", "authn", "environment.list"],
+      });
+    });
     expect(directoryReads).toBeGreaterThan(beforeDirectoryRead);
     noSwitch();
   });
@@ -689,6 +772,92 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       );
     });
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  it("sends this computer's local refresh once after a retryable transport failure", async () => {
+    const failure = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "the local host was not reached",
+      requestId: "local-refresh-first",
+      method: "host.status.refresh",
+      fatalDetails: null,
+    });
+    const { host, retryDelays, authRevalidations } =
+      hostWithLocalRefreshTransportFailure(failure);
+    signInWithEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    renderTab(host, ACCESS_METHODS, false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "On" }));
+
+    await waitFor(() => {
+      expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+        {
+          [ACCESS_HOST_ID]: true,
+        },
+      );
+    });
+    expect(retryDelays).toEqual([]);
+    expect(authRevalidations).toEqual([]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
+    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText("Couldn't change remote access. Try again."),
+    ).toBeNull();
+  });
+
+  it("sends one local refresh frame after a session-fatal UNAUTHORIZED", async () => {
+    const failure = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "Host access was revoked",
+      requestId: "local-refresh-session-fatal",
+      method: "host.status.refresh",
+      fatalDetails: {
+        code: "UNAUTHORIZED",
+        reason: "Host access was revoked",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    markMayHaveReachedHost(failure);
+    const { host, retryDelays, authRevalidations } =
+      hostWithLocalRefreshTransportFailure(failure);
+    const authn = signInWithEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    renderTab(host, ACCESS_METHODS, false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "On" }));
+
+    await waitFor(() => {
+      expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+        {
+          [ACCESS_HOST_ID]: true,
+        },
+      );
+    });
+    expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
+    expect(
+      authn.requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(retryDelays).toEqual([]);
+    expect(authRevalidations).toEqual([]);
+    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText("Couldn't change remote access. Try again."),
+    ).toBeNull();
   });
 
   it("does not refresh or answer the question when the click's sign-in changes during authn's PUT", async () => {

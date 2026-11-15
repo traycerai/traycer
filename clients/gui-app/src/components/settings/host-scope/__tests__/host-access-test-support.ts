@@ -23,6 +23,7 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentMessengerWrapper } from "@/lib/environment/__tests__/environment-test-support";
 
 /**
  * A fake host for the Access and setup tab and the Personal page notices. The
@@ -147,13 +148,28 @@ export function accessHostState(
 export function buildAccessHost(
   overrides: Partial<AccessHostState>,
 ): AccessHost {
-  return buildAccessHostOn(ACCESS_HOST_ID, overrides);
+  return buildAccessHostCore(ACCESS_HOST_ID, overrides, undefined);
+}
+
+export function buildAccessHostWithMessenger(
+  overrides: Partial<AccessHostState>,
+  wrapMessenger: EnvironmentMessengerWrapper,
+): AccessHost {
+  return buildAccessHostCore(ACCESS_HOST_ID, overrides, wrapMessenger);
 }
 
 /** The same fake host, addressed by another host id. */
 export function buildAccessHostOn(
   hostId: string,
   overrides: Partial<AccessHostState>,
+): AccessHost {
+  return buildAccessHostCore(hostId, overrides, undefined);
+}
+
+function buildAccessHostCore(
+  hostId: string,
+  overrides: Partial<AccessHostState>,
+  wrapMessenger: EnvironmentMessengerWrapper | undefined,
 ): AccessHost {
   const state = accessHostState(overrides);
   const requests: RecordedRequest[] = [];
@@ -164,6 +180,7 @@ export function buildAccessHostOn(
   };
   const { client } = buildEnvironmentClient({
     hostId,
+    wrapMessenger,
     handlers: {
       "environment.host.read": () => {
         if (state.binding === null) throw new Error("Binding unavailable");
