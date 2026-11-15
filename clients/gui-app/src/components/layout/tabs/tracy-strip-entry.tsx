@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { TracyEntryPicture } from "@/components/bots/tracy-entry-picture";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { HoverCard } from "@/components/ui/hover-card";
 import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import { cn } from "@/lib/utils";
@@ -11,7 +10,6 @@ import { useSurfaceJoinPane } from "./surface-join-pane";
 import { headerTabClassName } from "./tab-chrome-tokens";
 import type { TracyStripEntry } from "./tab-strip-controller";
 import { StripElapsedTime } from "./side-strip/strip-elapsed-time";
-import { SIDE_STRIP_NAV_TILE_COUNT_CLASS } from "./side-strip/side-strip-tokens";
 import {
   useTracyEntrySignals,
   type TracyEntrySignals,
@@ -24,54 +22,26 @@ import {
 export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
- * Where the count sits: up and to the right of the picture, clear of it, as the
- * bell's mark sits, ringed in the colour of the ground the entry stands on so
- * it reads as cut out of it.
- */
-const COUNT_SEAT_CLASS = {
-  strip: cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "-top-3.5 right-auto left-3.5"),
-  drawer: cn(
-    SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-    "-top-3.5 right-auto left-3.5 ring-popover md:ring-popover",
-  ),
-} as const;
-
-/**
- * The entry's picture, in every strip placement. It wears the bot's unread
- * count off its top-right corner; the rail tile passes none, because its row
- * draws the count. It wears the muted mark on its bottom-right while the
- * person has set the channel to Nothing. At zero, and where the host does not
- * count, it is the bare picture. `ground` is what the entry stands on: the
- * strip's, or the phone drawer's.
+ * The entry's picture, in every strip placement. It wears the muted mark on
+ * its bottom-right while the person has set the channel to Nothing. It wears
+ * no count: the entry's label is bold while unread, and the Notifications
+ * count carries how many.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
-  readonly unreadCount: number | null;
   readonly muted: boolean;
-  readonly ground: "strip" | "drawer";
 }): ReactNode {
-  const { className, unreadCount, muted, ground } = props;
-  const mutedMark = muted ? (
-    <BotMutedGlyph
-      className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
-      testId="tracy-entry-muted"
-    />
-  ) : null;
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
+    <span className={cn("relative inline-flex shrink-0", props.className)}>
       <span className="inline-flex" data-testid="tracy-entry-icon">
         <TracyEntryPicture />
       </span>
-      {mutedMark}
-      {unreadCount === null ? null : (
-        <UnreadCountBadge
-          count={unreadCount}
-          size="xs"
-          testId="tracy-entry-unread-count"
-          corner={COUNT_SEAT_CLASS[ground]}
-          noun="unread"
+      {props.muted ? (
+        <BotMutedGlyph
+          className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
+          testId="tracy-entry-muted"
         />
-      )}
+      ) : null}
     </span>
   );
 }
@@ -101,8 +71,7 @@ export function TracyEntryHoverBody(props: {
 
 /**
  * The fixed Tracy entry at the strip's leading edge, after Home and outside
- * the scrolling tabs: the Tracy glyph with the bot's unread count and
- * "Tracy", bold while unread, and how
+ * the scrolling tabs: the Tracy glyph and "Tracy", bold while unread, and how
  * long the bot has been working while it runs a turn; the hover names the
  * channel the surface shows. Like Home it has no drag,
  * no close, no menu and no Alt-digit; unlike Home it is a real tab, so it
@@ -145,12 +114,7 @@ export function TracyStripSlot(props: {
             color={null}
             session={false}
           />
-          <TracyEntryIcon
-            className="relative z-20"
-            unreadCount={signals.unreadCount}
-            muted={signals.muted}
-            ground="strip"
-          />
+          <TracyEntryIcon className="relative z-20" muted={signals.muted} />
           <span
             className={cn(
               "relative z-20 min-w-0 truncate",
