@@ -456,9 +456,10 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
     expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Show details",
       "Retry",
-      "Report issue",
       "Open settings",
+      "Report issue",
     ]);
   });
 
@@ -1633,7 +1634,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("unknown refusal keeps the offline cover and adds only its reason line", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "unrecognised-refusal",
       detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
