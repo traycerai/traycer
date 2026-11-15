@@ -6,6 +6,7 @@ import {
   SANDBOX_HOST,
   TASK_PIN_HOST,
   SANDBOX_ID,
+  PERSONAL_ENVIRONMENT_ID,
   SEND_ID,
   SURFACE,
   OCCUPIED_NEW_CHAT_CONTENT,
@@ -2352,6 +2353,7 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
 
@@ -2529,6 +2531,7 @@ describe("a message for an existing chat whose sandbox rests", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
 
@@ -4915,6 +4918,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5010,9 +5014,20 @@ describe("a send whose sandbox left awake on its own after the create timed out"
 
   it("binds the failed line's actions to the sandbox's host in a tile bound elsewhere, without opening a draft mirror for it", async () => {
     const TILE_HOST = "tile-host";
+    // The billing runtime signs in as the fixture user, so the held send is
+    // theirs: another person's send is not drawn.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: AUTHENTICATED_USER_FIXTURE_ID,
+        userName: "U",
+        email: "u@example.com",
+      },
+      { userId: AUTHENTICATED_USER_FIXTURE_ID, username: "U" },
+      [],
+    );
     seed({
       ...SEEDED,
-      send: SEND_BY_KIND.chat,
+      send: { ...SEND_BY_KIND.chat, userId: AUTHENTICATED_USER_FIXTURE_ID },
       phase: "creating",
       created: true,
     });
@@ -5121,6 +5136,7 @@ describe("a rested send this window cannot give back", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5273,6 +5289,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5944,6 +5961,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
 
@@ -6012,27 +6030,26 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expected,
       remedy,
     }) => {
-      mocks.authUser =
-        configuration.kind === "team"
-          ? createAuthenticatedUserFixture({
-              teamSubscriptions: [
-                {
-                  ...teamSubscription(0),
-                  teamID: "team-1",
-                  team: {
-                    ...teamSubscription(0).team,
-                    id: "team-1",
-                    slug: "Acme",
-                  },
-                },
-              ],
-            })
-          : null;
+      if (configuration.kind === "team") {
+        mocks.authUser = createAuthenticatedUserFixture({
+          teamSubscriptions: [
+            {
+              ...teamSubscription(0),
+              teamID: "team-1",
+              team: {
+                ...teamSubscription(0).team,
+                id: "team-1",
+                slug: "Acme",
+              },
+            },
+          ],
+        });
+      }
       environmentListAnswer.role = environmentRole;
       environmentListAnswer.loading = environmentLoading;
       environmentListAnswer.failed = environmentFailed;
       environmentListAnswer.personalEnvironmentId =
-        configuration.kind === "personal" ? "env-personal" : null;
+        configuration.kind === "personal" ? PERSONAL_ENVIRONMENT_ID : null;
       environmentListClientHosts.length = 0;
       const input: PendingSandboxSendDispatch["input"] = {
         epicId: "epic-1",
@@ -6071,13 +6088,16 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         environmentId:
           configuration.kind === "team"
             ? configuration.environmentId
-            : "env-personal",
+            : PERSONAL_ENVIRONMENT_ID,
       });
       usePendingSandboxSendStore.getState().add(
         pendingSend({
           id: SEND_ID,
           userId: AUTHENTICATED_USER_FIXTURE_ID,
           request: { kind: "message", chatId: input.chatId },
+          // The claim has asked for an observation, so a row read after it
+          // counts; a claim that has not yet reads every row as unknown.
+          observationRequestedAt: 1_000,
           dispatch: {
             input,
             status: "uncertain",
@@ -6089,7 +6109,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       answerHost(SANDBOX_HOST, CODEX_READY);
       mountInChatWithBillingRuntime(input.chatId);
       const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
-      answerSandboxRows([sandboxRow], FRESH);
+      answerSandboxRows([sandboxRow], Date.now() + 60_000);
       if (configuration.kind === "team") {
         await waitFor(() => {
           expect(environmentListClientHosts).toContain(SANDBOX_HOST);
@@ -6912,6 +6932,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
             id: SANDBOX_ID,
             hostId: SANDBOX_HOST,
             state: "awake",
+            environmentId: PERSONAL_ENVIRONMENT_ID,
             ...variant.row,
           }),
         ],
@@ -8175,6 +8196,7 @@ describe("a task with no chat whose message came back to its own composer on a s
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }

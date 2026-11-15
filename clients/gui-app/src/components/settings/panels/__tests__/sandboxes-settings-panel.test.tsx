@@ -1046,11 +1046,19 @@ describe("<SandboxesSettingsPanel />", () => {
   });
 
   it("renders one row per state with its badge and primary action", () => {
+    // The frozen row is the person's own: its environment is the one their
+    // environment list names, so Add credits is theirs to offer.
+    mocks.personalEnvironmentId = PERSONAL_ENV;
     renderPanel([
       row("awake-1", { state: "awake" }),
       row("suspended-1", { state: "suspended" }),
       row("stopped-1", { state: "stopped" }),
-      row("frozen-1", { state: "suspended", frozen: true, frozenAt: 1 }),
+      row("frozen-1", {
+        state: "suspended",
+        frozen: true,
+        frozenAt: 1,
+        environmentId: PERSONAL_ENV,
+      }),
       row("failed-1", { state: "failed", failureCode: "boom" }),
     ]);
 
@@ -1073,6 +1081,23 @@ describe("<SandboxesSettingsPanel />", () => {
         expect(within(element).getByText("Out of credits")).toBeDefined();
       }
     }
+  });
+
+  it("offers no Add credits on a frozen row whose owner is not known", () => {
+    renderPanel([
+      row("frozen-unknown", {
+        state: "suspended",
+        frozen: true,
+        frozenAt: 1,
+        environmentId: null,
+      }),
+    ]);
+
+    const element = rowOf("frozen-unknown");
+    expect(within(element).getByTestId("row-primary").textContent).toBe(
+      "Resume",
+    );
+    expect(within(element).queryByText("Add credits ↗")).toBeNull();
   });
 
   it("keeps the charge notice and Stop action when setup failed and the host is unreachable", () => {
@@ -1207,9 +1232,12 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
       "Couldn't start at 11:01 · The sandbox service couldn't start it. · SBX-0412",
     );
+    // The row's owner is not known (the default row has no environment id),
+    // so Retry is not held back for it and no top-up is offered.
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);
+    expect(failed.queryByText("Add credits ↗")).toBeNull();
     const destroy = failed.getByRole("button", {
       name: "Destroy build-box",
     });
@@ -2555,7 +2583,11 @@ describe("<SandboxesSettingsPanel />", () => {
       mocks.configurations = [{ kind: "personal" }];
       host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
       useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-      const personal = row("sbx-personal-rest", { state: "suspended" });
+      mocks.personalEnvironmentId = PERSONAL_ENV;
+      const personal = row("sbx-personal-rest", {
+        state: "suspended",
+        environmentId: PERSONAL_ENV,
+      });
       renderPanel([personal]);
       expect(clockOf(personal.id)).toContain("storage uses your credits");
       expect(shapeOf(personal.id)).not.toContain(

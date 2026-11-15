@@ -42,6 +42,7 @@ import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
@@ -301,6 +302,8 @@ export const TASK_PIN_HOST = "task-pin-host";
 const START_PAGE_PIN_HOST = "start-page-pin-host";
 
 export const SANDBOX_ID = "sbx-1";
+/** The environment id of the person's own environment: a row that carries it is theirs. */
+export const PERSONAL_ENVIRONMENT_ID = "env-personal";
 
 export const SEND_ID = "send-1";
 
@@ -1466,7 +1469,10 @@ afterEach(async () => {
 
 beforeEach(() => {
   mocks.useRuntimeBinding = false;
-  mocks.authUser = null;
+  // Signed in with no teams: every team has answered, so a row in an
+  // environment no team holds is the person's own. A case sets `null` to mean
+  // the teams are not known.
+  mocks.authUser = createAuthenticatedUserFixture(undefined);
   sandboxListState.pending = false;
   sandboxListState.failed = false;
   installLegendListTestClock();
@@ -1514,6 +1520,7 @@ beforeEach(() => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state: "awake",
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   ];
   mocks.listReadAt = Date.now() + 60_000;

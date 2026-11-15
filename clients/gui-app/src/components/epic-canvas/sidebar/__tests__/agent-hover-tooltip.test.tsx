@@ -844,13 +844,42 @@ describe("AgentHoverTooltip host section", () => {
         complete: true,
         personalEnvironmentId: null,
       };
-      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      // A row nobody started: with every team answered and none holding its
+      // environment, it is the person's own.
+      h.sandboxes = [
+        sandboxRow({ environmentId: "env-elsewhere", createdBy: null }),
+      ];
       renderAgent({
         hostId: "host-sbx",
         ownerKind: "chat",
         ownerHostUnreachable: false,
       });
       expect(configuration()).toBe("Personal");
+    });
+
+    it("shows exactly unknown for a row a member started in an environment outside every team's", () => {
+      h.registryOwner = null;
+      h.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-1",
+            teamName: "Acme",
+            environmentId: "env-acme",
+          },
+        ],
+        teamEnvironmentIds: new Set(["env-acme"]),
+        complete: true,
+        personalEnvironmentId: null,
+      };
+      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBe("unknown");
     });
 
     it("uses the bound team environment even when the host registry names another owner", () => {
@@ -886,7 +915,9 @@ describe("AgentHoverTooltip host section", () => {
         complete: true,
         personalEnvironmentId: null,
       };
-      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      h.sandboxes = [
+        sandboxRow({ environmentId: "env-elsewhere", createdBy: null }),
+      ];
       renderAgent({
         hostId: "host-sbx",
         ownerKind: "chat",
@@ -928,6 +959,7 @@ describe("AgentHoverTooltip host section", () => {
         h.sandboxes = [
           sandboxRow({
             environmentId: "env-personal",
+            createdBy: null,
             state,
           }),
         ];

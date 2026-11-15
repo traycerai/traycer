@@ -28,6 +28,11 @@ import {
   type FakeSandboxBinding,
   refusal,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 
@@ -231,7 +236,10 @@ beforeEach(() => {
   mocks.list = null;
   mocks.listError = false;
   mocks.listFetching = false;
-  mocks.listRefetch.mockClear();
+  afterEach(() => {
+    cleanup();
+    resetHostDirectoryRows();
+  });
   mocks.entryReads.mockClear();
   mocks.unavailableReason = null;
 });
@@ -259,7 +267,32 @@ describe("<SandboxTileStateFrame /> around a chat tile", () => {
 });
 
 describe("<SandboxTileStateFrame />", () => {
-  it.each<{ label: string; failure: SandboxLifecycleVerbFetchResult }>([
+  it("tells the shortfall as nobody's own and offers no top-up while the row names no owner", async () => {
+    setSandboxEntry("suspended", false);
+    mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 210,
+      creditSource: "personal",
+    });
+    renderFrame(false);
+    fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Couldn't resume build-box · not enough credits to wake this sandbox for an hour.",
+    );
+    expect(alert.textContent).not.toContain("$0.21");
+    expect(
+      within(alert).queryByRole("button", { name: "Add credits ↗" }),
+    ).toBeNull();
+  });
+
+  it.each<{
+    label: string;
+    failure: SandboxLifecycleVerbFetchResult;
+    /** The directory row names the person as the sandbox's owner. */
+    ownerKnown: boolean;
+  }>([
     {
       label: "credits",
       failure: {
@@ -267,16 +300,22 @@ describe("<SandboxTileStateFrame />", () => {
         shortfallMc: 210,
         creditSource: "personal",
       },
+      ownerKnown: true,
     },
-    { label: "bearer", failure: { kind: "unauthorized" } },
+    { label: "bearer", failure: { kind: "unauthorized" }, ownerKnown: false },
     {
       label: "network",
       failure: { kind: "network-error", detail: "unreachable" },
+      ownerKnown: false,
     },
   ])(
     "keeps a visible named $label wake failure with remedies on the tile",
-    async ({ failure, label }) => {
+    async ({ failure, label, ownerKnown }) => {
       setSandboxEntry("suspended", false);
+      // The failure line reads whose sandbox it is from the person's host
+      // directory; this row names them as its owner.
+      if (ownerKnown)
+        installHostDirectoryRows([sandboxHostEntry(HOST_ID, null)]);
       mocks.binding?.auth.runSandboxVerb.mockResolvedValue(failure);
       renderFrame(false);
       fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));

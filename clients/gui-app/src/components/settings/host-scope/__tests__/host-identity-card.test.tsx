@@ -10,10 +10,15 @@ import { HostIdentityCard } from "@/components/settings/host-scope/host-identity
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 
 const auth = vi.hoisted(() => ({
   marker: "sandbox-header-auth",
-  fetchAuthenticatedUser: vi.fn(() => Promise.resolve(null)),
+  fetchAuthenticatedUser: vi.fn((): Promise<AuthenticatedUser | null> =>
+    Promise.resolve(null),
+  ),
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -22,7 +27,12 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => ({ auth }),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  auth.fetchAuthenticatedUser.mockReset();
+  auth.fetchAuthenticatedUser.mockResolvedValue(null);
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+});
 
 function sandboxHost(
   state: "awake" | "suspended",
@@ -179,15 +189,34 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
   });
 
-  it("names the unnamed team's frozen credits beside the state", () => {
+  it("names the unnamed team's frozen credits beside the state once the person's teams have answered", async () => {
+    // The person is signed in with no teams, so every team has answered.
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer", username: "viewer" },
+    });
+    auth.fetchAuthenticatedUser.mockResolvedValue(
+      createAuthenticatedUserFixture(undefined),
+    );
     const host = teamSandboxHost("suspended", "online", true);
     renderCard(host, null);
 
     const state = screen.getByTestId("host-identity-sandbox-state");
     expect(state.parentElement?.textContent).toContain(HOST_FROZEN_WORD);
-    expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
-      "Your team's credits ran out",
-    );
+    expect(
+      (await screen.findByTestId("sandbox-card-state-line")).textContent,
+    ).toBe("Your team's credits ran out");
+  });
+
+  it("says nothing of the unnamed team's frozen credits until the person's teams have answered", () => {
+    const host = teamSandboxHost("suspended", "online", true);
+    renderCard(host, null);
+
+    expect(
+      screen.getByTestId("host-identity-sandbox-state").parentElement
+        ?.textContent,
+    ).toContain(HOST_FROZEN_WORD);
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
   });
 
   it("uses the known team name when the creator-less summary is a team sandbox", () => {

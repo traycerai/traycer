@@ -178,10 +178,12 @@ describe("useChatSandboxState", () => {
     });
   });
 
+  // The hook maps the configurations it is given: a team read that has not
+  // answered and one that failed hand it the same input (no team has an
+  // environment id, `complete: false`), so one case stands for both.
   it.each([
-    ["pending", new Set<string>()],
-    ["failed", new Set<string>()],
-    ["failed refetch with retained team data", new Set([TEAM_ENV])],
+    ["not answered", new Set<string>()],
+    ["a failed refetch with retained team data", new Set([TEAM_ENV])],
   ] as const)(
     "keeps a creator-less row unknown while the team read is %s",
     (_state, teamEnvironmentIds) => {
@@ -332,9 +334,14 @@ describe("useChatSandboxState", () => {
   });
 
   it("keeps a personal sandbox personal when the row names a previous payer", () => {
+    sources.configurations = {
+      ...sources.configurations,
+      personalEnvironmentId: PERSONAL_ENV,
+    };
     sources.sandboxes = [
       row({
         state: "suspended",
+        environmentId: PERSONAL_ENV,
         wakePayer: { userId: OTHER, displayName: "Other" },
       }),
     ];

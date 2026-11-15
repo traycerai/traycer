@@ -194,6 +194,9 @@ describe("<SandboxDetailsDrawerHost />", () => {
       id: "sbx-started-by-agent",
       displayName: "Kept agent sandbox",
       state: "awake",
+      // Every listed team has answered and none holds this environment, so the
+      // row is the person's own and "Started by" reads "you".
+      environmentId: "env-personal",
       burst: false,
       createdByAgentId: "agent-planner",
       createdByAgentName: "Planner",
