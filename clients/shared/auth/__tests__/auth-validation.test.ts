@@ -199,6 +199,29 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
     // terminal `rejected` - proving the transient/terminal distinction holds.
     expect(result.kind).toBe("rejected");
   });
+
+  it.each([301, 302, 307, 308])(
+    "treats exchange redirect %i as network-error without following it with the code",
+    async (status) => {
+      installMockFetch([
+        { status, body: { location: "https://elsewhere.test" } },
+      ]);
+
+      const result = await exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        url: EXCHANGE_ENDPOINT,
+        method: "POST",
+        redirect: "manual",
+      });
+    },
+  );
 });
 
 describe("refreshOnceAbortable", () => {

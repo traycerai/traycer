@@ -54,6 +54,9 @@ interface CapturedStreamClientOptions {
   // The probe wires this so an expired access token can be refreshed instead
   // of making the first UNAUTHORIZED terminal; tests drive it directly.
   readonly auth: StreamAuthRevalidator | null;
+  // The probe reports each admitted open here; tests call it to stand in for
+  // one.
+  readonly door: { readonly admitted: () => void };
 }
 
 const mocks = vi.hoisted(() => {
@@ -272,6 +275,7 @@ import {
   type ProvisionHostCredentialOptions,
 } from "../credential-provisioning";
 import { noopLogger } from "../../logger";
+import { formatCredentialProvisionNote } from "../install-auth";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -360,6 +364,25 @@ function provisionedOutcome(): HostCredentialMintOutcome {
     provisionedAt: "2026-01-01T00:00:00.000Z",
     expiresIn: 600,
   };
+}
+
+const TOKEN_EXPIRED_REFUSAL = {
+  code: "UNAUTHORIZED",
+  reason: "host refused the token",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+  doorReason: "token_expired",
+} as const;
+
+const NOT_A_MEMBER_MESSAGE =
+  "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.";
+
+function probeSignal(): AbortSignal {
+  const signal = mocks.createStoreBackedRevalidatorMock.mock.calls[0][0].signal;
+  if (signal === null) {
+    throw new Error("expected the probe to wire a signal");
+  }
+  return signal;
 }
 
 function fatalReason(reason: string, code: string): StreamCloseReason {
@@ -480,13 +503,19 @@ describe("provisionInstalledHostCredential", () => {
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "mint-unavailable",
     });
+    expect(formatCredentialProvisionNote(outcome)).toBe(
+      "host authorization not confirmed (the authorization did not complete) - run `traycer host doctor` to see how to fix it",
+    );
     expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
     expect(mocks.hostTokenMintMock).toHaveBeenCalledWith(
       config.authnBaseUrl,
       "host-1",
       "test-bearer-token",
-      expect.any(AbortSignal),
+      expect.anything(),
     );
+    // The mint is cancelled with the probe, and not with a signal of its own.
+    expect(mocks.hostTokenMintMock.mock.calls[0][3]).toBe(probeSignal());
+    expect(probeSignal().aborted).toBe(true);
     expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
     expect(mocks.sessions).toHaveLength(1);
     expectCleanTeardown();
@@ -538,6 +567,82 @@ describe("provisionInstalledHostCredential", () => {
     expect(capturedClientOptions().bearer()?.getBearerToken()).toBe(
       "fresh-host-only-token",
     );
+    expectCleanTeardown();
+  });
+
+  it("cancels the recovery's fresh-token mint with the probe", async () => {
+    const pendingMint = createDeferred<{
+      readonly kind: "unavailable";
+      readonly detail: string;
+    }>();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockImplementationOnce(() => pendingMint.promise);
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        const revalidateRefused =
+          capturedClientOptions().auth?.revalidateRefused;
+        if (revalidateRefused === undefined) {
+          throw new Error("probe wired no refused-token recovery");
+        }
+        void revalidateRefused(TOKEN_EXPIRED_REFUSAL).catch(() => undefined);
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 300, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
+    expect(mocks.hostTokenMintMock.mock.calls[0][3]).toBe(probeSignal());
+    expect(probeSignal().aborted).toBe(true);
+    pendingMint.resolve({ kind: "unavailable", detail: "cancelled" });
+  });
+
+  it.each([
+    {
+      name: "a second refusal with no admitted open between is final",
+      admit: false,
+      second: "rejected",
+      mints: 1,
+    },
+    {
+      name: "an admitted open between earns the one fresh token again",
+      admit: true,
+      second: "rotated",
+      mints: 2,
+    },
+  ] as const)("$name", async ({ admit, second, mints }) => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    const results: string[] = [];
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          const revalidateRefused = options.auth?.revalidateRefused;
+          if (revalidateRefused === undefined) {
+            throw new Error("probe wired no refused-token recovery");
+          }
+          results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
+          if (admit) options.door.admitted();
+          results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
+          options.onHostCredentialState("host-1", "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expect(results).toEqual(["rotated", second]);
+    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(mints);
     expectCleanTeardown();
   });
 
@@ -594,32 +699,37 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("keeps retrying a door refusal that carries not_admitted until the host answers", async () => {
-    mocks.onSessionCreated = (session): void => {
-      setTimeout(() => {
-        session.emitStatus("open", null, null);
-        session.emitStatus("reconnecting", null, {
-          code: "UNAUTHORIZED",
-          reason: "host has not admitted this session yet",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-          doorReason: "not_admitted",
-        });
-        capturedClientOptions().onHostCredentialState("host-1", "active");
-      }, 0);
-    };
+  // A team host's "cannot admit now" carries the same door reason under a
+  // membership code that would otherwise end the lap at once.
+  it.each(["UNAUTHORIZED", "TEAM_MEMBERSHIP_UNAVAILABLE"])(
+    "keeps retrying a %s door refusal that carries not_admitted until the host answers",
+    async (code) => {
+      mocks.onSessionCreated = (session): void => {
+        setTimeout(() => {
+          session.emitStatus("open", null, null);
+          session.emitStatus("reconnecting", null, {
+            code,
+            reason: "host has not admitted this session yet",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            doorReason: "not_admitted",
+          });
+          capturedClientOptions().onHostCredentialState("host-1", "active");
+        }, 0);
+      };
 
-    const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
-    );
+      const outcome = await provisionInstalledHostCredential(
+        makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+      );
 
-    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
-      kind: "active",
-      minted: false,
-    });
-    expect(mocks.sessions).toHaveLength(1);
-    expectCleanTeardown();
-  });
+      expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+        kind: "active",
+        minted: false,
+      });
+      expect(mocks.sessions).toHaveLength(1);
+      expectCleanTeardown();
+    },
+  );
 
   it("ends the lap immediately for a team-membership retry cause without a door reason", async () => {
     mocks.onSessionCreated = (session): void => {
@@ -640,8 +750,7 @@ describe("provisionInstalledHostCredential", () => {
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "error",
-      message:
-        "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
+      message: NOT_A_MEMBER_MESSAGE,
     });
     expect(mocks.sessions).toHaveLength(1);
     expectCleanTeardown();
@@ -989,9 +1098,65 @@ describe("provisionInstalledHostCredential", () => {
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "unreachable",
     });
+    expect(formatCredentialProvisionNote(outcome)).toBe(
+      "host authorization not confirmed (the host did not respond in time) - run `traycer host doctor` to see how to fix it",
+    );
     expect(mocks.mintFlowMock).not.toHaveBeenCalled();
     expect(mocks.sessions).toHaveLength(1);
     expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  });
+
+  it("reports not-adopted when the door refused with its reason and nothing was admitted before the bound passed", async () => {
+    mocks.onSessionCreated = (session): void => {
+      setTimeout(() => {
+        session.emitStatus("reconnecting", null, {
+          code: "UNAUTHORIZED",
+          reason: "host has not admitted this session yet",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: "not_admitted",
+        });
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 300, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "not-adopted",
+    });
+    expect(formatCredentialProvisionNote(outcome)).toBe(
+      "host authorization not confirmed (the host did not confirm it in time) - run `traycer host doctor` to see how to fix it",
+    );
+    expectCleanTeardown();
+  });
+
+  it("ends as it did before the mark once an admitted open follows the door's refusal", async () => {
+    mocks.onSessionCreated = (session): void => {
+      setTimeout(() => {
+        session.emitStatus("reconnecting", null, {
+          code: "UNAUTHORIZED",
+          reason: "host has not admitted this session yet",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: "not_admitted",
+        });
+        capturedClientOptions().door.admitted();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 300, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unreachable",
+    });
+    expect(formatCredentialProvisionNote(outcome)).toBe(
+      "host authorization not confirmed (the host did not respond in time) - run `traycer host doctor` to see how to fix it",
+    );
     expectCleanTeardown();
   });
 
@@ -1543,8 +1708,14 @@ describe("provisionInstalledHostCredential", () => {
     expect(events).toContain("recovery-settled");
     expect(settled).toEqual({
       status: "resolved",
-      outcome: { kind: "mint-unavailable" },
+      outcome: { kind: "error", message: NOT_A_MEMBER_MESSAGE },
     });
+    if (settled.status !== "resolved") {
+      throw new Error("expected the probe to resolve");
+    }
+    expect(formatCredentialProvisionNote(settled.outcome)).toBe(
+      "host authorization not confirmed - run `traycer host doctor` to see how to fix it",
+    );
     expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
     expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
     expectCleanTeardown();
