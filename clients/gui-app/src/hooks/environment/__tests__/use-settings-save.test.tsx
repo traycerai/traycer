@@ -1347,8 +1347,6 @@ describe("settings-save callers", () => {
       harness.authnRequests.filter((request) =>
         request.url.includes("/items?kind=env_override"),
       ).length;
-    const readsAtOpen = itemReadCount();
-
     let saving!: Promise<SetEnvOverrideResponse>;
     act(() => {
       saving = result.current.mutateAsync(setRequest("new-value"));
@@ -1363,6 +1361,12 @@ describe("settings-save callers", () => {
         settingsSaveMemoryKey(ACCOUNT_B),
       ),
     );
+    // B's own session may start its base read during retargeting. Let that
+    // read start before checking whether A's later apply starts another one.
+    await waitFor(() =>
+      expect(itemReadCount()).toBeGreaterThan(readsBeforeSwitch),
+    );
+    const readsAfterBRetarget = itemReadCount();
     harness.state.rows = [row("macos", "new-value", 2)];
     await act(async () => {
       applyAnswer.resolve({ status: 200, text: "" });
@@ -1374,7 +1378,7 @@ describe("settings-save callers", () => {
       ),
     );
 
-    expect(itemReadCount()).toBe(readsBeforeSwitch);
+    expect(itemReadCount()).toBe(readsAfterBRetarget);
     expect(records()).toEqual([]);
     expect(storedRows(ACCOUNT_A)).toHaveLength(1);
     expect(storedRows(ACCOUNT_B)).toEqual([]);
