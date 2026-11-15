@@ -1230,6 +1230,7 @@ describe("claimed-computer narration consumers", () => {
     const initialRead = deferredClaimRead();
     queueClaimPlan(ENVIRONMENT_ID, initialRead);
     queueClaimPlan(ENVIRONMENT_ID, CLAIMED_COMPUTERS_RESULTS.failed);
+    queueClaimPlan(ENVIRONMENT_ID, CLAIMED_COMPUTERS_RESULTS.failed);
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
     ]);
