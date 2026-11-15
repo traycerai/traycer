@@ -244,19 +244,7 @@ function renderPage(
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
   hostMock.client = client;
-  hostMock.binding = {
-    ...authnBinding,
-    auth: {
-      ...authnBinding.auth,
-      mintExecutableWriteGrant: () =>
-        Promise.resolve({
-          kind: "ok" as const,
-          grant: "grant-1",
-          expiresInSeconds: 600,
-        }),
-      getCredentialGeneration: () => 0,
-    },
-  };
+  hostMock.binding = authnBinding;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -365,8 +353,7 @@ describe("<AgentDefinitionsTab />", () => {
     await waitFor(() => {
       expect(rig.puts).toHaveLength(1);
     });
-    // Compare-and-set on THIS definition's revision, carrying the grant the
-    // person's own session minted: an agent definition is content an agent runs.
+    // Compare-and-set on THIS definition's revision.
     expect(rig.puts[0]).toEqual({
       name: "reviewer.md",
       text: "Review the change, then approve.",
@@ -728,19 +715,7 @@ describe("<AgentDefinitionsTab />", () => {
     recordNegotiatedHostMethods("host-b", METHODS);
     mountTeamPage({ kind: "host" }, {});
     const authnBinding = requireTeamEnvironmentAuthnBinding();
-    hostMock.binding = {
-      ...authnBinding,
-      auth: {
-        ...authnBinding.auth,
-        mintExecutableWriteGrant: () =>
-          Promise.resolve({
-            kind: "ok" as const,
-            grant: "grant-1",
-            expiresInSeconds: 600,
-          }),
-        getCredentialGeneration: () => 0,
-      },
-    };
+    hostMock.binding = authnBinding;
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
