@@ -9,7 +9,10 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
-import type { BrowserSessionsHostTransport } from "../browser-sessions-transport";
+import type {
+  BrowserSessionsHostDirectory,
+  BrowserSessionsHostTransport,
+} from "../browser-sessions-transport";
 import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
 import { openBrowserSessionsTransport } from "../browser-sessions-transport";
 import { BrowserSessionsRegistry } from "../browser-sessions-owner";
@@ -17,6 +20,7 @@ import {
   createRegistryHarness,
   FakeStreamClient,
   hostListResultForOwner,
+  type RegistryHarness,
 } from "./browser-sessions-stream-fixture";
 
 vi.mock("../../app/logger", () => ({
@@ -24,7 +28,9 @@ vi.mock("../../app/logger", () => ({
   describeLogError: (error: unknown) => String(error),
 }));
 
-const localWsClients = vi.hoisted(() => ({ clients: [] as unknown[] }));
+const localWsClients = vi.hoisted<{ clients: FakeStreamClient[] }>(() => ({
+  clients: [],
+}));
 vi.mock("@traycer-clients/shared/host-transport/ws-stream-client", async () => {
   const { FakeStreamClient } =
     await import("@traycer-clients/shared/host-transport/__testing__/fake-stream-client");
@@ -77,14 +83,24 @@ const TRANSPORT_DEPS = {
   hostTokens: HOST_TOKENS,
 };
 
+type ListRegisteredHosts = (
+  authnBaseUrl: string,
+  bearer: string,
+) => Promise<HostListFetchResult>;
+
+type OpenTransport = (
+  target: HostDirectoryEntry,
+  userId: string,
+) => BrowserSessionsHostTransport | null;
+
 interface LocalOwnerHarness {
   readonly pendingListings: Array<(result: HostListFetchResult) => void>;
-  readonly listRegisteredHosts: ReturnType<typeof vi.fn>;
-  readonly directory: ReturnType<typeof createBrowserSessionsHostDirectory>;
+  readonly listRegisteredHosts: ListRegisteredHosts;
+  readonly directory: BrowserSessionsHostDirectory;
   readonly registry: BrowserSessionsRegistry;
-  readonly emitted: ReturnType<typeof createRegistryHarness>["emitted"];
+  readonly emitted: RegistryHarness["emitted"];
   readonly openedTransports: BrowserSessionsHostTransport[];
-  readonly openTransport: ReturnType<typeof vi.fn>;
+  readonly openTransport: OpenTransport;
 }
 
 function createLocalOwnerHarness(): LocalOwnerHarness {
@@ -148,7 +164,7 @@ async function openLiveLocalStream(harness: LocalOwnerHarness): Promise<{
 }> {
   harness.registry.open(WINDOW_ID, OPEN_REQUEST);
   await settle();
-  const client = localWsClients.clients.at(-1) as FakeStreamClient | undefined;
+  const client = localWsClients.clients.at(-1);
   if (client === undefined)
     throw new Error("the local transport was not opened");
   const session = client.sessions[0];
@@ -162,7 +178,7 @@ async function openLiveLocalStream(harness: LocalOwnerHarness): Promise<{
 function resolveListing(
   harness: LocalOwnerHarness,
   owner: HostOwnerPrincipal,
-  index = 0,
+  index: number,
 ): void {
   const resolve = harness.pendingListings[index];
   if (resolve === undefined)
@@ -186,7 +202,7 @@ describe("local browser.sessions ownership changes", () => {
     expect(harness.openTransport).toHaveBeenCalledTimes(1);
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toBeNull();
 
-    resolveListing(harness, PERSONAL_OWNER);
+    resolveListing(harness, PERSONAL_OWNER, 0);
     await settle();
 
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
@@ -210,7 +226,7 @@ describe("local browser.sessions ownership changes", () => {
     activeRegistries.push(harness.registry);
     const { client, session } = await openLiveLocalStream(harness);
 
-    resolveListing(harness, TEAM_OWNER);
+    resolveListing(harness, TEAM_OWNER, 0);
     await settle();
 
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
@@ -240,7 +256,7 @@ describe("local browser.sessions ownership changes", () => {
     activeRegistries.push(harness.registry);
 
     await harness.directory.resolve(LOCAL_HOST_ID);
-    resolveListing(harness, PERSONAL_OWNER);
+    resolveListing(harness, PERSONAL_OWNER, 0);
     await settle();
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
       PERSONAL_OWNER,

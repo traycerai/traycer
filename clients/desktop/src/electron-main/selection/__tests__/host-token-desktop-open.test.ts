@@ -18,6 +18,7 @@ import {
   signIn,
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import type { BrowserSessionsHostTransport } from "../../browser-sessions/browser-sessions-transport";
 import { openBrowserSessionsTransport } from "../../browser-sessions/browser-sessions-transport";
 import { createLocalHostInventoryStreamClient } from "../local-host-inventory-subscription";
 
@@ -26,7 +27,7 @@ const HOST_TOKEN = "main-host-token";
 
 async function openLocalBrowserTransport(
   target: HostDirectoryEntry,
-): Promise<ReturnType<typeof openBrowserSessionsTransport>> {
+): Promise<BrowserSessionsHostTransport | null> {
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
   const hostTokens = createHostTokenSource({
