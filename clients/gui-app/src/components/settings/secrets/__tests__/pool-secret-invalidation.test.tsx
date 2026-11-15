@@ -88,9 +88,10 @@ const AT = Date.UTC(2026, 9, 20, 9, 30);
  */
 const OWN_INVALIDATION_WAIT_MS = 2_000;
 /**
- * The boundary's revision poll interval. The file fakes the interval timers,
- * so the poll ticks when a case advances the clock by this much and never on
- * real time.
+ * The boundary's revision poll interval. The file fakes the interval timers
+ * and lets them follow real time, so the poll ticks when a case advances the
+ * clock by this much, and on its own only after this long in real time, which
+ * no case here runs.
  */
 const REVISION_POLL_MS = 5_000;
 type SecretReadMethod = (typeof SECRET_READS)[number];
@@ -482,8 +483,14 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  // Only the interval timers, which the revision poll runs on.
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  // Only the interval timers, which the revision poll runs on, and they follow
+  // real time: Testing Library's `waitFor` polls on the same global
+  // `setInterval`, so a frozen one would stop it re-checking. The 5 s poll
+  // still cannot tick inside a wait of a couple of seconds.
+  vi.useFakeTimers({
+    toFake: ["setInterval", "clearInterval"],
+    shouldAdvanceTime: true,
+  });
   openLinkMock.mockResolvedValue(undefined);
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
