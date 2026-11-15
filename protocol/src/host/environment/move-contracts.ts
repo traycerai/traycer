@@ -271,9 +271,10 @@ export type EnvironmentMovePersonal = z.infer<
 >;
 
 /**
- * `@2.0` names the configuration the move is for (`target`). A target that is
- * not the move's own is refused with `E_MOVE_NOT_AWAITING`, as a host whose
- * move is not waiting is. `personal` is what the sheet is drawn against.
+ * `@2.0` names the configuration the move is for (`target`). The host draws
+ * and stages for that target without comparing it to anything; authn
+ * validates the target at acceptance. `personal` is what the sheet is drawn
+ * against.
  */
 export const environmentMovePlanRequestSchemaV20 = lazySchema(() =>
   z.object({
