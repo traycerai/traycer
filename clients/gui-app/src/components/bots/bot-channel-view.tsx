@@ -6,7 +6,9 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -234,6 +236,19 @@ function useThreadPanelLanding(
       ? { landing: landOn, handed: false }
       : null,
   );
+  const spend = useCallback(() => setHeld(null), []);
+  // A landing asked of a channel that is already shown arrives as a new prop,
+  // not a mount: it is held as the mount's would be. The render that adopts
+  // it ends there, so the landing it replaces is never spent against it: that
+  // spend would be queued after the adoption and clear the new landing.
+  const [asked, setAsked] = useState(landOn);
+  if (landOn !== asked) {
+    setAsked(landOn);
+    if (landOn !== null && landOn.threadId !== null) {
+      setHeld({ landing: landOn, handed: false });
+      return { landing: null, spend };
+    }
+  }
   const showing = held !== null && drawnThreadId === held.landing.threadId;
   if (held !== null && showing && !held.handed) {
     setHeld({ landing: held.landing, handed: true });
@@ -244,8 +259,37 @@ function useThreadPanelLanding(
   ) {
     setHeld(null);
   }
-  const spend = useCallback(() => setHeld(null), []);
   return { landing: showing ? held.landing : null, spend };
+}
+
+/**
+ * The landing the channel's own list takes: the one the channel mounted with,
+ * then each the tab asks of it while it is shown (a tapped notification),
+ * which arrives as a new `landOn` that no mount reads. Each is a new visit,
+ * numbered past the memory links' own.
+ */
+function useChannelLanding(
+  landOn: BotChannelLanding | null,
+): [
+  BotTranscriptLanding | null,
+  Dispatch<SetStateAction<BotTranscriptLanding | null>>,
+] {
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
+    landOn !== null && landOn.threadId === null ? landOn : null,
+  );
+  const [asked, setAsked] = useState(landOn);
+  if (landOn !== asked) {
+    setAsked(landOn);
+    if (landOn !== null && landOn.threadId === null) {
+      const { messageId, sendPostId } = landOn;
+      setLanding((previous) => ({
+        messageId,
+        sendPostId,
+        visit: (previous?.visit ?? 0) + 1,
+      }));
+    }
+  }
+  return [landing, setLanding];
 }
 
 /**
@@ -585,11 +629,7 @@ export function BotChannelView(props: {
   // each follow a new visit, so the same link followed again lands again. The
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
-  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
-    props.landOn !== null && props.landOn.threadId === null
-      ? props.landOn
-      : null,
-  );
+  const [landing, setLanding] = useChannelLanding(props.landOn);
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
       openThread: (anchorMessageId) =>
@@ -609,7 +649,7 @@ export function BotChannelView(props: {
         }));
       },
     }),
-    [onOpenMemory, onOpenThread],
+    [onOpenMemory, onOpenThread, setLanding],
   );
   const surface = useMemo<BotTranscriptSurface>(
     () => ({

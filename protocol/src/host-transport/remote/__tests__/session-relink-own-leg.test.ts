@@ -38,6 +38,7 @@ import {
 import {
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
@@ -1724,6 +1725,39 @@ describe("RemoteSession relink on an own-leg loss", () => {
           .map((frame) => frame.type),
       ).toEqual([MuxFrameType.RESUME, MuxFrameType.REQUEST]);
       expect(relay.handshakes).toBe(1);
+    });
+  });
+
+  describe("a SUBSCRIBE still sealing when the leg goes", () => {
+    it("counts as sent once the gap resend hands it to the next leg", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const sealed = deferred<Uint8Array>();
+      const encryptSpy = vi
+        .spyOn(NoiseChannel.prototype, "encrypt")
+        .mockImplementationOnce(() => sealed.promise);
+
+      const second = session.subscribe(STREAM_METHOD, { cursor: null });
+      await until(() => encryptSpy.mock.calls.length === 1);
+      const streamId = encodedSubscribeStreamId(encryptSpy.mock.calls[0][0]);
+      expect(streamId).not.toBeNull();
+      relay.dropLeg(1006, "net");
+      await step(0);
+      sealed.resolve(new Uint8Array([1, 2, 3]));
+      await untilResumed(fixture, 1);
+      await until(() => relay.subscribedStreams.includes(streamId ?? -1));
+
+      // Its only SUBSCRIBE is the resend on the next leg: the held seal sent
+      // nothing on the leg that went.
+      expect(
+        relay.clientFrames
+          .filter((frame) => frame.leg === 1)
+          .map((frame) => frame.type),
+      ).toEqual([MuxFrameType.RESUME, MuxFrameType.SUBSCRIBE]);
+      expect(
+        relay.subscribedStreams.filter((id) => id === streamId),
+      ).toHaveLength(1);
+      expect(second.hasSentOpenRequest()).toBe(true);
     });
   });
 

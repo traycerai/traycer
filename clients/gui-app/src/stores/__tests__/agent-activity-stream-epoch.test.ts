@@ -56,6 +56,9 @@ class StubSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emitFrame(frame: StreamFrameEnvelope): void {

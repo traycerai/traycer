@@ -239,6 +239,23 @@ export interface IStreamSession {
   requestReconnect(): void;
 
   /**
+   * Whether this session's subscribe frame - its open request - has been
+   * handed to a socket, on any connection. Never resets.
+   *
+   * Every transport re-sends a session's open request on each reconnect. For a
+   * stream whose open request STARTS work (an import, a deletion), a re-send
+   * after the host received the first one starts that work again. Read inside
+   * the `reconnecting` transition, which every transport emits before it
+   * re-sends: `true` means the host may have the request, so the replay must
+   * not go out; `false` means nothing was sent, and the replay is the request
+   * the person made.
+   *
+   * It turns `true` on the send, not on `open` and not on a frame from the
+   * host: the host acts on a request whose answer may never arrive.
+   */
+  hasSentOpenRequest(): boolean;
+
+  /**
    * The schema version THIS session negotiated for its method, or `null` before
    * the handshake has settled (and again after a disconnect drops it).
    *

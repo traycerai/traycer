@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { EpicPlaybackControls } from "@/components/epic-canvas/panels/epic-playback-controls";
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 
 /**
  * The frame of a task's status row, and the music's place in it, ahead of the
@@ -16,7 +16,7 @@ export function EpicStatusRow(props: {
       // header carries app-wide status instead. Desktop (>=768px) is unchanged.
       className="@container flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
     >
-      <EpicPlaybackControls />
+      <SoundtrackPlaybackControls placement="task" />
       {props.children}
     </output>
   );
