@@ -882,6 +882,7 @@ async function giveInstalledHostToTeam(
     endpoint.hostId,
   );
   if (
+    !cloud.onOriginSignIn() ||
     confirmed.kind !== "ok" ||
     confirmed.host.owner.kind !== "team" ||
     confirmed.host.owner.id !== target.ownerId
