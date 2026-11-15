@@ -255,9 +255,8 @@ const INVITATION: EnvironmentInvitation = {
  * environment list, as a second window on the same account does.
  */
 function WarmOtherHost(): ReactNode {
-  const client = requireViewingHostClient();
   useEnvironmentListQuery(true);
-  useEnvironmentInvitationsQuery(client);
+  useEnvironmentInvitationsQuery();
   return null;
 }
 
