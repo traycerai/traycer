@@ -15,6 +15,7 @@ import {
   plainHostEntry,
   resetHostDirectoryRows,
   sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   knownField,
@@ -1032,7 +1033,7 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     "keeps the cut when the directory row names no owner (%s)",
     (code) => {
       renderFrozenOnHostRows(
-        [{ ...sandboxHostEntry(TRANSCRIPT_HOST_ID, null), owner: null }],
+        [sandboxHostEntryWithoutOwner(TRANSCRIPT_HOST_ID)],
         { code, message: RAW_MESSAGE },
       );
 

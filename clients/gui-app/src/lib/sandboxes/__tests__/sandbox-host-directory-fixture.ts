@@ -9,8 +9,7 @@ import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixt
 /**
  * A sandbox host's directory row: a remote row carrying sandbox facts. `team`
  * names the owning team, or `null` for the person's own (Personal) sandbox,
- * whose row names the viewer as its owner. A row the registry sent with no
- * `owner` is written on purpose with `{ ...sandboxHostEntry(id, null), owner: null }`.
+ * whose row names the viewer as its owner.
  */
 export function sandboxHostEntry(
   hostId: string,
@@ -45,6 +44,17 @@ export function sandboxHostEntry(
       ownerTeamId: team === null ? null : team.id,
     },
   };
+}
+
+/**
+ * A sandbox host's directory row for a sandbox the directory does not name an
+ * owner for (the registry sent the row without `owner`): whose sandbox it is
+ * is not known.
+ */
+export function sandboxHostEntryWithoutOwner(
+  hostId: string,
+): RemoteHostDirectoryEntry {
+  return { ...sandboxHostEntry(hostId, null), owner: null };
 }
 
 /** A laptop-like local row, with no sandbox facts. */
