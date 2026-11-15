@@ -38,6 +38,7 @@ import {
   simulatorShutdownResponseSchema,
   simulatorStatusRequestSchema,
   simulatorStatusResponseSchema,
+  simulatorStatusResponseSchemaV10,
 } from "./schemas";
 
 /**
@@ -158,7 +159,28 @@ export const simulatorStatusV10 = defineRpcContract({
   method: "simulator.status",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: simulatorStatusRequestSchema,
+  responseSchema: simulatorStatusResponseSchemaV10,
+});
+
+/**
+ * `@1.1`: each platform may say whether setting up its prerequisites on this
+ * machine can make it runnable (`setupSupported`). A `@1.0` answer upgrades
+ * unchanged, with the key absent.
+ */
+export const simulatorStatusV11 = defineRpcContract({
+  method: "simulator.status",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: simulatorStatusRequestSchema,
   responseSchema: simulatorStatusResponseSchema,
+});
+export const simulatorStatusUpgradeV10ToV11 = defineUpgradePath<
+  typeof simulatorStatusV10,
+  typeof simulatorStatusV11
+>({
+  from: simulatorStatusV10.schemaVersion,
+  to: simulatorStatusV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /**

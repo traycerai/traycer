@@ -7,6 +7,10 @@ export {
   negotiatedListTasksServesLocalFirst,
 } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 export {
+  historySortForHost,
+  negotiatedListTasksSortsByCreated,
+} from "@/lib/cloud-epic-tasks-query/created-sort-admission";
+export {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksLastKnownQueryKey,

@@ -9,6 +9,11 @@
  * connectable hosts, the notification indicators and the bot's activity (the
  * real protocol schemas do not load in this suite's jsdom).
  */
+import {
+  PLAIN_BOT_ID,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -575,7 +580,9 @@ describe("the fixed Tracy entry - top strip", () => {
 
     expect(entry.textContent).toContain("Tracy");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(
+      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
+    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1318,7 +1325,9 @@ describe("the fixed Tracy entry - a default channel with any title", () => {
     expect(entry.textContent).toContain("Tracy");
     expect(entry.textContent).not.toContain("Release Notes");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(
+      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
+    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
 
     await userEvent.hover(entry);
     const body = await screen.findByTestId("tracy-entry-hover-body");
@@ -1402,7 +1411,9 @@ describe("the fixed Tracy entry - vertical strip", () => {
     expect(
       within(entry).getAllByTestId("tracy-entry-icon").length,
     ).toBeGreaterThan(0);
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(
+      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
+    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
     expect(entry.getAttribute("aria-label")).toBe("Tracy");
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
