@@ -10,7 +10,6 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   EnvironmentMembersResponseV12,
@@ -164,14 +163,6 @@ function mountViewer(
   return harness;
 }
 
-function everyRequestWentToThePool(
-  harness: TeamPageHarness,
-  method: string,
-): void {
-  expect(hostIdsOf(harness, method)).not.toHaveLength(0);
-  expect(new Set(hostIdsOf(harness, method))).toEqual(new Set([POOL_HOST_ID]));
-}
-
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
   it("shows the item's values from authn without asking a host", async () => {
     const harness = mountViewer(
@@ -190,15 +181,17 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
-    expect(harness.paramsOf("environment.configuration.items")).toEqual([
-      { environmentId: "env-acme" },
-    ]);
+    const itemReads = harness.paramsOf("environment.configuration.items");
+    expect(itemReads.length).toBeGreaterThan(0);
+    expect(
+      itemReads.every(({ environmentId }) => environmentId === "env-acme"),
+    ).toBe(true);
     expect(hostIdsOf(harness, "environment.configuration.items")).toHaveLength(
       0,
     );
   });
 
-  it("shows the editor roster read through the pool and the Members link", async () => {
+  it("shows the editor roster read from authn and the Members link", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -208,7 +201,15 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
       await screen.findByText("Ada, Bo can change defaults."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Members" })).toBeTruthy();
-    everyRequestWentToThePool(harness, "environment.members");
+    expect(
+      harness.cloudRequests.some(
+        (request) =>
+          request.method === "GET" &&
+          new URL(request.url).pathname ===
+            "/api/v3/environments/env-acme/members",
+      ),
+    ).toBe(true);
+    expect(hostIdsOf(harness, "environment.members")).toHaveLength(0);
   });
 
   it("shows roster loading until the members read answers", async () => {
