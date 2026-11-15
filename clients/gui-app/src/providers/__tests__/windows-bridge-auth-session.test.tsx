@@ -146,9 +146,8 @@ function renderWithFakes(
   let verificationRevokedListener:
     | ((rejectedToken: string, revocation: RevocationScope) => void)
     | null = null;
-  let resolveSetPromise:
-    | ((resolution: AuthSessionSetResolution) => void)
-    | null = null;
+  // Every write still waiting, oldest first: a window can have several.
+  const pendingSets: Array<(resolution: AuthSessionSetResolution) => void> = [];
   let mainSnapshot = SIGNED_OUT_DESKTOP_SNAPSHOT;
   let setAnswer: DesktopAuthSessionSetResult | "pending" = setResult;
   let restoreAnswer: RestoreAnswer = "restored";
@@ -210,7 +209,7 @@ function renderWithFakes(
       return Promise.resolve(setAnswer);
     }
     return new Promise<DesktopAuthSessionSetResult>((resolve, reject) => {
-      resolveSetPromise = (resolution) => {
+      pendingSets.push((resolution) => {
         if (resolution.kind === "resolve") {
           if (resolution.result.outcome === "accepted") {
             mainSnapshot = snapshot;
@@ -219,7 +218,7 @@ function renderWithFakes(
         } else {
           reject(resolution.cause);
         }
-      };
+      });
     });
   });
   const get = vi.fn(() => Promise.resolve(mainSnapshot));
@@ -274,11 +273,11 @@ function renderWithFakes(
     inboundDispose,
     outboundDispose,
     resolveSet: (resolution) => {
-      if (resolveSetPromise === null) {
+      const resolvePending = pendingSets.shift();
+      if (resolvePending === undefined) {
         throw new Error("set is not pending");
       }
-      resolveSetPromise(resolution);
-      resolveSetPromise = null;
+      resolvePending(resolution);
     },
     set,
     answerSetWith: (answer) => {
@@ -1040,6 +1039,74 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       expect(harness.set).toHaveBeenCalledTimes(3);
       expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("lets a superseded write's refusal for the keys decide nothing", async () => {
+    const harness = renderWithFakes(NO_KEYS, {});
+    harness.answerSetWith("pending");
+    harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+    harness.emitOutbound(FRESH_SNAPSHOT);
+    await settle();
+    expect(harness.set).toHaveBeenCalledTimes(2);
+
+    harness.resolveSet({ kind: "resolve", result: NO_KEYS });
+    await settle();
+    expect(harness.restoreLocal).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+
+    harness.resolveSet({ kind: "resolve", result: NO_KEYS });
+    await settle();
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+    expect(harness.restoreLocal).toHaveBeenCalledWith({
+      userId: FRESH_SNAPSHOT.profile?.userId,
+      token: FRESH_SNAPSHOT.token,
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("releases the hold when a different session is written over it, and tells the person about its own refusal", async () => {
+    const harness = await startOffline({});
+    harness.answerSetWith(refused("expired"));
+    await tick(RESEND_MS);
+    expect(harness.revalidate).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+
+    harness.setCurrentSession(FRESH_SNAPSHOT);
+    harness.emitOutbound(FRESH_SNAPSHOT);
+    await settle();
+
+    // A fresh session's refusal: told, as any first refusal is, and not asked
+    // about again as a held one would be.
+    expect(toast.warning).toHaveBeenCalledTimes(2);
+    expect(harness.revalidate).toHaveBeenCalledTimes(1);
+    const handedOver = harness.set.mock.calls.length;
+    await tick(RESEND_MS * 5);
+    expect(harness.set).toHaveBeenCalledTimes(handedOver);
+  });
+
+  it("holds a rotated token once, with no toast, and resends the new one", async () => {
+    const harness = await startOffline({});
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+
+    harness.setCurrentSession(FRESH_SNAPSHOT);
+    harness.emitOutbound(FRESH_SNAPSHOT);
+    await settle();
+
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
+    expect(harness.restoreLocal).toHaveBeenLastCalledWith({
+      userId: FRESH_SNAPSHOT.profile?.userId,
+      token: FRESH_SNAPSHOT.token,
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+    const handedOver = harness.set.mock.calls.length;
+    await tick(RESEND_MS);
+    expect(harness.set).toHaveBeenCalledTimes(handedOver + 1);
+    expect(harness.set).toHaveBeenLastCalledWith({
+      status: "signed-in",
+      token: FRESH_SNAPSHOT.token,
+      profile: FRESH_SNAPSHOT.profile,
+    });
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
   });
 
   it("does not sign a second window out when main publishes its local fallback", async () => {
