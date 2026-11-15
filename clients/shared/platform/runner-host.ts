@@ -1,7 +1,7 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
-import type { HostTokenSource } from "../auth/host-token-source";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
+import type { HostTokenSource } from "../auth/host-token-source";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";

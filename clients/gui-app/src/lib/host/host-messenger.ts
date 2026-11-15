@@ -1,3 +1,7 @@
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -5,10 +9,6 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
-import {
-  MINIMUM_HOST_VERSION,
-  hostDirectoryEntryNeedsUpdate,
-} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { v4 as uuidv4 } from "uuid";
 import type {

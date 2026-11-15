@@ -1,0 +1,338 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { BrowserSessionsServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
+} from "@traycer-clients/shared/auth/host-token-source";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  BrowserSessionsHostDirectory,
+  BrowserSessionsHostTransport,
+} from "../browser-sessions-transport";
+import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
+import { openBrowserSessionsTransport } from "../browser-sessions-transport";
+import { BrowserSessionsRegistry } from "../browser-sessions-owner";
+import {
+  createRegistryHarness,
+  FakeStreamClient,
+  hostListResultForOwner,
+  type RegistryHarness,
+} from "./browser-sessions-stream-fixture";
+
+vi.mock("../../app/logger", () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  describeLogError: (error: unknown) => String(error),
+}));
+
+const localWsClients = vi.hoisted<{ clients: FakeStreamClient[] }>(() => ({
+  clients: [],
+}));
+vi.mock("@traycer-clients/shared/host-transport/ws-stream-client", async () => {
+  const { FakeStreamClient } =
+    await import("@traycer-clients/shared/host-transport/__testing__/fake-stream-client");
+  return {
+    WsStreamClient: class extends FakeStreamClient {
+      constructor(_options: unknown) {
+        super(false);
+        localWsClients.clients.push(this);
+      }
+    },
+  };
+});
+
+const LOCAL_HOST_ID = "host-local";
+const WINDOW_ID = "window-1";
+const OPEN_REQUEST = {
+  scope: { kind: "epic", epicId: "epic-1" } as const,
+  hostId: LOCAL_HOST_ID,
+  identityKey: "identity-1",
+};
+const PERSONAL_OWNER: HostOwnerPrincipal = { kind: "user", id: "user-1" };
+const TEAM_OWNER: HostOwnerPrincipal = {
+  kind: "team",
+  id: "team-1",
+  name: "Team One",
+};
+const SNAPSHOT: BrowserSessionsServerFrame = {
+  kind: "snapshot",
+  hasBinaryPayload: false,
+  sessions: [],
+};
+
+const BEARER: BearerSourceProvider = () => ({
+  getBearerToken: () => "bearer-token",
+  identity: { userId: "user-1" },
+});
+const HOST_TOKENS = createHostTokenSource({
+  persistence: createMemoryHostTokenPersistence(),
+  mint: (): Promise<HostTokenMintOutcome> =>
+    Promise.resolve({ kind: "no-sign-in" }),
+  signIn: null,
+  now: () => Date.now(),
+});
+const TRANSPORT_DEPS = {
+  authnBaseUrl: () => "https://authn.test",
+  bearer: BEARER,
+  cloudAuthorized: () => true,
+  endpoint: () => null,
+  appVersion: "1.5.0",
+  hostTokens: HOST_TOKENS,
+};
+
+type ListRegisteredHosts = (
+  authnBaseUrl: string,
+  bearer: string,
+) => Promise<HostListFetchResult>;
+
+type OpenTransport = (
+  target: HostDirectoryEntry,
+  userId: string,
+) => BrowserSessionsHostTransport | null;
+
+interface LocalOwnerHarness {
+  readonly pendingListings: Array<(result: HostListFetchResult) => void>;
+  readonly listRegisteredHosts: ListRegisteredHosts;
+  readonly directory: BrowserSessionsHostDirectory;
+  readonly registry: BrowserSessionsRegistry;
+  readonly emitted: RegistryHarness["emitted"];
+  readonly openedTransports: BrowserSessionsHostTransport[];
+  readonly openTransport: OpenTransport;
+}
+
+function createLocalOwnerHarness(): LocalOwnerHarness {
+  const pendingListings: Array<(result: HostListFetchResult) => void> = [];
+  const listRegisteredHosts = vi.fn(
+    (_authnBaseUrl: string, _bearer: string) =>
+      new Promise<HostListFetchResult>((resolve) => {
+        pendingListings.push(resolve);
+      }),
+  );
+  const directory = createBrowserSessionsHostDirectory({
+    authnBaseUrl: () => "https://authn.test",
+    relayBaseUrl: "wss://relay.test/attach",
+    localHost: () => ({
+      hostId: LOCAL_HOST_ID,
+      websocketUrl: "ws://127.0.0.1:4455/ws",
+      version: "1.5.0",
+    }),
+    bearerToken: () => "bearer-token",
+    listRegisteredHosts,
+    now: () => 1_000_000,
+  });
+  const appHarness = createRegistryHarness();
+  const openedTransports: BrowserSessionsHostTransport[] = [];
+  const openTransport = vi.fn((target: HostDirectoryEntry, userId: string) => {
+    const transport = openBrowserSessionsTransport(
+      target,
+      userId,
+      TRANSPORT_DEPS,
+    );
+    if (transport !== null) openedTransports.push(transport);
+    return transport;
+  });
+  const registry = new BrowserSessionsRegistry({
+    ...appHarness.deps,
+    directory,
+    openTransport,
+    localHostId: () => LOCAL_HOST_ID,
+  });
+
+  return {
+    pendingListings,
+    listRegisteredHosts,
+    directory,
+    registry,
+    emitted: appHarness.emitted,
+    openedTransports,
+    openTransport,
+  };
+}
+
+async function openLiveLocalStream(harness: LocalOwnerHarness): Promise<{
+  readonly client: FakeStreamClient;
+  readonly session: FakeStreamClient["sessions"][number];
+}> {
+  const clientIndex = localWsClients.clients.length;
+  harness.registry.open(WINDOW_ID, OPEN_REQUEST);
+  await vi.waitFor(() =>
+    expect(localWsClients.clients).toHaveLength(clientIndex + 1),
+  );
+  const client = localWsClients.clients[clientIndex];
+  if (client === undefined)
+    throw new Error("the local transport was not opened");
+  await vi.waitFor(() => expect(client.sessions).toHaveLength(1));
+  const session = client.sessions[0];
+  if (session === undefined)
+    throw new Error("the browser.sessions stream was not subscribed");
+  session.emitStatus("open");
+  session.emit(SNAPSHOT, null);
+  return { client, session };
+}
+
+function resolveListing(
+  harness: LocalOwnerHarness,
+  owner: HostOwnerPrincipal,
+  index: number,
+): void {
+  const resolve = harness.pendingListings[index];
+  if (resolve === undefined)
+    throw new Error(`no registry listing ${index} is pending`);
+  resolve(hostListResultForOwner(LOCAL_HOST_ID, owner));
+}
+
+const activeRegistries: BrowserSessionsRegistry[] = [];
+afterEach(() => {
+  for (const registry of activeRegistries.splice(0)) registry.dispose();
+  localWsClients.clients.length = 0;
+});
+
+describe("local browser.sessions ownership changes", () => {
+  it("keeps the same live stream when unknown ownership becomes personal", async () => {
+    const harness = createLocalOwnerHarness();
+    activeRegistries.push(harness.registry);
+    const { client, session } = await openLiveLocalStream(harness);
+
+    expect(harness.listRegisteredHosts).toHaveBeenCalledTimes(1);
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+    expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toBeNull();
+
+    resolveListing(harness, PERSONAL_OWNER, 0);
+    await vi.waitFor(() =>
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
+        PERSONAL_OWNER,
+      ),
+    );
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(client.isClosed()).toBe(false);
+    expect(session.closed).toBe(false);
+    expect(
+      harness.emitted.some(
+        ({ envelope }) =>
+          envelope.event.kind === "status" &&
+          envelope.event.lifecycle === "failed",
+      ),
+    ).toBe(false);
+  });
+
+  it("retires the same live stream when unknown ownership becomes team", async () => {
+    const harness = createLocalOwnerHarness();
+    activeRegistries.push(harness.registry);
+    const { client, session } = await openLiveLocalStream(harness);
+
+    resolveListing(harness, TEAM_OWNER, 0);
+    await vi.waitFor(() => {
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+      expect(client.isClosed()).toBe(true);
+    });
+    expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(client.isClosed()).toBe(true);
+    expect(session.closed).toBe(true);
+
+    // The next real registry open resolves the now-known team owner. The
+    // production jar selector refuses it before a second socket is born.
+    harness.registry.open(WINDOW_ID, OPEN_REQUEST);
+    await vi.waitFor(() =>
+      expect(harness.openTransport).toHaveBeenCalledTimes(2),
+    );
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(localWsClients.clients).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(
+        harness.emitted.some(
+          ({ envelope }) =>
+            envelope.event.kind === "status" &&
+            envelope.event.lifecycle === "failed",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("retires a personal stream when its owner changes to team", async () => {
+    const harness = createLocalOwnerHarness();
+    activeRegistries.push(harness.registry);
+
+    await harness.directory.resolve(LOCAL_HOST_ID);
+    resolveListing(harness, PERSONAL_OWNER, 0);
+    await vi.waitFor(() =>
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
+        PERSONAL_OWNER,
+      ),
+    );
+
+    const { client, session } = await openLiveLocalStream(harness);
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+
+    harness.directory.invalidate(LOCAL_HOST_ID);
+    await harness.directory.resolve(LOCAL_HOST_ID);
+    expect(harness.pendingListings).toHaveLength(2);
+    resolveListing(harness, TEAM_OWNER, 1);
+    await vi.waitFor(() => {
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+      expect(client.isClosed()).toBe(true);
+    });
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(session.closed).toBe(true);
+  });
+
+  it("opens the local jar stream while the cold registry read stays pending", async () => {
+    const harness = createLocalOwnerHarness();
+    activeRegistries.push(harness.registry);
+
+    const { client, session } = await openLiveLocalStream(harness);
+
+    expect(harness.listRegisteredHosts).toHaveBeenCalledTimes(1);
+    expect(harness.pendingListings).toHaveLength(1);
+    expect(harness.openTransport).toHaveBeenCalledTimes(1);
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(client.isClosed()).toBe(false);
+    expect(session.closed).toBe(false);
+  });
+
+  it("still retires a remote stream when its personal principal changes", async () => {
+    const appHarness = createRegistryHarness();
+    const remoteHostId = "host-remote";
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-1" };
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        Promise.resolve(hostListResultForOwner(remoteHostId, owner)),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer-token",
+      listRegisteredHosts,
+      now: () => 1_000_000,
+    });
+    await directory.resolve(remoteHostId);
+
+    const registry = new BrowserSessionsRegistry({
+      ...appHarness.deps,
+      directory,
+    });
+    activeRegistries.push(registry);
+    const nextClient = appHarness.nextClient();
+    registry.open(WINDOW_ID, { ...OPEN_REQUEST, hostId: remoteHostId });
+    const client = await nextClient;
+    await vi.waitFor(() => expect(client.sessions).toHaveLength(1));
+    const session = client.sessions[0];
+    if (session === undefined)
+      throw new Error("the remote browser.sessions stream was not subscribed");
+    session.emitStatus("open");
+    session.emit(SNAPSHOT, null);
+
+    owner = { kind: "user", id: "user-2" };
+    directory.invalidate(remoteHostId);
+    await directory.resolve(remoteHostId);
+    await vi.waitFor(() => expect(appHarness.closedTransports).toEqual([0]));
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+  });
+});

@@ -33,6 +33,7 @@ import {
   type SandboxVerbFetchResult,
   type SandboxWakeBudget,
 } from "../sandbox-control";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -1855,14 +1856,6 @@ describe("the IAP proxy credential", () => {
   });
 });
 
-/** A browser's answer to a redirect it was told not to follow: status 0. */
-function opaqueRedirect(): Response {
-  const response = new Response(null);
-  Object.defineProperty(response, "status", { value: 0 });
-  Object.defineProperty(response, "type", { value: "opaqueredirect" });
-  return response;
-}
-
 describe("a redirect answered to a sandbox control call", () => {
   it.each([
     {
@@ -1874,7 +1867,11 @@ describe("a redirect answered to a sandbox control call", () => {
         }),
       status: 302,
     },
-    { name: "a browser's opaque redirect", answer: opaqueRedirect, status: 0 },
+    {
+      name: "a browser's opaque redirect",
+      answer: createOpaqueRedirectResponse,
+      status: 0,
+    },
   ])(
     "reads $name as a network error and follows nothing",
     async ({ answer, status }) => {
