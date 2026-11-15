@@ -22,6 +22,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -37,13 +38,21 @@ import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  noteLocalTeamAdmission,
+  useLocalTeamAdmissionStore,
+} from "@/stores/host/local-team-admission-store";
 
 export interface TeamProfileRecordHttpRequest {
   readonly url: string;
   readonly method: string;
-  readonly authorization: string | null;
+  readonly hasBearerAuthorization: boolean;
   readonly body: string | null;
 }
+
+export const TEAM_PROFILE_KEY_CANARY = "synthetic-profile-key";
 
 export interface TeamProfileRecordHttpAnswer {
   readonly status: number;
@@ -56,7 +65,25 @@ export interface TeamProfileRecordWireRow {
   readonly name: string;
   readonly color: string | null;
   readonly enabled: boolean;
-  readonly kind: string | null;
+  readonly kind:
+    | "oauth_code"
+    | "setup_token"
+    | "device_auth"
+    | "api_key"
+    | "grok-oidc"
+    | "antigravity-google"
+    | null;
+  readonly state: "live" | "signed-out-by-person" | "refused-by-provider";
+  readonly custodyMode: "legacy" | "owned";
+  readonly signInNumber: string;
+  readonly renewalNumber: string;
+  readonly recordRevision: string;
+  readonly personIntentNumber: string;
+  readonly expiresAt: number | null;
+  readonly renewal: {
+    readonly unsettledSince: number;
+    readonly standing: "settling" | "lost";
+  } | null;
   readonly readerLabel: "live" | "waiting" | "needs-sign-in";
   readonly otherNames: readonly string[];
 }
@@ -65,14 +92,119 @@ export type TeamProfileRecordListBody =
   | { readonly enabled: false }
   | {
       readonly enabled: true;
+      readonly environmentRevision: string;
       readonly records: readonly TeamProfileRecordWireRow[];
+      readonly removed: readonly [];
+      readonly aliases: readonly [];
+      readonly providerKeys: readonly [];
     };
+
+export type TeamAwaitLoginWireAnswer = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
+export type TeamStartLoginWireAnswer = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.startLogin"
+>;
+
+const TEAM_SIGN_IN_OPERATION_ID = "11111111-1111-4111-8111-111111111111";
+
+export function teamLoginStartedAnswer(): TeamStartLoginWireAnswer {
+  return {
+    url: "https://auth.traycer.invalid/sign-in",
+    started: true,
+    profileId: "team-created-profile",
+    userCode: null,
+    failure: null,
+    pending: null,
+    pack: null,
+    targetRefusal: null,
+  };
+}
+
+export function teamAwaitLoginSignInRequestAnswer(): TeamAwaitLoginWireAnswer {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    installation: null,
+    profileOutcome: null,
+    signInRequest: {
+      operationId: TEAM_SIGN_IN_OPERATION_ID,
+      environmentId: "env-a",
+      sourceHostId: mockLocalHostEntry.hostId,
+      sourceSharingGeneration: 1,
+      harnessId: "claude",
+    },
+  };
+}
+
+export function teamAwaitLoginOutcomeAnswer(
+  outcome: NonNullable<TeamAwaitLoginWireAnswer["profileOutcome"]>,
+): TeamAwaitLoginWireAnswer {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    installation: null,
+    profileOutcome: outcome,
+    signInRequest: null,
+  };
+}
+
+export function teamProfileRecord(input: {
+  readonly profileId: string;
+  readonly harnessId: string;
+  readonly name: string;
+  readonly readerLabel: TeamProfileRecordWireRow["readerLabel"];
+  readonly kind: TeamProfileRecordWireRow["kind"];
+}): TeamProfileRecordWireRow {
+  return {
+    profileId: input.profileId,
+    harnessId: input.harnessId,
+    name: input.name,
+    color: null,
+    enabled: true,
+    kind: input.kind,
+    state: "live",
+    custodyMode: "owned",
+    signInNumber: "1",
+    renewalNumber: "0",
+    recordRevision: "1",
+    personIntentNumber: "0",
+    expiresAt: null,
+    renewal: null,
+    readerLabel: input.readerLabel,
+    otherNames: [],
+  };
+}
+
+export function teamProfileRecordsBody(
+  records: readonly TeamProfileRecordWireRow[],
+): TeamProfileRecordListBody {
+  return {
+    enabled: true,
+    environmentRevision: "1",
+    records,
+    removed: [],
+    aliases: [],
+    providerKeys: [],
+  };
+}
 
 export const teamProfileRecordHttpBoundary: {
   list: TeamProfileRecordHttpAnswer & { body: TeamProfileRecordListBody };
   items: TeamProfileRecordHttpAnswer;
   action: TeamProfileRecordHttpAnswer;
+  keyAction: TeamProfileRecordHttpAnswer;
+  connections: TeamProfileRecordHttpAnswer;
+  replaceKey: TeamProfileRecordHttpAnswer;
+  signInIntent: TeamProfileRecordHttpAnswer;
   itemWriteStatus: number;
+  keyCanaryForwarded: boolean;
   calls: TeamProfileRecordHttpRequest[];
 } = {
   list: { status: 200, body: { enabled: false } },
@@ -85,7 +217,38 @@ export const teamProfileRecordHttpBoundary: {
       recordRevision: "1",
     },
   },
+  keyAction: {
+    status: 200,
+    body: {
+      profileId: "team-key-profile",
+      providerId: "cursor",
+      state: "removed",
+      signInNumber: "1",
+      recordRevision: "2",
+      personIntentNumber: "1",
+    },
+  },
+  connections: {
+    status: 200,
+    body: {
+      connections: [{ profileId: "team-api-key", bindingVersion: 4 }],
+    },
+  },
+  replaceKey: {
+    status: 200,
+    body: {
+      profileId: "team-api-key",
+      harnessId: "claude",
+      kind: "api_key",
+      status: "connected",
+    },
+  },
+  signInIntent: {
+    status: 200,
+    body: { operationId: TEAM_SIGN_IN_OPERATION_ID, endsAt: 1 },
+  },
   itemWriteStatus: 200,
+  keyCanaryForwarded: false,
   calls: [],
 };
 
@@ -219,71 +382,61 @@ function teamFetch(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
 ): Promise<Response> {
-  const url =
-    input instanceof URL
-      ? input
-      : typeof input === "string"
-        ? new URL(input)
-        : new URL(input.url);
+  const url = teamRequestUrl(input);
   const method = init?.method ?? "GET";
   const headers = new Headers(init?.headers);
-  const body = typeof init?.body === "string" ? init.body : null;
+  const rawBody = typeof init?.body === "string" ? init.body : null;
+  if (
+    url.pathname.includes("/harness-connections/") &&
+    url.pathname.endsWith("/connect") &&
+    rawBody !== null
+  ) {
+    teamProfileRecordHttpBoundary.keyCanaryForwarded = rawBody.includes(
+      TEAM_PROFILE_KEY_CANARY,
+    );
+  }
+  const omitBody =
+    (url.pathname.includes("/harness-connections/") &&
+      url.pathname.endsWith("/connect")) ||
+    url.pathname.endsWith("/profile-records/intents");
+  const body = omitBody ? null : rawBody;
   teamProfileRecordHttpBoundary.calls.push({
     url: url.toString(),
     method,
-    authorization: headers.get("authorization"),
+    hasBearerAuthorization:
+      headers.get("authorization")?.startsWith("Bearer ") === true,
     body,
   });
+  return (
+    teamAuthnResponse(url) ??
+    Promise.resolve(new Response(null, { status: 500 }))
+  );
+}
+
+function teamRequestUrl(input: RequestInfo | URL): URL {
+  if (input instanceof URL) return input;
+  if (typeof input === "string") return new URL(input);
+  return new URL(input.url);
+}
+
+function teamAuthnResponse(url: URL): Promise<Response> | null {
   if (url.pathname === "/api/v3/user/negotiated")
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          user: {
-            id: "team-test-user",
-            name: "Team Test User",
-            providerId: "team-test-provider",
-            providerHandle: "team-test-handle",
-            providerType: "GITHUB",
-            email: "team-test@example.invalid",
-            avatarUrl: null,
-            activatedAt: null,
-            createdAt: "2024-01-01T00:00:00.000Z",
-            updatedAt: "2024-01-01T00:00:00.000Z",
-            lastSeenAt: null,
-            privacyMode: false,
-            isLearningEnabled: true,
-          },
-          userSubscription: {
-            id: "team-test-subscription",
-            userID: "team-test-user",
-            orgID: null,
-            teamID: null,
-            customerId: "team-test-customer",
-            createdAt: "2024-01-01T00:00:00.000Z",
-            updatedAt: "2024-01-01T00:00:00.000Z",
-            subscriptionExpiry: null,
-            trialEndsAt: null,
-            subscriptionStatus: "FREE",
-            hasPaymentMethod: false,
-            isInTrial: false,
-            rechargeRateSeconds: 0,
-          },
-          teamSubscriptions: [],
-          payAsYouGoUsage: { allowPayAsYouGo: false },
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "x-traycer-user-record-version": "2.0",
-          },
-        },
-      ),
-    );
+    return teamNegotiatedUserResponse();
   if (url.pathname.endsWith("/profile-records"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.list);
+  if (url.pathname.endsWith("/profile-records/intents"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.signInIntent);
   if (url.pathname.includes("/profile-records/"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.action);
+  if (url.pathname.endsWith("/provider-keys/cursor"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.keyAction);
+  if (url.pathname.endsWith("/harness-connections"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.connections);
+  if (
+    url.pathname.includes("/harness-connections/") &&
+    url.pathname.endsWith("/connect")
+  )
+    return teamHttpResponse(teamProfileRecordHttpBoundary.replaceKey);
   if (url.pathname.endsWith("/items/managed_profile"))
     return Promise.resolve(
       new Response(null, {
@@ -292,7 +445,55 @@ function teamFetch(
     );
   if (url.pathname.endsWith("/items"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.items);
-  return Promise.resolve(new Response(null, { status: 500 }));
+  return null;
+}
+
+function teamNegotiatedUserResponse(): Promise<Response> {
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        user: {
+          id: "team-test-user",
+          name: "Team Test User",
+          providerId: "team-test-provider",
+          providerHandle: "team-test-handle",
+          providerType: "GITHUB",
+          email: "team-test@example.invalid",
+          avatarUrl: null,
+          activatedAt: null,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          lastSeenAt: null,
+          privacyMode: false,
+          isLearningEnabled: true,
+        },
+        userSubscription: {
+          id: "team-test-subscription",
+          userID: "team-test-user",
+          orgID: null,
+          teamID: null,
+          customerId: "team-test-customer",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          subscriptionExpiry: null,
+          trialEndsAt: null,
+          subscriptionStatus: "FREE",
+          hasPaymentMethod: false,
+          isInTrial: false,
+          rechargeRateSeconds: 0,
+        },
+        teamSubscriptions: [],
+        payAsYouGoUsage: { allowPayAsYouGo: false },
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "x-traycer-user-record-version": "2.0",
+        },
+      },
+    ),
+  );
 }
 
 function teamHttpResponse(
@@ -370,7 +571,99 @@ export function mountTeamPage(
   source: ConfigurationSource,
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
-  return buildTeamPage(source, handlers, null, false);
+  return buildTeamPage({
+    source,
+    handlers,
+    negotiated: null,
+    withPool: false,
+    boundarySection: null,
+    boundaryTarget: null,
+    pinBoundaryWindowHost: false,
+  });
+}
+
+type TeamPageBoundaryTarget =
+  | { readonly kind: "team"; readonly environmentId: string }
+  | { readonly kind: "personal" };
+
+/** Renders a team Providers surface through the real cloud boundary. */
+export function mountTeamPageThroughBoundary(
+  role: "owner" | "admin" | "editor" | "viewer",
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  section: SettingsSectionId,
+): TeamPageHarness {
+  const list: EnvironmentListResponseV11 = {
+    environments: [
+      {
+        environmentId: "env-a",
+        ownerKind: "organization",
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: role,
+        kind: "team",
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+    ],
+  };
+  return buildTeamPage({
+    source: poolSource(role),
+    handlers: { ...handlers, "environment.list": () => list },
+    negotiated: null,
+    withPool: false,
+    boundarySection: section,
+    boundaryTarget: { kind: "team", environmentId: "env-a" },
+    pinBoundaryWindowHost: true,
+  });
+}
+
+export function mountPersonalProvidersThroughBoundary(
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): TeamPageHarness {
+  const list: EnvironmentListResponseV11 = {
+    environments: [
+      {
+        environmentId: "env-personal",
+        ownerKind: "user",
+        ownerId: "team-test-user",
+        roomId: "room-personal",
+        label: "Personal",
+        effectiveRole: "owner",
+        kind: "personal",
+        hostCount: 1,
+        providerHandle: null,
+      },
+      {
+        environmentId: "env-a",
+        ownerKind: "organization",
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: "admin",
+        kind: "team",
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+    ],
+  };
+  return buildTeamPage({
+    source: personalPoolSource(),
+    handlers: { ...handlers, "environment.list": () => list },
+    negotiated: null,
+    withPool: false,
+    boundarySection: "providers",
+    boundaryTarget: { kind: "personal" },
+    pinBoundaryWindowHost: true,
+  });
+}
+
+export function admitCurrentUserToTeamWindow(): void {
+  const userId = useAuthStore.getState().contextMetadata?.userId;
+  if (userId === undefined) {
+    throw new Error("team window admission requires a signed-in test user");
+  }
+  noteLocalTeamAdmission(mockLocalHostEntry.hostId, userId, "admitted");
 }
 
 /**
@@ -383,7 +676,15 @@ export function mountTeamPageOnPoolBuild(
   source: ConfigurationSource,
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
-  return buildTeamPage(source, handlers, null, true);
+  return buildTeamPage({
+    source,
+    handlers,
+    negotiated: null,
+    withPool: true,
+    boundarySection: null,
+    boundaryTarget: null,
+    pinBoundaryWindowHost: false,
+  });
 }
 
 /** The host id each request for `method` was sent to, in order. */
@@ -404,7 +705,15 @@ export function mountTeamPageNegotiating(
   handlers: MockHandlerMap<HostRpcRegistry>,
   negotiated: Readonly<Record<string, { major: number; minor: number }>>,
 ): TeamPageHarness {
-  return buildTeamPage(source, handlers, negotiated, false);
+  return buildTeamPage({
+    source,
+    handlers,
+    negotiated,
+    withPool: false,
+    boundarySection: null,
+    boundaryTarget: null,
+    pinBoundaryWindowHost: false,
+  });
 }
 
 class FloorEnforcingMessenger extends MockHostMessenger<HostRpcRegistry> {
@@ -447,12 +756,28 @@ class FloorEnforcingMessenger extends MockHostMessenger<HostRpcRegistry> {
   }
 }
 
-function buildTeamPage(
-  source: ConfigurationSource,
-  handlers: MockHandlerMap<HostRpcRegistry>,
-  negotiated: Readonly<Record<string, { major: number; minor: number }>> | null,
-  withPool: boolean,
-): TeamPageHarness {
+interface TeamPageBuildOptions {
+  readonly source: ConfigurationSource;
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+  readonly negotiated: Readonly<
+    Record<string, { major: number; minor: number }>
+  > | null;
+  readonly withPool: boolean;
+  readonly boundarySection: SettingsSectionId | null;
+  readonly boundaryTarget: TeamPageBoundaryTarget | null;
+  readonly pinBoundaryWindowHost: boolean;
+}
+
+function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
+  const {
+    source,
+    handlers,
+    negotiated,
+    withPool,
+    boundarySection,
+    boundaryTarget,
+    pinBoundaryWindowHost,
+  } = options;
   installTeamFetch();
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -476,6 +801,7 @@ function buildTeamPage(
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
     findHostById: (hostId) => {
       if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
       if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
@@ -497,8 +823,16 @@ function buildTeamPage(
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
   useAuthStore.setState({ status: "signed-out" });
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   const authHarness = buildTeamAuthRuntime(queryClient);
   void startVerifiedTeamAuth(authHarness);
+  const binding = pinBoundaryWindowHost
+    ? {
+        ...authHarness.binding,
+        hostClient: teamHostBoundary.client,
+        hostId: mockLocalHostEntry.hostId,
+      }
+    : authHarness.binding;
   return {
     messenger,
     queryClient,
@@ -510,11 +844,20 @@ function buildTeamPage(
         .map((call) => call.params),
     Wrapper: (props) => (
       <RunnerHostProvider runnerHost={authHarness.runnerHost}>
-        <HostRuntimeContext.Provider value={authHarness.binding}>
+        <HostRuntimeContext.Provider value={binding}>
           <QueryClientProvider client={queryClient}>
-            <ConfigurationSourceContext.Provider value={source}>
-              {props.children}
-            </ConfigurationSourceContext.Provider>
+            {boundarySection === null || boundaryTarget === null ? (
+              <ConfigurationSourceContext.Provider value={source}>
+                {props.children}
+              </ConfigurationSourceContext.Provider>
+            ) : (
+              <ConfigurationSourceBoundary
+                target={boundaryTarget}
+                section={boundarySection}
+              >
+                {props.children}
+              </ConfigurationSourceBoundary>
+            )}
           </QueryClientProvider>
         </HostRuntimeContext.Provider>
       </RunnerHostProvider>
@@ -534,6 +877,7 @@ export function resetTeamPageHarness(): void {
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out" });
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   teamProfileRecordHttpBoundary.list = {
     status: 200,
     body: { enabled: false },
@@ -547,6 +891,37 @@ export function resetTeamPageHarness(): void {
       recordRevision: "1",
     },
   };
+  teamProfileRecordHttpBoundary.keyAction = {
+    status: 200,
+    body: {
+      profileId: "team-key-profile",
+      providerId: "cursor",
+      state: "removed",
+      signInNumber: "1",
+      recordRevision: "2",
+      personIntentNumber: "1",
+    },
+  };
+  teamProfileRecordHttpBoundary.connections = {
+    status: 200,
+    body: {
+      connections: [{ profileId: "team-api-key", bindingVersion: 4 }],
+    },
+  };
+  teamProfileRecordHttpBoundary.replaceKey = {
+    status: 200,
+    body: {
+      profileId: "team-api-key",
+      harnessId: "claude",
+      kind: "api_key",
+      status: "connected",
+    },
+  };
+  teamProfileRecordHttpBoundary.signInIntent = {
+    status: 200,
+    body: { operationId: TEAM_SIGN_IN_OPERATION_ID, endsAt: 1 },
+  };
   teamProfileRecordHttpBoundary.itemWriteStatus = 200;
+  teamProfileRecordHttpBoundary.keyCanaryForwarded = false;
   teamProfileRecordHttpBoundary.calls.length = 0;
 }

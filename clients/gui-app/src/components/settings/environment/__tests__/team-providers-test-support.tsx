@@ -249,7 +249,9 @@ export function profileRowSwitch(profileName: string): HTMLElement {
 }
 
 export async function openProfileEditor(): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /^Manage(?: profile)?$/ }),
+  );
   return screen.findByRole("dialog", { name: "Edit profile" });
 }
 
