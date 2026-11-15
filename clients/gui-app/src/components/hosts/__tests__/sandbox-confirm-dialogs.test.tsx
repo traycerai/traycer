@@ -11,8 +11,6 @@ import type { ReactElement, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { EMPTY_FOCUS_MODEL } from "@/lib/home-focus/build-focus-model";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
@@ -60,19 +58,34 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
   useSandboxSessionReport: () => ({ report: mocks.report, failed: false }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: mocks.configuration === null ? [] : [mocks.configuration],
-    teamEnvironmentIds: new Set<string>(),
-    complete: true,
-    personalEnvironmentId: "env-personal",
-  }),
-  sandboxConfigurationOf: (
-    _summary: SandboxSummary,
-    _configurations: SandboxConfigurations,
-  ) => mocks.configuration,
-  useSandboxWakeString: () => null,
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () => ({
+        configurations:
+          mocks.configuration === null
+            ? [{ kind: "personal" as const }]
+            : [{ kind: "personal" as const }, mocks.configuration],
+        teamEnvironmentIds: new Set(
+          mocks.configuration?.kind === "team" &&
+            mocks.configuration.environmentId !== null
+            ? [mocks.configuration.environmentId]
+            : [],
+        ),
+        complete: true,
+        personalEnvironmentId:
+          mocks.configuration?.kind === "personal" ? "env-personal" : null,
+      }),
+      useSandboxWakeString: () => null,
+    };
+  },
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ isPending: false, mutate: vi.fn() }),
 }));

@@ -239,7 +239,6 @@ describe("wakeSandboxOnPick", () => {
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).toHaveBeenCalledWith(
       "Not enough credits to wake this sandbox",
-      expect.anything(),
     );
     // Only the starter refreshed the directory.
     expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
@@ -334,7 +333,7 @@ describe("wakeSandboxOnPick", () => {
     );
   });
 
-  it("says the team's pot, nameless, when the directory has no row for the sandbox", async () => {
+  it("keeps a wake with no known owner to the title when the directory has no row", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
     binding.auth.listSandboxes.mockImplementation(
@@ -350,10 +349,6 @@ describe("wakeSandboxOnPick", () => {
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
-      {
-        description:
-          "Your team allowance is short $0.12. $0.12 more wakes it for an hour.",
-      },
     );
 
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
@@ -365,13 +360,10 @@ describe("wakeSandboxOnPick", () => {
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
-      {
-        description: "Your team's credits don't cover an hour of this sandbox.",
-      },
     );
   });
 
-  it("keeps the add-credits wording for a refusal from the person's own balance, and for one that named no pot", async () => {
+  it("keeps personal and generic add-credits wording for known balances", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
     binding.directory.findById.mockReturnValue(
@@ -393,6 +385,8 @@ describe("wakeSandboxOnPick", () => {
       { description: "Add 11 credits, then try again." },
     );
 
+    // Older servers omit the pot name. A known team gets the board's generic
+    // add-credits remedy; this is expected red until the builder's follow-up.
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 10_100,

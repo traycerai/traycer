@@ -40,7 +40,6 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxRowVerb } from "@/hooks/sandboxes/use-sandbox-operation";
-import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
@@ -95,25 +94,34 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
 vi.mock("@/components/host/host-restart-sessions", () => ({
   KnownHostSessionsList: () => null,
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: mocks.configuration === null ? [] : [mocks.configuration],
-    teamEnvironmentIds: new Set(
-      mocks.configuration?.kind === "team" &&
-        mocks.configuration.environmentId !== null
-        ? [mocks.configuration.environmentId]
-        : [],
-    ),
-    complete: true,
-    personalEnvironmentId:
-      mocks.configuration?.kind === "personal" ? "env-personal" : null,
-  }),
-  sandboxConfigurationOf: (
-    _summary: SandboxSummary,
-    _configurations: SandboxConfigurations,
-  ) => mocks.configuration,
-  useSandboxWakeString: () => null,
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () => ({
+        configurations:
+          mocks.configuration === null
+            ? [{ kind: "personal" as const }]
+            : [{ kind: "personal" as const }, mocks.configuration],
+        teamEnvironmentIds: new Set(
+          mocks.configuration?.kind === "team" &&
+            mocks.configuration.environmentId !== null
+            ? [mocks.configuration.environmentId]
+            : [],
+        ),
+        complete: true,
+        personalEnvironmentId:
+          mocks.configuration?.kind === "personal" ? "env-personal" : null,
+      }),
+      useSandboxWakeString: () => null,
+    };
+  },
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: undefined }),
 }));
@@ -304,10 +312,17 @@ function setup(testCase: VerbCase, overrides: Partial<SandboxSummary> | null) {
   const answer = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
   binding.auth.runSandboxVerb.mockReturnValue(answer.promise);
   binding.auth.destroySandbox.mockReturnValue(answer.promise);
+  let environmentId: string | null = null;
+  if (mocks.configuration?.kind === "personal") {
+    environmentId = "env-personal";
+  } else if (mocks.configuration?.kind === "team") {
+    environmentId = mocks.configuration.environmentId;
+  }
   const main = sandboxSummaryFixture({
     id: "sbx-build",
     displayName: "build-box",
     state: testCase.initial,
+    environmentId,
     ...(overrides ?? {}),
   });
   const other = sandboxSummaryFixture({
