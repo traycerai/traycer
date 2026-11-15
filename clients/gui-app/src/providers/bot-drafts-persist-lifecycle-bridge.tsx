@@ -96,16 +96,17 @@ function forgetSettledSends(queryClient: QueryClient): void {
 
 /**
  * A box's kept draft with `parts` below what it holds, a blank line between
- * each, as the box itself adds them. It replies to what the kept draft
- * replies to, else to what the failed send offered back replied to, as that
- * send put back in its box would (T166).
+ * each, as the box itself adds them. A kept draft keeps its own reply
+ * target, none included, since the failed send's would make the whole draft
+ * a reply. With no kept draft it replies to what the failed send offered back
+ * replied to, as that send put back in its box would (T166).
  */
 function withRetiredParts(
   kept: BotThreadBoxDraft | null,
   parts: ReadonlyArray<BotRetiredPart>,
 ): BotThreadBoxDraft {
   const seedId = kept?.seedId ?? 0;
-  const replyTo = kept?.replyTo ?? unsentReplyOf(parts);
+  const replyTo = kept === null ? unsentReplyOf(parts) : kept.replyTo;
   // Text put there from outside the box stays text: the box makes its
   // document, chips included, when it loads it.
   const blocks = movedBlocksOnly(parts);

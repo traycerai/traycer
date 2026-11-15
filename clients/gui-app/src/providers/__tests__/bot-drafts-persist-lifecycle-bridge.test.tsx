@@ -652,6 +652,28 @@ describe("<BotDraftsPersistLifecycleBridge /> a box replying to a message when i
     expect(stored?.text).toContain("Failed send");
     expect(stored?.replyTo).toEqual(REPLY);
   });
+
+  it("keeps a kept draft that replies to nothing replying to nothing when A retires with a failed send that replied to a message folded below it", async () => {
+    const run = await startOver();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    await signedInAsA(run);
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.typeThreadBox(BOT_ID, CHANNEL, {
+        text: "Newer draft",
+        content: null,
+        held: [],
+      });
+      drafts.offerUnsent(BOT_ID, CHANNEL, failedSend("Failed send", REPLY));
+    });
+
+    signInAs(run, ACCOUNT_B);
+
+    const stored = storedUnder(run, keyOfA)[BOT_ID]?.[CHANNEL];
+    expect(stored?.text).toContain("Newer draft");
+    expect(stored?.text).toContain("Failed send");
+    expect(stored?.replyTo).toBeNull();
+  });
 });
 
 describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", () => {
