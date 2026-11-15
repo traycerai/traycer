@@ -734,6 +734,7 @@ export function CommentModeFixture(): ReactNode {
                         toolbarControls={null}
                         menuItems={null}
                         raiseToComment={CHAT_ROW}
+                        commentable
                       />
                     </Placement>
                   </TooltipProvider>

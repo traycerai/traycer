@@ -123,6 +123,7 @@ function treeOn(
           toolbarControls={null}
           menuItems={null}
           raiseToComment={false}
+          commentable
         />
       </TooltipProvider>
     </QueryClientProvider>

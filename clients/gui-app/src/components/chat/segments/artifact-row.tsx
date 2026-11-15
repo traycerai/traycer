@@ -8,10 +8,7 @@ import {
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
-import {
-  HtmlArtifactCommentSurface,
-  HtmlArtifactOlderVersionComments,
-} from "@/components/html-artifact/html-artifact-comment-surface";
+import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
 import { HtmlArtifactLinks } from "@/components/html-artifact/html-artifact-links";
 import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
@@ -425,19 +422,12 @@ function CardPage(props: {
       htmlVersion={selected}
     />
   );
-  const picker = (
-    <CardVersionPicker
-      epicId={scope.epicId}
-      artifactId={stamp.artifactId}
-      artifact={props.artifact}
-      shown={selected}
-      onPick={props.onPick}
-    />
-  );
-  // Comments anchor to the live page, as in the tile: only the version the
-  // artifact serves now takes one, and an older one keeps the toggle in its
-  // place, unavailable.
-  if (viewTabId !== null && selected === null) {
+  if (viewTabId !== null) {
+    // One surface whatever version is on show, so moving between versions,
+    // by a pick or by a save that leaves the capture behind, never takes down
+    // the raise or a draft. Comments anchor to the live page, as in the tile:
+    // only the version the artifact serves now takes one, and an older one
+    // keeps the toggle in its place, unavailable.
     return (
       <HtmlArtifactLinks epicId={scope.epicId} viewTabId={viewTabId}>
         <HtmlArtifactCommentSurface
@@ -454,20 +444,27 @@ function CardPage(props: {
           onStatus={props.onStatus}
           toolbarControls={
             <>
-              {picker}
+              <CardVersionPicker
+                epicId={scope.epicId}
+                artifactId={stamp.artifactId}
+                artifact={props.artifact}
+                shown={selected}
+                onPick={props.onPick}
+              />
               {actions}
             </>
           }
           menuItems={undefined}
           raiseToComment
+          commentable={selected === null}
         />
       </HtmlArtifactLinks>
     );
   }
   return (
-    <ArtifactExpansion title={stamp.title}>
+    <ArtifactExpansion title={stamp.title} commentsInline>
       {caption}
-      <HtmlArtifactLinks epicId={scope.epicId} viewTabId={viewTabId}>
+      <HtmlArtifactLinks epicId={scope.epicId} viewTabId={null}>
         <ArtifactPagesFrame
           source={source}
           title={stamp.title}
@@ -482,17 +479,7 @@ function CardPage(props: {
           onFrame={null}
           overlay={null}
           sourceEquivalent={undefined}
-          toolbarControls={
-            viewTabId === null ? (
-              actions
-            ) : (
-              <>
-                {picker}
-                {actions}
-                <HtmlArtifactOlderVersionComments viewTabId={viewTabId} />
-              </>
-            )
-          }
+          toolbarControls={actions}
         />
       </HtmlArtifactLinks>
     </ArtifactExpansion>

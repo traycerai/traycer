@@ -1,5 +1,6 @@
 import {
   Fragment,
+  use,
   useCallback,
   useContext,
   useEffect,
@@ -11,7 +12,14 @@ import {
   type ReactNode,
 } from "react";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
-import { useArtifactExpansion } from "@/components/artifacts/artifact-expanded-context";
+import {
+  useArtifactExpanded,
+  useArtifactExpansion,
+} from "@/components/artifacts/artifact-expanded-context";
+import {
+  PaneSurfaceActivityContext,
+  type PaneSurfaceActivity,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
 import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
 import type { CanvasCommentView } from "@/components/canvas-artifact/canvas-frame-registry";
@@ -142,10 +150,19 @@ export function HtmlArtifactCommentSurface(
     readonly menuItems: ReactNode;
     /**
      * Comments only while the surface is raised. A chat card's transcript row
-     * clips whatever paints outside it, the comment draft included, so the
-     * card raises itself to take a comment.
+     * clips whatever paints outside it, the comment draft included, so its
+     * Comments control shows only on the raised card, and a thread revealed
+     * in the inline card raises it.
      */
     readonly raiseToComment: boolean;
+    /**
+     * Whether the page on show is the artifact's current version, which is
+     * the one comments anchor to. An older one keeps the surface, so a raise
+     * and a draft outlast the move to it, but takes no comment and is not
+     * filed with the comment machinery: its threads, pins and selection are
+     * the current page's.
+     */
+    readonly commentable: boolean;
   },
 ) {
   return (
@@ -168,6 +185,8 @@ export function HtmlArtifactCommentSurface(
         toolbarControls={props.toolbarControls}
         menuItems={props.menuItems}
         raiseToComment={props.raiseToComment}
+        commentable={props.commentable}
+        viewTabId={props.viewTabId}
       />
     </CanvasSelectionProvider>
   );
@@ -194,6 +213,8 @@ interface CommentFrameProps extends CommentFrameSizing {
   readonly toolbarControls: ReactNode;
   readonly menuItems: ReactNode;
   readonly raiseToComment: boolean;
+  readonly commentable: boolean;
+  readonly viewTabId: string;
 }
 
 function ProvidedCommentFrame(props: CommentFrameProps) {
@@ -205,16 +226,65 @@ function ProvidedCommentFrame(props: CommentFrameProps) {
     // the raised surface - portalled onto the pane or the body, behind an
     // inert document, invisible and unreachable. Inside here it portals into
     // the surface, and the menus it raises resolve their container from it.
-    <ArtifactExpansion title={props.title}>
+    <ArtifactExpansion
+      title={props.title}
+      commentsInline={!props.raiseToComment}
+    >
       <HtmlArtifactCommentFrame {...props} events={events} />
     </ArtifactExpansion>
   );
 }
 
 /**
+ * The comment draft's view of its pane. A surface that comments only while
+ * raised can be lowered under a draft without the reader closing it: a
+ * blocker that needs them yields the raise. The draft then waits as it would
+ * in a background pane, mounted with what was typed and concealed (the
+ * expansion's `commentsInline`), and stops answering Escape and presses
+ * outside it, so the blocker takes them. Raising the surface brings it back.
+ */
+function CommentDraftActivity(props: {
+  readonly raiseToComment: boolean;
+  readonly children: ReactNode;
+}) {
+  const pane = use(PaneSurfaceActivityContext);
+  const expanded = useArtifactExpanded();
+  const parked = props.raiseToComment && !expanded;
+  const activity = useMemo<PaneSurfaceActivity>(
+    () => (parked ? { visible: pane.visible, focused: false } : pane),
+    [parked, pane],
+  );
+  return (
+    <PaneSurfaceActivityContext value={activity}>
+      {props.children}
+    </PaneSurfaceActivityContext>
+  );
+}
+
+/**
+ * The Comments control in the toolbar. A surface that comments only while
+ * raised shows none inline, not even the unavailable one: the reader expands
+ * it first. An older page shows the unavailable one in its place.
+ */
+function CommentControl(props: {
+  readonly raiseToComment: boolean;
+  readonly commentable: boolean;
+  readonly commentsEnabled: boolean;
+  readonly events: CanvasFrameEvents;
+  readonly viewTabId: string;
+}) {
+  const expanded = useArtifactExpanded();
+  if (props.raiseToComment && !expanded) return null;
+  if (!props.commentable)
+    return <HtmlArtifactOlderVersionComments viewTabId={props.viewTabId} />;
+  if (!props.commentsEnabled) return null;
+  return props.events.renderToolbarControls?.() ?? null;
+}
+
+/**
  * The Comments mode the reader asked for, and the press that asks. A surface
- * that comments only while raised rises at a press made inline, stays off if
- * it cannot rise, and drops the mode as it lowers.
+ * that comments only while raised rises when asked inline (a thread revealed
+ * in it), stays off if it cannot rise, and drops the mode as it lowers.
  */
 function useCommentingRequest(
   raiseToComment: boolean,
@@ -249,15 +319,16 @@ function useCommentingRequest(
 function HtmlArtifactCommentFrame(
   props: CommentFrameProps & { readonly events: CanvasFrameEvents },
 ) {
-  const { source, events } = props;
+  const { source, events, commentable } = props;
   const [commentingRequested, setCommenting] = useCommentingRequest(
     props.raiseToComment,
   );
   const commentsEnabled = events.commentsEnabled === true;
   // Derived, not reset: should the host stop serving comments while the mode
   // is on, the toggle goes and the shield must go with it, or the page would
-  // stay blocked with nothing on screen to unblock it.
-  const commenting = commentingRequested && commentsEnabled;
+  // stay blocked with nothing on screen to unblock it. Moving to an older
+  // version and back is the same: the mode returns with the current page.
+  const commenting = commentingRequested && commentsEnabled && commentable;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   // The board comments go on is the page the frame shows. The surface shows
   // one page at a time, so there is one board, and following a link moves it.
@@ -317,10 +388,13 @@ function HtmlArtifactCommentFrame(
       ),
     [events, page],
   );
+  // An older page is filed nowhere: no view to reveal a thread in or index
+  // anchors from, and no board for a selection or its pins.
   useEffect(() => {
+    if (!commentable) return;
     events.onCanvasView?.(view);
     return () => events.onCanvasView?.(null);
-  }, [events, view]);
+  }, [events, view, commentable]);
   // A new `events` (a renamed artifact, another host client) still files into
   // the same registry, so the board is told through the latest one rather
   // than filed again: filing again would drop the page's bridge for a moment,
@@ -329,7 +403,7 @@ function HtmlArtifactCommentFrame(
     (call: (latest: CanvasFrameEvents) => void): void => call(events),
   );
   useEffect(() => {
-    if (page === null) return;
+    if (page === null || !commentable) return;
     tell((latest) => {
       latest.onSource?.(page, boardSource);
       latest.onServedSource?.(page, servedSha256);
@@ -340,13 +414,13 @@ function HtmlArtifactCommentFrame(
         latest.onSource?.(page, null);
         latest.onServedSource?.(page, null);
       });
-  }, [page, boardSource, servedSha256]);
+  }, [page, boardSource, servedSha256, commentable]);
   // Keyed by the proof, not the path: every document that proves itself is
   // filed afresh and told it is ready, so a page loaded again never keeps
   // what the provider held for the document before it, such as an adopted
   // revision.
   useEffect(() => {
-    if (board === null) return;
+    if (board === null || !commentable) return;
     const { path } = board;
     tell((latest) => {
       latest.onFrame?.(path, frameRef.current);
@@ -358,7 +432,7 @@ function HtmlArtifactCommentFrame(
         latest.onBridge(path, null);
         latest.onFrame?.(path, null);
       });
-  }, [board]);
+  }, [board, commentable]);
   return (
     <>
       {props.caption}
@@ -379,7 +453,8 @@ function HtmlArtifactCommentFrame(
           bridgeRef.current = bridge;
         }}
         onTextSelection={(selection) => {
-          if (page !== null) events.onTextSelection?.(page, selection);
+          if (page !== null && commentable)
+            events.onTextSelection?.(page, selection);
         }}
         onFrame={(frame) => {
           frameRef.current = frame;
@@ -395,12 +470,22 @@ function HtmlArtifactCommentFrame(
         toolbarControls={
           <>
             {props.toolbarControls}
-            {commentsEnabled ? events.renderToolbarControls?.() : null}
+            <CommentControl
+              raiseToComment={props.raiseToComment}
+              commentable={commentable}
+              commentsEnabled={commentsEnabled}
+              events={events}
+              viewTabId={props.viewTabId}
+            />
           </>
         }
         menuItems={props.menuItems}
       />
-      {events.renderCommentDraft?.()}
+      {/* Whatever the page on show: a draft begun on the current version
+          outlasts a move off it, and still posts on what it is anchored to. */}
+      <CommentDraftActivity raiseToComment={props.raiseToComment}>
+        {events.renderCommentDraft?.()}
+      </CommentDraftActivity>
     </>
   );
 }

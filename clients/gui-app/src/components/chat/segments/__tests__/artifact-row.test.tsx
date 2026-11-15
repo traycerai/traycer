@@ -15,15 +15,7 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   EpicListHtmlArtifactVersionsResponse,
@@ -47,7 +39,6 @@ import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SandboxStatus } from "@/lib/sandbox/bridge-host";
-import { holdFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -1090,8 +1081,14 @@ describe("<ArtifactRow />", () => {
         .getAttribute("aria-label");
     }
 
-    function commentsButton(): HTMLButtonElement {
-      const button = screen.getByRole("button", { name: "Comments" });
+    /** The card takes comments only while raised, so Expand is how it is reached. */
+    function raiseCard(): HTMLElement {
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      return screen.getByRole("dialog", { name: "My Artifact" });
+    }
+
+    function commentsButton(raised: HTMLElement): HTMLButtonElement {
+      const button = within(raised).getByRole("button", { name: "Comments" });
       if (!(button instanceof HTMLButtonElement))
         throw new Error("Comments is not a button");
       return button;
@@ -1107,36 +1104,34 @@ describe("<ArtifactRow />", () => {
       await user.click(screen.getByRole("menuitemradio", { name: row }));
     }
 
-    it("opens on a capture that is the current version, with the picker and a live Comments toggle", () => {
+    it("opens on a capture that is the current version, with the picker, and a live Comments toggle once raised", () => {
       serveCaptureAsCurrent();
       renderTaskRow(makeArtifactReadClient(neverRespond));
 
       expect(versionButtonLabel()).toBe("HTML version history: Latest");
-      expect(commentsButton().disabled).toBe(false);
       expect(servedEntrySha256()).toBe(STAMP_SHA);
       expect(toolbarButtons()).toEqual([
         "HTML version history: Latest",
         "Download",
         "Open in panel",
-        "Comments",
         "Expand",
       ]);
+      expect(commentsButton(raiseCard()).disabled).toBe(false);
     });
 
-    it("keeps an older capture on show under its version number, with Comments unavailable", () => {
+    it("keeps an older capture on show under its version number, with Comments unavailable once raised", () => {
       serveChangedSinceCapture();
       renderTaskRow(makeArtifactReadClient(neverRespond));
 
       expect(versionButtonLabel()).toBe("HTML version history: v1 of 3");
-      expect(commentsButton().disabled).toBe(true);
       expect(servedEntrySha256()).toBe(STAMP_SHA);
       expect(toolbarButtons()).toEqual([
         "HTML version history: v1 of 3",
         "Download",
         "Open in panel",
-        "Comments",
         "Expand",
       ]);
+      expect(commentsButton(raiseCard()).disabled).toBe(true);
     });
 
     it("moves to the current version when the reader picks Latest, and Open in panel then follows Latest", async () => {
@@ -1147,9 +1142,9 @@ describe("<ArtifactRow />", () => {
 
       expect(servedEntrySha256()).toBe(HEAD_SHA);
       expect(versionButtonLabel()).toBe("HTML version history: Latest");
-      expect(commentsButton().disabled).toBe(false);
       fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
       expect(lastOpenedIntent().node).not.toHaveProperty("htmlVersion");
+      expect(commentsButton(raiseCard()).disabled).toBe(false);
     });
 
     it("moves to the version the reader picks, and Download and Open in panel follow it", async () => {
@@ -1160,7 +1155,6 @@ describe("<ArtifactRow />", () => {
 
       expect(servedEntrySha256()).toBe(OTHER_SHA);
       expect(versionButtonLabel()).toBe("HTML version history: v2 of 3");
-      expect(commentsButton().disabled).toBe(true);
       expect(screen.getByTestId("download-stub").dataset.entrySha256).toBe(
         OTHER_SHA,
       );
@@ -1171,6 +1165,7 @@ describe("<ArtifactRow />", () => {
           entryPath: "index.html",
         },
       });
+      expect(commentsButton(raiseCard()).disabled).toBe(true);
     });
 
     it("opens on the capture again after a remount, whatever the reader had picked", async () => {
@@ -1202,17 +1197,19 @@ describe("<ArtifactRow />", () => {
 
       expect(screen.getByText("Showing latest")).toBeTruthy();
       expect(versionButtonLabel()).toBe("HTML version history: Latest");
-      expect(commentsButton().disabled).toBe(false);
       expect(servedEntrySha256()).toBe(HEAD_SHA);
+      expect(commentsButton(raiseCard()).disabled).toBe(false);
     });
 
-    it("offers the picker but no Comments control on an older version when frame comments are off", () => {
+    it("offers the picker but no Comments control on an older version, raised, when frame comments are off", () => {
       commentsFlag.enabled = false;
       serveChangedSinceCapture();
       renderTaskRow(makeArtifactReadClient(neverRespond));
 
       expect(versionButtonLabel()).toBe("HTML version history: v1 of 3");
-      expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
+      expect(
+        within(raiseCard()).queryByRole("button", { name: "Comments" }),
+      ).toBeNull();
     });
 
     it("keeps the same frame through Expand and carries the toolbar into the raised surface", () => {
@@ -1240,43 +1237,115 @@ describe("<ArtifactRow />", () => {
 
     // The card's row clips what paints outside it, the comment draft
     // included, so the card takes comments only while raised.
-    it("raises itself with Comments on when Comments is pressed inline, and lowering it turns Comments off", () => {
+    it("shows no Comments control inline, on the current version or an older one", () => {
+      serveCaptureAsCurrent();
+      const current = renderTaskRow(makeArtifactReadClient(neverRespond));
+      expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
+
+      current.unmount();
+      serveChangedSinceCapture();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+      expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
+    });
+
+    it("turns Comments on only when pressed on the raised card, and lowering turns it off so the next Expand opens with it off", () => {
       serveCaptureAsCurrent();
       renderTaskRow(makeArtifactReadClient(neverRespond));
 
-      fireEvent.click(commentsButton());
-
-      const raised = screen.getByRole("dialog", { name: "My Artifact" });
-      expect(
-        within(raised)
-          .getByRole("button", { name: "Comments" })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
+      const raised = raiseCard();
+      const comments = commentsButton(raised);
+      expect(comments.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(comments);
+      expect(commentsButton(raised).getAttribute("aria-pressed")).toBe("true");
       expect(sandboxFrameMocks.mounts).toBe(1);
 
       fireEvent.click(within(raised).getByRole("button", { name: "Close" }));
       expect(screen.queryByRole("dialog", { name: "My Artifact" })).toBeNull();
-      expect(commentsButton().getAttribute("aria-pressed")).toBe("false");
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
-      expect(
-        within(screen.getByRole("dialog", { name: "My Artifact" }))
-          .getByRole("button", { name: "Comments" })
-          .getAttribute("aria-pressed"),
-      ).toBe("false");
+      expect(commentsButton(raiseCard()).getAttribute("aria-pressed")).toBe(
+        "false",
+      );
     });
 
-    it("stays inline with Comments off when Comments is pressed while something needs the reader", () => {
-      serveCaptureAsCurrent();
-      renderTaskRow(makeArtifactReadClient(neverRespond));
-      act(() => {
-        onTestFinished(holdFullscreenBlocker());
+    describe("a raised card whose version changes under the reader", () => {
+      function commentHostOf(dialog: HTMLElement): Element {
+        const host = dialog.querySelector(
+          '[data-slot="artifact-comment-host"]',
+        );
+        if (host === null)
+          throw new Error("the raised card has no comment host");
+        return host;
+      }
+
+      it("stays raised on the same comment host and frame when the head advances past the capture", () => {
+        serveCaptureAsCurrent();
+        const view = render(
+          taskTree(
+            "tab-1",
+            scopeWithClient(makeArtifactReadClient(neverRespond)),
+            STAMP,
+          ),
+        );
+        const host = commentHostOf(raiseCard());
+        const mountsBefore = sandboxFrameMocks.mounts;
+
+        // A saved edit, or a first comment's id stamp, moves the head.
+        serveArtifact(PROJECTION_WITH_HEAD);
+        historyMocks.page = historyOf([V3, V1]);
+        view.rerender(
+          taskTree(
+            "tab-1",
+            scopeWithClient(makeArtifactReadClient(neverRespond)),
+            STAMP,
+          ),
+        );
+
+        const after = screen.getByRole("dialog", { name: "My Artifact" });
+        expect(commentHostOf(after)).toBe(host);
+        expect(sandboxFrameMocks.mounts).toBe(mountsBefore);
+        const comments = within(after).getByRole("button", {
+          name: "Comments",
+        });
+        expect(comments).toHaveProperty("disabled", true);
+        expect(comments.getAttribute("aria-pressed")).toBeNull();
       });
 
-      fireEvent.click(commentsButton());
+      it("stays raised on the same comment host, serving the older version, when the reader picks it from the raised card", async () => {
+        serveArtifact(PROJECTION_STAMP_IS_HEAD);
+        historyMocks.page = historyOf([
+          savedVersion(2, STAMP_SHA, 100, 1_000),
+          savedVersion(1, OTHER_SHA, 20, 500),
+        ]);
+        renderTaskRow(makeArtifactReadClient(neverRespond));
+        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        const host = commentHostOf(
+          screen.getByRole("dialog", { name: "My Artifact" }),
+        );
 
-      expect(screen.queryByRole("dialog", { name: "My Artifact" })).toBeNull();
-      expect(commentsButton().getAttribute("aria-pressed")).toBe("false");
+        await pickFromVersionMenu(userEvent.setup(), /Version 1/);
+
+        const after = screen.getByRole("dialog", { name: "My Artifact" });
+        expect(commentHostOf(after)).toBe(host);
+        expect(servedEntrySha256()).toBe(OTHER_SHA);
+      });
+
+      it("stays raised, with Comments live, when the reader picks Latest from the raised card of an older capture", async () => {
+        serveChangedSinceCapture();
+        renderTaskRow(makeArtifactReadClient(neverRespond));
+        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        const host = commentHostOf(
+          screen.getByRole("dialog", { name: "My Artifact" }),
+        );
+
+        await pickFromVersionMenu(userEvent.setup(), /Latest/);
+
+        const after = screen.getByRole("dialog", { name: "My Artifact" });
+        expect(commentHostOf(after)).toBe(host);
+        expect(servedEntrySha256()).toBe(HEAD_SHA);
+        expect(
+          within(after).getByRole("button", { name: "Comments" }),
+        ).toHaveProperty("disabled", false);
+      });
     });
   });
 

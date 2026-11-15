@@ -326,50 +326,52 @@ export function CanvasCommentIndex(props: {
       text: queries[index].data?.text ?? null,
     })),
   );
+  // A surface with no view yet, or showing a page comments do not anchor to
+  // (an older version), indexes nothing: what it would publish is the
+  // anchors of a page that is not the one its threads live on.
   useEffect(() => {
-    if (focused)
+    if (focused && view !== null)
       useAnchorPositionsStore
         .getState()
         .setForArtifact(scope.epicId, scope.artifactId, positions);
-  }, [focused, scope.epicId, scope.artifactId, positions]);
-  useEffect(
-    () =>
-      registerCommentEditor({
-        epicId: scope.epicId,
-        artifactId: scope.artifactId,
-        tileId,
-        isActive: focused,
-        reveal: (threadId) => {
-          if (!focused) return false;
-          const thread = threads?.find(
-            (candidate) => candidate.threadId === threadId,
-          );
-          if (thread === undefined) return false;
-          view?.setCommenting(true);
-          if (thread.data.anchorKind === "canvas-point") {
-            return thread.data.page !== undefined &&
-              thread.data.x !== undefined &&
-              thread.data.y !== undefined
-              ? (view?.revealCanvasPoint(
-                  thread.data.page,
-                  thread.data.x,
-                  thread.data.y,
-                ) ?? false)
-              : false;
-          }
-          if (thread.data.artboard === undefined) {
-            if (
-              useCanvasSelectionStore.getState().selection?.artifactId ===
-              scope.artifactId
-            )
-              useCanvasSelectionStore.getState().clear();
-            return true;
-          }
-          return view?.revealBoard(thread.data.artboard) ?? false;
-        },
-      }),
-    [scope.epicId, scope.artifactId, tileId, focused, threads, view],
-  );
+  }, [focused, view, scope.epicId, scope.artifactId, positions]);
+  useEffect(() => {
+    if (view === null) return;
+    return registerCommentEditor({
+      epicId: scope.epicId,
+      artifactId: scope.artifactId,
+      tileId,
+      isActive: focused,
+      reveal: (threadId) => {
+        if (!focused) return false;
+        const thread = threads?.find(
+          (candidate) => candidate.threadId === threadId,
+        );
+        if (thread === undefined) return false;
+        view.setCommenting(true);
+        if (thread.data.anchorKind === "canvas-point") {
+          return thread.data.page !== undefined &&
+            thread.data.x !== undefined &&
+            thread.data.y !== undefined
+            ? view.revealCanvasPoint(
+                thread.data.page,
+                thread.data.x,
+                thread.data.y,
+              )
+            : false;
+        }
+        if (thread.data.artboard === undefined) {
+          if (
+            useCanvasSelectionStore.getState().selection?.artifactId ===
+            scope.artifactId
+          )
+            useCanvasSelectionStore.getState().clear();
+          return true;
+        }
+        return view.revealBoard(thread.data.artboard);
+      },
+    });
+  }, [scope.epicId, scope.artifactId, tileId, focused, threads, view]);
   return null;
 }
 

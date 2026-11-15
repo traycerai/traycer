@@ -16,15 +16,30 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type {
   EpicListHtmlArtifactVersionsResponse,
   HtmlArtifactVersion,
   HtmlArtifactVersionSelection,
 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   disposeBridges,
+  pendingSaves,
   realBridge,
+  settleSave,
+  textSelection,
 } from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
 import { FrameCommentsUnavailable } from "@/components/comments/frame-comments";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
@@ -33,9 +48,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HtmlArtifactVersionState } from "@/hooks/epic/use-epic-html-artifact-version";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
-import { holdFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
+import {
+  holdFullscreenBlocker,
+  useFullscreenPinnedRowKeys,
+} from "@/lib/sandbox/overlay-owner";
 import {
   composerEditorAt,
+  createDeferred,
+  settle,
   typeIntoEditor,
 } from "@/components/comments/__tests__/comment-submit-test-support";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
@@ -69,8 +89,32 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
     return <div data-testid="frame" />;
   },
 }));
+const host = vi.hoisted(() => ({
+  client: null as { readonly getActiveHostId: () => string } | null,
+  createThread: vi.fn<
+    (request: { readonly anchor: unknown }) => Promise<{
+      readonly threadId: string;
+    }>
+  >(),
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => null,
+  useTabHostClient: () => host.client,
+}));
+// The host lies outside the draft: its two writes, the id stamp that precedes
+// a first comment on an element and the thread itself, are answered by hand.
+vi.mock("@/components/canvas-artifact/use-artboard-edit", async () =>
+  (
+    await import("@/components/canvas-artifact/__tests__/canvas-edit-test-support")
+  ).artboardEditModule(),
+);
+vi.mock("@/hooks/comments/use-comment-thread-mutations", async (original) => ({
+  ...(await original<
+    typeof import("@/hooks/comments/use-comment-thread-mutations")
+  >()),
+  useCreateCommentThreadForClient: () => ({
+    isPending: false,
+    mutateAsync: host.createThread,
+  }),
 }));
 vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
   useFrameCommentsEnabled: () => true,
@@ -88,6 +132,9 @@ vi.mock("@/providers/use-open-epic-handle", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-selection", () => ({
   useSidebarChatOrder: () => [],
+}));
+vi.mock("@/components/comments/anchored-draft-send-to-chat", () => ({
+  AnchoredDraftSendToChatSlot: () => null,
 }));
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => false,
@@ -208,6 +255,7 @@ function commentTile(onDownload: () => void) {
           </DropdownMenuItem>
         }
         raiseToComment={false}
+        commentable
       />
     </Providers>
   );
@@ -217,10 +265,14 @@ beforeEach(() => {
   frames.latest = null;
   frames.bridge = null;
   frames.mounts = 0;
+  host.client = null;
+  host.createThread.mockReset();
+  pendingSaves.length = 0;
 });
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   useAnchoredDraftStore.setState({ byEpicId: {} });
   disposeBridges();
   vi.restoreAllMocks();
@@ -559,5 +611,306 @@ describe("the comment draft of an expanded html artifact", () => {
       expect(composerEditorAt(0).view.dom).toBe(root);
       expect(composerEditorAt(0).getText()).toBe("unsent words @");
     });
+  });
+});
+
+describe("Escape in a pane that holds two cards", () => {
+  const SECOND_DRAFT_TILE = "00000000-0000-4000-8000-000000000002";
+
+  function card(artifactId: string, title: string): ReactNode {
+    return (
+      <HtmlArtifactCommentSurface
+        epicId="epic-1"
+        artifactId={artifactId}
+        artifactTitle={title}
+        hostId="host-1"
+        viewTabId="tab-1"
+        source={sourceNamed(artifactId)}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        toolbarControls={null}
+        menuItems={undefined}
+        raiseToComment
+        commentable
+      />
+    );
+  }
+
+  function pane(withSecond: boolean): ReactNode {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+          {withSecond ? card("html-b", "Second") : null}
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  /** First mounts with a real draft owner; the second pins its own. */
+  function mountBoth() {
+    const view = render(pane(false));
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(SECOND_DRAFT_TILE);
+    view.rerender(pane(true));
+    return view;
+  }
+
+  it("goes to a later raised card's dirty draft, asking to discard it, though an earlier card shares its pane", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mountBoth();
+    const [, secondExpand] = screen.getAllByRole("button", { name: "Expand" });
+    fireEvent.click(secondExpand);
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-b",
+        tileId: SECOND_DRAFT_TILE,
+        artifactId: "html-b",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      bubbles: true,
+    });
+
+    act(() => {
+      window.dispatchEvent(escape);
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes to a lone raised card's dirty draft, asking to discard it", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(SECOND_DRAFT_TILE);
+    render(pane(false));
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-a",
+        tileId: SECOND_DRAFT_TILE,
+        artifactId: "html-a",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          cancelable: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the comment draft of a card that comments only while raised", () => {
+  const onApprove = vi.fn<() => void>();
+
+  function PinnedRows() {
+    return (
+      <output data-testid="pinned">
+        {useFullscreenPinnedRowKeys().join()}
+      </output>
+    );
+  }
+
+  function transcriptCard() {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          <div data-message-id="m-1" data-row-key="row-1">
+            <HtmlArtifactCommentSurface
+              epicId="epic-1"
+              artifactId="html-1"
+              artifactTitle="Site"
+              hostId="host-1"
+              viewTabId="tab-1"
+              source={sourceNamed("html-1")}
+              caption={null}
+              height={null}
+              className="h-full w-full"
+              onSize={() => undefined}
+              onStatus={() => undefined}
+              toolbarControls={null}
+              menuItems={undefined}
+              raiseToComment
+              commentable
+            />
+          </div>
+          <button type="button" onClick={onApprove}>
+            Approve
+          </button>
+          <PinnedRows />
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  function draftHost(): HTMLElement {
+    const host = document.querySelector<HTMLElement>(
+      '[data-slot="artifact-comment-host"]',
+    );
+    if (host === null) throw new Error("no comment host");
+    return host;
+  }
+
+  it("stays mounted with its text, concealed and out of the way, when a blocker lowers the card, and returns when the card is raised again", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    onApprove.mockClear();
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(DRAFT_TILE);
+    render(transcriptCard());
+    fireEvent.click(within(expand()).getByRole("button", { name: "Comments" }));
+    openDraft();
+    const editor = composerEditorAt(0);
+    typeIntoEditor(editor, "unsent words");
+    const host = draftHost();
+
+    let release = (): void => undefined;
+    act(() => {
+      release = holdFullscreenBlocker();
+    });
+    onTestFinished(release);
+
+    expect(screen.queryByRole("dialog", { name: "Site" })).toBeNull();
+    expect(composerEditorAt(0)).toBe(editor);
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+    expect(host.closest("[inert]")).not.toBeNull();
+    expect(host.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByTestId("pinned").textContent).toBe("row-1");
+    const approve = screen.getByRole("button", { name: "Approve" });
+    fireEvent.pointerDown(approve);
+    fireEvent.click(approve);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onApprove).toHaveBeenCalledTimes(1);
+
+    act(() => release());
+    const raised = expand();
+
+    expect(
+      within(raised).getByRole("dialog", { name: "New comment" }),
+    ).toBeTruthy();
+    expect(host.closest("[inert]")).toBeNull();
+    expect(host.closest('[aria-hidden="true"]')).toBeNull();
+    expect(composerEditorAt(0)).toBe(editor);
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+  });
+});
+
+describe("a first comment whose stamp moves the artifact past the page on show", () => {
+  const STAMPED_TID = "t-stamped";
+
+  function raisedCard(commentable: boolean) {
+    return (
+      <Providers>
+        <HtmlArtifactCommentSurface
+          epicId="epic-1"
+          artifactId="html-1"
+          artifactTitle="Site"
+          hostId="host-1"
+          viewTabId="tab-1"
+          source={sourceNamed("html-1")}
+          caption={null}
+          height={null}
+          className="h-full w-full"
+          onSize={() => undefined}
+          onStatus={() => undefined}
+          toolbarControls={null}
+          menuItems={undefined}
+          raiseToComment
+          commentable={commentable}
+        />
+      </Providers>
+    );
+  }
+
+  it("keeps the draft and its text through a failed create, and posts on the stamped element when the reader retries", async () => {
+    host.client = { getActiveHostId: () => "host-1" };
+    recordNegotiatedHostManifest("host-1", {
+      "epic.createCommentThread": { major: 1, minor: 2 },
+    });
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(DRAFT_TILE);
+    const view = render(raisedCard(true));
+    fireEvent.click(within(expand()).getByRole("button", { name: "Comments" }));
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-1",
+        tileId: DRAFT_TILE,
+        artifactId: "html-1",
+        artifactType: "html",
+        anchor: {
+          kind: "element",
+          artboard: "index.html",
+          elementId: null,
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: {
+          ...textSelection(null, { tid: null, marker: 0 }),
+          artifactId: "html-1",
+          boardPath: "index.html",
+        },
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+    const created = createDeferred<{ readonly threadId: string }>();
+    host.createThread.mockReturnValueOnce(created.promise);
+
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await settleSave(0, {
+      ok: true,
+      tid: STAMPED_TID,
+      sha256After: "a".repeat(64),
+      splices: [],
+    });
+    await settle();
+    expect(host.createThread).toHaveBeenCalledTimes(1);
+
+    // The stamp moved the head past the page on show.
+    view.rerender(raisedCard(false));
+    await act(async () => {
+      created.reject(new Error("host unreachable"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("host unreachable");
+    expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId).toBe(
+      "draft-1",
+    );
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+
+    host.createThread.mockResolvedValueOnce({ threadId: "thread-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await settle();
+
+    expect(host.createThread).toHaveBeenCalledTimes(2);
+    expect(host.createThread.mock.calls[1][0].anchor).toMatchObject({
+      kind: "element",
+      elementId: STAMPED_TID,
+    });
+    expect(pendingSaves).toHaveLength(1);
+    expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toBeUndefined();
   });
 });

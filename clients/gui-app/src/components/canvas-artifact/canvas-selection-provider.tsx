@@ -10,6 +10,7 @@ import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-ena
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import { fullscreenSurface } from "@/lib/sandbox/overlay-owner";
 import {
   CanvasCommentIndex,
   CanvasCommentPins,
@@ -609,6 +610,7 @@ export function CanvasSelectionProvider(
         void registry.get(previousPath).bridge?.setTextSelectionTarget(null);
     };
   }, [artifactId, registry]);
+  const root = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const escape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || event.defaultPrevented || !paneFocused)
@@ -617,6 +619,10 @@ export function CanvasSelectionProvider(
         useAnchoredDraftStore.getState().byEpicId[epicId]?.tileId === draftOwner
       )
         return;
+      // A surface raised over the task owns the key, its draft included: a
+      // view behind it, even one in the same pane, must not consume it first.
+      const raised = fullscreenSurface();
+      if (raised !== null && root.current?.contains(raised) !== true) return;
       escapeSelection();
       event.preventDefault();
     };
@@ -629,7 +635,7 @@ export function CanvasSelectionProvider(
   }, [selectionOwner, paneFocused, escapeSelection, epicId, draftOwner]);
   return (
     <CanvasFrameEventsContext value={events}>
-      <div className="relative h-full w-full">
+      <div ref={root} className="relative h-full w-full">
         {props.viewOnly === true || artifactType !== "canvas" ? (
           // Paste edits boards; an html page has none, so it takes no
           // clipboard boundary.

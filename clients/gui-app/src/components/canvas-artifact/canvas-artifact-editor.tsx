@@ -349,7 +349,7 @@ function CanvasShownViewport({
  */
 export function CanvasArtifactEditor(props: CanvasArtifactEditorProps) {
   return (
-    <ArtifactExpansion title="Canvas">
+    <ArtifactExpansion title="Canvas" commentsInline>
       <CanvasEditorSurface {...props} />
     </ArtifactExpansion>
   );

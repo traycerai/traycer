@@ -172,6 +172,7 @@ export function ObjectArtifactTile(props: {
           toolbarControls={toolbarControls}
           menuItems={menuItems}
           raiseToComment={false}
+          commentable
         />
       </HtmlArtifactLinks>
     );

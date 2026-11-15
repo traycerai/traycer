@@ -1,6 +1,10 @@
 import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import {
+  holdTranscriptRow,
+  transcriptRowKeyOf,
+} from "@/lib/sandbox/overlay-owner";
 import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
 import { cn } from "@/lib/utils";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
@@ -148,6 +152,14 @@ export function AnchoredDraftPopover(props: {
     }
   });
   const hasDraft = draft !== null;
+  // The composer below is the only copy of what the reader typed, so a
+  // transcript row the draft lives in stays mounted while it is open, raised
+  // or not: a list that virtualized the row away would take the text with it.
+  useEffect(() => {
+    if (!hasDraft) return;
+    const row = transcriptRowKeyOf(commentContainer);
+    return row === null ? undefined : holdTranscriptRow(row);
+  }, [hasDraft, commentContainer]);
   useEffect(() => {
     if (!hasDraft || !focused || signOutQuestionOpen) return;
     window.addEventListener("keydown", keyDown);
