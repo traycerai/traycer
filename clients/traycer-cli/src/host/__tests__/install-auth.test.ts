@@ -59,9 +59,11 @@ const mocks = vi.hoisted(() => ({
   legacyHost: null as LegacyTeamHost | null,
 }));
 
-vi.mock("../../internal/host-auth", () => ({
-  resolveHostAuth: mocks.resolveHostAuthMock,
-}));
+vi.mock("../../internal/host-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-auth")>();
+  return { ...actual, resolveHostAuth: mocks.resolveHostAuthMock };
+});
 
 vi.mock("../pid-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../pid-metadata")>();
@@ -83,9 +85,15 @@ vi.mock("../../service/health-probe", async (importOriginal) => {
   };
 });
 
-vi.mock("../credential-provisioning", () => ({
-  provisionInstalledHostCredential: mocks.provisionInstalledHostCredentialMock,
-}));
+vi.mock("../credential-provisioning", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../credential-provisioning")>();
+  return {
+    ...actual,
+    provisionInstalledHostCredential:
+      mocks.provisionInstalledHostCredentialMock,
+  };
+});
 
 // Keep the network out while exercising the real team selection and bind
 // logic in install-auth.ts.
@@ -142,7 +150,9 @@ vi.mock(
 
 import {
   completeTeamInstall,
+  formatCredentialProvisionNote,
   maybeProvisionCredential,
+  provisionRunningHostCredential,
   warnIfTeamInstallSignInRemains,
 } from "../install-auth";
 import type {
@@ -1317,5 +1327,43 @@ describe("install auth helpers", () => {
       kind: "error",
       message: "simulated probe explosion",
     });
+  });
+
+  it("routes login's running-host follow-up through the provisioning probe", async () => {
+    const context = fakeCtx();
+    const auth = storedAuth();
+    const outcome: HostCredentialProvisionOutcome = {
+      kind: "active",
+      minted: true,
+    };
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      hostPidMetadata({ pid: process.pid }),
+    );
+    mocks.resolveHostAuthMock.mockResolvedValue(auth);
+    mocks.provisionInstalledHostCredentialMock.mockResolvedValue(outcome);
+
+    const result = await provisionRunningHostCredential(context);
+
+    expect(result).toEqual(outcome);
+    expect(mocks.provisionInstalledHostCredentialMock).toHaveBeenCalledTimes(1);
+    expect(mocks.provisionInstalledHostCredentialMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: context.runtime.environment,
+        auth,
+        deadlineMs: 30_000,
+      }),
+    );
+    expect(context.progress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "host-credential",
+        message: "authorizing the running host...",
+      }),
+    );
+  });
+
+  it("keeps the existing exact note for a host-token mint that did not complete", () => {
+    expect(formatCredentialProvisionNote({ kind: "mint-unavailable" })).toBe(
+      "host authorization not confirmed (the authorization did not complete) - run `traycer host doctor` to see how to fix it",
+    );
   });
 });
