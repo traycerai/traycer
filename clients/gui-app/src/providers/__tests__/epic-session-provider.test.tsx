@@ -138,6 +138,13 @@ const resolveSessionHostClient = vi.hoisted(
 // network boundary (`createRemoteHostTransport`), whose stream client is the
 // inert one `fakeDurableStreamTransports().opener` mints (a case may replace
 // that opener to count or throw on the socket's creation).
+// The suite setup (`__tests__/test-browser-apis.ts`) mocks this module with the
+// fake opener for every file; naming it here with its original puts the real
+// hook back for this one.
+vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
+  importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
+);
+
 vi.mock("@/providers/use-runner-host", async () => {
   const { MockRunnerHost } =
     await import("@traycer-clients/shared/host-client/mock/mock-runner-host");
@@ -2823,16 +2830,20 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
-      // Rising back to the floor acquires exactly one more session; the
-      // released stream is not closed a second time on the way.
+      // The opener refused the reacquire: no transport was minted below the
+      // floor. (The worker's own stream attach is not a session build, so the
+      // transports are what is counted.)
+      const transports = fakeDurableStreamTransports().records;
+      expect(transports).toHaveLength(1);
+      // Rising back to the floor mints exactly one more; the released stream is
+      // not closed a second time on the way.
       act(() => {
         publishRow("2.0.0");
       });
       await waitFor(() => {
-        expect(streams).toHaveLength(2);
+        expect(transports).toHaveLength(2);
       });
       expect(streams[0].closeCount).toBe(1);
-      expect(streams[1].closeCount).toBe(0);
     });
 
     it("keeps the stream when its row is removed", async () => {
