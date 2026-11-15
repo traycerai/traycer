@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -9,12 +10,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamProviderKeys } from "@/components/settings/environment/team-provider-keys";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
+  answerTeamHostList,
+  authnAnswer,
   configurationItem,
   mountTeamPage,
   mountTeamPageNegotiating,
@@ -894,5 +898,113 @@ describe("TeamPermissions", () => {
     expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
       { environmentId: "env-a", body: "", policyVersion: "3" },
     ]);
+  });
+});
+
+describe("the team's secrets panel when authn answers the host list again", () => {
+  async function mountWaitingOnMacMini() {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": () => ({
+        secrets: [],
+        removed: [
+          {
+            ...removedSecret("sec-OLD_TOKEN", "OLD_TOKEN"),
+            removal: {
+              outcome: "revoked" as const,
+              revokedAt: 1,
+              destroyedAt: null,
+              targets: [
+                {
+                  target: "host" as const,
+                  hostId: "host-a",
+                  hostName: null,
+                  state: "requested" as const,
+                  at: 1,
+                  failedAt: null,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      "environment.list": () => ({
+        environments: [
+          ...environments.environments,
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+      "environment.host.list": () => ({
+        hosts: [
+          {
+            hostId: "host-a",
+            hostLabel: "Mac mini",
+            hostPlatform: "darwin",
+            enrolledByUserId: "u-1",
+            kind: "personal",
+            boundAt: 1,
+            reachable: true,
+            lastReportedAt: 1,
+            applied: [],
+            hasLocalRow: false,
+          },
+        ],
+      }),
+    });
+    render(<SecretsSettingsPanel />, { wrapper: harness.Wrapper });
+    expect(
+      await screen.findByText(/waiting for Mac mini to delete its copy/),
+    ).toBeTruthy();
+    return harness;
+  }
+
+  it.each([
+    ["a 403 environment_action_forbidden", 403, "environment_action_forbidden"],
+    ["a 404 environment_not_found", 404, "environment_not_found"],
+  ])(
+    'names a secret\'s host "a host" after %s',
+    async (_label, status, code) => {
+      const harness = await mountWaitingOnMacMini();
+
+      answerTeamHostList(harness, "env-a", authnAnswer(status, { code }));
+      await act(() =>
+        invalidateEnvironmentReads(harness.queryClient, [
+          "environment.host.list",
+        ]),
+      );
+
+      expect(
+        await screen.findByText(/waiting for a host to delete its copy/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Mac mini/)).toBeNull();
+    },
+  );
+
+  it("still names the secret's host through a 503", async () => {
+    const harness = await mountWaitingOnMacMini();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(
+      screen.getByText(/waiting for Mac mini to delete its copy/),
+    ).toBeTruthy();
   });
 });
