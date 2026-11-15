@@ -16,6 +16,7 @@ import {
 } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
+  canManageTeamProviderAccounts,
   configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
@@ -240,6 +241,9 @@ export function ConfigurationSourceBoundary(props: {
       value={source}
     >
       {source.kind === "pool" &&
+      !(
+        props.section === "providers" && canManageTeamProviderAccounts(source)
+      ) &&
       (source.effectiveRole === null || source.transportReadOnly) ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
           {seeButNotChangeLine(descriptor.label)}

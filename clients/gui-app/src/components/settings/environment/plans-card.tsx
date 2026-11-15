@@ -17,8 +17,8 @@ export function PlansCard(props: {
   readonly canAdminister: boolean;
   readonly adminNames: readonly string[];
   readonly isPending: boolean;
-  readonly onLink: () => void;
-  readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
+  readonly onLink: (() => void) | null;
+  readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
   const [pickedId, setPickedId] = useState<string | null>(null);
   const selected =
@@ -49,7 +49,7 @@ export function PlansCard(props: {
       {quota === null ? null : (
         <p className="text-ui-xs text-muted-foreground">{quota}</p>
       )}
-      {!props.canAdminister ? (
+      {!props.canAdminister && props.onLink !== null ? (
         <p className="text-ui-xs text-muted-foreground">
           {askAnAdminLine(props.adminNames)}
         </p>
@@ -87,10 +87,13 @@ function PlanActionRow(props: {
   readonly canAdminister: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
-  readonly onLink: () => void;
-  readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
+  readonly onLink: (() => void) | null;
+  readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
-  if (!props.canAdminister) return null;
+  const onLink = props.onLink;
+  const onPreviewUnlink = props.onPreviewUnlink;
+  if (!props.canAdminister || onLink === null || onPreviewUnlink === null)
+    return null;
   const selected = props.selected;
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -99,7 +102,7 @@ function PlanActionRow(props: {
         variant="outline"
         size="xs"
         disabled={props.isPending}
-        onClick={props.onLink}
+        onClick={onLink}
       >
         Link a plan
       </Button>
@@ -109,7 +112,7 @@ function PlanActionRow(props: {
           variant="outline"
           size="xs"
           disabled={props.isPending}
-          onClick={() => props.onPreviewUnlink(selected)}
+          onClick={() => onPreviewUnlink(selected)}
         >
           Unlink
         </Button>

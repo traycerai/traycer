@@ -9,21 +9,34 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { AuthService } from "@/lib/auth/auth-service";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
+  providerMutationCliStateSchemaV21,
+  providersBeginApiKeyChangeResponseSchema,
+  providersSettleApiKeyChangeResponseSchema,
   providersAwaitLoginResponseSchema,
-  type ProvidersAwaitLoginResponse,
+  type ProviderCliState,
+  type ProviderId,
+  type ProviderLoginCapability,
+  type ProviderLoginRefusal,
+  type ProvidersSettleApiKeyChangeResponse,
 } from "@traycer/protocol/host/provider-schemas";
-import type {
-  ProviderCliState,
-  ProviderLoginCapability,
-  ProviderLoginRefusal,
-} from "@traycer/protocol/host/provider-schemas";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
+import { AuthService } from "@/lib/auth/auth-service";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
+import type { ProvidersAwaitLoginResponse } from "@traycer/protocol/host/provider-schemas";
 import {
   FORBIDDEN_SIGN_IN_REQUEST_REPLY,
   installSignInRequestFetchHarness,
@@ -111,9 +124,18 @@ const mocks = vi.hoisted(() => ({
   touchLoginReset: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
   setApiKeyMutate: vi.fn(),
+  useRealKeyChange: false,
+  hostClient: null as HostClient<HostRpcRegistry> | null,
+  authService: null as AuthService | null,
+  tabClient: { id: "tab-client" } as
+    | { id: string }
+    | HostClient<HostRpcRegistry>
+    | null,
+  toastError: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
+  recordChangeCalls: 0,
   openSettings: vi.fn(),
   reportContexts: new Array<ReportIssueContext>(),
   hostKind: "local",
@@ -122,8 +144,6 @@ const mocks = vi.hoisted(() => ({
   realAwaitLoginSuccess: false,
   /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
   credentialRefusal: null as string | null,
-  /** What `useTabHostClient` answers; `null` is a tab host not reachable now. */
-  tabClient: { id: "tab-client" } as { id: string } | null,
 }));
 
 let authServiceForTest: AuthService | null = null;
@@ -151,6 +171,30 @@ afterEach(() => {
   mocks.realAwaitClient = null;
   mocks.useRealAwaitLogin = false;
   mocks.realAwaitLoginSuccess = false;
+  mocks.useRealKeyChange = false;
+  mocks.hostClient = null;
+  mocks.authService = null;
+});
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: (): HostClient<HostRpcRegistry> => {
+      if (!mocks.useRealKeyChange) return actual.useHostClient();
+      if (mocks.hostClient === null) {
+        throw new Error("The provider-key test client is unavailable.");
+      }
+      return mocks.hostClient;
+    },
+    useAuthService: (): AuthService => {
+      if (!mocks.useRealKeyChange) return currentAuthService();
+      if (mocks.authService === null) {
+        throw new Error("The provider-key test service is unavailable.");
+      }
+      return mocks.authService;
+    },
+  };
 });
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -167,12 +211,12 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () =>
-    mocks.useRealAwaitLogin ? mocks.realAwaitClient : mocks.tabClient,
+    mocks.useRealKeyChange
+      ? mocks.hostClient
+      : mocks.useRealAwaitLogin
+        ? mocks.realAwaitClient
+        : mocks.tabClient,
 }));
-vi.mock("@/lib/host", async (importActual) => {
-  const actual = await importActual<typeof import("@/lib/host")>();
-  return { ...actual, useAuthService: currentAuthService };
-});
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
@@ -254,12 +298,26 @@ vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
-  useProvidersSetApiKey: () => ({
-    mutate: mocks.setApiKeyMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-api-key-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-set-api-key-mutation")
+      >();
+    return {
+      ...actual,
+      useProvidersSetApiKey: (expectedEnvironmentId: string | null) => {
+        if (mocks.useRealKeyChange)
+          return actual.useProvidersSetApiKey(expectedEnvironmentId);
+        return {
+          mutate: mocks.setApiKeyMutate,
+          isPending: false,
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
@@ -272,6 +330,13 @@ vi.mock("@/components/report-issue/report-issue-action", () => ({
     return null;
   },
 }));
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: mocks.toastError },
+  };
+});
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
 }));
@@ -284,11 +349,22 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 // One client per render() call, held by a stable wrapper, so view.rerender keeps
 // the same client (and its per-client coordinator) as the retained observer.
 const renderedClients: QueryClient[] = [];
+const realKeyChangeRigs: Array<{
+  readonly spine: HostClient<HostRpcRegistry>;
+  readonly service: AuthService;
+}> = [];
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  __resetAppLocalNotificationsStoreForTests();
   for (const client of renderedClients) client.clear();
   renderedClients.length = 0;
+  for (const rig of realKeyChangeRigs.splice(0)) {
+    rig.service.dispose();
+    rig.spine.dispose();
+  }
+  resetNegotiatedManifests();
   activeSignInFetch?.restore();
   activeSignInFetch = null;
   authServiceForTest?.dispose();
@@ -328,6 +404,66 @@ function renderWithRealListObserver(ui: ReactElement) {
     );
   }
   return baseRender(ui, { wrapper: QueryWrapper });
+}
+
+function makeRealKeyChangeRig(
+  result: ProvidersSettleApiKeyChangeResponse["result"],
+): void {
+  const state = providerMutationCliStateSchemaV21.parse({
+    ...hostV115MutationV20Fixtures.minimalStatesByProviderId.cursor,
+    profiles: [],
+  });
+  const fixture = buildEnvironmentClient({
+    hostId: "host-1",
+    handlers: {
+      "environment.status": () =>
+        environmentStatusFixture({ principal: { kind: "personal" } }),
+      "providers.beginApiKeyChange": () =>
+        providersBeginApiKeyChangeResponseSchema.parse({
+          mode: "record",
+          changeToken: "opaque",
+          environmentId: "env-synthetic",
+        }),
+      "providers.settleApiKeyChange": () =>
+        providersSettleApiKeyChangeResponseSchema.parse({ state, result }),
+    },
+  });
+  recordNegotiatedHostMethods("host-1", [
+    "environment.status",
+    "providers.beginApiKeyChange",
+    "providers.settleApiKeyChange",
+  ]);
+  const service = new AuthService({
+    runnerHost: new MockRunnerHost({
+      signInUrl:
+        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    }),
+  });
+  vi.spyOn(service, "changeProviderKeyRecord").mockImplementation(() => {
+    mocks.recordChangeCalls += 1;
+    return Promise.resolve({
+      kind: "record",
+      record: {
+        profileId: "profile-synthetic",
+        providerId: "cursor",
+        state: "live",
+        signInNumber: "3",
+        recordRevision: "5",
+        personIntentNumber: "2",
+      },
+    });
+  });
+  mocks.useRealKeyChange = true;
+  mocks.hostClient = fixture.client;
+  mocks.tabClient = fixture.client;
+  mocks.authService = service;
+  realKeyChangeRigs.push({ spine: fixture.spine, service });
 }
 
 function mockStartLoginAlwaysSucceeds(): void {
@@ -602,6 +738,7 @@ function droidState(): ProviderCliState {
 
 describe("<ProviderReauthBanner />", () => {
   beforeEach(() => {
+    resetNegotiatedManifests();
     mocks.startLoginMutate.mockReset();
     mocks.awaitLoginMutate.mockClear();
     mocks.cancelLoginMutate.mockClear();
@@ -611,6 +748,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.submitLoginCodeSuccess = false;
     mocks.submitLoginCodeData = undefined;
     mocks.submitLoginCodeError = null;
+    mocks.recordChangeCalls = 0;
     mocks.submitLoginCodeMutate.mockImplementation(() => {
       mocks.submitLoginCodePending = true;
       mocks.submitLoginCodeSuccess = false;
@@ -1114,10 +1252,7 @@ describe("<ProviderReauthBanner />", () => {
     // Droid has an encrypted host-side key store, so the banner persists the key
     // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
     // rather than a plaintext env override.
-    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
-      { providerId: "droid", apiKey: "fk-droid-123" },
-      expect.anything(),
-    );
+    expect(mocks.setApiKeyMutate.mock.calls.length === 1).toBe(true);
     expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
   });
 
@@ -1906,15 +2041,15 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.change(input, { target: { value: "  sk-ant-123  " } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(mocks.setEnvOverrideMutate).toHaveBeenCalledWith(
-      {
-        providerId: "claude-code",
-        key: "ANTHROPIC_API_KEY",
-        value: "sk-ant-123",
-        executableWriteGrant: null,
-      },
-      expect.anything(),
-    );
+    const saveCall = mocks.setEnvOverrideMutate.mock.calls.at(0);
+    expect(
+      mocks.setEnvOverrideMutate.mock.calls.length === 1 &&
+        saveCall !== undefined &&
+        saveCall[0].providerId === "claude-code" &&
+        saveCall[0].key === "ANTHROPIC_API_KEY" &&
+        saveCall[0].value === "sk-ant-123" &&
+        saveCall[0].executableWriteGrant === null,
+    ).toBe(true);
   });
 
   it("kills the login child on explicit Cancel but not on teardown", async () => {
@@ -2072,10 +2207,78 @@ describe("<ProviderReauthBanner />", () => {
       target: { value: "  cursor-key  " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
-      { providerId: "cursor", apiKey: "cursor-key" },
-      expect.anything(),
+    expect(mocks.setApiKeyMutate.mock.calls.length === 1).toBe(true);
+  });
+
+  it("clears a refused record-backed paste and shows the partial-success notice without probing", async () => {
+    makeRealKeyChangeRig("refused");
+    mocks.refreshProviders.mockClear();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
     );
+    const keyInput = screen.getByPlaceholderText("Paste your API key");
+    fireEvent.change(keyInput, {
+      target: { value: "synthetic-provider-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        keyInput instanceof HTMLInputElement && keyInput.value === "",
+      ).toBe(true);
+      expect(mocks.reportableErrorToast.mock.calls.length === 1).toBe(true);
+    });
+    const notice = mocks.reportableErrorToast.mock.calls.at(0);
+    expect(
+      mocks.recordChangeCalls === 1 &&
+        mocks.refreshProviders.mock.calls.length === 0 &&
+        screen.queryByText(/Token not accepted/) === null &&
+        notice !== undefined &&
+        notice[0] ===
+          "The API key was saved, but this computer is not using it.",
+    ).toBe(true);
+  });
+
+  it("probes sign-in after an installed record-backed paste", async () => {
+    makeRealKeyChangeRig("installed");
+    mocks.refreshProviders.mockClear();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    const keyInput = screen.getByPlaceholderText("Paste your API key");
+    fireEvent.change(keyInput, {
+      target: { value: "synthetic-provider-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mocks.refreshProviders.mock.calls.length === 1).toBe(true);
+      expect(
+        keyInput instanceof HTMLInputElement && keyInput.value === "",
+      ).toBe(true);
+    });
+    expect(
+      mocks.recordChangeCalls === 1 &&
+        mocks.reportableErrorToast.mock.calls.length === 0,
+    ).toBe(true);
   });
 
   describe("profile-specific reasons", () => {

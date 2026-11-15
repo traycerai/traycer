@@ -23,11 +23,13 @@ import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { TeamReadFailed } from "./team-read-failed";
+import { useTeamProviderRecords } from "./team-provider-records";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
   readonly adminNames: readonly string[];
 }): ReactNode {
+  const records = useTeamProviderRecords();
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
@@ -77,16 +79,22 @@ export function TeamPlans(props: {
         canAdminister={canAdminister}
         adminNames={props.adminNames}
         isPending={target !== null}
-        onLink={() => {
-          if (source.kind === "pool")
-            open({
-              providerId: props.providerId,
-              profileId: null,
-              environmentId: source.environmentId,
-            });
-        }}
-        onPreviewUnlink={(plan) =>
-          setTarget({ plan, previewId: crypto.randomUUID() })
+        onLink={
+          records === null
+            ? () => {
+                if (source.kind === "pool")
+                  open({
+                    providerId: props.providerId,
+                    profileId: null,
+                    environmentId: source.environmentId,
+                  });
+              }
+            : null
+        }
+        onPreviewUnlink={
+          records === null
+            ? (plan) => setTarget({ plan, previewId: crypto.randomUUID() })
+            : null
         }
       />
       {target !== null && canAdminister ? (

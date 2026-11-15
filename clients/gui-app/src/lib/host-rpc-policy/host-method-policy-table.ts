@@ -2723,10 +2723,6 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
-  "environment.providers.list": {
-    ...LATEST_SCHEDULING,
-    poll: CONFIGURATION_READ_POLL,
-  },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": {
     ...LATEST_SCHEDULING,
@@ -2856,21 +2852,6 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.plans.unlink": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "environment.providers.signOutProfile": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "environment.providers.removeProfile": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "environment.providers.renameProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

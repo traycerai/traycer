@@ -2,7 +2,12 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderAuth,
+  ProviderCliState,
+  ProviderProfile,
+  ProviderProfilePersonNotice,
+} from "@traycer/protocol/host/provider-schemas";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { configurationItem } from "./team-configuration-test-support";
@@ -27,6 +32,40 @@ export const profile = (enabled: boolean, revision: number) =>
     },
     revision,
   });
+
+export function teamProviderProfile(input: {
+  readonly profileId: string;
+  readonly label: string;
+  readonly authStatus: ProviderAuth["status"];
+  readonly personNotice: ProviderProfilePersonNotice | null;
+  readonly apiKeyConfigured: boolean;
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    kind: "managed",
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: input.authStatus,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+    enabled: true,
+    personNotice: input.personNotice,
+    otherNames: [],
+    ...(input.apiKeyConfigured
+      ? { apiKey: { supported: false, configured: true } }
+      : {}),
+  };
+}
 
 export const envOverride = (value: string, revision: number) =>
   configurationItem({
@@ -210,7 +249,9 @@ export function profileRowSwitch(profileName: string): HTMLElement {
 }
 
 export async function openProfileEditor(): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /^Manage(?: profile)?$/ }),
+  );
   return screen.findByRole("dialog", { name: "Edit profile" });
 }
 
