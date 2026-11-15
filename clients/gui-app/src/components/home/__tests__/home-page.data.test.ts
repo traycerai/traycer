@@ -26,28 +26,23 @@ function makeItem(
   overrides: Partial<HistoryItem> & { id: string; title: string },
 ): HistoryItem {
   return {
-    id: overrides.id,
-    epicId: overrides.epicId ?? overrides.id,
-    taskType: overrides.taskType ?? "epic",
-    title: overrides.title,
-    initialUserPrompt: overrides.initialUserPrompt ?? "",
-    updatedAtMs: overrides.updatedAtMs ?? 1,
-    updatedLabel: overrides.updatedLabel ?? "x",
-    updatedBucket: overrides.updatedBucket ?? "today",
-    linkedRepos: overrides.linkedRepos ?? [],
-    chatHostIds: overrides.chatHostIds ?? null,
-    linkedWorkspaces: overrides.linkedWorkspaces ?? [],
-    pullRequestNumbers: overrides.pullRequestNumbers ?? [],
-    worktreeBranches: overrides.worktreeBranches ?? [],
-    worktreePaths: overrides.worktreePaths ?? [],
-    ownership: overrides.ownership ?? "mine",
-    permissionRole:
-      overrides.permissionRole === undefined
-        ? "owner"
-        : overrides.permissionRole,
-    isPinned: overrides.isPinned ?? false,
-    isLocalHome: overrides.isLocalHome,
-    isPreservedOrphan: overrides.isPreservedOrphan,
+    epicId: overrides.id,
+    taskType: "epic",
+    initialUserPrompt: "",
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    updatedLabel: "x",
+    updatedBucket: "today",
+    linkedRepos: [],
+    chatHostIds: null,
+    linkedWorkspaces: [],
+    pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
+    ownership: "mine",
+    permissionRole: "owner",
+    isPinned: false,
+    ...overrides,
   };
 }
 

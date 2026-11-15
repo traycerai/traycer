@@ -5,6 +5,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -87,7 +88,7 @@ const trackMock = vi.hoisted(() => vi.fn());
 
 const refetch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => {
+  useHistoryQuery: (params: UseHistoryQueryParams) => {
     const hasMountedQuery = useRef(false);
     if (!hasMountedQuery.current) {
       hasMountedQuery.current = true;
@@ -99,6 +100,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
         totalCount: testState.items.length,
         hostRequiresCloudToList: testState.hostRequiresCloudToList,
       },
+      sort: params.search.sort,
+      createdSortAvailable: true,
       isPending: testState.isPending,
       cloudPagePending: testState.cloudPagePending,
       isFetching: false,
@@ -270,6 +273,7 @@ function historyItem(overrides: {
     taskType: "epic",
     title: overrides.title,
     initialUserPrompt: "",
+    createdAtMs: overrides.updatedAtMs,
     updatedAtMs: overrides.updatedAtMs,
     recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",

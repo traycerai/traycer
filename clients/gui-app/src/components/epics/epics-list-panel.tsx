@@ -393,6 +393,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    sort,
+    createdSortAvailable,
     refetch,
     refetchTasks,
     fetchNextPage,
@@ -439,9 +441,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     items: pageItems,
     userId: currentUserId,
     hostId,
-    enabled:
-      variant !== "picker" && !hasActiveFilters && search.sort === "recent",
-    refreshEnabled: search.sort === "recent",
+    enabled: variant !== "picker" && !hasActiveFilters && sort === "recent",
+    refreshEnabled: sort === "recent",
     refreshScope: activityRefreshScope,
     refetch: refetchTasks,
   });
@@ -491,12 +492,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // collecting, so it cancels the walk. The one exemption is the run where
   // the sort itself just changed: a re-sort keeps the matching set, and any
   // fetch it starts is for the re-sorted request.
-  const sortRef = useRef(search.sort);
+  const sortRef = useRef(sort);
   useEffect(() => {
-    const resorted = sortRef.current !== search.sort;
-    sortRef.current = search.sort;
+    const resorted = sortRef.current !== sort;
+    sortRef.current = sort;
     if (isFetching && !resorted) abortSelectAll();
-  }, [abortSelectAll, isFetching, search.sort]);
+  }, [abortSelectAll, isFetching, sort]);
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
   // Explicit user overrides of the per-worktree checkbox. Absent entries fall
@@ -1008,10 +1009,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           }),
           onStart: enterSelectionMode,
         },
-    sort: search.sort,
+    sort,
     onSortChange: (next) => {
       updateSearch({ sort: next, sortExplicit: true });
     },
+    createdSortAvailable,
     availableRepos: availableRepos,
     availableWorkspaces: availableWorkspaces,
     search: search,
@@ -1034,7 +1036,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
-            sort={search.sort}
+            sort={sort}
             isCountPending={isCountPending}
             isBulkSelectionPending={selectAllPending}
             scope={selectionMode ? "tasks" : props.scope}
