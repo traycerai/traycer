@@ -32,6 +32,7 @@ import {
   HostClient,
   type HostRequester,
 } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -42,6 +43,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import { botReply } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   negotiateBotSend,
   resetBotFailedRequestSupport,
@@ -64,6 +66,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
@@ -102,6 +111,8 @@ const mocks = vi.hoisted(() => ({
   /** The client of the host that runs the bot, which takes an Update. */
   boundClient: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
+  /** Whether the viewer is the Admin of the team the bot's sandbox is on. */
+  billingAdmin: false,
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
 
@@ -114,6 +125,15 @@ vi.mock(
   () => emptyBotMentionHostListsMock,
 );
 
+// Who may buy a team's credits is the environment list's answer, read by its
+// own hook; here a case says it.
+vi.mock("@/hooks/sandboxes/use-team-billing-admin", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/sandboxes/use-team-billing-admin")
+  >()),
+  useTeamBillingAdmin: (teamId: string | null) =>
+    teamId !== null && mocks.billingAdmin,
+}));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -534,6 +554,7 @@ beforeEach(() => {
   mocks.openSettings.mockClear();
   useProvidersFocusStore.getState().clearFocusHarnessId();
   mocks.threads = [];
+  mocks.billingAdmin = false;
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
   ensured = [];
@@ -547,6 +568,7 @@ afterEach(() => {
   // What a box held unsent is kept under the bot, past its view.
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
+  resetHostDirectoryRows();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;
   mocks.threadHandle = null;
@@ -1598,6 +1620,8 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     const raw = "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
     const copy = sandboxRefusalCopyFor("SANDBOX_FROZEN", raw);
     if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    // The bot's sandbox is the viewer's own.
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
     activityStore.setState({
       activity: trunkWithReason("failed", {
         summary: raw,
@@ -1627,6 +1651,72 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
       `Not answered: ${GROK_OUTDATED} · Retry · Edit`,
     );
+  });
+
+  describe("a turn the bot's sandbox ran out of credits on", () => {
+    const FROZEN_RAW =
+      "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+    const ENDED_TURN = "This sandbox ran out of credits, which ended the turn.";
+    const ACME = { id: "team-acme", name: "Acme" };
+
+    /** The line under the post, with the bot's sandbox described by `rows`. */
+    function frozenLine(rows: ReadonlyArray<HostDirectoryEntry>): HTMLElement {
+      installHostDirectoryRows(rows);
+      activityStore.setState({
+        activity: trunkWithReason("failed", {
+          summary: FROZEN_RAW,
+          code: "SANDBOX_FROZEN",
+          harnessId: "claude",
+          action: "none",
+        }),
+      });
+      mountChannel(null, memberPost(VIEWER_USER_ID));
+      return lineOf(screen.getByTestId("bot-member-row"));
+    }
+
+    it("tells a team's member to wait for the team's credits, not to add any", () => {
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, ACME)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} Once Acme has credits again, send a message to pick up where it stopped. · Retry · Edit`,
+      );
+      expect(line.textContent).not.toContain("Add credits");
+    });
+
+    it("tells the team's billing Admin to add credits", () => {
+      mocks.billingAdmin = true;
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, ACME)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} Add credits, then send a message to pick up where it stopped. · Retry · Edit`,
+      );
+    });
+
+    it("tells no remedy for a sandbox whose row names no owner", () => {
+      const line = frozenLine([sandboxHostEntryWithoutOwner(BOUND_HOST_ID)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+      expect(line.textContent).not.toContain("Add credits");
+    });
+
+    it("tells no remedy while no host runs the bot", () => {
+      boundHostId = null;
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, null)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+    });
+
+    it("tells no remedy when the bot runs on a computer that is not a sandbox", () => {
+      const line = frozenLine([plainHostEntry(BOUND_HOST_ID)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+    });
   });
 
   it("adds Sign in for a sign-out, which opens Settings ▸ Providers at that provider on the host that runs the bot, not the one serving the tab", async () => {
@@ -1810,5 +1900,121 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     );
     expect(screen.queryByTestId("bot-thread-unanswered")).toBeNull();
     expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+});
+
+describe("a frozen turn in a bot's channel or thread draws no error row, and the summary says it", () => {
+  const FROZEN_RAW =
+    "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+  const FROZEN_REASON = {
+    summary: FROZEN_RAW,
+    code: "SANDBOX_FROZEN",
+    harnessId: "claude",
+    action: "none",
+  } as const;
+  const TWO_SENTENCES =
+    "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
+
+  /** The bot's turn that the sandbox's want of credits ended. */
+  function frozenTurn(): Message {
+    const turn = botReply({
+      messageId: "turn-frozen",
+      text: "",
+      timestamp: 2_000,
+    });
+    return {
+      ...turn,
+      blocks: [
+        {
+          type: "error",
+          blockId: "turn-frozen:error",
+          status: "completed",
+          timestamp: 2_000,
+          parentBlockId: null,
+          message: FROZEN_RAW,
+          recoverable: false,
+          code: "SANDBOX_FROZEN",
+          failure: null,
+        },
+      ],
+    };
+  }
+
+  function expectNoErrorRow(): void {
+    expect(document.querySelector("[data-failure-presentation]")).toBeNull();
+    expect(screen.queryByText(/^Paused:/)).toBeNull();
+    expect(screen.queryByText(FROZEN_RAW)).toBeNull();
+  }
+
+  it("in the channel", () => {
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
+    activityStore.setState({
+      activity: {
+        trunk: { ...sessionOn("failed", POST_REQUEST), reason: FROZEN_REASON },
+        threads: {},
+      },
+    });
+    mountChannelWith(null, [memberPost(VIEWER_USER_ID), frozenTurn()]);
+
+    expect(screen.getByTestId("bot-reply-row")).toBeTruthy();
+    expectNoErrorRow();
+    expect(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-unanswered",
+      ).textContent,
+    ).toBe(`Not answered: ${TWO_SENTENCES} · Retry · Edit`);
+  });
+
+  it("in a thread's panel", () => {
+    const requestId = "req-thread-reply";
+    const threadReply: Message = {
+      role: "user",
+      messageId: "thread-reply",
+      sender: { type: "user", userId: VIEWER_USER_ID },
+      sessionAnchor: null,
+      message: {
+        kind: "user",
+        content: textDoc("thread-reply"),
+        browserAnnotations: [],
+      },
+      timestamp: 3_000,
+      conversationRequest: {
+        requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    };
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    mocks.threadHandle = {
+      store: createChannelStore([threadReply, frozenTurn()]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...failedOn(requestId),
+            reason: FROZEN_REASON,
+          },
+        },
+      },
+    });
+    mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-reply-row")).toBeTruthy();
+    expectNoErrorRow();
+    expect(
+      within(panel).getByTestId("bot-message-unanswered").textContent,
+    ).toBe(`Not answered: ${TWO_SENTENCES} · Retry · Edit`);
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  type AttachGrantProvision,
   createAttachGrantProvider,
   createSandboxAttachGrantProvider,
   mintAttachGrantViaHttp,
@@ -9,7 +10,17 @@ import {
   signalOfLastFetch,
   stubHangingFetch,
 } from "../../../auth/__tests__/no-native-abort-helpers";
-import { SANDBOX_FROZEN_MESSAGE } from "../../../host-client/sandbox-control";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "../../../host-client/host-connection-registry";
+import type { HostDirectoryEntry } from "../../../host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "../../../host-client/remote-fetcher";
+import {
+  SANDBOX_FROZEN_MESSAGE,
+  SANDBOX_OUT_OF_CREDITS,
+} from "../../../host-client/sandbox-control";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "../../../test-fixtures/authenticated-user";
 
 const AUTHN = "https://authn.test";
 const HOST_ID = "host-1";
@@ -960,35 +971,125 @@ describe("attach grant providers on a frozen sandbox", () => {
     );
   }
 
-  it("createAttachGrantProvider answers refused, with the SANDBOX_FROZEN fatal and the frozen copy", async () => {
-    stub402({ code: "sandbox_frozen" });
-    const provision = await createAttachGrantProvider(deps)();
-    expect(provision).toMatchObject({
-      kind: "refused",
-      detail: FROZEN_DETAIL,
-      fatal: {
-        code: "SANDBOX_FROZEN",
-        reason: SANDBOX_FROZEN_MESSAGE,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+  /** A remote row carrying sandbox facts, owned as the arguments say. */
+  function sandboxRow(
+    owner: RemoteHostDirectoryEntry["owner"],
+    team: { readonly id: string; readonly name: string } | null,
+  ): RemoteHostDirectoryEntry {
+    return {
+      hostId: HOST_ID,
+      label: "Sandbox",
+      kind: "remote",
+      websocketUrl: "wss://relay.invalid/attach",
+      version: "1.2.3",
+      transportDialability: "dialable",
+      remoteStatus: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: null,
+        lastSeenAt: null,
       },
+      publicKey: "pubkey-host-1",
+      owner,
+      relayFuseGrace: false,
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        profile: "agent",
+        ownerTeamName: team === null ? null : team.name,
+        ownerTeamId: team === null ? null : team.id,
+      },
+    };
+  }
+
+  function installRows(rows: ReadonlyArray<HostDirectoryEntry>): void {
+    const byId = new Map(rows.map((row) => [row.hostId, row]));
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => byId.get(hostId) ?? null,
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+  }
+
+  const PERSONAL_ROW = sandboxRow(
+    { kind: "user", id: AUTHENTICATED_USER_FIXTURE_ID },
+    null,
+  );
+  const TEAM = { id: "team-1", name: "Acme" };
+  const TEAM_ROW = sandboxRow(
+    { kind: "team", id: TEAM.id, name: TEAM.name },
+    TEAM,
+  );
+
+  afterEach(() => {
+    resetHostConnectionRegistryForTest();
+  });
+
+  const PROVIDERS = [
+    ["createAttachGrantProvider", () => createAttachGrantProvider(deps)()],
+    [
+      "createSandboxAttachGrantProvider",
+      () => createSandboxAttachGrantProvider(deps).provider(),
+    ],
+  ] as const;
+
+  describe.each(PROVIDERS)("%s", (_name, refusedProvision) => {
+    function expectFatal(
+      provision: AttachGrantProvision,
+      reason: string,
+    ): void {
+      expect(provision).toMatchObject({
+        kind: "refused",
+        detail: FROZEN_DETAIL,
+        fatal: {
+          code: "SANDBOX_FROZEN",
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    }
+
+    it("keeps the paused-credits sentence for a sandbox its row names as the reader's own", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([PERSONAL_ROW]);
+      expectFatal(await refusedProvision(), SANDBOX_FROZEN_MESSAGE);
+    });
+
+    it("says the sandbox is out of credits, with no remedy, for a team's sandbox", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([TEAM_ROW]);
+      expectFatal(await refusedProvision(), SANDBOX_OUT_OF_CREDITS);
+    });
+
+    it("does not read a sandbox row with no owner and no team as the reader's own", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([sandboxRow(null, null)]);
+      expectFatal(await refusedProvision(), SANDBOX_OUT_OF_CREDITS);
+    });
+
+    it("says the sandbox is out of credits when the directory has no row for the host", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([{ ...PERSONAL_ROW, hostId: "another-host" }]);
+      expectFatal(await refusedProvision(), SANDBOX_OUT_OF_CREDITS);
+    });
+
+    it("says the sandbox is out of credits, without throwing, when no directory is installed", async () => {
+      stub402({ code: "sandbox_frozen" });
+      resetHostConnectionRegistryForTest();
+      expectFatal(await refusedProvision(), SANDBOX_OUT_OF_CREDITS);
     });
   });
 
-  it("createSandboxAttachGrantProvider answers refused the same way, and keeps no session grant", async () => {
+  it("createSandboxAttachGrantProvider keeps no session grant after a frozen refusal", async () => {
     stub402({ code: "sandbox_frozen" });
+    installRows([PERSONAL_ROW]);
     const source = createSandboxAttachGrantProvider(deps);
-    const provision = await source.provider();
-    expect(provision).toMatchObject({
-      kind: "refused",
-      detail: FROZEN_DETAIL,
-      fatal: {
-        code: "SANDBOX_FROZEN",
-        reason: SANDBOX_FROZEN_MESSAGE,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-      },
-    });
+    expect(await source.provider()).toMatchObject({ kind: "refused" });
     expect(source.readSessionGrant()).toBeNull();
   });
 
