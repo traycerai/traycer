@@ -191,10 +191,11 @@ function AgentMemoriesRow(): ReactNode {
   });
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: AGENT_MEMORIES_SET, request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     mutationKey: configMutationKeys.agentMemoriesSet(),
     errorMessage: "Couldn't update memories",

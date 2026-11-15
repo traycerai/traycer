@@ -53,13 +53,18 @@ export type PendingSettingsSave =
   | { readonly kind: "abandoned"; readonly method: string };
 
 /**
- * Called just before a save is sent, with the host it is sent on: remembers
- * what the save will propose, so the app applies its own hold. A save sent
- * on any host but the requester's own is not followed.
+ * Called just before a save is sent, with the host it is sent on and the
+ * sign-in the person acted on (`pressedOn`, taken in the mutation's
+ * `onMutate`; null with no session service): remembers what the save will
+ * propose, so the app applies its own hold. A save sent on any host but the
+ * requester's own is not followed. Once the sign-in it was pressed on has
+ * ended, by a switch or by signing in again as the same person, the save is
+ * not sent.
  */
 export type PrepareSettingsSave = (
   save: SettingsSave,
   sentOn: string | null,
+  pressedOn: EnvironmentCloud | null,
 ) => Promise<PendingSettingsSave>;
 
 /** Sends a followed save and tells `pending` whether the host answered it. */
@@ -301,7 +306,7 @@ async function keepOwnWrite(
 
 /** One save of an editor session, from its preparation to its apply. */
 interface SaveOperation {
-  /** The sign-in the save is made on. */
+  /** The sign-in the save was pressed on. */
   readonly cloud: EnvironmentCloud;
   /** Its place among the session's saves ({@link SaveLedger}). */
   readonly order: number;
@@ -339,6 +344,10 @@ async function followSave(
     address?.kind === edit.kind && address.key === edit.key
       ? baseRows
       : await rowsOf(edit.kind, edit.key);
+  // Nothing is remembered for a press whose sign-in has ended.
+  if (!operation.cloud.onOriginSignIn()) {
+    return { kind: "abandoned", method: save.method };
+  }
   const beginning = await coordinator.begin(
     mapping,
     {
@@ -458,8 +467,14 @@ export function useSettingsSave(
     async (
       save: SettingsSave,
       sentOn: string | null,
+      pressedOn: EnvironmentCloud | null,
     ): Promise<PendingSettingsSave> => {
-      if (scope === null) return NOTHING_TO_FOLLOW;
+      // The save was pressed on `pressedOn`: once that sign-in has ended it
+      // is not sent, wherever it was going, followed or not.
+      if (pressedOn !== null && !pressedOn.onOriginSignIn()) {
+        return { kind: "abandoned", method: save.method };
+      }
+      if (scope === null || pressedOn === null) return NOTHING_TO_FOLLOW;
       // The editor, and whatever the caller read from authn for this save,
       // belong to `scope.viewerId`: a save prepared once anyone else is
       // signed in is not sent, wherever it was going.
@@ -472,7 +487,7 @@ export function useSettingsSave(
       const accountId = scope.coordinator.account();
       if (accountId === null) return NOTHING_TO_FOLLOW;
       const operation: SaveOperation = {
-        cloud: scope.source(),
+        cloud: pressedOn,
         order: scope.ledger.take(),
       };
       let pending: PendingSettingsSave;
@@ -481,11 +496,15 @@ export function useSettingsSave(
       } catch {
         pending = NOTHING_TO_FOLLOW;
       }
-      if (isEditorsAccount() && scope.coordinator.account() === accountId) {
+      if (
+        pressedOn.onOriginSignIn() &&
+        isEditorsAccount() &&
+        scope.coordinator.account() === accountId
+      ) {
         return pending;
       }
-      // Made for an account that is no longer here: it is not sent, and its
-      // record, if remembered in that account's memory, is not out.
+      // Pressed on a sign-in that has ended: it is not sent, and its record,
+      // if remembered in that account's memory, is not out.
       if (pending.kind === "send") pending.failed();
       return { kind: "abandoned", method: save.method };
     },

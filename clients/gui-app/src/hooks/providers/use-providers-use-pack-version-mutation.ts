@@ -75,10 +75,11 @@ export function useProvidersUsePackVersionForClient(
     client,
     method: "providers.usePackVersion",
     mapVariables: (variables) => variables,
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "providers.usePackVersion", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),

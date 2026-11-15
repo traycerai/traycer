@@ -27,10 +27,11 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
     mutationKey: providersMutationKeys.deleteEnvOverride(),
     errorMessage: "Couldn't remove the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
-    followSettingsSave: (request, client) =>
+    followSettingsSave: (request, client, pressedOn) =>
       prepareSave(
         { method: "providers.deleteEnvOverride", request },
         client.getActiveHostId(),
+        pressedOn,
       ),
   });
 }
