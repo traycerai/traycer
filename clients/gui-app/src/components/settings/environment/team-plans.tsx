@@ -5,12 +5,10 @@ import {
   useConfigurationPlanUnlinkPreview,
 } from "@/hooks/environment/team/use-plans-query";
 import { useConfigurationPlanUnlinkMutation } from "@/hooks/environment/team/use-plan-unlink-mutation";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   providerIdToGuiHarnessId,
   providerDisplayName,
 } from "@/lib/provider-ordering";
-import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
@@ -27,7 +25,6 @@ import { useTeamProviderRecords } from "./team-provider-records";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
-  readonly adminNames: readonly string[];
 }): ReactNode {
   const records = useTeamProviderRecords();
   const source = useConfigurationSource();
@@ -41,7 +38,6 @@ export function TeamPlans(props: {
     readonly plan: ConfigurationPlan;
     readonly previewId: string;
   } | null>(null);
-  const open = useProviderLinkDialogStore((state) => state.open);
   const plans =
     query.data?.plans.flatMap((plan) => {
       if (
@@ -77,20 +73,7 @@ export function TeamPlans(props: {
         teamName={name}
         plans={plans}
         canAdminister={canAdminister}
-        adminNames={props.adminNames}
         isPending={target !== null}
-        onLink={
-          records === null
-            ? () => {
-                if (source.kind === "pool")
-                  open({
-                    providerId: props.providerId,
-                    profileId: null,
-                    environmentId: source.environmentId,
-                  });
-              }
-            : null
-        }
         onPreviewUnlink={
           records === null
             ? (plan) => setTarget({ plan, previewId: crypto.randomUUID() })
@@ -106,7 +89,6 @@ export function TeamPlans(props: {
           onClose={() => setTarget(null)}
         />
       ) : null}
-      <ProviderLinkDialog />
     </>
   );
 }

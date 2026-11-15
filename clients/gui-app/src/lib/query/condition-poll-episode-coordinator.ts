@@ -90,9 +90,10 @@ export class ConditionPollEpisodeCoordinator {
   }
 
   pollOptionsFor(
-    method: HostRpcMethod,
+    method: string,
     poll: boolean | undefined,
   ): HostQueryPollingOptions {
+    if (!isHostRpcMethod(method)) return {};
     const policy = HOST_METHOD_POLL_TABLE[method].poll;
     if (policy === null) return {};
     if (policy.kind === "condition") {

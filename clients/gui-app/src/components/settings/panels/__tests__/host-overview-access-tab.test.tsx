@@ -122,6 +122,16 @@ function renderTab(
   return { queryClient };
 }
 
+function bindLocalHostId(hostId: string): void {
+  hostMock.binding = {
+    auth: {},
+    directory: {
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalHostId: () => hostId,
+    },
+  };
+}
+
 function hostWith(
   status: Partial<EnvironmentStatusResponse>,
   rest: Partial<AccessHostState>,
@@ -464,13 +474,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
   });
 
   it("says this computer in the sign-in sentence of this machine's own host", async () => {
-    hostMock.binding = {
-      auth: {},
-      directory: {
-        onChange: () => ({ dispose: () => undefined }),
-        getLocalHostId: () => ACCESS_HOST_ID,
-      },
-    };
+    bindLocalHostId(ACCESS_HOST_ID);
     const host = hostWith({}, { providers: [claudeAmbient(true)] });
     renderTab(host, READY);
 
@@ -509,7 +513,8 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     ).toBeTruthy();
   });
 
-  it("tells a team host's reader that an admin links a plan on the team's Providers", async () => {
+  it("uses this computer's sign-in sentence for a team's own computer", async () => {
+    bindLocalHostId(ACCESS_HOST_ID);
     const host = hostWith(
       { principal: { kind: "team", teamName: "Acme" } },
       { providers: [claudeAmbient(true)] },
@@ -519,10 +524,29 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     await screen.findByTestId("terminal-account-row");
     expect(
       screen.getByText(
-        "This host's own sign-in, which stays on this host. An admin can link a plan on Acme's Providers to use one everywhere.",
+        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/This computer's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/This host's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/An admin can link a plan/)).toBeNull();
+  });
+
+  it("uses the named computer's sign-in sentence for a team's other computer", async () => {
+    bindLocalHostId("another-computer");
+    const host = hostWith(
+      { principal: { kind: "team", teamName: "Acme" } },
+      { providers: [claudeAmbient(true)] },
+    );
+    renderTab(host, READY);
+
+    await screen.findByTestId("terminal-account-row");
+    expect(
+      screen.getByText(
+        "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/This host's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/An admin can link a plan/)).toBeNull();
   });
 
   it("has no terminal accounts section when no provider has an ambient profile", async () => {

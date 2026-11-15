@@ -435,7 +435,6 @@ export function ProviderProfileScopedSection(
           terminalComputerName={hostName}
         />
         <ProviderOnHostOnlyLine
-          hostId={hostId}
           providerId={state.providerId}
           profileId={selectedProfile.profileId}
         />

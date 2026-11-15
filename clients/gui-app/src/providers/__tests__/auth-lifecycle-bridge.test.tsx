@@ -44,7 +44,6 @@ import {
   requestSandboxesPageConfiguration,
   useSandboxesPageStore,
 } from "@/stores/sandboxes/sandboxes-page-store";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -181,7 +180,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
     useAddHostDialogStore.getState().closeDialog();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
-    useProviderLinkDialogStore.getState().close();
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -715,46 +713,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     expect(useProvidersFocusStore.getState().focusHostId).toBe("host-a");
     expect(useProvidersFocusStore.getState().startSignIn).toBe(true);
-  });
-
-  it("closes the provider Link dialog on user-switch", () => {
-    // The target names a provider profile of account A's; left open, account B
-    // would see A's Link dialog and could run its sign-in under B's session.
-    useProviderLinkDialogStore
-      .getState()
-      .open({ providerId: "claude", profileId: "profile-alice" });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    act(() => {
-      resetAuth("signed-in", "bob@example.com", "user-bob");
-    });
-
-    expect(useProviderLinkDialogStore.getState().target).toBeNull();
-  });
-
-  it("leaves an open provider Link dialog alone when the identity has not changed", () => {
-    // The counterweight: a bridge that closed it on every render would
-    // satisfy the user-switch case above while never letting it survive a
-    // normal render.
-    useProviderLinkDialogStore
-      .getState()
-      .open({ providerId: "claude", profileId: "profile-a" });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    expect(useProviderLinkDialogStore.getState().target).toEqual({
-      providerId: "claude",
-      profileId: "profile-a",
-    });
   });
 
   it("leaves an open Add-host dialog alone when the identity has not changed", () => {

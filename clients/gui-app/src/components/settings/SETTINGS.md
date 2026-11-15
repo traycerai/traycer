@@ -888,7 +888,7 @@ computer is selected; without a pool they retain the surface host. Capability
 checks use the requester serving each method. Saves quote the displayed
 revision; conflicts reread the row and show who changed it. Approval policy
 reads its item and writes through the dedicated policy method. Editors can change configuration;
-plan linking and approval/browser policy changes require an admin. Viewers get
+approval/browser policy changes require an admin. Viewers get
 read-only values, with secret names and read-access Details entries only.
 
 Secrets and plan sign-in requests carry the source environment id and require
@@ -918,8 +918,10 @@ rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
 labelled **Provider**. The header does not link to Secrets, and the pane has
 no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
 **Pack version** when the provider has pack ids. Plans is one **Linked plan**
-picker, plus **Link a plan** and **Unlink** when the viewer can administer, and
-**No plans linked.** when none are. Profiles is one **Profile** picker under
+picker, plus legacy **Unlink** when the viewer can administer, and
+**No plans linked.** when none are. There is no Link control, dialog or admin
+hint. A rate-limit card with no linked plan shows no empty-state sentence.
+Profiles is one **Profile** picker under
 **Profiles**; the selected profile's account name stays under it, and Use is a
 switch when the person can edit, otherwise On or Off as text. The executable
 path and version stay inside the rate-limit card. A rail subtitle reads **key**
@@ -1091,7 +1093,7 @@ working.** on this computer, or **The fork uses the latest usable cloud backup
 available when you click Fork. Work still in progress may not be included. The
 original agent continues working.** on another computer. A fork from one turn
 has no snapshot sentence. Code identifiers remain workspace-based. Invitation review,
-Invite, Link a plan and Add an MCP server name the team or environment once in
+Invite and Add an MCP server name the team or environment once in
 the heading; subsequent copy uses the team or this environment and keeps every
 grant, seat and sharing consequence. The first tab a member opens on a team
 host is three paragraphs at rest: agents here run as the host and can read what
@@ -1208,9 +1210,7 @@ environment (`hooks/environment/use-addressed-environment.ts`): a team's id on
 its pages, Personal's own id on the Personal pick (from `environment.list`,
 `ownerKind: "user"`, the resolver Details shares), and the host's own only on a
 Local pick, so a host that has not moved its settings still reads Personal's. A
-read waits for Personal's id. A provider's sign-in (`providers.link`,
-`providers.linkComplete`) names the same environment, and its Continue waits for
-Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
+read waits for Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
 by you 24 Oct" ("replaced by you" after a replacement, from the current version)
 with **Replace**, **Remove** and **Details**; Details holds **Verify**
 (`environment.secrets.verify` by id), the rotation, **Versions** (Undo, Restore
@@ -6753,9 +6753,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        its switch named
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
-       in on Providers to use one everywhere." (a team host: "This host's own
-       sign-in, which stays on this host. An admin can link a plan on
-       <Team>'s Providers to use one everywhere."), with a switch over
+       in on Providers to use one everywhere." for this computer, or the named
+       computer form otherwise, on both personal and team computers, with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value

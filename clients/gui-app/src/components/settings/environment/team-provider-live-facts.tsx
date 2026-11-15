@@ -69,7 +69,6 @@ export function TeamProviderLiveFacts(props: {
                 providerId={props.providerId}
                 state={state}
                 linkedProfileIds={linkedProfileIds}
-                teamName={name}
               />
             </>
           )}
@@ -122,7 +121,6 @@ function TeamPlanLimits(props: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState;
   readonly linkedProfileIds: readonly string[];
-  readonly teamName: string;
 }): ReactNode {
   const eligibility = resolveRateLimitFetchEligibility(props.state);
   const profiles = props.state.profiles.filter(
@@ -130,12 +128,7 @@ function TeamPlanLimits(props: {
       profile.kind === "managed" &&
       props.linkedProfileIds.includes(profile.profileId),
   );
-  if (props.linkedProfileIds.length === 0)
-    return (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Link a plan to {props.teamName} to see its rate limits.
-      </p>
-    );
+  if (props.linkedProfileIds.length === 0) return null;
   return profiles.map((profile) => (
     <ProviderRateLimitForProvider
       key={profile.profileId}

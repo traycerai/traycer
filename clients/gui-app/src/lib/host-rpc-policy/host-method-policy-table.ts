@@ -6,7 +6,11 @@ import type {
   RpcSchedulingMode,
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import {
+  HOST_UNARY_RPC_ROUTES,
+  type ClientHostUnaryRpcMethod,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
@@ -2124,43 +2128,6 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Profile sync. The overview is statuses only and is read from the source
-  // host while its dialog is open; the three `host.*` methods travel between
-  // two linked hosts and are never sent by an app.
-  "providers.profileSync.overview": {
-    ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
-  },
-  "providers.profileSync.syncNow": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileSync.setKeepInSync": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileSync.acceptAccount": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.apply": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.offerCredential": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.fetchCredential": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   "providers.detectVersion": { ...LATEST_SCHEDULING, poll: null },
   // Starting login spawns a provider-authentication process.
   "providers.startLogin": {
@@ -3105,20 +3072,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
-} satisfies HostMethodPolicyTable;
+} satisfies Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>;
 
-const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;
+const hostMethodPolicyTable: Partial<HostMethodPolicyTable> =
+  HOST_METHOD_POLL_TABLE;
 
 export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   modeFor(method, params) {
-    const mode = hostMethodPolicyTable[method].mode;
+    const mode = hostMethodPolicyTable[method]?.mode ?? LATEST_SCHEDULING.mode;
     return typeof mode === "function" ? mode(params) : mode;
   },
   latestScopeFor(method, params) {
-    return hostMethodPolicyTable[method].latestScope?.(params);
+    return hostMethodPolicyTable[method]?.latestScope?.(params);
   },
   joinResponseTimeoutMs(method) {
-    return hostMethodPolicyTable[method].joinResponseTimeoutMs;
+    return hostMethodPolicyTable[method]?.joinResponseTimeoutMs ?? null;
   },
 };
 
@@ -3136,9 +3104,9 @@ export function stampHostRpcMethod<
 }
 
 export function assertExactHostMethodPollTableKeys(
-  table: HostMethodPolicyTable,
+  table: Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>,
 ): void {
-  const registryKeys = Object.keys(hostRpcRegistry).sort();
+  const registryKeys = Object.keys(HOST_UNARY_RPC_ROUTES).sort();
   const tableKeys = Object.keys(table).sort();
   const hasExactKeys =
     registryKeys.length === tableKeys.length &&
@@ -3146,7 +3114,7 @@ export function assertExactHostMethodPollTableKeys(
 
   if (!hasExactKeys) {
     throw new Error(
-      `Host method poll table must exactly match hostRpcRegistry. Registry: ${registryKeys.join(", ")}. Table: ${tableKeys.join(", ")}.`,
+      `Host method poll table must exactly match client-routable host methods. Registry: ${registryKeys.join(", ")}. Table: ${tableKeys.join(", ")}.`,
     );
   }
 }
