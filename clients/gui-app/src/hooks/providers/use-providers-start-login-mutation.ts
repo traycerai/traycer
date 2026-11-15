@@ -34,6 +34,10 @@ export function useProvidersStartLoginForClient(
 ): StartLoginMutationResult {
   return useHostScopedMutationForClient(client, {
     method: "providers.startLogin",
+    requiredHostMethodVersion: (request) =>
+      request.target === null
+        ? null
+        : { method: "providers.startLogin", version: { major: 1, minor: 5 } },
     mutationKey: providersMutationKeys.startLogin(),
     errorMessage: "Couldn't start the sign-in flow.",
     invalidateMethods: [],
