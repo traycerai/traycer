@@ -480,6 +480,7 @@ export function ProviderMcpAddDialog(props: {
       submission.transport.type !== "stdio" &&
       submission.transport.auth !== null &&
       submission.transport.auth.type === "oauth";
+    const name = submission.name;
     submittedTransport.set(submission.transport);
     mutate.mutate(
       {
@@ -488,18 +489,18 @@ export function ProviderMcpAddDialog(props: {
           mode === "edit"
             ? {
                 action: "update",
-                name: submission.name,
+                name,
               }
             : {
                 action: "add",
-                name: submission.name,
+                name,
               },
         suppressToast: true,
       },
       {
         onSuccess: () => {
           if (mode === "add" && onAdded !== null) {
-            onAdded({ name: submission.name, requiresAuth });
+            onAdded({ name, requiresAuth });
           }
           handleOpenChange(false);
         },

@@ -630,6 +630,9 @@ export function LinkPhonePanel() {
   const submittedCode = useSubmittedSecretInput<string>(
     "Link claim input is unavailable.",
   );
+  const submittedDecision = useSubmittedSecretInput<string>(
+    "Link decision input is unavailable.",
+  );
   const respond = useRespondLinkLoginMutation(
     submittedCode.read,
     submittedCode.clear,
@@ -681,12 +684,13 @@ export function LinkPhonePanel() {
     }
     setRespondFailedCode(null);
     setDecidedElsewhere(null);
-    const decidedOn = claim.code;
-    submittedCode.set(decidedOn);
+    submittedCode.set(claim.code);
+    submittedDecision.set(claim.code);
     respond.mutate(
       { approve },
       {
         onSuccess: (outcome) => {
+          const decidedOn = submittedDecision.read();
           if (approve && outcome === "ok") {
             setApprovedDone(true);
             return;
@@ -718,8 +722,9 @@ export function LinkPhonePanel() {
           restartCode();
         },
         onError: () => {
-          setRespondFailedCode(decidedOn);
+          setRespondFailedCode(submittedDecision.read());
         },
+        onSettled: submittedDecision.clear,
       },
     );
   };

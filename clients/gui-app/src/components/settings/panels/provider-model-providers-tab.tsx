@@ -400,6 +400,9 @@ function useCustomProviderForm(
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
+  const submittedValues = useSubmittedSecretInput<CustomProviderValues>(
+    "Custom provider draft input is unavailable.",
+  );
   const submittedAction = useSubmittedSecretInput<ModelProviderAuthAction>(
     "Model provider input is unavailable.",
   );
@@ -447,6 +450,7 @@ function useCustomProviderForm(
         // than an empty list it happens to be holding.
         env: values.env === null ? null : [...values.env],
       });
+      submittedValues.set(values);
       auth.mutate(
         {
           providerId,
@@ -463,21 +467,30 @@ function useCustomProviderForm(
             // whatever the user did next, reporting a failure for a write that
             // has already been superseded.
             if (!configWrite.isCurrent(token)) return;
+            const submitted = submittedValues.read();
             const failure = customSubmitError(data.result);
             setError(failure);
             // A failure lands the user in the form for THESE values, whether or
             // not they came from one. A bare re-enable that the host refused
             // otherwise reports itself on a row with no way to act on it, and
             // the form is the surface that can.
-            setState(failure === null ? null : { initial: values });
+            setState(failure === null ? null : { initial: submitted });
           },
           onSettled: () => {
+            submittedValues.clear();
             configWrite.release(token);
           },
         },
       );
     },
-    [auth, configWrite, credentialRefusal, providerId, submittedAction],
+    [
+      auth,
+      configWrite,
+      credentialRefusal,
+      providerId,
+      submittedAction,
+      submittedValues,
+    ],
   );
 
   const submit = useCallback(

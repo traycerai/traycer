@@ -125,6 +125,8 @@ export function McpServerDialog(props: {
     submittedServer.set(
       mcpServerPutRequest(form, server, source.environmentId, credential),
     );
+    const serverName = form.name.trim();
+    const refusalSecret = refusedSecret(form, server, secretList);
     put.mutate(
       {
         environmentId: source.environmentId,
@@ -139,8 +141,8 @@ export function McpServerDialog(props: {
             setProblem(
               serverRefusal(result.reason, {
                 configuration: name,
-                server: form.name.trim(),
-                secret: refusedSecret(form, server, secretList),
+                server: serverName,
+                secret: refusalSecret,
               }),
             );
         },
