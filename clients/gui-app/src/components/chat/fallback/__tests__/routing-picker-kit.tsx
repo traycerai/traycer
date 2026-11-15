@@ -831,39 +831,44 @@ export function botMutationsModule<
     readonly useBotUpdateRunSettingsMutation: () => unknown;
   },
 >(actual: T) {
+  // The hook is chosen from the flag and then called unconditionally, so a
+  // component keeps one hook order while the flag holds.
+  function useRecordedBotWrite() {
+    const [pending, setPending] = useState(false);
+    return {
+      mutateAsync: (variables: Record<string, unknown>) => {
+        kit.mutations.push({
+          clientId: null,
+          method: "bot.updateRunSettings",
+          variables,
+        });
+        setPending(true);
+        return new Promise<{
+          readonly signIn: { readonly isCurrent: () => boolean };
+        }>((resolve, reject) => {
+          const deliver = (): void => {
+            setPending(false);
+            const refusal = kit.botWriteRefusal;
+            if (refusal === null) resolve({ signIn: WRITE_SIGN_IN });
+            else reject(new Error(refusal));
+          };
+          if (kit.deferResponses) {
+            kit.pendingResponses.push(deliver);
+            return;
+          }
+          deliver();
+        });
+      },
+      isPending: pending,
+    };
+  }
   return {
     ...actual,
     useBotUpdateRunSettingsMutation: () => {
-      if (kit.realBotWrite) {
-        return actual.useBotUpdateRunSettingsMutation();
-      }
-      const [pending, setPending] = useState(false);
-      return {
-        mutateAsync: (variables: Record<string, unknown>) => {
-          kit.mutations.push({
-            clientId: null,
-            method: "bot.updateRunSettings",
-            variables,
-          });
-          setPending(true);
-          return new Promise<{
-            readonly signIn: { readonly isCurrent: () => boolean };
-          }>((resolve, reject) => {
-            const deliver = (): void => {
-              setPending(false);
-              const refusal = kit.botWriteRefusal;
-              if (refusal === null) resolve({ signIn: WRITE_SIGN_IN });
-              else reject(new Error(refusal));
-            };
-            if (kit.deferResponses) {
-              kit.pendingResponses.push(deliver);
-              return;
-            }
-            deliver();
-          });
-        },
-        isPending: pending,
-      };
+      const useWrite = kit.realBotWrite
+        ? actual.useBotUpdateRunSettingsMutation
+        : useRecordedBotWrite;
+      return useWrite();
     },
   };
 }

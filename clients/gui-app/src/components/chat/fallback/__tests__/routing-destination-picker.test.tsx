@@ -386,6 +386,12 @@ async function withActEnvironmentDisabled(
   }
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
 describe("RoutingDestinationPicker", () => {
   beforeEach(() => {
     resetKit();
@@ -1931,7 +1937,7 @@ describe("RoutingDestinationPicker", () => {
                   triggerVariant="outline"
                   triggerAriaLabel={null}
                   triggerDisabled={false}
-                  canAct={true}
+                  canAct
                   epicId={input.epicId}
                   chatId={CHAT_ID}
                   hostId={SESSION_HOST_ID}
@@ -2061,7 +2067,7 @@ describe("RoutingDestinationPicker", () => {
         readonly body: string | null;
       }> = [];
       const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-        const url = String(input);
+        const url = requestUrl(input);
         if (url.endsWith("/api/v3/user/negotiated")) {
           const authorization = new Headers(init?.headers).get("Authorization");
           return identityResponse(
