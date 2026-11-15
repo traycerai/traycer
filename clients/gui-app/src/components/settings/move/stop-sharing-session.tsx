@@ -100,7 +100,10 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   // shows the loading state until the new one arrives.
   const [answeredBeforeChange, setAnsweredBeforeChange] =
     useState<ReadonlySet<string> | null>(null);
-  const refreshing = answeredBeforeChange !== null && preview.isFetching;
+  const [refusalRefreshPending, setRefusalRefreshPending] = useState(false);
+  const refreshing =
+    refusalRefreshPending ||
+    (answeredBeforeChange !== null && preview.isFetching);
   const previewStatus = refreshing
     ? "loading"
     : stopPreviewStatus(supported, preview);
@@ -116,7 +119,10 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         );
 
   const onOpenChange = (open: boolean): void => {
-    if (!open) setAnsweredBeforeChange(null);
+    if (!open) {
+      setAnsweredBeforeChange(null);
+      setRefusalRefreshPending(false);
+    }
     props.onOpenChange(open);
   };
 
@@ -147,7 +153,13 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
           onOpenChange(false);
         },
         onError: () => {
-          if (personalProfiles !== null) void preview.refetch();
+          if (personalProfiles === null) return;
+          // Per-mutate callbacks precede the mutation observer's listeners:
+          // raise the gate before the settled mutation can enable Stop.
+          setRefusalRefreshPending(true);
+          void preview.refetch().finally(() => {
+            setRefusalRefreshPending(false);
+          });
         },
       },
     );
