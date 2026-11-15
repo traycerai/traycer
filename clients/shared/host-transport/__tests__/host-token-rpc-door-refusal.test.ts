@@ -45,11 +45,9 @@ import { createAuthAwareMessenger } from "../auth-aware-messenger";
 import { createRetryingMessenger } from "../retrying-messenger";
 import type { DialPriority } from "../dial-priority";
 import {
-  HOST_DOOR_STATE_POLICY,
   hostDoorStateOfRefusal,
   type HostDoorState,
   type HostDoorStateKind,
-  type HostDoorStateRetry,
 } from "../host-door-state";
 import type { HostRequestOptions } from "../host-messenger";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
@@ -106,109 +104,78 @@ const HELD_TOKEN = "host-token-1";
 
 interface RpcDoorReasonCase {
   readonly name: string;
-  readonly doorReason: string | undefined;
+  readonly doorReason: string;
   readonly expectedKind: HostDoorStateKind | null;
-  readonly expectedRetry: HostDoorStateRetry | null;
   readonly expectedMintAttempts: number;
   readonly expectedRequests: number;
   readonly refuseAgainAfterMint: boolean;
 }
 
-type RecognisedRpcDoorReasonCase = Omit<RpcDoorReasonCase, "doorReason"> & {
-  readonly doorReason: HostDoorReason;
-};
+type RpcDoorOutcome = Omit<RpcDoorReasonCase, "name" | "doorReason">;
 
-const RECOGNISED_RPC_DOOR_CASES: readonly RecognisedRpcDoorReasonCase[] = [
-  {
-    name: "keys_unavailable",
-    doorReason: "keys_unavailable",
+// Keyed by every current reason, so a reason added to the protocol fails to
+// compile here until it names its outcome, and then runs through the consumer.
+const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
+  keys_unavailable: {
     expectedKind: "keys-unavailable",
-    expectedRetry: "backoff",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "clock_skew",
-    doorReason: "clock_skew",
+  clock_skew: {
     expectedKind: "clock-skew",
-    expectedRetry: "backoff",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "token_expired",
-    doorReason: "token_expired",
+  token_expired: {
     expectedKind: "token-expired",
-    expectedRetry: "when-online",
     expectedMintAttempts: 1,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "not_admitted",
-    doorReason: "not_admitted",
+  not_admitted: {
     expectedKind: "not-admitted",
-    expectedRetry: "none",
     expectedMintAttempts: 1,
     expectedRequests: 2,
     refuseAgainAfterMint: true,
   },
-  {
-    name: "enrolment_broken",
-    doorReason: "enrolment_broken",
+  enrolment_broken: {
     expectedKind: "enrolment-broken",
-    expectedRetry: "backoff",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "membership_removed",
-    doorReason: "membership_removed",
+  membership_removed: {
     expectedKind: "membership-removed",
-    expectedRetry: "none",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "session_revoked",
-    doorReason: "session_revoked",
+  session_revoked: {
     expectedKind: null,
-    expectedRetry: null,
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-  {
-    name: "host_claimed",
-    doorReason: "host_claimed",
+  host_claimed: {
     expectedKind: "host-claimed",
-    expectedRetry: "none",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
-];
+};
 
 const RPC_DOOR_CASES: readonly RpcDoorReasonCase[] = [
-  ...RECOGNISED_RPC_DOOR_CASES,
+  ...HOST_DOOR_REASONS.map((reason) => ({
+    name: reason,
+    doorReason: reason,
+    ...RECOGNISED_RPC_DOOR_OUTCOMES[reason],
+  })),
   {
     name: "a reason this client does not recognise",
     doorReason: "future_door_reason",
     expectedKind: "unrecognised-refusal",
-    expectedRetry: "none",
-    expectedMintAttempts: 0,
-    expectedRequests: 1,
-    refuseAgainAfterMint: false,
-  },
-  {
-    name: "a refusal without a reason",
-    doorReason: undefined,
-    expectedKind: "older-host",
-    expectedRetry: "none",
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
@@ -583,18 +550,11 @@ describe("persistent /rpc door refusals through the host-only token", () => {
     resetNegotiatedManifests();
   });
 
-  it("covers every current door reason from the local unary consumer", () => {
-    expect(
-      RECOGNISED_RPC_DOOR_CASES.map(({ doorReason }) => doorReason),
-    ).toEqual(HOST_DOOR_REASONS);
-  });
-
   it.each(RPC_DOOR_CASES)(
-    "uses the local stream door policy for /rpc $name",
+    "raises the door state of a persistent /rpc answer carrying $name",
     async ({
       doorReason,
       expectedKind,
-      expectedRetry,
       expectedMintAttempts,
       expectedRequests,
       refuseAgainAfterMint,
@@ -643,22 +603,7 @@ describe("persistent /rpc door refusals through the host-only token", () => {
       expect(harness.states.map(({ kind }) => kind)).toEqual(
         expectedKind === null ? [] : [expectedKind],
       );
-      if (expectedKind !== null) {
-        expect(HOST_DOOR_STATE_POLICY[expectedKind].retry).toBe(expectedRetry);
-      } else {
-        expect(expectedRetry).toBeNull();
-      }
-
-      if (doorReason === undefined) {
-        expect(error.doorRefusal).toBeNull();
-        expect(harness.states[0]).toMatchObject({
-          hostId: HOST_ID,
-          kind: "older-host",
-          detail: { code: "UNAUTHORIZED", doorReason: null },
-        });
-      } else {
-        expect(error.doorRefusal?.doorReason).toBe(doorReason);
-      }
+      expect(error.doorRefusal?.doorReason).toBe(doorReason);
       if (doorReason === "future_door_reason") {
         expect(harness.states[0]).toMatchObject({
           hostId: HOST_ID,
@@ -880,13 +825,14 @@ describe("persistent /rpc door refusals through the host-only token", () => {
 
   it.each([
     { code: "FORBIDDEN", expected: [] },
+    { code: "UNAUTHORIZED", expected: ["older-host"] },
     { code: "TEAM_MEMBERSHIP_REQUIRED", expected: ["older-host"] },
     { code: "TEAM_MEMBERSHIP_UNAVAILABLE", expected: [] },
     { code: "INCOMPATIBLE", expected: [] },
     { code: "REMOTE_ACCESS_OFF", expected: [] },
     { code: "HOST_RESTARTING", expected: [] },
   ])(
-    "records only the right state for reasonless /rpc open code $code",
+    "a /rpc open refused without a reason under $code is rethrown and raises only the state its code earns",
     async ({ code, expected }) => {
       const harness = doorHarness();
       await harness.ready;
@@ -897,7 +843,11 @@ describe("persistent /rpc door refusals through the host-only token", () => {
         kind: "fatalError",
         details: fatalDetails(code, undefined, false),
       });
-      await pending;
+      const error = await pending;
+      expect(error).toBeInstanceOf(HostRpcError);
+      if (!(error instanceof HostRpcError))
+        throw new Error("expected the refused open to be rethrown");
+      expect(error.fatalDetails?.code).toBe(code);
       expect(harness.states.map(({ kind }) => kind)).toEqual(expected);
     },
   );
@@ -928,7 +878,7 @@ describe("persistent /rpc door refusals through the host-only token", () => {
     expect(harness.minted).toEqual([]);
   });
 
-  it("recovers nothing from an envelope with no doorReason", async () => {
+  it("a per-request answer without a doorReason raises no door state and reaches its caller", async () => {
     const harness = doorHarness();
     await harness.ready;
     const pending = captureRejection(harness.call("older"));

@@ -50,7 +50,7 @@ export function organizationEnvironment(
 export function environmentList(
   environments: readonly EnvironmentListResponseV11["environments"][number][],
 ): EnvironmentListResponseV11 {
-  return { environments };
+  return { environments: [...environments] };
 }
 
 export interface DeferredClaimRead {
