@@ -1769,4 +1769,32 @@ describe("The MCP servers page", () => {
 
     expect(await screen.findByText("github")).toBeTruthy();
   });
+
+  it("reads the cloud declaration list without a negotiated host list method", async () => {
+    negotiateMethods({
+      "environment.configuration.items": { major: 1, minor: 0 },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        servers: () => [declaredServer({ serverId: "srv-1", name: "github" })],
+        hostServers: [],
+      }),
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "mcp_server",
+            key: "legacy",
+            value: { mcpServerId: "srv-9", toolToggles: {} },
+          }),
+        ],
+      }),
+    });
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("github")).toBeTruthy();
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.list"),
+    ).toEqual([{ environmentId: "env-a" }]);
+  });
+
 });
