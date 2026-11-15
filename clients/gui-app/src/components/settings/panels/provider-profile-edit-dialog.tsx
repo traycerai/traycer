@@ -509,6 +509,21 @@ function ProfileEditAccountSection(props: {
   );
 }
 
+function profileSignOutAvailable(
+  profile: ProviderProfile,
+  recordAccount: boolean,
+  supported: boolean,
+): boolean {
+  if (profile.kind !== "managed") return false;
+  if (recordAccount) return true;
+  const custodyClass = profile.credentialHome?.custodyClass;
+  return (
+    supported &&
+    profile.presence?.kind === "admitted" &&
+    (custodyClass === "self-sufficient" || custodyClass === "brokered")
+  );
+}
+
 function ProfileSignOutAction(props: {
   readonly providerId: ProviderId;
   readonly profile: ProviderProfile;
@@ -531,13 +546,7 @@ function ProfileSignOutAction(props: {
   );
   const custodyClass = props.profile.credentialHome?.custodyClass;
   const recordAccount = props.recordAccount;
-  if (
-    (!recordAccount && !supported) ||
-    props.profile.kind !== "managed" ||
-    (!recordAccount &&
-      (props.profile.presence?.kind !== "admitted" ||
-        (custodyClass !== "self-sufficient" && custodyClass !== "brokered")))
-  )
+  if (!profileSignOutAvailable(props.profile, recordAccount, supported))
     return null;
   const environmentAccount = recordAccount || custodyClass === "brokered";
   const scope = recordAccount ? "record" : "legacy";

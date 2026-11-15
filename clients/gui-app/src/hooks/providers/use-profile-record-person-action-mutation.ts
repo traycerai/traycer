@@ -43,7 +43,7 @@ export function useProfileRecordPersonAction(
   const binding = useEnvironmentHostReadQuery(client, hostId, bindingUsable);
   const environmentId =
     bindingUsable && binding.kind === "binding"
-      ? (binding.query.data?.environment?.environmentId ?? null)
+      ? (binding.query.data?.environment.environmentId ?? null)
       : null;
   const fallback = PROFILE_RECORD_FAILURE_COPY.action[action];
   return useMutation({
