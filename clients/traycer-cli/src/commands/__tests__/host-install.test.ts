@@ -441,6 +441,8 @@ function signedInNonMemberUser() {
 
 const TEAM_SLUG_SENTENCE =
   "Enter the slug of a team you belong to, as shown in its dashboard address.";
+const AUTHN_UNREACHABLE_SENTENCE =
+  "Could not reach the authn service; check your network.";
 
 beforeAll(() => {
   expect(osHome.current).not.toBe("");
@@ -805,6 +807,23 @@ describe("buildHostInstallCommand", () => {
       expect(mocks.legacyHost).toBeNull();
     },
   );
+
+  it("stops --team before anything is installed when the sign-in's teams cannot be read", async () => {
+    mocks.validateIdentityMock.mockResolvedValue({ kind: "network-error" });
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "team/acme" }))(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: AUTHN_UNREACHABLE_SENTENCE,
+      exitCode: 1,
+    });
+
+    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+  });
 
   it("uses a prepared team token before auth, waits after commit, and returns only the target receipt", async () => {
     const prepared = {
