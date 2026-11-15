@@ -205,19 +205,28 @@ describe("<SandboxDetailsDrawerHost />", () => {
       expect(history.textContent).not.toContain(NEUTRAL);
     });
 
-    it("keeps the balance-unverified sentence while the owner is not known", () => {
-      const history = openCreditRefusal(
-        { ownerKnown: false },
-        { creditSource: "personal", reason: "unverified" },
-      );
-
-      expect(
-        within(history).getByText(
+    it.each([
+      {
+        reason: "unverified",
+        expected:
           "Traycer couldn't confirm your credit balance. Try again in a moment.",
-        ),
-      ).toBeTruthy();
-      expect(history.textContent).not.toContain(NEUTRAL);
-    });
+      },
+      {
+        reason: "unsupported-subscription",
+        expected: "Your plan doesn't include sandboxes.",
+      },
+    ])(
+      "keeps the $reason refusal sentence while the owner is not known",
+      ({ reason, expected }) => {
+        const history = openCreditRefusal(
+          { ownerKnown: false },
+          { creditSource: "personal", reason },
+        );
+
+        expect(within(history).getByText(expected)).toBeTruthy();
+        expect(history.textContent).not.toContain(NEUTRAL);
+      },
+    );
 
     it("tells the person's own amount when the row is the person's own", () => {
       const history = openCreditRefusal(
