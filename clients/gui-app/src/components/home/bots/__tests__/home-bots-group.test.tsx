@@ -148,8 +148,6 @@ function mountCard(
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={null}
       />
     </StrictMode>,
@@ -284,8 +282,6 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={null}
       />,
     );
@@ -325,8 +321,6 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={setup}
       />,
     );

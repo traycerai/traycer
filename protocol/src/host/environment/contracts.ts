@@ -866,10 +866,14 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
 
 /**
  * `environment.previewLocalFacts@1.0`: this computer's own counts for a plan
- * (`plan`, by its profile) or a member (`member`) of an environment.
- * `terminals` is always null for a `plan` subject. Defined and not
- * registered: it registers with the host slice that serves it and its first
- * caller. Not an agent capability.
+ * (`plan`, by its profile) or a member (`member`) of an environment, or for
+ * the computer itself (`computer`). For `computer`, the counts are the team
+ * work running on this computer: `activeTurns` is the number of the team's
+ * chats with a turn running on it, `terminals` the number of the team's
+ * terminal sessions running on it; read before a member claims the computer,
+ * when that work stops. `terminals` is always null for a `plan` subject.
+ * Defined and not registered: it registers with the host slice that serves
+ * it and its first caller. Not an agent capability.
  */
 export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
   z.object({
@@ -877,6 +881,7 @@ export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
     subject: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("plan"), profileId: z.string().min(1) }),
       z.object({ kind: z.literal("member"), userId: z.string().min(1) }),
+      z.object({ kind: z.literal("computer") }),
     ]),
   }),
 );

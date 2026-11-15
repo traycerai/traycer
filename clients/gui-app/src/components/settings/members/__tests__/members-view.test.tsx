@@ -39,7 +39,6 @@ import type {
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mountTeamPage,
-  requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
@@ -80,7 +79,6 @@ function member(
     linkedPlan: false,
     inviteState: "accepted",
     invitedAddress: null,
-    removalState: "none",
     ...overrides,
   };
 }
@@ -176,7 +174,6 @@ function renderView(options: {
     <harness.Wrapper>
       <RunnerHostContext.Provider value={dashboardRunnerHost()}>
         <MembersView
-          client={requireTeamHostClient()}
           environmentId="env-1"
           teamName="Acme"
           teamHandle="acme"
@@ -196,7 +193,6 @@ function renderView(options: {
           invitePending={false}
           setRolePending={false}
           removePending={false}
-          seatsSupported={false}
           hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
           onNoticeSeen={onNoticeSeen}
         />
@@ -215,10 +211,7 @@ function renderView(options: {
 const BASE = {
   currentUserId: "u-admin",
   legacyRoleNoticeSeenAt: 1,
-  removeOutcome: {
-    outcome: "pending",
-    receiptId: "r1",
-  } satisfies MembersRemoveOutcome,
+  removeOutcome: { outcome: "removed" } satisfies MembersRemoveOutcome,
   setRoleOutcome: { outcome: "changed" } satisfies MembersSetRoleOutcome,
   preview: (): EnvironmentMembersRemovePreviewResponse => PREVIEW,
 };
@@ -1054,17 +1047,13 @@ describe("MembersView pending writes", () => {
       },
     );
     function Wired(): ReactNode {
-      const writes = useEnvironmentMembersWrites(
-        requireTeamHostClient(),
-        "env-1",
-      );
+      const writes = useEnvironmentMembersWrites("env-1");
       return (
         <>
           <button type="button" onClick={() => options.send(writes)}>
             Send elsewhere
           </button>
           <MembersView
-            client={requireTeamHostClient()}
             environmentId="env-1"
             teamName="Acme"
             teamHandle="acme"
@@ -1082,7 +1071,6 @@ describe("MembersView pending writes", () => {
             invitePending={writes.inviteMutation.isPending}
             setRolePending={writes.setRoleMutation.isPending}
             removePending={writes.removeMutation.isPending}
-            seatsSupported={false}
             hostLabel={() => null}
             onNoticeSeen={() => undefined}
           />

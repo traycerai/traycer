@@ -21,8 +21,9 @@ const claimRunningChatsNotKnownLine = "Running chats will stop.";
 /** The confirm's running-work line, by what is known of the computer's chats. */
 export function ClaimRunningWork(props: {
   readonly hostId: string | null;
+  readonly environmentId: string | null;
 }): ReactNode {
-  const running = useClaimRunningChats(props.hostId);
+  const running = useClaimRunningChats(props.hostId, props.environmentId);
   if (running.kind === "counted" && running.chats === 0) return null;
   return (
     <p className="text-ui-sm text-muted-foreground">

@@ -775,16 +775,19 @@ describe("<EpicsList />", () => {
       authStatus: "signed-in",
       headline: "You don't have permission to view these epics.",
     },
-  ] as const)("renders the $name headline", ({ code, doorReason, authStatus, headline }) => {
-    setInitialAuthState(authStatus);
-    render(
-      <EpicsListError
-        error={epicHeadlineError(code, doorReason)}
-        onRetry={() => undefined}
-      />,
-    );
-    expect(screen.getByText(headline)).not.toBeNull();
-  });
+  ] as const)(
+    "renders the $name headline",
+    ({ code, doorReason, authStatus, headline }) => {
+      setInitialAuthState(authStatus);
+      render(
+        <EpicsListError
+          error={epicHeadlineError(code, doorReason)}
+          onRetry={() => undefined}
+        />,
+      );
+      expect(screen.getByText(headline)).not.toBeNull();
+    },
+  );
 
   it("re-fires the epic.listTasks query when Refresh is clicked", async () => {
     const result = mountSignedInEpicsList(() => ({

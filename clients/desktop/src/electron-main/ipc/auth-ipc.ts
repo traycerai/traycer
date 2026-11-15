@@ -5,6 +5,8 @@ import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-tok
 import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
 import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
+import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
 import {
   RunnerHostEvent,
@@ -305,6 +307,19 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.listEnvironments,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listEnvironments.bearerToken");
+      return listEnvironmentsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
       );
     },
   );

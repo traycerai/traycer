@@ -77,6 +77,9 @@ const mocks = vi.hoisted(() => ({
   state: {
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
+    teamRole: "editor" as string | null,
+    /** The rendered host's client, which a request named for its id reaches. */
+    client: null as HostClient<HostRpcRegistry> | null,
   },
   auth: {
     currentAuthEra: vi.fn<() => AuthEra>(),
@@ -111,12 +114,35 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// A request named for the rendered host goes out on that host's own client.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === "host-a" ? mocks.state.client : null,
+}));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
     kind: "binding",
     query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
+// The list is the account's, read through authn rather than this host's
+// `environment.list`; the person's role on the team is all the card reads.
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { useQuery } = await import("@tanstack/react-query");
+  return {
+    useEnvironmentListQuery: (enabled: boolean) =>
+      useQuery({
+        queryKey: ["environment-list-fixture", mocks.state.teamRole],
+        queryFn: () => ({
+          environments: [
+            listedEnvironment(PERSONAL),
+            { ...listedEnvironment(TEAM), effectiveRole: mocks.state.teamRole },
+          ],
+        }),
+        enabled,
+      }),
+  };
+});
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
 }));
@@ -199,6 +225,8 @@ function renderSection(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const client = makeClient(handlers);
+  mocks.state.client = client;
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostContext.Provider
@@ -227,7 +255,7 @@ function renderSection(
                     }
                   : null,
             }),
-            client: makeClient(handlers),
+            client,
           })}
         />
       </RunnerHostContext.Provider>
@@ -263,6 +291,8 @@ function ownershipResult(
 }
 
 beforeEach(() => {
+  mocks.state.teamRole = "editor";
+  mocks.state.client = null;
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
     identity: "user-me",
@@ -377,9 +407,11 @@ describe("HostEnvironmentSection", () => {
       within(dialog).getByRole("button", { name: "Confirm at this computer" }),
     );
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Mac mini now belongs to Acme. Any member of the team can claim it as their own.",
-    );
+    expect(
+      await screen.findByText(
+        "Mac mini now belongs to Acme. Any member of the team can claim it as their own.",
+      ),
+    ).toBeTruthy();
     expect(events.slice(0, 3)).toEqual([
       "ownership-read",
       "bind:env-team",
@@ -562,9 +594,13 @@ describe("HostEnvironmentSection", () => {
     },
   );
 
-  it.each(["admin", "editor"] as const)(
-    "lets a team %s claim a local team-owned computer through auth",
-    async (role) => {
+  it.each([
+    ["Admin", "admin"],
+    ["Editor", "editor"],
+  ] as const)(
+    "lets a team %s claim a local team-owned computer through auth without an environment move",
+    async (_roleName, teamRole) => {
+      mocks.state.teamRole = teamRole;
       const runnerHost = dashboardRunnerHost();
       mocks.state.binding = teamBinding(true);
       mocks.auth.readHostOwnership
@@ -574,17 +610,12 @@ describe("HostEnvironmentSection", () => {
       mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
       const stopRequests: unknown[] = [];
       let stopPreviewCalls = 0;
+      const countRequests: unknown[] = [];
       const queryClient = renderSection("personal", {
         owner: TEAM_OWNER,
         isLocalMachine: true,
         runnerHost,
         handlers: {
-          "environment.list": () => ({
-            environments: [
-              listedEnvironment(PERSONAL),
-              { ...listedEnvironment(TEAM), effectiveRole: role },
-            ],
-          }),
           "environment.move.stop": (request) => {
             stopRequests.push(request);
             return { outcome: "stopped" };
@@ -594,6 +625,10 @@ describe("HostEnvironmentSection", () => {
             throw new Error(
               "returning a team computer does not need a preview",
             );
+          },
+          "environment.previewLocalFacts": (request) => {
+            countRequests.push(request);
+            return { activeTurns: 2, terminals: 0 };
           },
         },
       });
@@ -607,6 +642,12 @@ describe("HostEnvironmentSection", () => {
           "This computer will become yours. The team will lose access to it.",
         ),
       ).toBeTruthy();
+      expect(
+        await within(dialog).findByText("2 chats are running and will stop."),
+      ).toBeTruthy();
+      expect(countRequests).toEqual([
+        { environmentId: TEAM.environmentId, subject: { kind: "computer" } },
+      ]);
       fireEvent.click(
         within(dialog).getByRole("button", { name: "Claim this computer" }),
       );
@@ -657,42 +698,37 @@ describe("HostEnvironmentSection", () => {
     },
   );
 
-  it("does not offer a claim to a Viewer on a local team-owned computer", async () => {
-    mocks.state.binding = teamBinding(true);
-    renderSection("personal", {
-      owner: TEAM_OWNER,
-      isLocalMachine: true,
-      handlers: {
-        "environment.list": () => ({
-          environments: [
-            listedEnvironment(PERSONAL),
-            { ...listedEnvironment(TEAM), effectiveRole: "viewer" },
-          ],
-        }),
-      },
-    });
+  it.each([
+    ["Viewer", "viewer"],
+    ["role not known", null],
+  ] as const)(
+    "does not offer Claim to a %s on the local team computer",
+    async (_roleName, teamRole) => {
+      mocks.state.teamRole = teamRole;
+      mocks.state.binding = teamBinding(true);
+      mocks.auth.readHostOwnership.mockResolvedValue(
+        ownershipResult(TEAM_OWNER),
+      );
+      const queryClient = renderSection("personal", {
+        ...NO_SECTION_OPTIONS,
+        owner: TEAM_OWNER,
+        isLocalMachine: true,
+      });
 
-    expect(
-      screen.queryByRole("button", { name: "Claim this computer" }),
-    ).toBeNull();
-  });
-
-  it("does not offer a claim when the team role is not known", async () => {
-    mocks.state.binding = teamBinding(true);
-    renderSection("personal", {
-      owner: TEAM_OWNER,
-      isLocalMachine: true,
-      handlers: {
-        "environment.list": () => ({
-          environments: [listedEnvironment(PERSONAL)],
-        }),
-      },
-    });
-
-    expect(
-      screen.queryByRole("button", { name: "Claim this computer" }),
-    ).toBeNull();
-  });
+      expect(
+        await screen.findByText("This computer belongs to Acme."),
+      ).toBeTruthy();
+      await waitFor(() =>
+        expect(
+          queryClient.getQueryState(["environment-list-fixture", teamRole])
+            ?.status,
+        ).toBe("success"),
+      );
+      expect(
+        screen.queryByRole("button", { name: "Claim this computer" }),
+      ).toBeNull();
+    },
+  );
 
   it("does not offer Claim this computer on a remote team-owned host", () => {
     mocks.state.binding = teamBinding(true);

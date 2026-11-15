@@ -211,22 +211,21 @@ export function useEnvironmentInvitationAcceptMutation(
     context: auth?.getRequestContextProvider().current() ?? null,
     localHostId: readLocalHostIdSnapshot(),
   });
-  const noteMembershipChange = (captured: {
+  // The team's computers join the person's host list now, not at the next
+  // picker open or poll; and only for the sign-in that accepted: an account
+  // switched while the call was out tells the new account nothing.
+  const afterAccepted = (captured: {
     readonly context: RequestContext | null;
     readonly localHostId: string | null;
   }): void => {
     if (
-      captured.localHostId === null ||
       captured.context === null ||
       captured.context.abortSignal.aborted ||
       auth?.getRequestContextProvider().current() !== captured.context
     )
       return;
-    noteHostMembershipChanged(captured.localHostId);
-  };
-  // The team's computers join the person's host list now, not at the next
-  // picker open or poll.
-  const refreshHostList = (): void => {
+    if (captured.localHostId !== null)
+      noteHostMembershipChanged(captured.localHostId);
     void queryClient.invalidateQueries({
       queryKey: authQueryKeys.registeredHostsAll(),
     });
@@ -240,9 +239,7 @@ export function useEnvironmentInvitationAcceptMutation(
     invalidateMethods: ["environment.invitations.list", "environment.list"],
     captureContext: captureAdmission,
     onSuccess: (answer, _request, _hostId, captured) => {
-      if (answer.outcome !== "accepted") return;
-      noteMembershipChange(captured);
-      refreshHostList();
+      if (answer.outcome === "accepted") afterAccepted(captured);
     },
   });
   const direct = useMutation({
@@ -253,10 +250,7 @@ export function useEnvironmentInvitationAcceptMutation(
     },
     onMutate: () => ({ auth, viewerUserId, ...captureAdmission() }),
     onSuccess: async (answer, _request, captured) => {
-      if (answer.outcome === "accepted") {
-        noteMembershipChange(captured);
-        refreshHostList();
-      }
+      if (answer.outcome === "accepted") afterAccepted(captured);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: authQueryKeys.environmentInvitations(

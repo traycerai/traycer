@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import {
-  WIRE_ROLE_NO_AUTHORITY,
   enrichConfigurationList,
   type ConfigurationListFacts,
 } from "@traycer/protocol/host/environment/configuration-list";
@@ -13,25 +12,55 @@ const PERSONAL: EnvironmentDescriptor = {
   roomId: "room-personal",
   label: "Personal",
 };
-const TEAM: EnvironmentDescriptor = {
-  environmentId: "env-team",
-  ownerKind: "organization",
-  ownerId: "team-1",
-  roomId: "room-team",
-  label: "Acme",
-};
 
-interface TeamFacts {
-  readonly providerHandle: string;
-  readonly effectiveRole: "admin" | "editor" | null;
+function teamEnvironment(
+  environmentId: string,
+  ownerId: string,
+  roomId: string,
+  label: string,
+): EnvironmentDescriptor {
+  return { environmentId, ownerKind: "organization", ownerId, roomId, label };
 }
+
+const ADMIN = teamEnvironment(
+  "env-admin",
+  "team-admin",
+  "room-admin",
+  "Admin team",
+);
+const EDITOR = teamEnvironment(
+  "env-editor",
+  "team-editor",
+  "room-editor",
+  "Editor team",
+);
+const VIEWER = teamEnvironment(
+  "env-viewer",
+  "team-viewer",
+  "room-viewer",
+  "Viewer team",
+);
+const FAILED = teamEnvironment(
+  "env-failed",
+  "team-failed",
+  "room-failed",
+  "Failed team",
+);
+
+type TeamFacts = {
+  readonly providerHandle: string;
+  readonly effectiveRole: "admin" | "editor" | "viewer";
+};
 
 function factsWith(
   team: (environment: EnvironmentDescriptor) => Promise<TeamFacts>,
   failures: string[],
+  hosts: (
+    environmentId: string,
+  ) => readonly { readonly purgePending: boolean }[],
 ): ConfigurationListFacts {
   return {
-    hosts: () => Promise.resolve([{ purgePending: false }]),
+    hosts: (environmentId) => Promise.resolve(hosts(environmentId)),
     team,
     rowFailed: (environmentId, facts) => {
       failures.push(`${environmentId}:${facts}`);
@@ -39,58 +68,90 @@ function factsWith(
   };
 }
 
-describe("enrichConfigurationList with a retired team seat", () => {
-  it("leaves out a team whose role was read and authorizes nothing", async () => {
+describe("enrichConfigurationList", () => {
+  it("lists Personal and each team with its own role and excludes purge-pending hosts", async () => {
     const failures: string[] = [];
+    const roleByEnvironment: Record<string, TeamFacts> = {
+      [ADMIN.environmentId]: {
+        providerHandle: "acme-admin",
+        effectiveRole: "admin",
+      },
+      [EDITOR.environmentId]: {
+        providerHandle: "acme-editor",
+        effectiveRole: "editor",
+      },
+      [VIEWER.environmentId]: {
+        providerHandle: "acme-viewer",
+        effectiveRole: "viewer",
+      },
+    };
     const rows = await enrichConfigurationList(
-      [PERSONAL, TEAM],
+      [PERSONAL, ADMIN, EDITOR, VIEWER],
       factsWith(
-        () => Promise.resolve({ providerHandle: "acme", effectiveRole: null }),
+        (environment) => {
+          const teamFacts = roleByEnvironment[environment.environmentId];
+          return teamFacts
+            ? Promise.resolve(teamFacts)
+            : Promise.reject(new Error("unexpected team environment"));
+        },
         failures,
+        () => [{ purgePending: false }, { purgePending: true }],
       ),
     );
 
-    expect(rows.map((row) => row.environmentId)).toEqual(["env-personal"]);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toMatchObject({
+      environmentId: "env-personal",
+      kind: "personal",
+      effectiveRole: "owner",
+      providerHandle: null,
+      hostCount: 1,
+    });
+    expect(rows[1]).toMatchObject({
+      environmentId: "env-admin",
+      kind: "team",
+      effectiveRole: "admin",
+      providerHandle: "acme-admin",
+      hostCount: 1,
+    });
+    expect(rows[2]).toMatchObject({
+      environmentId: "env-editor",
+      kind: "team",
+      effectiveRole: "editor",
+      providerHandle: "acme-editor",
+      hostCount: 1,
+    });
+    expect(rows[3]).toMatchObject({
+      environmentId: "env-viewer",
+      kind: "team",
+      effectiveRole: "viewer",
+      providerHandle: "acme-viewer",
+      hostCount: 1,
+    });
     expect(failures).toEqual([]);
   });
 
-  it("still lists a team whose role read failed, degraded to no authority and no provider handle", async () => {
+  it("lists a team as viewer without a provider handle when its role read fails", async () => {
     const failures: string[] = [];
     const rows = await enrichConfigurationList(
-      [PERSONAL, TEAM],
+      [PERSONAL, FAILED],
       factsWith(
         () => Promise.reject(new Error("members unavailable")),
         failures,
+        () => [{ purgePending: false }],
       ),
     );
 
     expect(rows.map((row) => row.environmentId)).toEqual([
       "env-personal",
-      "env-team",
+      "env-failed",
     ]);
     expect(rows[1]).toMatchObject({
       kind: "team",
-      effectiveRole: WIRE_ROLE_NO_AUTHORITY,
+      effectiveRole: "viewer",
       providerHandle: null,
       hostCount: 1,
     });
-    expect(failures).toEqual(["env-team:team"]);
-  });
-
-  it("lists a team whose role grants authority as itself", async () => {
-    const rows = await enrichConfigurationList(
-      [TEAM],
-      factsWith(
-        () =>
-          Promise.resolve({ providerHandle: "acme", effectiveRole: "editor" }),
-        [],
-      ),
-    );
-
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      effectiveRole: "editor",
-      providerHandle: "acme",
-    });
+    expect(failures).toEqual(["env-failed:team"]);
   });
 });

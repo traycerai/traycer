@@ -295,12 +295,9 @@ export function addServerReach(): string {
   return "It reaches every provider on every host running this environment.";
 }
 
-/** The Secret option's line: Pick needs `put@1.1`; a 1.0 host takes Add only. */
-export function secretOptionLine(canPick: boolean): string {
-  return canPick
-    ? "Pick or add a secret. It is sent only to this server's address."
-    : "Add a secret. It is sent only to this server's address.";
-}
+/** The Secret option's line. */
+export const SECRET_OPTION_LINE =
+  "Pick or add a secret. It is sent only to this server's address.";
 
 export function custodySentence(personal: boolean, name: string): string {
   return personal

@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { openEnvironmentPage } from "@/components/settings/environment/open-environment-page";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useHostClient } from "@/lib/host";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
 
@@ -14,7 +13,7 @@ import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
 export function useConfigurationProvidersOpener(
   readsTeams: boolean,
 ): (configuration: StageConfiguration) => (() => void) | null {
-  const environments = useEnvironmentListQuery(useHostClient(), readsTeams);
+  const environments = useEnvironmentListQuery(readsTeams);
   const listed = environments.data?.environments;
   return useCallback(
     (configuration: StageConfiguration): (() => void) | null => {

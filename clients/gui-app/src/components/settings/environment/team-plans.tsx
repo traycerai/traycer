@@ -22,6 +22,7 @@ import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { useWindowHostIsTeamComputer } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
@@ -32,6 +33,9 @@ export function TeamPlans(props: {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const canEdit = useCanEditConfiguration();
+  // Linking goes through this window's host, and a team's computer cannot
+  // check the caller's seat for it, so it is not offered through one.
+  const linkReachable = !useWindowHostIsTeamComputer();
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
@@ -74,6 +78,7 @@ export function TeamPlans(props: {
         teamName={name}
         plans={plans}
         canEdit={canEdit}
+        linkReachable={linkReachable}
         isPending={target !== null}
         onLink={() => {
           if (source.kind === "pool")

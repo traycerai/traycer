@@ -18,6 +18,7 @@ vi.mock("sonner", () => {
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostRpcRegistry } from "@/lib/host";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   clearHostDoorState,
   useHostDoorStateStore,
@@ -29,12 +30,13 @@ import {
   toastFromHostError,
   classifySendRefusal,
   toastFromHostErrorOnFork,
+  toastFromBackgroundHostError,
   toastSendRefusal,
   toastFromHostErrorWithDetail,
-  toastFromBackgroundHostError,
   toastUnknownOutcomeAfterRefusedRetry,
   HOST_UNSUPPORTED_MESSAGE,
 } from "@/lib/host-error-toast";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -63,6 +65,7 @@ import {
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
+  mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import {
@@ -279,11 +282,7 @@ async function unaryDoorHarness(
           return Promise.resolve("rejected");
         return revalidateExpectedBearer(expected);
       }
-      return hostRecovery.revalidateRefusedBearer(
-        expected,
-        hostId,
-        refusal,
-      );
+      return hostRecovery.revalidateRefusedBearer(expected, hostId, refusal);
     },
   };
   const bearer =
@@ -293,6 +292,7 @@ async function unaryDoorHarness(
           options.hostId,
           signInLease,
         );
+  if (bearer === null) throw new Error("expected a bearer for the host");
   const raw = scriptedDoorMessenger(options.refusals, sentBearers);
   const messenger = recordingRefusedHost(
     createRetryingMessenger(
@@ -310,19 +310,23 @@ async function unaryDoorHarness(
     },
     call: async () => {
       try {
-        await messenger.request("host.status", {}, {
-          idempotencyKey: null,
-          replayMustBeKeyed: false,
-          requiredHostMethodVersion: null,
-          authority: {
-            endpoint: {
-              hostId: options.hostId,
-              websocketUrl: "ws://host.invalid/rpc",
+        await messenger.request(
+          "host.status",
+          {},
+          {
+            idempotencyKey: null,
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            authority: {
+              endpoint: {
+                hostId: options.hostId,
+                websocketUrl: "ws://host.invalid/rpc",
+              },
+              bearer,
+              abortSignal: new AbortController().signal,
             },
-            bearer,
-            abortSignal: new AbortController().signal,
           },
-        });
+        );
       } catch (cause) {
         if (cause instanceof HostRpcError) return cause;
         throw cause;
@@ -333,11 +337,13 @@ async function unaryDoorHarness(
 }
 
 function signInForUnaryTest(): void {
-  useAuthStore.getState().setSignedIn(
-    { userId: UNARY_DOOR_USER_ID, userName: "U", email: "u@example.com" },
-    { userId: UNARY_DOOR_USER_ID, username: "U" },
-    [],
-  );
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: UNARY_DOOR_USER_ID, userName: "U", email: "u@example.com" },
+      { userId: UNARY_DOOR_USER_ID, username: "U" },
+      [],
+    );
 }
 
 describe("toastFromHostError", () => {
@@ -1526,8 +1532,9 @@ describe("unary credential refusals through the renderer messenger chain", () =>
       "fresh-host-token-1",
     ]);
     expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
-    expect(useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID))
-      .toMatchObject({ kind: "not-admitted" });
+    expect(
+      useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID),
+    ).toMatchObject({ kind: "not-admitted" });
 
     toastFromHostError(error, "Couldn't update this task.");
     expect(toast.error).not.toHaveBeenCalled();
@@ -1548,8 +1555,9 @@ describe("unary credential refusals through the renderer messenger chain", () =>
     const error = await harness.call();
     expect(harness.sentBearers).toHaveLength(2);
     expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
-    expect(useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID))
-      .toBe(false);
+    expect(
+      useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID),
+    ).toBe(false);
     toastFromHostError(error, "Couldn't update this task.");
     expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
       id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
@@ -1565,12 +1573,10 @@ describe("unary credential refusals through the renderer messenger chain", () =>
     await harness.call();
 
     expect(harness.sentBearers).toHaveLength(4);
-    expect(harness.mintCalls).toEqual([
-      UNARY_DOOR_HOST_ID,
-      UNARY_DOOR_HOST_ID,
-    ]);
-    expect(useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID))
-      .toBe(false);
+    expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID, UNARY_DOOR_HOST_ID]);
+    expect(
+      useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID),
+    ).toBe(false);
   });
 
   it("routes session_revoked through sign-in recovery without minting a host token", async () => {
@@ -1653,12 +1659,77 @@ describe("unary credential refusals through the renderer messenger chain", () =>
 
     expect(harness.sentBearers).toHaveLength(2);
     expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
-    expect(useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID))
-      .toMatchObject({ kind: "access-check-delayed" });
+    expect(
+      useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID),
+    ).toMatchObject({ kind: "access-check-delayed" });
     toastFromHostError(error, "Couldn't update this task.");
     expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
       id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
       cancel: null,
     });
+  });
+});
+
+describe("below-minimum host errors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function error(): HostBelowMinimumError {
+    return new HostBelowMinimumError({
+      requestId: "floor-request",
+      method: "terminal.create",
+    });
+  }
+
+  it("is a local HostRpcError, not an abort or transport failure", () => {
+    const belowMinimum = error();
+
+    expect(belowMinimum).toBeInstanceOf(HostRpcError);
+    expect(belowMinimum).not.toBeInstanceOf(HostRequestAbortedError);
+    expect(belowMinimum).not.toBeInstanceOf(HostTransportFailureError);
+    expect(belowMinimum.code).toBe("RPC_ERROR");
+    expect(mayHaveReachedHost(belowMinimum)).toBe(false);
+    expect(belowMinimum.message).toBe(HOST_UPDATE_SKEW_COPY.title);
+  });
+
+  it.each([
+    ["ordinary", toastFromHostError],
+    ["detail-preserving", toastFromHostErrorWithDetail],
+  ])(
+    "shows only the existing update title through the %s gesture mapper",
+    (_label, show) => {
+      show(error(), "This fallback must not appear.");
+
+      expect(vi.mocked(toast).mock.calls).toHaveLength(1);
+      expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe(
+        HOST_UPDATE_SKEW_COPY.title,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+    },
+  );
+
+  it("is silent for background work but keeps ordinary background failures visible", () => {
+    toastFromBackgroundHostError(error(), "Couldn't restore the terminal.");
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+
+    toastFromBackgroundHostError(
+      makeError("RPC_ERROR", "The host rejected the request."),
+      "Couldn't restore the terminal.",
+    );
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't restore the terminal.",
+    );
   });
 });

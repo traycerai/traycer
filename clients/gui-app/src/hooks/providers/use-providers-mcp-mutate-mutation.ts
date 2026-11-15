@@ -1,13 +1,16 @@
 import type { Query, UseMutationResult } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProvidersMcpMutateAction,
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
   mapNativeMutateToMcpMutate,
@@ -91,7 +94,8 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant.
+  // What this installs can run on the host, so it carries the grant; the host
+  // no longer reads it on a remove or a tool toggle, which are sent without.
   const grant = useExecutableWriteGrant();
   return useMutation<
     McpMutateResult,
@@ -123,22 +127,26 @@ export function useProvidersMcpMutate(): UseMutationResult<
         listParams,
         listData: queryClient.getQueryData<McpListData>(listKey),
       };
+      const request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.nativeMutate"
+      > = {
+        providerId: variables.providerId,
+        executableWriteGrant: null,
+        expectedEnvironmentId: null,
+        mutation: {
+          kind: "mcp",
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+          mutation: variables.mutation,
+        },
+      };
       const response = await client.request(
         "providers.nativeMutate",
-        await grant(
-          {
-            providerId: variables.providerId,
-            executableWriteGrant: null,
-            expectedEnvironmentId: null,
-            mutation: {
-              kind: "mcp",
-              scope: variables.scope,
-              workspaceRoot: variables.workspaceRoot,
-              mutation: variables.mutation,
-            },
-          },
-          client,
-        ),
+        variables.mutation.action === "remove" ||
+          variables.mutation.action === "toggleTool"
+          ? request
+          : await grant(request, client),
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },
