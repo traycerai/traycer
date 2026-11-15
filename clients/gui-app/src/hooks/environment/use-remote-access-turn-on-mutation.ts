@@ -24,11 +24,12 @@ import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-st
 const METHOD = "host.remoteAccess.set";
 
 /**
- * Asks the computer to read its own status now, over a connection this
- * window already holds: this machine's host through its own socket, a remote
- * one only through a ready session it already has open. It never opens or
- * dials one for this, and every failure is silent: the computer finds out at
- * its own two-minute status read.
+ * Asks the computer to read its own status now, once: one send and never a
+ * second, on either path. This machine's host gets it through its own socket
+ * on the single-attempt requester (no transport retry, no resend after a
+ * credential recovery); a remote one only through a ready session this window
+ * already has open, never a dial. Every failure is silent: the computer finds
+ * out at its own two-minute status read.
  */
 async function refreshOverOpenConnection(
   entry: HostDirectoryEntry | null,
@@ -37,13 +38,11 @@ async function refreshOverOpenConnection(
   if (entry === null) return;
   try {
     if (entry.kind === "local" || entry.kind === "mock") {
-      // The ordinary requester. The request carries no idempotency key, so
-      // the transport retry re-sends only a failure the host provably never
-      // dispatched. Its credential recovery is `"always"`
-      // (`host-runtime-provider.tsx`): a sign-in refused after the request
-      // was sent is sent once more on the renewed sign-in, so the host can be
-      // asked to refresh twice.
-      await client?.request("host.status.refresh", {});
+      // Sent once on the credential in hand, on the messenger below both
+      // resending layers (`host-runtime-provider.tsx`): neither a transport
+      // failure nor a refused sign-in is recovered and sent again. Any
+      // failure is dropped like the remote arm's.
+      await client?.requestSingleAttemptFor(entry, "host.status.refresh", {});
       return;
     }
     const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(
