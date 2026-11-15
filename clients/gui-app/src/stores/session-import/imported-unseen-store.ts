@@ -1,10 +1,5 @@
 import { create } from "zustand";
-import {
-  createJSONStorage,
-  persist,
-  type PersistStorage,
-  type StorageValue,
-} from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
@@ -28,9 +23,7 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  *
  * Persisted so a restart between importing and looking does not erase the
  * hint; entries clear the first time the task is opened (the epic surface
- * mounting is the one funnel every open path goes through). The state changes
- * at once, so a dot appears and clears on the same frame; the stored copy
- * follows within a second, or when the window hides or closes.
+ * mounting is the one funnel every open path goes through).
  */
 interface ImportedUnseenState {
   /**
@@ -56,80 +49,6 @@ interface ImportedUnseenState {
 
 const IMPORTED_UNSEEN_PERSIST_KEY = persistKey(STORE_KEYS.sessionImportUnseen);
 
-type PersistedUnseen = Pick<ImportedUnseenState, "unseen">;
-
-/**
- * At most one write of the set per interval. An import marks one entry per
- * session it imports, and the set reaches thousands, so writing the whole set
- * on every mark made an import's cost grow with every task it had made.
- */
-const WRITE_INTERVAL_MS = 1_000;
-
-const writer: {
-  /** The latest snapshot not yet written; only the newest is kept. */
-  pending: {
-    readonly name: string;
-    readonly value: StorageValue<PersistedUnseen>;
-  } | null;
-  timer: number | null;
-  /** Set for good by a wipe. */
-  stopped: boolean;
-} = { pending: null, timer: null, stopped: false };
-
-function dropPendingWrite(): void {
-  if (writer.timer !== null) window.clearTimeout(writer.timer);
-  writer.timer = null;
-  writer.pending = null;
-}
-
-/** Writes the waiting snapshot now, if there is one. */
-function flushImportedUnseenWrite(): void {
-  const pending = writer.pending;
-  dropPendingWrite();
-  if (pending === null || writer.stopped) return;
-  try {
-    localStorage.setItem(pending.name, JSON.stringify(pending.value));
-  } catch {
-    // Storage full or unavailable: the dots still show for this session.
-  }
-}
-
-/**
- * Drops the waiting write and refuses every later one, so a wipe's sweep is
- * not undone by this store's timer or by the reload's page hide.
- */
-export function stopImportedUnseenWrites(): void {
-  dropPendingWrite();
-  writer.stopped = true;
-}
-
-const jsonStorage = createJSONStorage<PersistedUnseen>(() => localStorage);
-
-const coalescedStorage: PersistStorage<PersistedUnseen> = {
-  getItem: (name) => jsonStorage?.getItem(name) ?? null,
-  setItem: (name, value) => {
-    if (writer.stopped) return;
-    writer.pending = { name, value };
-    writer.timer ??= window.setTimeout(
-      flushImportedUnseenWrite,
-      WRITE_INTERVAL_MS,
-    );
-  },
-  removeItem: (name) => {
-    dropPendingWrite();
-    jsonStorage?.removeItem(name);
-  },
-};
-
-// A closing or hidden window writes what is waiting: the renderer may not
-// get another turn to run the timer.
-if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", flushImportedUnseenWrite);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushImportedUnseenWrite();
-  });
-}
-
 export const useImportedUnseenStore = create<ImportedUnseenState>()(
   persist(
     (set, get) => ({
@@ -154,7 +73,7 @@ export const useImportedUnseenStore = create<ImportedUnseenState>()(
     }),
     {
       ...basePersistOptions(IMPORTED_UNSEEN_PERSIST_KEY),
-      storage: coalescedStorage,
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ unseen: state.unseen }),
     },
   ),
