@@ -66,6 +66,7 @@ function fakeSession(): IStreamSession {
       mocks.frameHandler = handler;
     },
     onStatusChange: () => undefined,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     getNegotiatedSchemaVersion: () => null,
     close: closeSession,

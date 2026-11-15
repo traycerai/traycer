@@ -6,13 +6,18 @@ import {
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { refusal } from "./sandbox-binding-fixture";
 
+type RefusedFailure = Extract<
+  SandboxControlFailure,
+  { readonly kind: "refused" }
+>;
+
 function refused(
   code: string,
   detail: {
     readonly reason: string | null;
     readonly shortfallMc: number | null;
   },
-): SandboxControlFailure {
+): RefusedFailure {
   return {
     kind: "refused",
     status: 400,
@@ -107,6 +112,24 @@ describe("sandboxFailureMessage", () => {
       ),
     ).toBe(
       "Your credits don't cover an hour of this sandbox. Add $11 and try again.",
+    );
+  });
+
+  it("says the server's sentence for a credit refusal that carries one, and the team allowance copy without it", () => {
+    const seatWaiting =
+      "Your seat on this team is waiting on payment. You can use team credits once the payment goes through.";
+    const teamAllowance: RefusedFailure = {
+      ...refused("insufficient_credit", {
+        reason: "denied",
+        shortfallMc: null,
+      }),
+      creditSource: "team-allowance",
+    };
+    expect(
+      sandboxFailureMessage({ ...teamAllowance, message: seatWaiting }),
+    ).toBe(seatWaiting);
+    expect(sandboxFailureMessage(teamAllowance)).toBe(
+      "Your team allowance doesn't cover an hour of this sandbox.",
     );
   });
 
