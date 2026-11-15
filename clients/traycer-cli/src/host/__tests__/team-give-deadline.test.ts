@@ -12,6 +12,7 @@ import {
 import type { HostPidMetadata } from "../pid-metadata";
 import type { HealthProbeOptions } from "../../service/health-probe";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
 // The give's readiness poll runs on the health probe's 45 s budget, and each
 // try bounds its host call with `AbortSignal.timeout(remainingMs)`. These
@@ -29,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
   readHostOwnershipMock: vi.fn(),
+  validateIdentityMock: vi.fn(),
   credentialsPath: "",
   hostTokenTable: new Map() as HostTokenTable,
 }));
@@ -74,6 +76,17 @@ vi.mock(
     };
   },
 );
+
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    validateAuthTokenIdentityAccessOnly: mocks.validateIdentityMock,
+  };
+});
 
 vi.mock("../../internal/host-auth", async (importOriginal) => {
   const actual =
@@ -193,6 +206,26 @@ const personalBinding = {
   enrolledByUserId: null,
   canUnbind: false,
 };
+
+/** The sign-in's own record: Acme, listed by its slug. */
+function signInWithAcme() {
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    user: { ...base.user, id: USER_ID },
+    environments: {
+      personal: "environment-personal",
+      teams: [
+        { teamId: TEAM_ID, environmentId: teamEnvironment.environmentId },
+      ],
+    },
+    teamSubscriptions: [
+      {
+        team: { id: TEAM_ID, slug: "acme" },
+      } as (typeof base.teamSubscriptions)[number],
+    ],
+  };
+}
 
 function movePlan() {
   return {
@@ -329,8 +362,6 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
 function answerHost(): void {
   mocks.requestMock.mockImplementation(async (method: string) => {
     switch (method) {
-      case "environment.list":
-        return { environments: [teamEnvironment] };
       case "environment.move.plan":
         return movePlan();
       case "environment.move.stage":
@@ -381,8 +412,8 @@ async function runGive(): Promise<GiveRun> {
   let tokensAfterFirstCall = "";
   mocks.requestMock.mockImplementationOnce(async (method: string) => {
     tokensAfterFirstCall = tokenTableSnapshot();
-    expect(method).toBe("environment.list");
-    return { environments: [teamEnvironment] };
+    expect(method).toBe("environment.move.plan");
+    return movePlan();
   });
   const give = useInstalledHostTeam("acme", vi.fn());
   const observed = give.then(
@@ -443,6 +474,11 @@ beforeEach(async () => {
   });
   mocks.readHostPidMetadataMock.mockReset();
   mocks.readHostPidMetadataMock.mockResolvedValue(hostMetadata());
+  mocks.validateIdentityMock.mockReset();
+  mocks.validateIdentityMock.mockResolvedValue({
+    kind: "valid",
+    user: signInWithAcme(),
+  });
   mocks.readHostOwnershipMock.mockReset();
   mocks.readHostOwnershipMock.mockResolvedValue({
     kind: "ok",
