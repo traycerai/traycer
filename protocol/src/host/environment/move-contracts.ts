@@ -230,12 +230,56 @@ export type EnvironmentOperationTarget = z.infer<
 >;
 
 /**
+ * What the app read of the person's Personal on the person's own sign-in, for
+ * the sheet: each row of every item kind the item routes serve, and whether
+ * Personal holds any secret. Personal's environment is `target.environmentId`.
+ * The app sends the rows exactly as the route answered them, in the route's
+ * order, read for this sheet and never from an older copy, so the sheet and
+ * authn's accept see the same Personal as nearly as the two reads allow.
+ *
+ * `null` when the app could not read Personal; the computer then answers as
+ * when the sheet is unavailable. For a team target the app sends `null` and
+ * the computer does not read the field.
+ *
+ * The computer uses this only to draw the sheet ("Already in Personal" and
+ * "Different from Personal", and whether Personal's secrets reach this
+ * computer), never as a fact for the migrate: authn decides row by row at the
+ * accept.
+ */
+export const environmentMovePersonalSchema = lazySchema(() =>
+  z
+    .object({
+      items: z
+        .array(
+          z
+            .object({
+              kind: environmentItemKindSchema,
+              key: z.string().min(1).max(3072),
+              os: environmentOsSchema.nullable(),
+              value: z.json(),
+            })
+            .strict(),
+        )
+        .max(4096),
+      holdsSecrets: z.boolean(),
+    })
+    .strict()
+    .nullable(),
+);
+export type EnvironmentMovePersonal = z.infer<
+  typeof environmentMovePersonalSchema
+>;
+
+/**
  * `@2.0` names the configuration the move is for (`target`). A target that is
  * not the move's own is refused with `E_MOVE_NOT_AWAITING`, as a host whose
- * move is not waiting is.
+ * move is not waiting is. `personal` is what the sheet is drawn against.
  */
 export const environmentMovePlanRequestSchemaV20 = lazySchema(() =>
-  z.object({ target: environmentOperationTargetSchema }),
+  z.object({
+    target: environmentOperationTargetSchema,
+    personal: environmentMovePersonalSchema,
+  }),
 );
 export type EnvironmentMovePlanRequestV20 = z.infer<
   typeof environmentMovePlanRequestSchemaV20
@@ -379,10 +423,12 @@ const environmentMoveStaysChoicesSchema = lazySchema(() =>
   z.array(environmentMoveStaysChoiceSchema).max(4096),
 );
 
+/** `personal` as on `plan@2.0`: the `moves` rows `keyChoices` is kept against. */
 export const environmentMoveStageRequestSchema = lazySchema(() =>
   z.object({
     target: environmentOperationTargetSchema,
     keyChoices: environmentMoveStaysChoicesSchema,
+    personal: environmentMovePersonalSchema,
   }),
 );
 export type EnvironmentMoveStageRequest = z.infer<
