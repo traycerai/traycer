@@ -11699,7 +11699,10 @@ describe("RemoteSession member credential hand-off", () => {
 describe("RemoteSession: a start request sent and never answered", () => {
   function startSession(): {
     readonly relay: FakeRelayHost;
-    readonly session: RemoteSession;
+    readonly session: RemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >;
     readonly streamClient: RemoteStreamClient<
       VersionedRpcRegistry,
       typeof hostStreamRpcRegistry
@@ -11753,7 +11756,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
     return new SessionImportRunClient({
       wsStreamClient: streamClient,
       selections: [{ harness: "claude", nativeSessionId }],
-      permissionMode: "default",
+      permissionMode: "supervised",
       callbacks: importCallbacks,
     });
   }
@@ -11783,7 +11786,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
 
   async function dropAndReconnect(
     relay: FakeRelayHost,
-    session: RemoteSession,
+    session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
   ): Promise<void> {
     relay.dropCurrentConnection();
     await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);

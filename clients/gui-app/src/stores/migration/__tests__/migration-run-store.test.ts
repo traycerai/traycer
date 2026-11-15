@@ -81,7 +81,9 @@ describe("useMigrationRunStore", () => {
       });
       useMigrationRunStore.getState().incrementTaskChain(HOST_A, "skipped");
 
-      expect(migrationRunFor(useMigrationRunStore.getState(), HOST_A).counts).toEqual({
+      expect(
+        migrationRunFor(useMigrationRunStore.getState(), HOST_A).counts,
+      ).toEqual({
         ...ZERO_COUNTS,
         taskChainsSkipped: 1,
       });

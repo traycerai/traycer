@@ -300,6 +300,7 @@ vi.mock(
               });
               settleTarget(path, false);
             },
+            onDroppedAfterStart: () => undefined,
             onConnectionStatus: (status, reason) =>
               options.callbacks.onConnectionStatus({
                 status,
