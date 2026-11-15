@@ -35,25 +35,30 @@ function cloudAnswering(bodies: Readonly<Record<string, unknown>>): {
   return { cloud, requested };
 }
 
-function membersAnswer(role: unknown): unknown {
+/** authn's members answer: the one member's role and the reader's own. */
+function membersAnswerOf(memberRole: unknown, readerRole: unknown): unknown {
   return {
     members: [
       {
         id: "member-1",
         email: "",
         user: { id: "user-1", name: "Rae", avatarUrl: null },
-        effectiveRole: role,
+        effectiveRole: memberRole,
         linkedPlan: false,
         inviteState: "accepted",
         invitedAddress: null,
       },
     ],
     viewer: {
-      effectiveRole: role,
+      effectiveRole: readerRole,
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     },
   };
+}
+
+function membersAnswer(role: unknown): unknown {
+  return membersAnswerOf(role, role);
 }
 
 const MEMBERS_PATH = "api/v3/environments/env-acme/members";
@@ -74,6 +79,48 @@ describe("a team role is Admin, Editor or Viewer", () => {
     const { cloud } = cloudAnswering({
       [HOSTS_PATH]: { hosts: [] },
       [MEMBERS_PATH]: { viewer: { effectiveRole: "viewer" } },
+    });
+    const rowFailed = vi.fn();
+    const [row] = await readEnvironmentList(
+      cloud,
+      [TEAM_ENVIRONMENT],
+      [{ id: "team-acme", slug: "acme" }],
+      rowFailed,
+    );
+    expect(row).toMatchObject({
+      kind: "team",
+      effectiveRole: "viewer",
+      providerHandle: "acme",
+    });
+    expect(rowFailed).not.toHaveBeenCalled();
+  });
+
+  // authn answers `null` for a seat stored on the retired Viewer role, on that
+  // member's row and on the reader's own.
+  it("reads a member stored on the Viewer role as a viewer, and the page still parses", async () => {
+    const { cloud } = cloudAnswering({
+      [MEMBERS_PATH]: membersAnswerOf(null, "admin"),
+    });
+    const page = await readConfigurationMembers(cloud, "env-acme", null, null);
+    expect(page.members.map((member) => member.effectiveRole)).toEqual([
+      "viewer",
+    ]);
+  });
+
+  it("parses a members answer whose reader is stored on the Viewer role", async () => {
+    const { cloud } = cloudAnswering({
+      [MEMBERS_PATH]: membersAnswerOf("editor", null),
+    });
+    const page = await readConfigurationMembers(cloud, "env-acme", null, null);
+    expect(page.members.map((member) => member.effectiveRole)).toEqual([
+      "editor",
+    ]);
+  });
+
+  it("lists a team row whose reader is stored on the Viewer role as a viewer with its provider handle", async () => {
+    const { cloud } = cloudAnswering({
+      [HOSTS_PATH]: { hosts: [] },
+      [MEMBERS_PATH]: { viewer: { effectiveRole: null } },
     });
     const rowFailed = vi.fn();
     const [row] = await readEnvironmentList(
