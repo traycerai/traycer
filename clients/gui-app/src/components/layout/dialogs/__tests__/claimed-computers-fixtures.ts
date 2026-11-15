@@ -1,30 +1,7 @@
-import type {
-  ClaimedComputer,
-  ClaimedComputersResult,
-} from "@traycer-clients/shared/auth/claimed-computers";
+import type { ClaimedComputersResult } from "@traycer-clients/shared/auth/claimed-computers";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 
-export const CLAIMED_COMPUTER_WITH_NAME = {
-  hostId: "host-claimed-computer",
-  computerName: "Build Mac",
-  claimantName: "Priya",
-  claimedAt: "2026-11-15T00:00:00.000Z",
-} satisfies ClaimedComputer;
-
-export const CLAIMED_COMPUTER_WITHOUT_NAME = {
-  hostId: "host-claimed-computer-no-name",
-  computerName: null,
-  claimantName: "Priya",
-  claimedAt: "2026-11-15T00:00:00.000Z",
-} satisfies ClaimedComputer;
-
 export const CLAIMED_COMPUTERS_RESULTS = {
-  withClaim: { kind: "ok", claims: [CLAIMED_COMPUTER_WITH_NAME] },
-  withNullComputerName: {
-    kind: "ok",
-    claims: [CLAIMED_COMPUTER_WITHOUT_NAME],
-  },
-  empty: { kind: "ok", claims: [] },
   notFound: { kind: "not-found" },
   unauthorized: { kind: "unauthorized" },
   failed: { kind: "failed" },
