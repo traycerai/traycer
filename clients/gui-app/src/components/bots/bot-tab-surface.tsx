@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -50,7 +51,10 @@ import {
 } from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import {
+  BotMayChangeContext,
+  useReaderMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
@@ -510,25 +514,6 @@ function useTracyChannelUpkeep(input: {
   return { forget, unavailable };
 }
 
-/**
- * The reader may change the bot's environment: its Personal, or a team where
- * they are an Admin or Editor. A list that has answered without that role (a
- * Viewer, or a team not listed) takes the bot's Model form and Delete away.
- * Until the list answers, personal or team is not known either, so the panel
- * draws them as before and the host refuses a write the reader may not make,
- * under the control.
- */
-function readerMayChangeBot(
-  environments: EnvironmentListResponseV11 | undefined,
-  environmentId: string,
-): boolean {
-  if (environments === undefined) return true;
-  const environment = environments.environments.find(
-    (entry) => entry.environmentId === environmentId,
-  );
-  return environment !== undefined && configurationRoleOf(environment) !== null;
-}
-
 /** The channel column's groups; `null` until both lists answer. */
 function useBotsGroups(
   bots: BotListResponse | undefined,
@@ -877,6 +862,9 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  // The reader's standing on the bot's environment, for its settings and its
+  // failed turns' Switch, from the list the tab already reads.
+  const mayChangeBot = useReaderMayChangeBot(client, subscription.snapshot);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
@@ -911,26 +899,28 @@ function BotTabBody(props: {
   }
 
   return (
-    <BotTabContent
-      botId={botId}
-      hostId={hostId}
-      snapshot={snapshot}
-      pausedReason={openState.kind === "paused" ? openState.reason : null}
-      reopenFailure={openError}
-      onReopen={reopen}
-      reopenPending={openPending}
-      streamError={subscription.error}
-      snapshotFresh={subscription.snapshotFresh}
-      onRetry={resubscribe}
-      view={view}
-      onViewChange={changeView}
-      level2={props.level2}
-      tiles={props.tiles}
-      onRailDrawn={props.onRailDrawn}
-      threadsView={threadsView}
-      onDeleted={deleted}
-      mainBotIds={props.mainBotIds}
-    />
+    <BotMayChangeContext value={mayChangeBot}>
+      <BotTabContent
+        botId={botId}
+        hostId={hostId}
+        snapshot={snapshot}
+        pausedReason={openState.kind === "paused" ? openState.reason : null}
+        reopenFailure={openError}
+        onReopen={reopen}
+        reopenPending={openPending}
+        streamError={subscription.error}
+        snapshotFresh={subscription.snapshotFresh}
+        onRetry={resubscribe}
+        view={view}
+        onViewChange={changeView}
+        level2={props.level2}
+        tiles={props.tiles}
+        onRailDrawn={props.onRailDrawn}
+        threadsView={threadsView}
+        onDeleted={deleted}
+        mainBotIds={props.mainBotIds}
+      />
+    </BotMayChangeContext>
   );
 }
 
@@ -1514,10 +1504,7 @@ function BotTabContent(props: {
   // Only a personal environment's bot may answer posts itself; a list not
   // read yet draws no reply-mode control.
   const personal = environment?.ownerKind === "user";
-  const mayChangeBot = readerMayChangeBot(
-    environments.data,
-    snapshot.bot.environmentId,
-  );
+  const mayChangeBot = use(BotMayChangeContext);
   const setupHistory = useChannelSetupHistory({
     client,
     hostId,
