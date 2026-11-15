@@ -286,6 +286,11 @@ export async function provisionInstalledHostCredential(
   // because the terminal fallback is `unreachable`, whose copy says the host
   // never came up - false on its face once the host has spoken to us.
   let hostAnswered = false;
+  // The door's last word on this run was a retryable refusal: it answered
+  // the dial and has not admitted the open since. Cleared by an admitted
+  // open, so only a door that kept refusing to the bound reads as one that
+  // did not take the credential in time.
+  let doorRetried = false;
   // CONSECUTIVE silent opens - reset by any ack that carries a state, so an
   // occasional ack losing the race with the grace timer cannot accumulate
   // into a false "this host has no credential capability" verdict.
@@ -425,6 +430,7 @@ export async function provisionInstalledHostCredential(
       door: {
         refused: () => undefined,
         admitted: () => {
+          doorRetried = false;
           if (endpoint !== null)
             tokens.streamRecovery(endpoint.hostId).admitted();
         },
@@ -526,6 +532,12 @@ export async function provisionInstalledHostCredential(
       // answered every single dial; what actually failed is the handoff, and
       // that is `mint-unavailable`'s line - a later client with a live token
       // mints for it normally.
+      // The door answered every dial with a retryable refusal up to the bound
+      // (a claimed host that has not read its owner yet): the host answered
+      // and did not take the credential in time.
+      if (doorRetried) {
+        return { kind: "not-adopted" };
+      }
       if (hostAnswered) {
         return { kind: "mint-unavailable" };
       }
@@ -571,6 +583,9 @@ export async function provisionInstalledHostCredential(
         },
         (wake) => {
           wakeOnMintRefusal = wake;
+        },
+        () => {
+          doorRetried = true;
         },
         remainingMs,
       );
@@ -835,6 +850,7 @@ function observeNextAck(
   client: WsStreamClient<HostStreamRpcRegistry>,
   bindObserver: (resolver: (state: HostCredentialState) => void) => void,
   bindMintRefusal: (wake: () => void) => void,
+  onDoorRetry: () => void,
   timeoutMs: number,
 ): Promise<{
   readonly observation: AckObservation;
@@ -873,6 +889,7 @@ function observeNextAck(
       finish({ kind: "token-refused" }, true);
     });
     session.onStatusChange((status, reason, retryCause) => {
+      if (retryCause && retryCause.doorReason !== undefined) onDoorRetry();
       // A retryable refusal that carries the door's reason (a claimed host
       // that has not read its owner yet answers `not_admitted`) is retried
       // quietly inside the bound, whatever code carries it.
