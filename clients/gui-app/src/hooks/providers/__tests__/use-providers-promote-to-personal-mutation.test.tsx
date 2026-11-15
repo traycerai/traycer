@@ -26,6 +26,9 @@ const cloudHarness = vi.hoisted(() => ({
   source: null as EnvironmentCloudSource | null,
 }));
 const toastHarness = vi.hoisted(() => ({ messages: [] as string[] }));
+const grantHarness = vi.hoisted(() => ({
+  prepare: null as ((request: unknown) => Promise<unknown>) | null,
+}));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -35,7 +38,10 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => cloudHarness.source,
 }));
 vi.mock("@/hooks/environment/use-executable-write-grant", () => ({
-  useExecutableWriteGrant: () => async (request: unknown) => request,
+  useExecutableWriteGrant: () => async (request: unknown) => {
+    const prepare = grantHarness.prepare;
+    return prepare === null ? request : prepare(request);
+  },
 }));
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: (_error: unknown, fallback: string) => {
@@ -165,6 +171,7 @@ afterEach(() => {
   cleanup();
   cloudHarness.source = null;
   toastHarness.messages = [];
+  grantHarness.prepare = null;
   resetTeamPageHarness();
 });
 
@@ -346,7 +353,7 @@ describe("useProvidersPromoteToPersonal", () => {
     expect(nativeRequests).toEqual([]);
   });
 
-  it("does not read a recorded intent on B after the host upload started on A", async () => {
+  it("reads back on A's click operation after the host upload while sign-in switches to B", async () => {
     const account = { current: "A" };
     const aRequests: EnvironmentTransportRequest[] = [];
     const bRequests: EnvironmentTransportRequest[] = [];
@@ -417,6 +424,97 @@ describe("useProvidersPromoteToPersonal", () => {
     });
     expect(aRequests.map(({ method }) => method)).toEqual(["POST"]);
     expect(bRequests).toEqual([]);
+  });
+
+  it("reads the intent through the cloud operation captured for the click", async () => {
+    const aRequests: EnvironmentTransportRequest[] = [];
+    const bRequests: EnvironmentTransportRequest[] = [];
+    const cloudA = stateCloud("consumed", aRequests);
+    const cloudB = stateCloud("consumed", bRequests);
+    let sourceCalls = 0;
+    const result = await runPromote({
+      cloud: () => {
+        sourceCalls += 1;
+        return sourceCalls === 1 ? cloudA : cloudB;
+      },
+      handlers: {
+        "environment.host.read": () => binding(7),
+        "providers.nativeMutate": () => PROMOTED,
+      },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.rendered.result.current.mutateAsync(result.input);
+    });
+
+    expect(outcome).toEqual({ kind: "added" });
+    expect(sourceCalls).toBe(1);
+    expect(aRequests.map(({ method }) => method)).toEqual(["POST", "GET"]);
+    expect(bRequests).toEqual([]);
+  });
+
+  it("does not upload when sign-in changes while the executable write grant is being prepared", async () => {
+    const account = { current: "A" };
+    const requests: EnvironmentTransportRequest[] = [];
+    const cloudA = makeCloud(
+      async (request) => {
+        requests.push(request);
+        return request.method === "POST"
+          ? {
+              status: 200,
+              text: JSON.stringify({
+                operationId: "00000000-0000-4000-8000-000000000001",
+                endsAt: 2_000_000_000,
+              }),
+            }
+          : {
+              status: 200,
+              text: JSON.stringify({
+                state: "consumed",
+                mcpServerId: SERVER_ID,
+              }),
+            };
+      },
+      () => account.current === "A",
+    );
+    const grant = deferred<unknown>();
+    const grantStarted = deferred<void>();
+    grantHarness.prepare = (request) => {
+      grantStarted.resolve();
+      return grant.promise.then(() => request);
+    };
+    const nativeRequests: unknown[] = [];
+    const result = await runPromote({
+      cloud: () => cloudA,
+      handlers: {
+        "environment.host.read": () => binding(7),
+        "providers.nativeMutate": (request) => {
+          nativeRequests.push(request);
+          return PROMOTED;
+        },
+      },
+    });
+    let mutation: Promise<unknown> | undefined;
+    await act(async () => {
+      mutation = result.rendered.result.current.mutateAsync(result.input);
+      await Promise.resolve();
+    });
+    await grantStarted.promise;
+    account.current = "B";
+    grant.resolve(undefined);
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await mutation;
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "refused",
+      text: "Couldn't add it to Acme.",
+      refreshLists: false,
+    });
+    expect(requests.map(({ method }) => method)).toEqual(["POST"]);
+    expect(nativeRequests).toEqual([]);
   });
 
   it("does not record or promote when sharing generation is null or cloud is absent", async () => {

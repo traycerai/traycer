@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConfigurationSourceContext,
+  type ConfigurationRole,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { AddToConfigurationButton } from "@/components/settings/environment/add-to-configuration-button";
@@ -25,15 +26,20 @@ vi.mock("@/hooks/providers/use-providers-promote-to-personal-mutation", () => ({
 
 afterEach(cleanup);
 
-function elementFor(configuration: "personal" | "team", role: string | null) {
-  const source = {
+function elementFor(
+  configuration: "personal" | "team",
+  role: ConfigurationRole | null,
+  transportReadOnly = false,
+) {
+  const source: ConfigurationSource = {
     kind: "pool",
     configuration,
     environmentId: `env-${configuration}`,
     roomId: `room-${configuration}`,
     providerHandle: null,
     effectiveRole: role,
-  } as unknown as ConfigurationSource;
+    transportReadOnly,
+  };
   return (
     <ConfigurationSourceContext.Provider value={source}>
       <AddToConfigurationButton
@@ -74,6 +80,12 @@ describe("AddToConfigurationButton role gate", () => {
     expect(screen.queryByRole("button", { name: "Add to Acme" })).toBeNull();
 
     view.rerender(elementFor("team", null));
+    expect(screen.queryByRole("button", { name: "Add to Acme" })).toBeNull();
+  });
+
+  it("hides Add when transport is read-only even for an editor", () => {
+    render(elementFor("team", "editor", true));
+
     expect(screen.queryByRole("button", { name: "Add to Acme" })).toBeNull();
   });
 });
