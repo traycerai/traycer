@@ -15,7 +15,6 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
   StreamCloseReason,
-  StatusChangeHandler,
   StreamConnectionStatus,
   StreamContinuity,
   StreamFrameEnvelope,
@@ -86,11 +85,27 @@ export interface WorktreeDeleteBatchStreamCallbacks {
    */
   readonly onUnsupported: () => void;
   /**
-   * Connection-status changes. `reason` is non-null only on the `closed`
-   * transition. An unsupported-method close is reported through
+   * Connection-status changes. An unsupported-method close is reported through
    * `onUnsupported` instead and never reaches this handler.
    */
-  readonly onConnectionStatus: StatusChangeHandler;
+  readonly onConnectionStatus: (
+    change: WorktreeDeleteBatchConnectionStatus,
+  ) => void;
+}
+
+/** One connection-status transition of a deletion command's stream. */
+export interface WorktreeDeleteBatchConnectionStatus {
+  readonly status: StreamConnectionStatus;
+  /** Non-null only on the `closed` transition. */
+  readonly reason: StreamCloseReason | null;
+  readonly retryCause: FatalErrorDetails | null;
+  readonly continuity: StreamContinuity;
+  /**
+   * Whether the command's start request has been sent
+   * ({@link IStreamSession.hasSentOpenRequest}): before it, a drop started
+   * nothing; after it, the command may be running or finished.
+   */
+  readonly startSent: boolean;
 }
 
 export interface WorktreeDeleteBatchStreamClientOptions {
@@ -124,15 +139,16 @@ export interface WorktreeDeleteBatchStreamClientOptions {
  *
  * So this wrapper never lets a `start` be the thing that gets replayed. It
  * subscribes once in `start` mode, and the moment that session drops AFTER
- * reaching the host, it closes it and opens a fresh session in `observe` mode
- * for the same `commandId`. Every subsequent reconnect - however many, however
- * long after - re-sends `observe`, which can attach to a live command but can
- * never create one.
+ * sending its start request ({@link IStreamSession.hasSentOpenRequest}), it
+ * closes it and opens a fresh session in `observe` mode for the same
+ * `commandId`. Every subsequent reconnect - however many, however long after -
+ * re-sends `observe`, which can attach to a live command but can never create
+ * one.
  *
- * A drop BEFORE the session ever opened is left alone: the subscribe frame
- * never reached the host, so nothing was started and the transport's own
- * retry of `start` is both safe and the behaviour the user wants (a host that
- * was briefly unreachable still runs the delete they asked for).
+ * A drop BEFORE the start was sent is left alone: nothing was started, and the
+ * transport's own retry of `start` is both safe and the behaviour the user
+ * wants (a host that was briefly unreachable still runs the delete they asked
+ * for).
  */
 export class WorktreeDeleteBatchStreamClient {
   private session: IStreamSession;
@@ -142,12 +158,6 @@ export class WorktreeDeleteBatchStreamClient {
   /** Whether the start request carries safety-significant @1.1 consent. */
   private readonly hasForceTargets: boolean;
   private mode: "start" | "observe";
-  /**
-   * True once a session reached `open`, which is the moment the subscribe
-   * frame was handed to a live socket - i.e. the first instant the host may
-   * have created the command.
-   */
-  private reachedHost: boolean;
   /** Suppresses the `closed` callback from a swap's own deliberate close. */
   private swapping: boolean;
   private closed: boolean;
@@ -161,7 +171,6 @@ export class WorktreeDeleteBatchStreamClient {
       (target) => target.stopOwners === true,
     );
     this.mode = "start";
-    this.reachedHost = false;
     this.swapping = false;
     this.closed = false;
     this.reportedUnsupported = false;
@@ -213,8 +222,11 @@ export class WorktreeDeleteBatchStreamClient {
     session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
+    // The session is passed in, not read from `this.session`: a transport
+    // may replay a status while this handler is installed, before the caller
+    // has assigned it.
     session.onStatusChange((status, reason, retryCause, continuity) => {
-      this.handleStatusChange(status, reason, retryCause, continuity);
+      this.handleStatusChange(session, status, reason, retryCause, continuity);
     });
     return session;
   }
@@ -222,10 +234,10 @@ export class WorktreeDeleteBatchStreamClient {
   /**
    * Replaces the `start` session with an `observe` one for the same command.
    *
-   * Runs inside the `reconnecting` transition, which `WsStreamClient` emits
-   * BEFORE it arms the redial timer - so closing here cancels the pending
-   * re-subscribe rather than racing it, and the `start` request can never go
-   * out a second time.
+   * Runs inside the `reconnecting` transition, which every transport emits
+   * BEFORE it re-sends - so closing here cancels the pending re-subscribe
+   * rather than racing it, and the `start` request can never go out a second
+   * time.
    */
   private swapToObserve(): void {
     this.mode = "observe";
@@ -239,6 +251,7 @@ export class WorktreeDeleteBatchStreamClient {
   }
 
   private handleStatusChange(
+    session: IStreamSession,
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     retryCause: FatalErrorDetails | null,
@@ -251,24 +264,31 @@ export class WorktreeDeleteBatchStreamClient {
     if (this.swapping) {
       return;
     }
+    // An `observe` session exists only once the start was sent.
+    const startSent = this.mode === "observe" || session.hasSentOpenRequest();
     if (status === "open") {
-      this.reachedHost = true;
-      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
+      this.callbacks.onConnectionStatus({
+        status,
+        reason,
+        retryCause,
+        continuity,
+        startSent,
+      });
       return;
     }
     // Local transports cache unsupported-method evidence on the client. Remote
     // mux sessions deliberately do not, so their only capability evidence is
     // the incompatible close emitted before the subscribe frame is enqueued.
     //
-    // Only BEFORE the host has seen the command. `onUnsupported` is the
-    // caller's licence to run the legacy per-path delete because nothing was
-    // attempted; once `reachedHost` is true the command may be running or
-    // finished, so an incompatible close on a later observe session (a host
-    // swapped for a build without this method) is a connection failure, never
-    // a fallback trigger - the fallback would run the deletion a second time.
+    // Only BEFORE the start was sent. `onUnsupported` is the caller's licence
+    // to run the legacy per-path delete because nothing was attempted; once
+    // the start went out the command may be running or finished, so an
+    // incompatible close on a later observe session (a host swapped for a
+    // build without this method) is a connection failure, never a fallback
+    // trigger - the fallback would run the deletion a second time.
     if (
       status === "closed" &&
-      !this.reachedHost &&
+      !startSent &&
       reason !== null &&
       (this.wsStreamClient.getMethodSupport(
         WORKTREE_DELETE_BATCH_STREAM_METHOD,
@@ -287,15 +307,19 @@ export class WorktreeDeleteBatchStreamClient {
       status === "reconnecting" &&
       continuity !== "held" &&
       this.mode === "start" &&
-      this.reachedHost
+      startSent
     ) {
+      // Reported below as the reconnect it still is: the run stays live and
+      // waits for the observe session to land.
       this.swapToObserve();
-      // Still a reconnect from the consumer's point of view: the run stays
-      // live and waits for the observe session to land.
-      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
-      return;
     }
-    this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
+    this.callbacks.onConnectionStatus({
+      status,
+      reason,
+      retryCause,
+      continuity,
+      startSent,
+    });
   }
 
   private handleServerFrame(

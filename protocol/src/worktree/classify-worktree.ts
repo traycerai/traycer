@@ -114,7 +114,7 @@ export function worktreeTierRank(tier: WorktreeTier): number {
 }
 
 export const GIT_UNREADABLE_REASON =
-  "Git can't read this worktree — its main repository is missing or was moved";
+  "Git can't read this worktree or one of its submodules";
 
 function gitUnreadableOf(entry: WorktreeHostEntryV12): boolean {
   return (
@@ -129,12 +129,14 @@ function gitUnreadableOf(entry: WorktreeHostEntryV12): boolean {
  * plan's precedence truth table. Order is deliberate:
  *
  *  1. `inUse` → **in-use** (blocked; never a delete candidate).
- *  1b. `gitUnreadable` → **review**. The `.git` gitlink exists but git cannot
- *     resolve the repository it points at (main missing / moved / re-cloned, or
- *     the admin entry pruned). Checked BEFORE orphaned on purpose: this shape
- *     also has `gitRemovable: false`, but its branch and dirty count are
- *     fabricated, so it must not read as an fs-only cleanup with nothing to
- *     lose. Older hosts omit the field; absence is treated as false.
+ *  1b. `gitUnreadable` → **review**. Git cannot read all of the worktree:
+ *     either its `.git` gitlink points at a repository git cannot resolve
+ *     (main missing / moved / re-cloned, or the admin entry pruned), or an
+ *     initialized submodule's does. Checked BEFORE orphaned on purpose: the
+ *     first shape also has `gitRemovable: false`, but its branch and dirty
+ *     count are placeholders, so it must not read as an fs-only cleanup with
+ *     nothing to lose. Older hosts omit the field; absence is treated as
+ *     false.
  *  2. `!gitRemovable` → **orphaned**. Checked BEFORE the greens on purpose: an
  *     orphan's `branchStatus` is usually null. Per-row only, so this only changes
  *     the LABEL, never bulk safety.

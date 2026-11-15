@@ -66,6 +66,7 @@ export interface WorkerStreamClientHandle {
     reason: StreamCloseReason | null,
     retryCause: FatalErrorDetails | null,
     continuity: StreamContinuity,
+    openRequestSent: boolean,
   ): void;
   /** The per-session negotiated version, pushed before its status. */
   deliverSessionVersion(streamId: number, version: SchemaVersion | null): void;
@@ -86,7 +87,13 @@ export interface WorkerStreamClientHandle {
 interface ProxiedSession {
   readonly session: IStreamSession;
   readonly deliverFrame: ServerFrameHandler;
-  readonly deliverStatus: StatusChangeHandler;
+  readonly deliverStatus: (
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
+    continuity: StreamContinuity,
+    openRequestSent: boolean,
+  ) => void;
   setVersion(version: SchemaVersion | null): void;
   /** Re-reads a params provider, if this session has one, and returns it. */
   readParams(): { readonly has: boolean; readonly params: unknown };
@@ -115,6 +122,7 @@ export function createWorkerStreamClient(
     let frameHandler: ServerFrameHandler | null = null;
     let statusHandler: StatusChangeHandler | null = null;
     let negotiated: SchemaVersion | null = null;
+    let openRequestSent = false;
     let closed = false;
 
     const session: IStreamSession = {
@@ -149,6 +157,13 @@ export function createWorkerStreamClient(
       getNegotiatedSchemaVersion(): SchemaVersion | null {
         return negotiated;
       },
+      // As of the last status main relayed. The worker's close reaches main
+      // only after the transport re-sent, so a stream whose open request
+      // starts work cannot stop that replay from here; every method this
+      // proxy carries is a read subscription.
+      hasSentOpenRequest(): boolean {
+        return openRequestSent;
+      },
       close(): void {
         if (closed) return;
         closed = true;
@@ -162,7 +177,8 @@ export function createWorkerStreamClient(
       deliverFrame: (envelope, binaryPayload) => {
         frameHandler?.(envelope, binaryPayload);
       },
-      deliverStatus: (status, reason, retryCause, continuity) => {
+      deliverStatus: (status, reason, retryCause, continuity, sent) => {
+        openRequestSent = sent;
         statusHandler?.(status, reason, retryCause, continuity);
       },
       setVersion: (version) => {
@@ -230,10 +246,23 @@ export function createWorkerStreamClient(
         .get(parsed.frame.streamId)
         ?.deliverFrame(parsed.frame.envelope, parsed.frame.binaryPayload);
     },
-    deliverStatus(streamId, status, reason, retryCause, continuity): void {
+    deliverStatus(
+      streamId,
+      status,
+      reason,
+      retryCause,
+      continuity,
+      openRequestSent,
+    ): void {
       const entry = sessions.get(streamId);
       if (entry === undefined) return;
-      entry.deliverStatus(status, reason, retryCause, continuity);
+      entry.deliverStatus(
+        status,
+        reason,
+        retryCause,
+        continuity,
+        openRequestSent,
+      );
       // A status transition is when a re-declare becomes imminent, so it is
       // where a params provider is re-read. Pushed AFTER the handler runs: the
       // handler is what applies the state the provider reads, so reading first

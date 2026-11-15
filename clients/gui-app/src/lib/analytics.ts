@@ -426,6 +426,7 @@ export type AnalyticsSetting =
   | "steerOnModEnterEnabled"
   | "storageArchivedChats"
   | "storageChats"
+  | "storageFileEditSnapshots"
   | "storageIdleTasks"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
@@ -1585,6 +1586,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     steerOnModEnterEnabled: true,
     storageArchivedChats: true,
     storageChats: true,
+    storageFileEditSnapshots: true,
     storageIdleTasks: true,
     summonHotkeyChord: true,
     summonHotkeyEnabled: true,

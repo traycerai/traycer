@@ -40,6 +40,8 @@ type FakeSession = {
     | ((status: string, reason: StreamCloseReason | null) => void)
     | null;
   frameHandler: ((envelope: unknown) => void) | null;
+  /** Set on `open`, which the local transport reports right after the send. */
+  openRequestSent: boolean;
 };
 
 type CapturedStreamOptions = {
@@ -198,6 +200,7 @@ beforeEach(async () => {
         params,
         statusHandler: null,
         frameHandler: null,
+        openRequestSent: false,
       };
       hoisted.state.sessions.push(session);
       return {
@@ -207,8 +210,12 @@ beforeEach(async () => {
         onStatusChange: (
           handler: (status: string, reason: StreamCloseReason | null) => void,
         ) => {
-          session.statusHandler = handler;
+          session.statusHandler = (status, reason) => {
+            if (status === "open") session.openRequestSent = true;
+            handler(status, reason);
+          };
         },
+        hasSentOpenRequest: () => session.openRequestSent,
         sendClientFrame: () => undefined,
         close: hoisted.sessionCloseMock,
       };
@@ -417,7 +424,7 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
 
     await waitForSessions(1);
     const session = commandSession();
-    // Reaching `open` is the moment the subscribe frame hit a live socket.
+    // The local transport reports `open` right after it sends the subscribe.
     session.statusHandler?.("open", null);
     // A recoverable transport drop surfaces as `reconnecting`.
     session.statusHandler?.("reconnecting", null);
