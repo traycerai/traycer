@@ -101,7 +101,6 @@ function renderSessionWith(
     "environment.status": { major: 1, minor: 1 },
     "environment.review": { major: 1, minor: 2 },
     "environment.review.record": { major: 1, minor: 0 },
-    "environment.review.heldApply": { major: 1, minor: 0 },
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -368,9 +367,7 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
       ],
       [],
       {
-        extraHandlers: {
-          "environment.review.heldApply": () => ({ outcome: "forbidden" }),
-        },
+        extraHandlers: {},
         onOpenChange,
       },
     );
