@@ -15,6 +15,10 @@ import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { CanvasBox, CanvasElement } from "@/lib/sandbox/canvas-bridge";
 import {
+  COMMENT_OPENER,
+  COMMENT_OPENER_ATTRIBUTE,
+} from "@/lib/comments/comment-opener";
+import {
   canvasSelectionCaptureRect,
   clipCanvasBox,
 } from "./canvas-selection-geometry";
@@ -215,6 +219,14 @@ export function CanvasSelectionOverlay(props: {
         onPick(boardPath, { x: activity.x, y: activity.y });
     });
   }, [pointerInPage, bridge, onPick, boardPath]);
+  // A page taking the pointer reaches the parent only as the frame element:
+  // a press relayed when the frame takes focus, and nothing after that.
+  const commenting = props.commenting === true;
+  useEffect(() => {
+    if (!pointerInPage || !commenting || frame === null) return;
+    frame.setAttribute(COMMENT_OPENER_ATTRIBUTE, "");
+    return () => frame.removeAttribute(COMMENT_OPENER_ATTRIBUTE);
+  }, [pointerInPage, commenting, frame]);
   const hasSelection = selection !== null;
   const marker = selection?.element.marker;
   const tid = selection?.element.tid;
@@ -391,6 +403,7 @@ export function CanvasSelectionOverlay(props: {
       {pointerInPage ? null : (
         <div
           role="presentation"
+          {...(commenting ? COMMENT_OPENER : {})}
           className={cn(
             "absolute inset-0 touch-auto [&]:pointer-events-auto",
             props.commenting && "cursor-crosshair",

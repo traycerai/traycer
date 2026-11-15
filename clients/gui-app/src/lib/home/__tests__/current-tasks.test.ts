@@ -62,6 +62,7 @@ function item(id: string, updatedAtMs: number, isPinned: boolean): HistoryItem {
     taskType: "epic",
     title: id,
     initialUserPrompt: "",
+    createdAtMs: updatedAtMs,
     updatedAtMs,
     updatedLabel: "now",
     updatedBucket: "today",
