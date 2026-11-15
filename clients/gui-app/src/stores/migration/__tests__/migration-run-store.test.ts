@@ -66,6 +66,27 @@ describe("useMigrationRunStore", () => {
       expect(runB.status).toBe("running");
     });
 
+    it("counts a resumed run from its own started, against its own totals", () => {
+      useMigrationRunStore.getState().markRunning(HOST_A);
+      useMigrationRunStore.getState().applyStarted(HOST_A, {
+        totalTaskChains: 2,
+        totalLocalEpics: 0,
+      });
+      useMigrationRunStore.getState().incrementTaskChain(HOST_A, "complete");
+      useMigrationRunStore.getState().incrementTaskChain(HOST_A, "complete");
+
+      useMigrationRunStore.getState().applyStarted(HOST_A, {
+        totalTaskChains: 2,
+        totalLocalEpics: 0,
+      });
+      useMigrationRunStore.getState().incrementTaskChain(HOST_A, "skipped");
+
+      expect(migrationRunFor(useMigrationRunStore.getState(), HOST_A).counts).toEqual({
+        ...ZERO_COUNTS,
+        taskChainsSkipped: 1,
+      });
+    });
+
     it("incrementReplayIncomplete and applyComplete fold only the named host", () => {
       useMigrationRunStore.getState().markRunning(HOST_A);
       useMigrationRunStore.getState().markRunning(HOST_B);
