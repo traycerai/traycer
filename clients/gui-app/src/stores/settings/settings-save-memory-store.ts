@@ -15,6 +15,13 @@ const SETTINGS_SAVE_MEMORY_CAP = 200;
  * text: a put is matched by {@link valueDigest} alone.
  */
 export interface SettingsSaveMemoryRecord {
+  /**
+   * This edit's own identity, and its record's id. A later save of the same
+   * item replaces the record with its own, so work begun for the earlier edit
+   * finds nothing left to act on, and a row forgotten before never fences the
+   * new one out of storage.
+   */
+  readonly editId: string;
   readonly environmentId: string;
   readonly hostId: string;
   /** The host's sharing generation when the save was made. */
@@ -45,36 +52,16 @@ interface SettingsSaveMemoryState {
    * with how many such saves each has. Never persisted: a restart has none.
    */
   readonly inFlight: Readonly<Record<string, number>>;
-  /** Remembers `record`, forgetting every earlier save of the same item on the same host. */
+  /**
+   * Remembers `record` under its edit id, forgetting every earlier save of the
+   * same item on the same host.
+   */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
+  /** Counts an unanswered apply, only while `id` is still remembered. */
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
-}
-
-/** The record's id: the save's full address, so two saves of one item never share one. */
-export function settingsSaveMemoryId(
-  record: Pick<
-    SettingsSaveMemoryRecord,
-    | "environmentId"
-    | "hostId"
-    | "sharingGeneration"
-    | "kind"
-    | "key"
-    | "os"
-    | "operation"
-  >,
-): string {
-  return JSON.stringify([
-    record.environmentId,
-    record.hostId,
-    record.sharingGeneration,
-    record.kind,
-    record.key,
-    record.os,
-    record.operation,
-  ]);
 }
 
 function sameItem(
@@ -130,7 +117,7 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
       records: {},
       inFlight: {},
       remember: (record) => {
-        const id = settingsSaveMemoryId(record);
+        const id = record.editId;
         set((state) => ({
           records: newestWithin({
             ...Object.fromEntries(
