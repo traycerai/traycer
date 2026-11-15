@@ -90,7 +90,6 @@ export async function openFrameCommentDraft(args: {
   );
   const store = useAnchoredDraftStore.getState();
   const current = store.byEpicId[args.epicId];
-  if (current?.submitting === true) return null;
   if (!yieldOpenDraft(args.epicId, args.tileId)) return null;
   const draft = {
     draftId: matchesDraft(current, args.tileId, selection)

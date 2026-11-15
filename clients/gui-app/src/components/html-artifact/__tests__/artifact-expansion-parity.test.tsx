@@ -958,11 +958,8 @@ describe("a card whose draft a blocker has parked", () => {
     );
   }
 
-  /**
-   * The first card is raised, a draft opened on it and typed into, and a
-   * blocker lowers it: the draft is parked, answering no Escape or press.
-   */
-  function parkFirstCardsDraft(text: string | null, second: ReactNode): void {
+  /** The first card raised with Comments on, beside `second`. */
+  function raiseFirstCard(second: ReactNode): void {
     const randomUUID = vi.spyOn(crypto, "randomUUID");
     randomUUID.mockReturnValue(FIRST_TILE);
     const view = render(
@@ -982,6 +979,14 @@ describe("a card whose draft a blocker has parked", () => {
         { name: "Comments" },
       ),
     );
+  }
+
+  /**
+   * The first card is raised, a draft opened on it and typed into, and a
+   * blocker lowers it: the draft is parked, answering no Escape or press.
+   */
+  function parkFirstCardsDraft(text: string | null, second: ReactNode): void {
+    raiseFirstCard(second);
     act(() =>
       useAnchoredDraftStore.getState().setDraft("epic-1", {
         draftId: "draft-a",
@@ -1081,17 +1086,15 @@ describe("a card whose draft a blocker has parked", () => {
       useEffect(() => {
         pin.events = events;
       }, [events]);
-      return null;
+      return events?.renderCommentDraft?.() ?? null;
     }
 
     function paneCommentHandler(): CanvasFrameEvents["onPaneComment"] {
       return pin.events?.onPaneComment;
     }
 
-    function parkCardDraftAndPin(): void {
-      pin.events = null;
-      parkFirstCardsDraft(
-        "unsent words",
+    function canvasProvider(): ReactNode {
+      return (
         <CanvasSelectionProvider
           epicId="epic-1"
           artifactId="canvas-1"
@@ -1101,8 +1104,11 @@ describe("a card whose draft a blocker has parked", () => {
           viewTabId="tab-1"
         >
           <PinHost />
-        </CanvasSelectionProvider>,
+        </CanvasSelectionProvider>
       );
+    }
+
+    function pinOnCanvas(): void {
       const onPaneComment = paneCommentHandler();
       if (onPaneComment === undefined)
         throw new Error("no pane comment handler");
@@ -1113,6 +1119,12 @@ describe("a card whose draft a blocker has parked", () => {
           page: "flow",
         }),
       );
+    }
+
+    function parkCardDraftAndPin(): void {
+      pin.events = null;
+      parkFirstCardsDraft("unsent words", canvasProvider());
+      pinOnCanvas();
     }
 
     it("keeps the parked card draft and its text, opening no pin, when the reader declines to discard it", () => {
@@ -1142,6 +1154,121 @@ describe("a card whose draft a blocker has parked", () => {
           anchor: { kind: "canvas-point", page: "flow", x: 40, y: -12 },
         },
       );
+    });
+
+    it("leaves another view's draft alone while it is posting, even when the reader would discard it", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      host.client = { getActiveHostId: () => "host-1" };
+      recordNegotiatedHostManifest("host-1", {
+        "epic.createCommentThread": { major: 1, minor: 3 },
+      });
+      const bridge = realBridge();
+      frames.bridge = bridge;
+      const stamped = createDeferred<boolean>();
+      const stampTid = vi
+        .spyOn(bridge, "stampTid")
+        .mockReturnValue(stamped.promise);
+      pin.events = null;
+      raiseFirstCard(canvasProvider());
+      markReady();
+      act(() =>
+        useAnchoredDraftStore.getState().setDraft("epic-1", {
+          draftId: "draft-a",
+          tileId: FIRST_TILE,
+          artifactId: "html-a",
+          artifactType: "html",
+          anchor: {
+            kind: "element",
+            artboard: "index.html",
+            elementId: null,
+            label: "p",
+          },
+          quotedText: "",
+          rect: { x: 10, y: 10, width: 100, height: 20 },
+          selection: {
+            ...textSelection(null, { tid: null, marker: 0 }),
+            artifactId: "html-a",
+            boardPath: "index.html",
+            servedSha256: "a".repeat(64),
+          },
+          retargeted: false,
+        }),
+      );
+      typeIntoEditor(composerEditorAt(0), "unsent words");
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+      await settleSave(0, {
+        ok: true,
+        tid: "t-stamped",
+        sha256After: "b".repeat(64),
+        splices: [],
+      });
+      await settle();
+      // The id is being adopted: no request is in flight, the draft is posting.
+      expect(stampTid).toHaveBeenCalledTimes(1);
+      expect(host.createThread).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: "draft-a", submitting: true },
+      );
+
+      pinOnCanvas();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: "draft-a", submitting: true },
+      );
+
+      host.createThread.mockResolvedValueOnce({ threadId: "thread-1" });
+      stamped.resolve(true);
+      await settle();
+
+      expect(host.createThread).toHaveBeenCalledTimes(1);
+      expect(
+        useAnchoredDraftStore.getState().byEpicId["epic-1"],
+      ).toBeUndefined();
+      pinOnCanvas();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { artifactId: "canvas-1", anchor: { kind: "canvas-point" } },
+      );
+    });
+
+    it("opens nothing new when a view pins again while its own pin is posting", async () => {
+      host.client = { getActiveHostId: () => "host-1" };
+      recordNegotiatedHostManifest("host-1", {
+        "epic.createCommentThread": { major: 1, minor: 3 },
+      });
+      pin.events = null;
+      render(
+        <Providers>
+          <SurfacePresentationBoundary visible focused>
+            {canvasProvider()}
+          </SurfacePresentationBoundary>
+        </Providers>,
+      );
+      pinOnCanvas();
+      const first = useAnchoredDraftStore.getState().byEpicId["epic-1"];
+      if (first === undefined) throw new Error("the first pin opened no draft");
+      typeIntoEditor(composerEditorAt(0), "pinned words");
+      const created = createDeferred<{ readonly threadId: string }>();
+      host.createThread.mockReturnValueOnce(created.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+      await settle();
+      expect(host.createThread).toHaveBeenCalledTimes(1);
+
+      const pinAgain = paneCommentHandler();
+      if (pinAgain === undefined) throw new Error("no pane comment handler");
+      act(() => {
+        pinAgain({
+          screen: { x: 10, y: 20 },
+          canvas: { x: 5, y: 6 },
+          page: "other",
+        });
+      });
+
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: first.draftId, anchor: { kind: "canvas-point", x: 40 } },
+      );
+      created.resolve({ threadId: "thread-1" });
+      await settle();
     });
   });
 });

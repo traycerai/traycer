@@ -77,11 +77,16 @@ export function registerOpenDraftDiscard(
  * draft, and another view's goes first through its own discard, which asks
  * before dropping typed text: a draft out of sight (a card lowered under it,
  * a pane in the background) answers no press outside it, so without this it
- * would be replaced without a word. A draft no box shows holds no text.
+ * would be replaced without a word. A draft no box shows holds no text. A
+ * draft that is posting holds the task until it settles, whoever asks: its
+ * box's own discard refuses only while a request is in flight, not between
+ * the steps of a submission.
  */
 export function yieldOpenDraft(epicId: string, tileId: string): boolean {
   const current = useAnchoredDraftStore.getState().byEpicId[epicId];
-  if (current === undefined || current.tileId === tileId) return true;
+  if (current === undefined) return true;
+  if (current.submitting === true) return false;
+  if (current.tileId === tileId) return true;
   const entry = openDraftDiscards.get(epicId);
   if (entry?.draftId !== current.draftId) return true;
   return entry.discard();
