@@ -340,6 +340,43 @@ describe("notification save sign-in ownership", () => {
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
 
+  it("abandons an account hook save after an account switch without closing or reporting an error", async () => {
+    const oldSession = signIn("session-a", "account-a");
+    useSignIn(oldSession);
+    const gate = deferred<void>();
+    const started = deferred<void>();
+    const client = makeMutationClient([gate], [started]);
+    accountPanel(client);
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "Build alerts revised" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
+    await act(async () => started.promise);
+
+    oldSession.active = false;
+    const newSession = signIn("session-b", "account-b");
+    expect(newSession.accountId).not.toBe(oldSession.accountId);
+    originFixtures.cloud = cloudFor(newSession);
+    gate.resolve(undefined);
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog"))
+          .getByRole("button", {
+            name: "Save hook",
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    expect(originFixtures.requests).toEqual([]);
+    expect(originFixtures.refreshCalls).toBe(0);
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+  });
+
   it("abandons a team item save after its sign-in ends while Query onMutate is deferred", async () => {
     const oldSession = signIn("session-a", "account-a");
     useSignIn(oldSession);
