@@ -2,7 +2,6 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
@@ -17,7 +16,10 @@ import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/enviro
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
+import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
@@ -45,26 +47,26 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 function LocalEnvironmentReaders(): ReactNode {
   const client = requireTeamHostClient();
   const status = useEnvironmentStatusRead(client, LOCAL_HOST_ID, true);
-  useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: ["user-me"],
+  useSecretsRead({
     client,
     method: "environment.secrets.list",
     params: { environmentId: "env-personal" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  useHostQuery<HostRpcRegistry, "environment.secrets.versions">({
-    cacheKeyIdentity: undefined,
+  useSecretsRead({
     client,
     method: "environment.secrets.versions",
     params: { environmentId: "env-personal", secretId: "sec-1" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  useHostQuery<HostRpcRegistry, "environment.secrets.rotation">({
-    cacheKeyIdentity: undefined,
+  useSecretsRead({
     client,
     method: "environment.secrets.rotation",
     params: { environmentId: "env-personal", secretId: "sec-1" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
   useHostQuery<HostRpcRegistry, "providers.list">({
     cacheKeyIdentity: undefined,
@@ -117,26 +119,26 @@ function FocusReaders(): ReactNode {
     params: {},
     options: {},
   });
-  useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: ["user-me"],
+  useSecretsRead({
     client: localClient,
     method: "environment.secrets.list",
     params: { environmentId: "env-personal" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  useHostQuery<HostRpcRegistry, "environment.secrets.versions">({
-    cacheKeyIdentity: undefined,
+  useSecretsRead({
     client: localClient,
     method: "environment.secrets.versions",
     params: { environmentId: "env-personal", secretId: "sec-1" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  useHostQuery<HostRpcRegistry, "environment.secrets.rotation">({
-    cacheKeyIdentity: undefined,
+  useSecretsRead({
     client: localClient,
     method: "environment.secrets.rotation",
     params: { environmentId: "env-personal", secretId: "sec-1" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
   return null;
 }
@@ -183,6 +185,19 @@ function readCounts(
   );
 }
 
+const SECRET_READS = [
+  "environment.secrets.list",
+  "environment.secrets.versions",
+  "environment.secrets.rotation",
+] as const;
+
+/** How many times authn has been asked each secrets read. */
+function secretReadCounts(harness: TeamPageHarness): Record<string, number> {
+  return Object.fromEntries(
+    SECRET_READS.map((method) => [method, harness.paramsOf(method).length]),
+  );
+}
+
 function seedPersonalHostReads(): EnvironmentStatusResponseV12 {
   return environmentStatusFixture({
     principal: { kind: "personal" },
@@ -203,7 +218,7 @@ afterEach(() => {
 });
 
 describe("a Personal host on a build with a server pool", () => {
-  it("re-reads pool secrets and host-local provider and environment reads when its revision moves", async () => {
+  it("re-reads the account's secrets and host-local provider and environment reads when its revision moves", async () => {
     let status = seedPersonalHostReads();
     recordNegotiatedHostManifest(LOCAL_HOST_ID, {
       "environment.status": { major: 1, minor: 1 },
@@ -216,18 +231,10 @@ describe("a Personal host on a build with a server pool", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("received-revision").textContent).toBe("1");
-      expect(hostIdsOf(harness, "environment.list")).toEqual([POOL_HOST_ID]);
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
     });
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-    const poolBefore = readCounts(
-      harness,
-      [
-        "environment.secrets.list",
-        "environment.secrets.versions",
-        "environment.secrets.rotation",
-      ],
-      POOL_HOST_ID,
-    );
+    const accountBefore = secretReadCounts(harness);
     const localBefore = readCounts(
       harness,
       ["providers.list", "config.env.list"],
@@ -245,10 +252,8 @@ describe("a Personal host on a build with a server pool", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("received-revision").textContent).toBe("2");
-      for (const [method, count] of Object.entries(poolBefore)) {
-        expect(
-          hostIdsOf(harness, method).filter((id) => id === POOL_HOST_ID),
-        ).toHaveLength(count + 1);
+      for (const [method, count] of Object.entries(accountBefore)) {
+        expect(harness.paramsOf(method), method).toHaveLength(count + 1);
       }
       for (const [method, count] of Object.entries(localBefore)) {
         expect(
@@ -256,14 +261,8 @@ describe("a Personal host on a build with a server pool", () => {
         ).toHaveLength(count + 1);
       }
     });
-    for (const method of [
-      "environment.secrets.list",
-      "environment.secrets.versions",
-      "environment.secrets.rotation",
-    ]) {
-      expect(new Set(hostIdsOf(harness, method))).toEqual(
-        new Set([POOL_HOST_ID]),
-      );
+    for (const method of SECRET_READS) {
+      expect(hostIdsOf(harness, method)).toEqual([]);
     }
     for (const method of ["providers.list", "config.env.list"]) {
       expect(new Set(hostIdsOf(harness, method))).toEqual(
@@ -272,7 +271,7 @@ describe("a Personal host on a build with a server pool", () => {
     }
   });
 
-  it("re-reads pool secrets and only this Local host's provider and environment reads on focus", async () => {
+  it("re-reads the account's secrets and only this Local host's provider and environment reads on focus", async () => {
     const harness = mountTeamPageOnPoolBuild(
       personalPoolSource(),
       handlersFor(seedPersonalHostReads),
@@ -284,63 +283,54 @@ describe("a Personal host on a build with a server pool", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: LOCAL_HOST_ID, hostName: "This Mac" },
     });
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://example.invalid/signin",
+      authnBaseUrl: "https://example.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
     render(
-      <PersonalPageFrame section="secrets">
-        <FocusReaders />
-      </PersonalPageFrame>,
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <PersonalPageFrame section="secrets">
+          <FocusReaders />
+        </PersonalPageFrame>
+      </RunnerHostProvider>,
       { wrapper: harness.Wrapper },
     );
 
     await waitFor(() => {
-      for (const method of [
-        "environment.secrets.list",
-        "environment.secrets.versions",
-        "environment.secrets.rotation",
-        "providers.list",
-        "config.env.list",
-      ]) {
+      for (const method of SECRET_READS) {
+        expect(harness.paramsOf(method)).not.toHaveLength(0);
+      }
+      for (const method of ["providers.list", "config.env.list"]) {
         expect(hostIdsOf(harness, method)).not.toHaveLength(0);
       }
       expect(hostIdsOf(harness, "providers.list")).toContain(REMOTE_HOST_ID);
       expect(hostIdsOf(harness, "config.env.list")).toContain(REMOTE_HOST_ID);
     });
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-    const before = harness.messenger.calls.map((call) => ({
-      method: call.method,
-      hostId: call.authority.endpoint.hostId,
-    }));
+    const accountBefore = secretReadCounts(harness);
+    const localBefore = readCounts(
+      harness,
+      ["providers.list", "config.env.list"],
+      LOCAL_HOST_ID,
+    );
 
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
 
     await waitFor(() => {
-      for (const method of [
-        "environment.secrets.list",
-        "environment.secrets.versions",
-        "environment.secrets.rotation",
-        "providers.list",
-        "config.env.list",
-      ]) {
+      for (const [method, count] of Object.entries(accountBefore)) {
+        expect(harness.paramsOf(method), method).toHaveLength(count + 1);
+      }
+      for (const [method, count] of Object.entries(localBefore)) {
         expect(
-          harness.messenger.calls.filter(
-            (call) =>
-              call.method === method &&
-              call.authority.endpoint.hostId ===
-                (method.startsWith("environment.secrets.")
-                  ? POOL_HOST_ID
-                  : LOCAL_HOST_ID),
-          ),
-        ).toHaveLength(
-          before.filter(
-            (call) =>
-              call.method === method &&
-              call.hostId ===
-                (method.startsWith("environment.secrets.")
-                  ? POOL_HOST_ID
-                  : LOCAL_HOST_ID),
-          ).length + 1,
-        );
+          hostIdsOf(harness, method).filter((id) => id === LOCAL_HOST_ID),
+        ).toHaveLength(count + 1);
       }
     });
     for (const method of ["providers.list", "config.env.list"]) {
@@ -348,14 +338,8 @@ describe("a Personal host on a build with a server pool", () => {
         hostIdsOf(harness, method).filter((id) => id === REMOTE_HOST_ID),
       ).toHaveLength(1);
     }
-    for (const method of [
-      "environment.secrets.list",
-      "environment.secrets.versions",
-      "environment.secrets.rotation",
-    ]) {
-      expect(new Set(hostIdsOf(harness, method))).toEqual(
-        new Set([POOL_HOST_ID]),
-      );
+    for (const method of SECRET_READS) {
+      expect(hostIdsOf(harness, method)).toEqual([]);
     }
     for (const method of ["providers.list", "config.env.list"]) {
       expect(new Set(hostIdsOf(harness, method))).toEqual(
