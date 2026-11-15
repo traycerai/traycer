@@ -206,9 +206,11 @@ export function WindowsBridgeAuthSessionBridge(
             // A held session main now judges bad (its keys came back): told
             // once per judged session, never on every tick. For a verdict
             // authn can settle, ask it at once, as the start's own validation
-            // would: a refresh is handed over, a rejection signs out, an
-            // acceptance is handed over on the next tick, and an unreachable
-            // authn leaves the hold as it is.
+            // would: a refresh is handed over; a rejection demotes the session
+            // to unverified, the local computer only (signed out only when the
+            // stored session moved to another account, was deleted or was
+            // tombstoned); an acceptance is handed over on the next tick; and
+            // an unreachable authn leaves the hold as it is.
             if (judgedHeld === serialized) return;
             judgedHeld = serialized;
             if (
