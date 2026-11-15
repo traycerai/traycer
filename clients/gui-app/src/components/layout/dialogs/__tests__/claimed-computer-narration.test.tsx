@@ -787,7 +787,7 @@ describe("claimed-computer narration consumers", () => {
     assertWindowClaim("Rao", ENVIRONMENT_LABEL);
   });
 
-  it("uses a separate claims read for another AuthService instance in the same account", async () => {
+  it("shares one claims entry between two AuthService instances of one account, each state reading after its own claim", async () => {
     queueClaimPlan(
       ENVIRONMENT_ID,
       claims(claim(TILE_HOST_ID, "Priya", "2026-10-01T00:00:00.000Z")),
@@ -801,20 +801,42 @@ describe("claimed-computer narration consumers", () => {
     ]);
     setHostClaimedState(TILE_HOST_ID);
     const secondAuthReference: AuthReference = { current: null };
-    harness.renderTree(
-      <>
-        <TileClaimConsumer hostId={TILE_HOST_ID} />
-        <NestedRuntimeTileConsumer
-          client={harness.hostClient}
-          authReferenceRef={secondAuthReference}
-          hostId={TILE_HOST_ID}
-        />
-      </>,
-    );
+    // Added nodes are inspected as they land: the final DOM cannot show a
+    // name that was drawn and replaced.
+    let priyaDrawn = false;
+    const scan = (records: readonly MutationRecord[]): void => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node.textContent?.includes("Priya claimed this computer"))
+            priyaDrawn = true;
+    };
+    const observer = new MutationObserver(scan);
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      harness.renderTree(
+        <>
+          <TileClaimConsumer hostId={TILE_HOST_ID} />
+          <NestedRuntimeTileConsumer
+            client={harness.hostClient}
+            authReferenceRef={secondAuthReference}
+            hostId={TILE_HOST_ID}
+          />
+        </>,
+      );
 
-    await screen.findByText("Priya claimed this computer");
-    await screen.findByText("Rao claimed this computer");
+      await waitFor(() =>
+        expect(screen.getAllByText("Rao claimed this computer")).toHaveLength(
+          2,
+        ),
+      );
+      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+      scan(observer.takeRecords());
+    } finally {
+      observer.disconnect();
+    }
     expect(harness.authReference.current).not.toBe(secondAuthReference.current);
+    expect(priyaDrawn).toBe(false);
+    expect(screen.queryByText("Priya claimed this computer")).toBeNull();
     expect(claimCallCount(ENVIRONMENT_ID)).toBe(2);
   });
 
