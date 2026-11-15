@@ -417,7 +417,11 @@ function ProviderProfileSignInDialog({
 
   const retryFinalize = (): void => {
     if (flow.state.kind !== "identity") return;
-    finalizeProfile(namingCommittedProfile ?? flow.state.profile);
+    const profile =
+      namingCommittedProfile?.profileId === flow.state.profileId
+        ? namingCommittedProfile
+        : flow.state.profile;
+    finalizeProfile(profile);
   };
 
   const duplicateProfile =

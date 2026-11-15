@@ -388,7 +388,9 @@ function registerSwitchMethods(
   supportedMoves: boolean,
   recordEnvironment: boolean,
 ): void {
-  const environmentMethods = recordEnvironment
+  const environmentMethods: Readonly<
+    Record<string, { readonly major: number; readonly minor: number }>
+  > = recordEnvironment
     ? {
         "environment.status": { major: 1, minor: 2 },
         "environment.host.read": { major: 1, minor: 1 },
