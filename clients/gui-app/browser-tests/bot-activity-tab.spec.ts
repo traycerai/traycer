@@ -15,7 +15,8 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 // stylesheet at a phone's width and reads the boxes back.
 
 const PAGE = '[data-testid="bot-activity-page"]';
-const ROW = '[data-testid="bot-activity-task"]';
+const ACTIVE_ROW = '[data-testid="bot-activity-task"]';
+const ENDED_ROW = '[data-testid="bot-activity-ended-task"]';
 const OPEN = '[data-testid="bot-activity-task-open"]';
 
 const ReadingSchema = z.object({
@@ -31,7 +32,9 @@ test("no row pushes the page sideways or its open button out of the pane on a ph
   page,
 }) => {
   await page.goto(fixture("bot-activity-tab"));
-  const rows = page.locator(ROW);
+  await expect(page.locator(ACTIVE_ROW)).toHaveCount(3);
+  await expect(page.locator(ENDED_ROW)).toHaveCount(2);
+  const rows = page.locator(`${ACTIVE_ROW}, ${ENDED_ROW}`);
   await expect(rows).toHaveCount(5);
   for (const title of [
     "Release notes draft for 1.9",

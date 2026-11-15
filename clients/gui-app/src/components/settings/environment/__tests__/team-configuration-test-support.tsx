@@ -19,7 +19,11 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -38,7 +42,7 @@ import {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ExternalSession } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
@@ -63,7 +67,8 @@ export const teamHostBoundary: {
   auth: AuthService | null;
   runtime: HostRuntime<HostRpcRegistry> | null;
   directory: HostDirectoryService | null;
-} = { client: null, auth: null, runtime: null, directory: null };
+  binding: HostRuntimeBinding<HostRpcRegistry> | null;
+} = { client: null, auth: null, runtime: null, directory: null, binding: null };
 
 /**
  * The client of a second host (`mockRemoteHostEntry`) over the same messenger:
@@ -80,6 +85,14 @@ export const viewingHostBoundary: {
  * `windowHostScopeMock`; `null` is a window with no host of its own.
  */
 export const windowHostBoundary: { hostId: string | null } = { hostId: null };
+
+let environmentCloudOverride: EnvironmentCloud | null = null;
+
+export function setTeamEnvironmentCloudOverride(
+  cloud: EnvironmentCloud | null,
+): void {
+  environmentCloudOverride = cloud;
+}
 
 export function windowHostScopeMock(): { hostId: string | null } {
   return { hostId: windowHostBoundary.hostId };
@@ -106,6 +119,16 @@ export function requireTeamCloudAuth(): AuthService {
   return teamHostBoundary.auth;
 }
 
+export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  if (teamHostBoundary.binding === null) {
+    throw new Error("no team host binding mounted");
+  }
+  return teamHostBoundary.binding;
+}
+
+export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  return requireTeamHostBinding();
+}
 /**
  * Build a real environment-list descriptor before deriving its configuration
  * source. The retired Viewer role and an absent role both authorize nothing,
@@ -161,6 +184,59 @@ export function configurationItem(
   };
 }
 
+export function authSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
+    },
+  };
+}
+
 export interface TeamPageHarness {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -170,6 +246,31 @@ export interface TeamPageHarness {
   readonly cloudResponses: TeamEnvironmentCloudResponses;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
+}
+
+export function rejectNextTeamEnvironmentItemPut(
+  harness: TeamPageHarness,
+  kind: string,
+): EnvironmentTransportRequest[] {
+  const cloud = harness.auth.environmentCloud();
+  const rejectedRequests: EnvironmentTransportRequest[] = [];
+  let rejectNextPut = true;
+  harness.auth.environmentCloud = () => ({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        rejectNextPut &&
+        request.method === "PUT" &&
+        new URL(request.url).pathname.endsWith(`/items/${kind}`)
+      ) {
+        rejectNextPut = false;
+        rejectedRequests.push(request);
+        throw new Error("The transport did not answer.");
+      }
+      return cloud.transport(request);
+    },
+  });
+  return rejectedRequests;
 }
 
 export function mountTeamPage(
@@ -190,6 +291,32 @@ export function mountTeamPageOnPoolBuild(
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
   return buildTeamPage(source, handlers, null, true);
+}
+
+/** authn's answer: a status and the body it sends with it. */
+export function authnAnswer(
+  status: number,
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status, text: JSON.stringify(body) };
+}
+
+/**
+ * What authn answers the team's host list read for `environmentId` from now
+ * on; `null` is no answer at all, as when the transport fails.
+ */
+export function answerTeamHostList(
+  harness: TeamPageHarness,
+  environmentId: string,
+  answer: EnvironmentTransportAnswer | null,
+): void {
+  harness.cloudResponses.set(
+    `GET /api/v3/environments/${encodeURIComponent(environmentId)}/hosts`,
+    () => {
+      if (answer === null) throw new Error("The transport did not answer.");
+      return answer;
+    },
+  );
 }
 
 /** The host id each request for `method` was sent to, in order. */
@@ -339,6 +466,9 @@ function buildTeamPage(
     }),
     runnerHostOverrides: {},
   });
+  const baseEnvironmentCloud = auth.environmentCloud.bind(auth);
+  auth.environmentCloud = () =>
+    environmentCloudOverride ?? baseEnvironmentCloud();
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -366,6 +496,7 @@ function buildTeamPage(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => null,
+    onHostTokenRenewal: () => undefined,
   });
   const spine = runtime.hostClient;
   spine.setRequestContext(
@@ -382,6 +513,7 @@ function buildTeamPage(
     auth,
     hostId: null,
   };
+  teamHostBoundary.binding = authBinding;
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
   useAuthStore.setState({
     status: "signed-in",
@@ -414,6 +546,7 @@ function buildTeamPage(
 }
 
 export function resetTeamPageHarness(): void {
+  environmentCloudOverride = null;
   teamHostBoundary.runtime?.dispose();
   teamHostBoundary.directory?.dispose();
   teamHostBoundary.auth?.dispose();
@@ -421,6 +554,7 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.auth = null;
   teamHostBoundary.runtime = null;
   teamHostBoundary.directory = null;
+  teamHostBoundary.binding = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });

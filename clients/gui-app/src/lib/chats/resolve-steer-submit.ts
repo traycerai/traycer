@@ -45,7 +45,7 @@ export interface SteerSubmitConditions {
  * can fold in, interrupt-restart on confirmed drift, or a labeled next-turn
  * fallback otherwise. Deliberately NOT gated on harness capability: an
  * unsupported harness still sends `after_safe_point` so the host records the
- * downgrade as a fallback ("After turn") row (decisions 5, 11) rather than the
+ * downgrade as a fallback (Queued) row (decisions 5, 11) rather than the
  * renderer erasing the steer intent into a plain `"auto"`. Capability gates only
  * the discovery hints (see `steerHintIsActive`). It IS gated on
  * `steerProtocolSupported` - the negotiated wire version - so a new renderer

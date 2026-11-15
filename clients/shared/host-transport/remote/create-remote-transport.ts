@@ -23,11 +23,15 @@ import { RemoteStreamClient } from "./remote-stream-client";
 import {
   mintRelayPassWithHostTokenViaHttp,
   type AttachGrantProvider,
+  type RelayPassMintOutcome,
 } from "./grant-client";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
-import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
-  hostTokenRevalidator,
+  isIssuedHostTokenEra,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
+  hostTokenSessionAuth,
   type HostTokenStateSink,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
@@ -278,25 +282,61 @@ export function createRemoteHostTransport<
       // through an existing, tested path rather than inventing a failure
       // mode. See `cloudAuthorized` for why the check lives in here and not
       // at build time.
+      const signInNow = (): string | null =>
+        cloudAuthorized() ? deriveBearerToken(bearer) : null;
+      // One mint in `era`; `null` when the person signed out or was replaced
+      // while authn answered, so nothing of theirs is kept or raised.
+      const mintInEra = async (
+        signInToken: string,
+        era: number,
+      ): Promise<RelayPassMintOutcome | null> => {
+        const minted = await mintRelayPassWithHostTokenViaHttp(
+          options.authnBaseUrl,
+          options.hostId,
+          signInToken,
+        );
+        return options.hostTokens.era(options.userId) === era ? minted : null;
+      };
+      // authn refused the sign-in: refresh it once and mint again, the local
+      // door's rule (`hostTokenRevalidator`). Refused again, or any recovery
+      // answer but `rotated`, keeps today's provision: the relay's backoff,
+      // with no state. An invalid sign-in is ended by the auth service's own
+      // refresh, not here.
+      const mintAfterSignInRefresh = async (
+        refused: RelayPassMintOutcome,
+        era: number,
+      ): Promise<RelayPassMintOutcome | null> => {
+        if (
+          options.auth === null ||
+          (await options.auth.revalidateForReconnect()) !== "rotated"
+        )
+          return refused;
+        const refreshed = signInNow();
+        return refreshed === null ? null : mintInEra(refreshed, era);
+      };
       const grantProvider: AttachGrantProvider = async () => {
-        const signInToken = cloudAuthorized()
-          ? deriveBearerToken(bearer)
-          : null;
+        const signInToken = signInNow();
         if (signInToken === null)
           return {
             kind: "unavailable",
             detail: "no user bearer available (signed out?)",
             context: "",
           };
+        // No era, no mint: the sign-in is never sent for work that cannot
+        // keep what it brings.
         const era = options.hostTokens.era(options.userId);
-        const minted = await mintRelayPassWithHostTokenViaHttp(
-          options.authnBaseUrl,
-          options.hostId,
-          signInToken,
-        );
-        // The person signed out or was replaced while authn answered: keep
-        // nothing of theirs and raise nothing.
-        if (options.hostTokens.era(options.userId) !== era)
+        if (!isIssuedHostTokenEra(era))
+          return {
+            kind: "unavailable",
+            detail: "no host-token era for this person",
+            context: "",
+          };
+        const first = await mintInEra(signInToken, era);
+        const minted =
+          first?.kind === "sign-in-rejected"
+            ? await mintAfterSignInRefresh(first, era)
+            : first;
+        if (minted === null)
           return {
             kind: "unavailable",
             detail: "signed out while the relay pass was minted",
@@ -307,11 +347,12 @@ export function createRemoteHostTransport<
             options.userId,
             options.hostId,
             minted.hostToken,
+            era,
           );
           return { kind: "ok", grant: minted.grant };
         }
-        if (minted.kind === "not-admitted")
-          options.onState(options.hostId, "not-admitted");
+        if (minted.kind === "not-admitted" || minted.kind === "not-a-member")
+          options.onState(options.hostId, minted.kind);
         else if (minted.kind === "unreachable")
           options.onState(options.hostId, "token-unavailable");
         return minted.provision;
@@ -324,21 +365,23 @@ export function createRemoteHostTransport<
         hostToken: () =>
           options.hostTokens.current(options.userId, options.hostId)?.token ??
           null,
-        door: options.door,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may
         // spend, which is a different question with a different consumer - the
         // host's own background workers, which no client-side gate can reach.
         cloudAuthorized,
-        auth: hostTokenRevalidator({
-          tokens: options.hostTokens,
-          currentUserId: () => bearer()?.identity.userId ?? null,
-          hostId: options.hostId,
-          signInRecovery: options.auth,
-          onState: options.onState,
-          now: Date.now,
-        }),
+        ...hostTokenSessionAuth(
+          {
+            tokens: options.hostTokens,
+            currentUserId: () => bearer()?.identity.userId ?? null,
+            hostId: options.hostId,
+            signInRecovery: options.auth,
+            onState: options.onState,
+            now: Date.now,
+          },
+          options.door,
+        ),
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,

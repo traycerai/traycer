@@ -7,6 +7,7 @@ import {
   configAgentMemoriesResponseSchema,
   configAgentMemoriesSetRequestSchema,
   configAgentMemoriesSetResponseSchema,
+  configAgentMemoriesSetResponseSchemaV10,
   configBrowserGetRequestSchema,
   configBrowserResponseSchema,
   configBrowserSetRequestSchema,
@@ -225,7 +226,24 @@ export const configAgentMemoriesSetV10 = defineRpcContract({
   method: "config.agentMemories.set",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configAgentMemoriesSetRequestSchema,
+  responseSchema: configAgentMemoriesSetResponseSchemaV10,
+});
+
+export const configAgentMemoriesSetV11 = defineRpcContract({
+  method: "config.agentMemories.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configAgentMemoriesSetRequestSchema,
   responseSchema: configAgentMemoriesSetResponseSchema,
+});
+
+export const configAgentMemoriesSetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configAgentMemoriesSetV10,
+  typeof configAgentMemoriesSetV11
+>({
+  from: configAgentMemoriesSetV10.schemaVersion,
+  to: configAgentMemoriesSetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Reads the machine-user-global policy for worktrees agents create. */

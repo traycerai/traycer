@@ -11,8 +11,7 @@ import {
   renderHook,
   screen,
 } from "@testing-library/react";
-import { queryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -20,6 +19,7 @@ import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate"
 import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const facts = vi.hoisted(() => ({
   cachedReady: false,
@@ -80,6 +80,21 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
             ? [{ ownerKind: "user", environmentId: "personal-env" }]
             : [],
         },
+    error: facts.failedEnvironment
+      ? new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Environment read is temporarily unavailable",
+          requestId: "request-environment-list",
+          method: "environment.list",
+          fatalDetails: {
+            code: "HOST_RESTARTING",
+            reason: "The host is temporarily unavailable.",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+          },
+        })
+      : null,
     isError: facts.failedEnvironment,
     refetch: () => Promise.resolve(),
   }),
@@ -160,15 +175,14 @@ it("holds cached ready Personal membership until the unresolved pick resolves", 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  // The host list is the app's own read of authn, keyed under its scope.
   const membershipQuery = queryOptions({
-    queryKey: [
-      ...queryKeys.hostMethod<HostRpcRegistry, "environment.host.list">(
-        null,
-        "environment.host.list",
-        { environmentId: "personal-env" },
-      ),
+    queryKey: environmentCloudQueryKey(
+      "environment.host.list",
+      { environmentId: "personal-env" },
       "",
-    ],
+      [],
+    ),
   });
   queryClient.setQueryData(membershipQuery.queryKey, {
     hosts: [

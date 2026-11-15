@@ -98,18 +98,16 @@ export const ROUTING_SETTINGS_LABEL = "Model routing settings";
 /** The settled card's receipt when routing ran no step at all. */
 export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
 /**
- * The Message Queue panel's paused pill when the host paused it because a turn
- * failed (`queue.pausedReason` `turn_error` / `routing`), and its tooltip for
- * `turn_error`.
+ * The Message Queue panel's Paused pill tooltip when the host paused the queue
+ * because a turn failed (`queue.pausedReason` `turn_error`).
  *
- * The tooltip says why the row is held and how to send it, and promises no
+ * It says why the row is held and how to send it, and promises no
  * more (replacing the earlier "Retry or switch sends
  * it after; Resume sends it now"): a successful manual Retry or Switch leaves
  * the held rows paused - the host's own notice says "still paused - resume the
  * queue to send them" - and while one is in flight Resume is gated rather than
  * immediate.
  */
-export const QUEUE_PAUSED_AFTER_ERROR_LABEL = "Paused after an error";
 export const QUEUE_PAUSED_AFTER_ERROR_TOOLTIP =
   "Held because the last turn failed. Resume to send it.";
 /**

@@ -19,7 +19,6 @@ import { readShortLandscape } from "@/hooks/ui/use-short-landscape";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
-import { heldReviewEntries } from "@/components/settings/move/held-from-review";
 import {
   useThisComputer,
   type ThisComputer,
@@ -283,7 +282,7 @@ function useHeldOnThisComputer(
   if (review.supported === false) return "clear";
   // A re-read that fails keeps the last answer, as the status does.
   if (review.data === null) return review.isError ? "clear" : "pending";
-  return heldReviewEntries(review.data.entries).length > 0 ? "held" : "clear";
+  return review.data.entries.length > 0 ? "held" : "clear";
 }
 
 const HELD_TOAST_ID = "traycer-held-on-this-computer";

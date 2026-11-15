@@ -36,6 +36,7 @@ interface HostBindingMock {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly findById: (hostId: string) => null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -174,6 +175,8 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      // The empty listing answers no row for any host.
+      findById: () => null,
     },
   };
 }

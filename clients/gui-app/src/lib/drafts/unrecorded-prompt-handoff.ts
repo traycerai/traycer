@@ -522,6 +522,9 @@ function installHandoffDraft(args: {
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
     returnedSandbox: args.returnedSandbox,
+    // A chat's unrecorded prompt is not a start-page draft opened for a
+    // machine; resending it starts a task wherever the composer points.
+    namedHostId: null,
     durability: args.durability,
   });
   if (installed) return draftId;

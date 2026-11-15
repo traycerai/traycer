@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -85,6 +86,7 @@ export function useProvidersUsePackVersionForClient(
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),

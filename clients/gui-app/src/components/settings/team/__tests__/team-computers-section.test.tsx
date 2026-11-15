@@ -16,7 +16,6 @@ import type {
 } from "@traycer-clients/shared/host-client/team-computers";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
-import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
@@ -75,8 +74,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 const listTeamComputers =
   vi.fn<(environmentId: string) => Promise<TeamComputersResult>>();
-const listEnvironments = vi.fn<() => Promise<EnvironmentDirectoryResult>>();
-const environmentCloud = vi.fn<AuthService["environmentCloud"]>();
 const releaseTeamComputer =
   vi.fn<
     (
@@ -87,15 +84,7 @@ const releaseTeamComputer =
 const auth = {
   listTeamComputers,
   releaseTeamComputer,
-  listEnvironments,
-  environmentCloud,
-} satisfies Pick<
-  AuthService,
-  | "listTeamComputers"
-  | "releaseTeamComputer"
-  | "listEnvironments"
-  | "environmentCloud"
->;
+} satisfies Pick<AuthService, "listTeamComputers" | "releaseTeamComputer">;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
 function computer(overrides: Partial<TeamComputer>): TeamComputer {
@@ -131,8 +120,7 @@ function environment(
   return {
     environmentId,
     ownerKind: "organization",
-    ownerId:
-      environmentId === ENVIRONMENT_ID ? "team-a" : `team-${environmentId}`,
+    ownerId: `team-${environmentId}`,
     roomId: `room-${environmentId}`,
     label: "Acme",
     effectiveRole: "editor",
@@ -166,17 +154,31 @@ function mountSection(
   effectiveRole: ConfigurationRole | null,
   providerHandle: string | null,
 ) {
+  const environments = [
+    environment(ENVIRONMENT_ID, providerHandle),
+    environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
+  ];
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
-    "environment.list": () => ({
-      environments: [
-        environment(ENVIRONMENT_ID, providerHandle),
-        environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
-      ],
-    }),
+    "environment.list": () => ({ environments }),
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
-  listEnvironments.mockImplementation(() => harness.auth.listEnvironments());
-  environmentCloud.mockImplementation(() => harness.auth.environmentCloud());
+  // The account's teams as the app has them at sign-in: the environment list
+  // joins each team's handle from them, and a team with no handle is not
+  // among them.
+  useAuthStore.setState({
+    shareableTeams: environments.flatMap((row) =>
+      row.providerHandle === null
+        ? []
+        : [{ teamId: row.ownerId, slug: row.providerHandle, avatarUrl: null }],
+    ),
+  });
+  vi.spyOn(harness.auth, "listTeamComputers").mockImplementation(
+    auth.listTeamComputers,
+  );
+  vi.spyOn(harness.auth, "releaseTeamComputer").mockImplementation(
+    auth.releaseTeamComputer,
+  );
+  hostBinding.value = { auth: harness.auth, directory };
   const runnerHost = dashboardRunnerHost();
   const view = render(
     sectionTree(harness, environmentId, effectiveRole, runnerHost),
@@ -202,8 +204,6 @@ beforeEach(() => {
   previewLocalFacts.answer = () => ({ activeTurns: null, terminals: null });
   askedHostIds.length = 0;
   listTeamComputers.mockReset();
-  listEnvironments.mockReset();
-  environmentCloud.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
   directory.refresh.mockClear();
@@ -251,10 +251,9 @@ describe("TeamComputersSection", () => {
   });
 
   it("prints install and use commands with the team's provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "admin", `handle-${ENVIRONMENT_ID}`);
+    mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
-    await waitFor(() => expect(listEnvironments).toHaveBeenCalledOnce());
     await user.click(
       await screen.findByRole("button", { name: "Add a computer" }),
     );
@@ -268,9 +267,8 @@ describe("TeamComputersSection", () => {
   });
 
   it("does not offer a command when the team has no provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "admin", null);
+    mountSection(ENVIRONMENT_ID, "owner", null);
 
-    await waitFor(() => expect(listEnvironments).toHaveBeenCalledOnce());
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
     );

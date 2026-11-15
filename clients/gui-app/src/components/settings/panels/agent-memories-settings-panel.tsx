@@ -158,7 +158,7 @@ function hostRowStatus(input: {
   readonly progress: AgentMemoryWriteProgress;
 }): string {
   if (input.readFailed)
-    return "Couldn't read this host's memories setting. Check the host connection and reopen Settings.";
+    return "Couldn't read this host's common memory setting. Check the host connection and reopen Settings.";
   switch (input.progress.kind) {
     case "queued":
       return "Waiting to reach your configuration. This computer will send the change when it is online.";
@@ -201,9 +201,10 @@ function AgentMemoriesRow(): ReactNode {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: (answer) => answer.state !== "local_only",
     },
     mutationKey: configMutationKeys.agentMemoriesSet(),
-    errorMessage: "Couldn't update memories",
+    errorMessage: "Couldn't change the common memory setting",
     // The observer owns sequential confirmation reads. Mark this exact entry
     // stale without launching a parallel fetch; reopening before confirmation
     // must re-read even inside the normal cache freshness window.
@@ -441,6 +442,22 @@ function AgentMemoriesRow(): ReactNode {
         },
         onSuccess: (response) => {
           if (!live()) return;
+          // Saved on a computer bound to no configuration, in force here like
+          // `applied`. A row that read a configuration ends as for a host
+          // rebound since the read, without taking the answer as its read.
+          if (response.state === "local_only") {
+            if (environmentId !== null) {
+              finish({ kind: "settled" });
+              return;
+            }
+            latestRead = {
+              enabled: response.enabled,
+              revision: null,
+              environmentId: null,
+            };
+            finishAfterRead({ kind: "settled" });
+            return;
+          }
           if (
             environmentId !== null &&
             response.environmentId !== environmentId

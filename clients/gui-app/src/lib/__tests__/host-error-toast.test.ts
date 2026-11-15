@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("sonner", () => {
   // `toast` is CALLABLE as well as a namespace: the transport-class notice
@@ -17,13 +20,20 @@ vi.mock("sonner", () => {
 
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { hostRpcRegistry } from "@/lib/host";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { TileDoorCoverLayer } from "@/components/hosts/tile-door-cover";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import {
   clearHostDoorState,
   useHostDoorStateStore,
 } from "@/stores/host/host-door-state-store";
 import { noteHostTokenRefusal } from "@/lib/host/host-door-observer";
+import {
+  isDoorCoverDrawn,
+  useMarkDrawnDoorCover,
+} from "@/stores/host/drawn-door-cover-store";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import {
   batchRefusalAdvice,
   isSilentHostError,
@@ -41,39 +51,22 @@ import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
-import {
-  createHostTokenSource,
-  createMemoryHostTokenPersistence,
-  type HostTokenMintOutcome,
-  type HostTokenSource,
-} from "@traycer-clients/shared/auth/host-token-source";
-import {
-  hostTokenBearerFor,
-  hostTokenUnaryRevalidator,
-} from "@traycer-clients/shared/auth/host-token-lease";
-import type {
-  RefusalAwareAuthRevalidator,
-  StreamAuthRevalidator,
-} from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
-  type HostRequestOptions,
-  type IHostMessenger,
-  type RequestOfMethod,
-  type ResponseOfMethod,
   mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import {
-  createRetryingMessenger,
-  DEFAULT_TRANSPORT_RETRY_POLICY,
-} from "@traycer-clients/shared/host-transport/retrying-messenger";
-import { recordingRefusedHost } from "@/lib/host/refused-host";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+  fatalDoorRefusal,
+  POOL_DOOR_HOST_ID,
+  signInForUnaryTest,
+  UNARY_DOOR_HOST_ID,
+  UNARY_DOOR_SIGN_IN,
+  UNARY_DOOR_USER_ID,
+  unaryDoorHarness,
+} from "./fixtures/unary-door-harness";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
   return new HostRpcError({
@@ -147,203 +140,23 @@ function doorReasonError(
   });
 }
 
-const UNARY_DOOR_HOST_ID = "unary-door-host";
-const POOL_DOOR_HOST_ID = "pool";
-const UNARY_DOOR_USER_ID = "user-1";
-const UNARY_DOOR_SIGN_IN = "test-sign-in";
-
-type UnaryDoorRegistry = typeof hostRpcRegistry;
-
-interface UnaryDoorHarnessOptions {
+function DoorCoverPane(props: {
   readonly hostId: string;
-  readonly refusals: readonly HostRpcError[];
-}
-
-interface UnaryDoorHarness {
-  readonly call: () => Promise<HostRpcError>;
-  readonly sentBearers: string[];
-  readonly mintCalls: string[];
-  readonly signInRevalidationCalls: string[];
-  readonly tokens: HostTokenSource;
-  readonly setNow: (now: number) => void;
-}
-
-function fatalDoorRefusal(
-  code: HostRpcError["code"],
-  doorReason: string | undefined,
-): HostRpcError {
-  const details: FatalErrorDetails = {
-    code,
-    reason: "refused before the request was sent",
-    incompatibleMethods: null,
-    upgradeGuidance: null,
-    ...(doorReason === undefined ? {} : { doorReason }),
-  };
-  return new HostRpcError({
-    code,
-    message: details.reason,
-    requestId: `req-${doorReason ?? code}`,
-    method: "host.status",
-    fatalDetails: details,
-    doorRefusal: details,
-  });
-}
-
-function scriptedDoorMessenger(
-  refusals: readonly HostRpcError[],
-  sentBearers: string[],
-): IHostMessenger<UnaryDoorRegistry> {
-  const queue = [...refusals];
-  const request = <Method extends keyof UnaryDoorRegistry & string>(
-    _method: Method,
-    _params: RequestOfMethod<UnaryDoorRegistry, Method>,
-    options: HostRequestOptions,
-  ): Promise<ResponseOfMethod<UnaryDoorRegistry, Method>> => {
-    sentBearers.push(options.authority.bearer.getBearerToken());
-    const refusal = queue.shift();
-    return Promise.reject(refusal ?? new Error("unexpected unary send"));
-  };
-  const requestWithResponseTimeout = async <
-    Method extends keyof UnaryDoorRegistry & string,
-  >(
-    method: Method,
-    params: RequestOfMethod<UnaryDoorRegistry, Method>,
-    timeoutMs: number,
-    options: HostRequestOptions,
-  ): Promise<ResponseOfMethod<UnaryDoorRegistry, Method>> => {
-    void timeoutMs;
-    return request(method, params, options);
-  };
-  return {
-    request,
-    requestWithResponseTimeout,
-  };
-}
-
-async function unaryDoorHarness(
-  options: UnaryDoorHarnessOptions,
-): Promise<UnaryDoorHarness> {
-  let now = 1_000_000;
-  let signInToken = UNARY_DOOR_SIGN_IN;
-  const sentBearers: string[] = [];
-  const mintCalls: string[] = [];
-  const signInRevalidationCalls: string[] = [];
-  const signInLease: OpenFrameBearerSource = {
-    identity: { userId: UNARY_DOOR_USER_ID },
-    getBearerToken: () => signInToken,
-  };
-  const tokens = createHostTokenSource({
-    persistence: createMemoryHostTokenPersistence(),
-    mint: (hostId, _signInToken): Promise<HostTokenMintOutcome> => {
-      mintCalls.push(hostId);
-      return Promise.resolve({
-        kind: "ok",
-        token: {
-          token: `fresh-host-token-${mintCalls.length}`,
-          expiresAtMs: now + 60_000,
-        },
-      });
-    },
-    signIn: (userId) =>
-      userId === UNARY_DOOR_USER_ID ? UNARY_DOOR_SIGN_IN : null,
-    now: () => now,
-  });
-  await tokens.adopt(UNARY_DOOR_USER_ID, options.hostId, {
-    token: "held-host-token",
-    expiresAtMs: now + 60_000,
-  });
-  const signInRecovery: StreamAuthRevalidator = {
-    revalidateForReconnect: () => {
-      signInRevalidationCalls.push("stream");
-      signInToken = `${UNARY_DOOR_SIGN_IN}-stream`;
-      return Promise.resolve("rotated");
-    },
-  };
-  const hostRecovery = hostTokenUnaryRevalidator({
-    tokens,
-    currentUserId: () =>
-      useAuthStore.getState().contextMetadata?.userId ?? null,
-    signInRecovery,
-    onState: noteHostTokenRefusal,
-    now: () => now,
-  });
-  const revalidateExpectedBearer: RefusalAwareAuthRevalidator["revalidateExpectedBearer"] =
-    (expected) => {
-      signInRevalidationCalls.push("unary");
-      if (expected !== signInLease) return Promise.resolve("superseded");
-      signInToken = `${UNARY_DOOR_SIGN_IN}-${signInRevalidationCalls.length}`;
-      return Promise.resolve("rotated");
-    };
-  const auth: RefusalAwareAuthRevalidator = {
-    revalidateExpectedBearer,
-    revalidateRefusedBearer: (expected, hostId, refusal) => {
-      if (hostId === POOL_DOOR_HOST_ID) {
-        if (refusal !== null && refusal.code !== "UNAUTHORIZED")
-          return Promise.resolve("rejected");
-        return revalidateExpectedBearer(expected);
-      }
-      return hostRecovery.revalidateRefusedBearer(expected, hostId, refusal);
-    },
-  };
-  const bearer =
-    options.hostId === POOL_DOOR_HOST_ID
-      ? signInLease
-      : await hostTokenBearerFor(tokens, noteHostTokenRefusal)(
-          options.hostId,
-          signInLease,
-        );
-  if (bearer === null) throw new Error("expected a bearer for the host");
-  const raw = scriptedDoorMessenger(options.refusals, sentBearers);
-  const messenger = recordingRefusedHost(
-    createRetryingMessenger(
-      createAuthAwareMessenger(raw, auth, "always"),
-      DEFAULT_TRANSPORT_RETRY_POLICY,
+  readonly paneVisible: boolean;
+  readonly tabSelected: boolean;
+}): ReactNode {
+  return createElement(
+    PaneVisibilityContext.Provider,
+    { value: props.paneVisible },
+    createElement(
+      TabBodySelectedContext.Provider,
+      { value: props.tabSelected },
+      createElement(TileDoorCoverLayer, {
+        hostId: props.hostId,
+        cover: { kind: "team-membership-required" },
+      }),
     ),
   );
-  return {
-    sentBearers,
-    mintCalls,
-    signInRevalidationCalls,
-    tokens,
-    setNow: (nextNow) => {
-      now = nextNow;
-    },
-    call: async () => {
-      try {
-        await messenger.request(
-          "host.status",
-          {},
-          {
-            idempotencyKey: null,
-            replayMustBeKeyed: false,
-            requiredHostMethodVersion: null,
-            authority: {
-              endpoint: {
-                hostId: options.hostId,
-                websocketUrl: "ws://host.invalid/rpc",
-              },
-              bearer,
-              abortSignal: new AbortController().signal,
-            },
-          },
-        );
-      } catch (cause) {
-        if (cause instanceof HostRpcError) return cause;
-        throw cause;
-      }
-      throw new Error("expected the host to refuse the request");
-    },
-  };
-}
-
-function signInForUnaryTest(): void {
-  useAuthStore
-    .getState()
-    .setSignedIn(
-      { userId: UNARY_DOOR_USER_ID, userName: "U", email: "u@example.com" },
-      { userId: UNARY_DOOR_USER_ID, username: "U" },
-      [],
-    );
 }
 
 describe("toastFromHostError", () => {
@@ -1470,6 +1283,70 @@ describe("toastSendRefusal", () => {
   });
 });
 
+describe("below-minimum host errors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function error(): HostBelowMinimumError {
+    return new HostBelowMinimumError({
+      requestId: "floor-request",
+      method: "terminal.create",
+    });
+  }
+
+  it("is a local HostRpcError, not an abort or transport failure", () => {
+    const belowMinimum = error();
+
+    expect(belowMinimum).toBeInstanceOf(HostRpcError);
+    expect(belowMinimum).not.toBeInstanceOf(HostRequestAbortedError);
+    expect(belowMinimum).not.toBeInstanceOf(HostTransportFailureError);
+    expect(belowMinimum.code).toBe("RPC_ERROR");
+    expect(mayHaveReachedHost(belowMinimum)).toBe(false);
+    expect(belowMinimum.message).toBe(HOST_UPDATE_SKEW_COPY.title);
+  });
+
+  it.each([
+    ["ordinary", toastFromHostError],
+    ["detail-preserving", toastFromHostErrorWithDetail],
+  ])(
+    "shows only the existing update title through the %s gesture mapper",
+    (_label, show) => {
+      show(error(), "This fallback must not appear.");
+
+      expect(vi.mocked(toast).mock.calls).toHaveLength(1);
+      expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe(
+        HOST_UPDATE_SKEW_COPY.title,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+    },
+  );
+
+  it("is silent for background work but keeps ordinary background failures visible", () => {
+    toastFromBackgroundHostError(error(), "Couldn't restore the terminal.");
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+
+    toastFromBackgroundHostError(
+      makeError("RPC_ERROR", "The host rejected the request."),
+      "Couldn't restore the terminal.",
+    );
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't restore the terminal.",
+    );
+  });
+});
+
 describe("reasoned door refusal dispatch", () => {
   afterEach(() => {
     vi.mocked(toast).mockClear();
@@ -1509,6 +1386,7 @@ describe("reasoned door refusal dispatch", () => {
 
 describe("unary credential refusals through the renderer messenger chain", () => {
   afterEach(() => {
+    cleanup();
     clearHostDoorState(UNARY_DOOR_HOST_ID);
     clearHostDoorState(POOL_DOOR_HOST_ID);
     useAuthStore.getState().setSignedOut();
@@ -1516,7 +1394,7 @@ describe("unary credential refusals through the renderer messenger chain", () =>
     __resetAppLocalNotificationsStoreForTests();
   });
 
-  it("records a repeated not_admitted refusal for its host and suppresses the caller toast", async () => {
+  it("records a repeated not_admitted refusal and suppresses the caller toast while its cover is drawn", async () => {
     signInForUnaryTest();
     const harness = await unaryDoorHarness({
       hostId: UNARY_DOOR_HOST_ID,
@@ -1536,8 +1414,75 @@ describe("unary credential refusals through the renderer messenger chain", () =>
       useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID),
     ).toMatchObject({ kind: "not-admitted" });
 
+    renderHook(() => useMarkDrawnDoorCover(UNARY_DOOR_HOST_ID));
     toastFromHostError(error, "Couldn't update this task.");
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps caller copy visible for a hidden tile cover and counts visible panes per host", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const tree = (
+      firstPaneVisible: boolean,
+      firstTabSelected: boolean,
+      secondPaneVisible: boolean,
+      secondTabSelected: boolean,
+    ): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(
+          HostRuntimeTestProvider,
+          null,
+          createElement(DoorCoverPane, {
+            hostId: UNARY_DOOR_HOST_ID,
+            paneVisible: firstPaneVisible,
+            tabSelected: firstTabSelected,
+          }),
+          createElement(DoorCoverPane, {
+            hostId: UNARY_DOOR_HOST_ID,
+            paneVisible: secondPaneVisible,
+            tabSelected: secondTabSelected,
+          }),
+        ),
+      );
+    const view = render(tree(true, false, true, false));
+
+    expect(screen.getAllByTestId("tile-door-cover")).toHaveLength(2);
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(false);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "Couldn't update this task.",
+    );
+
+    view.rerender(tree(true, true, true, false));
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(true);
+    vi.mocked(toast.error).mockClear();
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).not.toHaveBeenCalled();
+
+    view.rerender(tree(true, false, true, false));
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(false);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledTimes(1);
+
+    view.rerender(tree(true, true, true, true));
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(true);
+    view.rerender(tree(false, true, true, true));
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(true);
+    view.rerender(tree(false, true, false, true));
+    expect(isDoorCoverDrawn(UNARY_DOOR_HOST_ID)).toBe(false);
   });
 
   it("does not mint twice while the token_expired replacement is still usable, then mints after expiry", async () => {
@@ -1667,69 +1612,5 @@ describe("unary credential refusals through the renderer messenger chain", () =>
       id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
       cancel: null,
     });
-  });
-});
-
-describe("below-minimum host errors", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    __resetAppLocalNotificationsStoreForTests();
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-    __resetAppLocalNotificationsStoreForTests();
-  });
-
-  function error(): HostBelowMinimumError {
-    return new HostBelowMinimumError({
-      requestId: "floor-request",
-      method: "terminal.create",
-    });
-  }
-
-  it("is a local HostRpcError, not an abort or transport failure", () => {
-    const belowMinimum = error();
-
-    expect(belowMinimum).toBeInstanceOf(HostRpcError);
-    expect(belowMinimum).not.toBeInstanceOf(HostRequestAbortedError);
-    expect(belowMinimum).not.toBeInstanceOf(HostTransportFailureError);
-    expect(belowMinimum.code).toBe("RPC_ERROR");
-    expect(mayHaveReachedHost(belowMinimum)).toBe(false);
-    expect(belowMinimum.message).toBe(HOST_UPDATE_SKEW_COPY.title);
-  });
-
-  it.each([
-    ["ordinary", toastFromHostError],
-    ["detail-preserving", toastFromHostErrorWithDetail],
-  ])(
-    "shows only the existing update title through the %s gesture mapper",
-    (_label, show) => {
-      show(error(), "This fallback must not appear.");
-
-      expect(vi.mocked(toast).mock.calls).toHaveLength(1);
-      expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe(
-        HOST_UPDATE_SKEW_COPY.title,
-      );
-      expect(toast.error).not.toHaveBeenCalled();
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
-    },
-  );
-
-  it("is silent for background work but keeps ordinary background failures visible", () => {
-    toastFromBackgroundHostError(error(), "Couldn't restore the terminal.");
-
-    expect(toast).not.toHaveBeenCalled();
-    expect(toast.error).not.toHaveBeenCalled();
-    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
-
-    toastFromBackgroundHostError(
-      makeError("RPC_ERROR", "The host rejected the request."),
-      "Couldn't restore the terminal.",
-    );
-
-    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
-      "Couldn't restore the terminal.",
-    );
   });
 });

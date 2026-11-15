@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -85,6 +86,7 @@ export function useRenameProviderProfileForClient(
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
     options: {
       mutationKey: providersMutationKeys.renameProfile(),

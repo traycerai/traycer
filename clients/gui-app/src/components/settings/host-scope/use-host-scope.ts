@@ -5,6 +5,7 @@ import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TEAM_MEMBERSHIP_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-transport/local-open-auth";
 import { hostDoorStateFor } from "@/stores/host/host-door-state-store";
+import { DOOR_STATE_TITLES } from "@/lib/host/door-state-titles";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
@@ -22,6 +23,7 @@ import { appLogger } from "@/lib/logger";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
+  isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import {
@@ -321,8 +323,8 @@ function useHostScopeWithOptions(
   // hope — so only the `following` branch may swap in the ambient client.
   // Any other branch handing back `ambientClient` would be the exact
   // substitution this status enum exists to make impossible.
-  const resolvedClient =
-    status === "following" ? ambientClient : overrideClient;
+  const scopedClient = status === "following" ? ambientClient : overrideClient;
+  const resolvedClient = isHostScopeUsable(status) ? scopedClient : null;
 
   // The local-maintenance fallback wrap, HERE and nowhere else: this is the
   // one point where every scope consumer's client is decided, so decorating
@@ -517,13 +519,18 @@ function showLocalHostActivationFailure(
   hostName: string,
   switchAccount: () => void,
 ): void {
-  if (hostDoorStateFor(hostId)?.kind === "not-a-member") {
+  const doorState = hostDoorStateFor(hostId)?.kind;
+  if (doorState === "not-a-member") {
     toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
       action: {
         label: "Switch account",
         onClick: switchAccount,
       },
     });
+    return;
+  }
+  if (doorState === "token-unavailable" || doorState === "token-expired") {
+    toast.error(DOOR_STATE_TITLES[doorState]);
     return;
   }
   toast.error(activateRefusalMessage("unrecognized", hostName));

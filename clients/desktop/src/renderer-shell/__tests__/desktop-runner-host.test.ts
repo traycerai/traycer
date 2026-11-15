@@ -279,10 +279,11 @@ function buildFakeBridge(
       };
     })(),
     hostTokens: {
-      obtain: () => Promise.resolve({ kind: "no-sign-in" as const }),
-      renew: () => Promise.resolve({ kind: "already-current" as const }),
-      adopt: () => Promise.resolve(),
-      forgetUser: () => Promise.resolve(),
+      era: (_userId: string) => 0,
+      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
+      adopt: async () => ({ era: 0 }),
+      forgetUser: async () => ({ era: 0 }),
       subscribe: () => ({ dispose: () => undefined }),
     },
     listUserSessions: async () => ({ kind: "network-error" as const }),

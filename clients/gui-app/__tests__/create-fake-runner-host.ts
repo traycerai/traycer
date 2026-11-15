@@ -1,15 +1,15 @@
 import {
-  createHostTokenSource,
-  createMemoryHostTokenPersistence,
-  type HostTokenSource,
-} from "@traycer-clients/shared/auth/host-token-source";
-import {
   fetchEnvironmentTransport,
   type EnvironmentTransport,
   type EnvironmentTransportAnswer,
   type EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -212,10 +212,15 @@ export async function heldHostTokenSource(
   hostId: string,
 ): Promise<HostTokenSource> {
   const tokens = inertHostTokenSource();
-  await tokens.adopt(userId, hostId, {
-    token: `host-token-${hostId}`,
-    expiresAtMs: Date.now() + 3_600_000,
-  });
+  await tokens.adopt(
+    userId,
+    hostId,
+    {
+      token: `host-token-${hostId}`,
+      expiresAtMs: Date.now() + 3_600_000,
+    },
+    tokens.era(userId),
+  );
   return tokens;
 }
 

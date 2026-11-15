@@ -32,7 +32,7 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useWindowHostIsTeamComputer } from "@/hooks/environment/use-window-host-is-team-computer";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 
 /** The team is gone from the person's memberships: they were removed from it. */
 function noLongerInLine(teamName: string): string {
@@ -117,7 +117,9 @@ export function ConfigurationSourceBoundary(props: {
 }): ReactNode {
   const { target } = props;
   const viewerId = useCloudChatViewerId();
-  const onTeamComputer = useWindowHostIsTeamComputer();
+  // Until the registry answers, Personal stays read-only as on a team's
+  // computer.
+  const onTeamComputer = useWindowHostOwnership() !== "not-team";
   const list = useEnvironmentListQuery(true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"

@@ -12,7 +12,11 @@ import type {
   EnvironmentHostListResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import {
+  EnvironmentCloudError,
+  NEEDS_PERMISSION_MESSAGE,
+  SETTINGS_REFUSED_MESSAGE,
   environmentPath,
+  errorBodyCode,
   parseSettings,
   sendSettings,
   type EnvironmentCloud,
@@ -59,22 +63,34 @@ function reportedItemState(
 /**
  * Every host authn lists for the environment, less those removed and not
  * seen since (`purgePending`). A failure is the settings mapping of every
- * other read here: an environment the person cannot read answers 404, which
- * is the settings refusal.
+ * other read here, except authn's two answers that the environment is not
+ * this person's to read, which are `not_readable` with the words their
+ * status already had, so the last list is not kept through them:
+ * - 404 `environment_not_found`: no accepted seat, another person's
+ *   Personal, or no such environment;
+ * - 403 `environment_action_forbidden`: a seated person whose role does not
+ *   allow the read.
+ * The same statuses without authn's code are a malformed request and a plain
+ * `forbidden`, as for every other call.
  */
 export async function listConfigurationHosts(
   cloud: EnvironmentCloud,
   environmentId: string,
 ): Promise<EnvironmentHostListResponseV12> {
-  const { hosts } = parseSettings(
-    await sendSettings(
-      cloud,
-      "GET",
-      `${environmentPath(environmentId)}/hosts?include=localRow,binding`,
-      null,
-    ),
-    authnHostsSchema,
+  const answer = await sendSettings(
+    cloud,
+    "GET",
+    `${environmentPath(environmentId)}/hosts?include=localRow,binding`,
+    null,
   );
+  const code = errorBodyCode(answer.body);
+  if (answer.status === 404 && code === "environment_not_found") {
+    throw new EnvironmentCloudError("not_readable", SETTINGS_REFUSED_MESSAGE);
+  }
+  if (answer.status === 403 && code === "environment_action_forbidden") {
+    throw new EnvironmentCloudError("not_readable", NEEDS_PERMISSION_MESSAGE);
+  }
+  const { hosts } = parseSettings(answer, authnHostsSchema);
   return {
     hosts: hosts
       .filter((row) => !row.purgePending)

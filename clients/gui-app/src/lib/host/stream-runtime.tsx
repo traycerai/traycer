@@ -8,6 +8,10 @@ import {
   type ReactNode,
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
@@ -39,6 +43,7 @@ import {
   wireAvailabilityRecovery,
 } from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -113,6 +118,9 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // effect below still refuses to build one without a bound host and a live
   // request context, which is the real precondition.
   const identityKey = useReactiveOwnerIdentityKey(appHostClient);
+  // Beside the identity, not in it: a host that falls below the version floor
+  // tears the client down, and rising back builds as on a first mount.
+  const floorAdmitted = useReactiveHostFloorAdmitted(appHostClient);
   const requestContextUserId = readiness.requestContextUserId;
   const [value, setValue] = useState<StreamRuntimeBinding | null>(null);
   // Liveness escape hatch: bumped when the served client turns out to be
@@ -259,7 +267,9 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     return () => {
       tornDown = true;
       teardownInProgressRef.current = true;
-      closeIfUnheld();
+      // No lease keeps a client on a host below the version floor.
+      if (readHostFloorAdmitted(appHostClient)) closeIfUnheld();
+      else wsStreamClient.close("app-stream-provider-teardown");
       teardownInProgressRef.current = false;
     };
   }, [
@@ -269,6 +279,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     authnBaseUrl,
     hostTokens,
     identityKey,
+    floorAdmitted,
     requestContextUserId,
     readiness.hostId,
     rebuildBackoff,
@@ -314,18 +325,31 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
+    // The person's Retry runs a waiting rebuild now; the streak it earned
+    // stays, so a rebuild refused again waits as long as it would have.
+    const stopRetry =
+      value.hostId === null
+        ? () => undefined
+        : onHostDoorRetry(value.hostId, () => {
+            if (backoffTimer === null) return;
+            window.clearTimeout(backoffTimer);
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          });
     if (client.isClosed()) {
       rebuild();
     } else {
       const unsubscribe = client.onClosed(rebuild);
       return () => {
         unsubscribe();
+        stopRetry();
         if (backoffTimer !== null) {
           window.clearTimeout(backoffTimer);
         }
       };
     }
     return () => {
+      stopRetry();
       if (backoffTimer !== null) {
         window.clearTimeout(backoffTimer);
       }
@@ -499,4 +523,28 @@ function readHostTransportKey<Registry extends VersionedRpcRegistry>(
   client: HostClient<Registry> | null,
 ): string | null {
   return hostTransportKey(client?.getActiveHost() ?? null);
+}
+
+/** Same arm as {@link useReactiveHostTransportKey}, for the version floor. */
+function useReactiveHostFloorAdmitted<Registry extends VersionedRpcRegistry>(
+  client: HostClient<Registry> | null,
+): boolean {
+  const subscribe = useCallback((callback: () => void) => {
+    return subscribeAnyHostRowChanged(callback);
+  }, []);
+  const getSnapshot = useCallback(
+    () => readHostFloorAdmitted(client),
+    [client],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => true);
+}
+
+/** `false` only for a row known to be below the version floor. */
+function readHostFloorAdmitted<Registry extends VersionedRpcRegistry>(
+  client: HostClient<Registry> | null,
+): boolean {
+  const row = client?.getActiveHost() ?? null;
+  return (
+    row === null || !hostDirectoryEntryNeedsUpdate(row, MINIMUM_HOST_VERSION)
+  );
 }

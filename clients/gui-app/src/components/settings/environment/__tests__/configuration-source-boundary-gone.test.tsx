@@ -18,6 +18,10 @@ import type {
   EnvironmentInvitation,
   EnvironmentInvitationsListResponse,
 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  HostListItem,
+  HostListResponse,
+} from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -33,6 +37,7 @@ import {
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { TeamPlans } from "@/components/settings/environment/team-plans";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
@@ -309,12 +314,14 @@ function Probe(): ReactNode {
   );
 }
 
-function ConfigurationPermissionProbe(): ReactNode {
+function ConfigurationPermissionProbe(props: {
+  readonly testId?: string;
+}): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   return (
     <p
-      data-testid="configuration-permission-probe"
+      data-testid={props.testId ?? "configuration-permission-probe"}
       data-effective-role={
         source.kind === "pool" ? (source.effectiveRole ?? "none") : "host"
       }
@@ -324,6 +331,82 @@ function ConfigurationPermissionProbe(): ReactNode {
       data-can-edit={String(canEdit)}
     />
   );
+}
+
+const LOCAL_TEAM_HOST_REGISTRY_ROW: HostListItem = {
+  hostId: mockLocalHostEntry.hostId,
+  displayName: "This computer",
+  platform: "darwin",
+  kind: "machine",
+  publicKey: "test-public-key",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  status: {
+    connectivity: "connectable",
+    viewerReachability: "ok",
+    clientCloud: "ok",
+    updateState: "current",
+    appVersion: "1.1.10",
+    lastSeenAt: "2026-01-01T00:00:00.000Z",
+  },
+  updatePolicy: "manual",
+  owner: { kind: "team", id: "team-a", name: "Acme" },
+};
+
+function mountOwnershipConsumers(
+  registeredHosts: () => Promise<HostListResponse | null>,
+): void {
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => ({ environments: [PERSONAL, team("admin")] }),
+    "environment.plans.list": () => ({ plans: [] }),
+  });
+  harness.auth.fetchRegisteredHosts = registeredHosts;
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+  render(
+    <>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
+        <ConfigurationPermissionProbe testId="personal-ownership-probe" />
+        <TeamPlans providerId="claude-code" adminNames={[]} />
+      </ConfigurationSourceBoundary>
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-a" }}
+        section={null}
+      >
+        <ConfigurationPermissionProbe testId="team-ownership-probe" />
+      </ConfigurationSourceBoundary>
+    </>,
+    { wrapper: harness.Wrapper },
+  );
+}
+
+async function expectOwnershipConsumers(options: {
+  readonly personalEditable: boolean;
+  readonly planLinkEnabled: boolean;
+}): Promise<void> {
+  const personal = await screen.findByTestId("personal-ownership-probe");
+  const teamPage = await screen.findByTestId("team-ownership-probe");
+
+  expect(personal.getAttribute("data-can-edit")).toBe(
+    String(options.personalEditable),
+  );
+  expect(teamPage.getAttribute("data-can-edit")).toBe("true");
+  if (options.planLinkEnabled) {
+    expect(
+      await screen.findByRole("button", { name: "Link a plan" }),
+    ).toBeTruthy();
+  } else {
+    expect(screen.queryByRole("button", { name: "Link a plan" })).toBeNull();
+  }
+  const readOnlyLine = screen.queryByText(
+    "You can see Personal's settings but not change them.",
+  );
+  if (options.personalEditable) {
+    expect(readOnlyLine).toBeNull();
+  } else {
+    expect(readOnlyLine).toBeTruthy();
+  }
 }
 
 function mountConfigurationPermissionBoundary(options: {
@@ -1432,10 +1515,7 @@ describe("configuration access after the team-computer lift", () => {
       activeHost: TEAM_OWNED_SANDBOX_HOST,
     });
 
-    const probe = await screen.findByTestId("configuration-permission-probe");
-    expect(probe.getAttribute("data-effective-role")).toBe("admin");
-    expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(screen.queryByText(/but not change them/)).toBeNull();
+    await expectEditableAdmin();
   });
 
   it("keeps a team admin editable on this user's local host", async () => {
@@ -1446,5 +1526,49 @@ describe("configuration access after the team-computer lift", () => {
     });
 
     await expectEditableAdmin();
+  });
+});
+
+describe("configuration access while this computer's owner is being read", () => {
+  it("keeps Personal read-only and the plan link closed while the registry is pending", async () => {
+    mountOwnershipConsumers(
+      () => new Promise<HostListResponse | null>(() => undefined),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
+  });
+
+  it("keeps Personal read-only and the plan link closed after a cold registry failure", async () => {
+    mountOwnershipConsumers(() =>
+      Promise.reject(new Error("registry unavailable")),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
+  });
+
+  it("opens Personal for its owner and offers the plan link once the registry says this is Personal", async () => {
+    mountOwnershipConsumers(() => Promise.resolve({ hosts: [] }));
+
+    await expectOwnershipConsumers({
+      personalEditable: true,
+      planLinkEnabled: true,
+    });
+  });
+
+  it("keeps Personal read-only on a team-owned computer while team settings follow the role", async () => {
+    mountOwnershipConsumers(() =>
+      Promise.resolve({ hosts: [LOCAL_TEAM_HOST_REGISTRY_ROW] }),
+    );
+
+    await expectOwnershipConsumers({
+      personalEditable: false,
+      planLinkEnabled: false,
+    });
   });
 });
