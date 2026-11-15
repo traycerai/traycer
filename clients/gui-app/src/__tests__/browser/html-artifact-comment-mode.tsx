@@ -656,7 +656,7 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
 /**
  * `?layout=chat-row` lays the surface out as a task chat's artifact card: a
  * height of its own, in a transcript row that contains its layout and paint
- * (`ChatTimelineRow`), in a list that scrolls.
+ * (`ChatTimelineRow`), in a list that scrolls, raising itself to comment.
  */
 const CHAT_ROW =
   new URLSearchParams(window.location.search).get("layout") === "chat-row";
@@ -733,6 +733,7 @@ export function CommentModeFixture(): ReactNode {
                         onStatus={() => undefined}
                         toolbarControls={null}
                         menuItems={null}
+                        raiseToComment={CHAT_ROW}
                       />
                     </Placement>
                   </TooltipProvider>

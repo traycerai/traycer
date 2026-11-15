@@ -4,12 +4,14 @@ import {
   useContext,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import { useArtifactExpansion } from "@/components/artifacts/artifact-expanded-context";
 import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
 import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
 import type { CanvasCommentView } from "@/components/canvas-artifact/canvas-frame-registry";
@@ -138,6 +140,12 @@ export function HtmlArtifactCommentSurface(
     readonly caption: ReactNode;
     readonly toolbarControls: ReactNode;
     readonly menuItems: ReactNode;
+    /**
+     * Comments only while the surface is raised. A chat card's transcript row
+     * clips whatever paints outside it, the comment draft included, so the
+     * card raises itself to take a comment.
+     */
+    readonly raiseToComment: boolean;
   },
 ) {
   return (
@@ -159,6 +167,7 @@ export function HtmlArtifactCommentSurface(
         onStatus={props.onStatus}
         toolbarControls={props.toolbarControls}
         menuItems={props.menuItems}
+        raiseToComment={props.raiseToComment}
       />
     </CanvasSelectionProvider>
   );
@@ -184,19 +193,66 @@ interface CommentFrameProps extends CommentFrameSizing {
   readonly caption: ReactNode;
   readonly toolbarControls: ReactNode;
   readonly menuItems: ReactNode;
+  readonly raiseToComment: boolean;
 }
 
 function ProvidedCommentFrame(props: CommentFrameProps) {
   const events = useContext(CanvasFrameEventsContext);
   if (events === null) return null;
-  return <HtmlArtifactCommentFrame {...props} events={events} />;
+  return (
+    // Around the draft as well as the frame: the draft is a sibling of the
+    // frame, so an expansion raised inside the frame would leave it outside
+    // the raised surface - portalled onto the pane or the body, behind an
+    // inert document, invisible and unreachable. Inside here it portals into
+    // the surface, and the menus it raises resolve their container from it.
+    <ArtifactExpansion title={props.title}>
+      <HtmlArtifactCommentFrame {...props} events={events} />
+    </ArtifactExpansion>
+  );
+}
+
+/**
+ * The Comments mode the reader asked for, and the press that asks. A surface
+ * that comments only while raised rises at a press made inline, stays off if
+ * it cannot rise, and drops the mode as it lowers.
+ */
+function useCommentingRequest(
+  raiseToComment: boolean,
+): readonly [boolean, (enabled: boolean) => void] {
+  const expansion = useArtifactExpansion();
+  const expanded = expansion?.expanded ?? false;
+  const [requested, setRequested] = useState(false);
+  if (raiseToComment && !expanded && requested) setRequested(false);
+  // Read at the press, not at render: the expansion hands out a fresh
+  // `expand` with every render it makes.
+  const expandRef = useRef<(() => boolean) | null>(null);
+  const expand = expansion?.expand ?? null;
+  useLayoutEffect(() => {
+    expandRef.current = expand;
+  }, [expand]);
+  const request = useCallback(
+    (enabled: boolean): void => {
+      if (
+        enabled &&
+        raiseToComment &&
+        !expanded &&
+        expandRef.current?.() !== true
+      )
+        return;
+      setRequested(enabled);
+    },
+    [raiseToComment, expanded],
+  );
+  return [requested, request];
 }
 
 function HtmlArtifactCommentFrame(
   props: CommentFrameProps & { readonly events: CanvasFrameEvents },
 ) {
   const { source, events } = props;
-  const [commentingRequested, setCommenting] = useState(false);
+  const [commentingRequested, setCommenting] = useCommentingRequest(
+    props.raiseToComment,
+  );
   const commentsEnabled = events.commentsEnabled === true;
   // Derived, not reset: should the host stop serving comments while the mode
   // is on, the toggle goes and the shield must go with it, or the page would
@@ -243,7 +299,7 @@ function HtmlArtifactCommentFrame(
       revealCanvasPoint: () => false,
       clearNodeSelection: noop,
     }),
-    [commenting, order, pageSources, page],
+    [commenting, setCommenting, order, pageSources, page],
   );
   const boardSource = page === null ? null : (pageSources.get(page) ?? null);
   const servedSha256 =
@@ -304,12 +360,7 @@ function HtmlArtifactCommentFrame(
       });
   }, [board]);
   return (
-    // Around the draft as well as the frame: the draft is a sibling of the
-    // frame, so an expansion raised inside the frame would leave it outside
-    // the raised surface - portalled onto the pane or the body, behind an
-    // inert document, invisible and unreachable. Inside here it portals into
-    // the surface, and the menus it raises resolve their container from it.
-    <ArtifactExpansion title={props.title}>
+    <>
       {props.caption}
       <ArtifactPagesFrame
         ref={pagesFrame}
@@ -350,6 +401,6 @@ function HtmlArtifactCommentFrame(
         menuItems={props.menuItems}
       />
       {events.renderCommentDraft?.()}
-    </ArtifactExpansion>
+    </>
   );
 }

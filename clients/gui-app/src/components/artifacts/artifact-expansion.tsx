@@ -174,7 +174,7 @@ export function ArtifactExpansion(props: {
     claimRef.current = claim;
     return true;
   };
-  const expand = (): void => {
+  const expand = (): boolean => {
     // Asks whatever holds the top layer to give it up, as an app's Expand
     // does, and takes it in the SAME press: a surface the yield has lowered
     // does not read as a blocker of this one - an expanded artifact is a
@@ -189,9 +189,10 @@ export function ArtifactExpansion(props: {
     // inline, where its toggle is. Either way, never two raised at once.
     if (!take()) {
       yieldFullscreen();
-      if (!take()) return;
+      if (!take()) return false;
     }
     setExpanded(true);
+    return true;
   };
 
   // The phone's back gesture stands down while the surface is up, and its back

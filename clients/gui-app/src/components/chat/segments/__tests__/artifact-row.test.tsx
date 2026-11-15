@@ -15,7 +15,15 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   EpicListHtmlArtifactVersionsResponse,
@@ -39,6 +47,7 @@ import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SandboxStatus } from "@/lib/sandbox/bridge-host";
+import { holdFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -1227,6 +1236,47 @@ describe("<ArtifactRow />", () => {
         expect(within(dialog).getByRole("button", { name })).toBeTruthy();
       }
       expect(sandboxFrameMocks.mounts).toBe(1);
+    });
+
+    // The card's row clips what paints outside it, the comment draft
+    // included, so the card takes comments only while raised.
+    it("raises itself with Comments on when Comments is pressed inline, and lowering it turns Comments off", () => {
+      serveCaptureAsCurrent();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      fireEvent.click(commentsButton());
+
+      const raised = screen.getByRole("dialog", { name: "My Artifact" });
+      expect(
+        within(raised)
+          .getByRole("button", { name: "Comments" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(sandboxFrameMocks.mounts).toBe(1);
+
+      fireEvent.click(within(raised).getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog", { name: "My Artifact" })).toBeNull();
+      expect(commentsButton().getAttribute("aria-pressed")).toBe("false");
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      expect(
+        within(screen.getByRole("dialog", { name: "My Artifact" }))
+          .getByRole("button", { name: "Comments" })
+          .getAttribute("aria-pressed"),
+      ).toBe("false");
+    });
+
+    it("stays inline with Comments off when Comments is pressed while something needs the reader", () => {
+      serveCaptureAsCurrent();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+      act(() => {
+        onTestFinished(holdFullscreenBlocker());
+      });
+
+      fireEvent.click(commentsButton());
+
+      expect(screen.queryByRole("dialog", { name: "My Artifact" })).toBeNull();
+      expect(commentsButton().getAttribute("aria-pressed")).toBe("false");
     });
   });
 

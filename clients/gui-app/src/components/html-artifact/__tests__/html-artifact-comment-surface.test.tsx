@@ -122,6 +122,7 @@ function treeOn(
           onStatus={() => undefined}
           toolbarControls={null}
           menuItems={null}
+          raiseToComment={false}
         />
       </TooltipProvider>
     </QueryClientProvider>

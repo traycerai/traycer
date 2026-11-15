@@ -459,6 +459,7 @@ function CardPage(props: {
             </>
           }
           menuItems={undefined}
+          raiseToComment
         />
       </HtmlArtifactLinks>
     );

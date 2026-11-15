@@ -821,17 +821,17 @@ test("a link still opens the other page while Comments is off, and that page sti
   await expect(pageFrame(page).locator("#counter")).toHaveText("count 1");
 });
 
-test("a chat card raised over the task takes a comment in full, though its row clips what paints outside it", async ({
+test("a chat card raises itself for Comments and takes a comment in full, though its row clips what paints outside it", async ({
   page,
 }) => {
   await serveArtifactFromPage(page);
   await page.goto(`${fixture("html-artifact-comment-mode")}?layout=chat-row`);
   await expect(pageFrame(page).locator("#counter")).toHaveText("count 0");
   // Inline, a card's controls come up on hover or focus.
-  await page.getByRole("button", { name: "Expand" }).focus();
+  await commentsButton(page).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: FRAME_TITLE })).toBeVisible();
-  await setComments(page, true);
+  await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "true");
 
   // The draft box takes the click only where the raised card took it: not
   // clipped by the row, not left behind the inert page.

@@ -207,6 +207,7 @@ function commentTile(onDownload: () => void) {
             Download ZIP
           </DropdownMenuItem>
         }
+        raiseToComment={false}
       />
     </Providers>
   );
