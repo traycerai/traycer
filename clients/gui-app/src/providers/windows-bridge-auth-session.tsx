@@ -168,7 +168,10 @@ export function WindowsBridgeAuthSessionBridge(
           // over again until main verifies it. No toast: the app works, and a
           // failed restore says so itself. Every other refusal is a statement
           // about the token and adopts nothing.
-          if (result.reason === "key-source-unavailable" && current) {
+          if (result.reason === "key-source-unavailable") {
+            // A superseded write's answer decides nothing: the current
+            // write's own answer takes the fallback, silently.
+            if (!current) return;
             if (heldLocally === serialized || restoringLocally === serialized)
               return;
             restoringLocally = serialized;
