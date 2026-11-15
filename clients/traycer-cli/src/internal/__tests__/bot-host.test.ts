@@ -1,10 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
 import type { HostTransportEndpoint } from "../../../../shared/host-transport/host-messenger";
 import { openLocalStreamClient, readBotSnapshot } from "../bot-host";
+import { config } from "../../config";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
 type CapturedOptions = {
   readonly endpoint: () => HostTransportEndpoint;
@@ -19,6 +22,7 @@ const state = vi.hoisted(() => ({
   resolveEndpoint: vi.fn(),
   fetch: vi.fn(),
 }));
+let hostTokenFetchAt: number | null = null;
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -73,24 +77,37 @@ beforeEach(async () => {
     websocketUrl: "ws://127.0.0.1:9999/rpc",
   });
   state.fetch.mockReset();
-  state.fetch.mockResolvedValue(
-    new Response(
+  hostTokenFetchAt = null;
+  state.fetch.mockImplementation(async () => {
+    hostTokenFetchAt = performance.now();
+    return new Response(
       JSON.stringify({
         session_grant: "bot-host-only-token",
         session_grant_expires_in: 3600,
       }),
       { status: 200, headers: { "content-type": "application/json" } },
-    ),
-  );
+    );
+  });
   vi.stubGlobal("fetch", state.fetch);
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (lockPresentAtCleanup) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] bot-host cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms fetch-at=${hostTokenFetchAt === null ? "none" : hostTokenFetchAt.toFixed(1)} token-lock-at-entry=${lockPresentAtCleanup}`,
+  );
   vi.unstubAllGlobals();
   const home = state.home.path;
   state.home.path = null;
   if (home !== null) await rm(home, { recursive: true, force: true });
-});
+}, 15_000);
 
 describe("openLocalStreamClient host authority", () => {
   it("uses the host-only token bought with the stored sign-in", async () => {
@@ -106,7 +123,9 @@ describe("openLocalStreamClient host authority", () => {
   });
 
   it("maps a reasonless non-retryable door refusal to the older-host line", async () => {
+    const startedAt = performance.now();
     const { client } = await openLocalStreamClient();
+    const hostSessionReadyAt = performance.now();
     const pending = readBotSnapshot(client, "bot-1");
     state.status?.("closed", {
       kind: "fatalError",
@@ -124,5 +143,8 @@ describe("openLocalStreamClient host authority", () => {
       message:
         "The host is out of date. Reinstall the latest host with 'traycer host update'.",
     });
+    console.info(
+      `[timing] bot-host reasonless-refusal settled-at=${performance.now().toFixed(1)} session-ready-at=${hostSessionReadyAt.toFixed(1)} fetch-at=${hostTokenFetchAt === null ? "none" : hostTokenFetchAt.toFixed(1)} elapsed-from-start=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
   });
 });

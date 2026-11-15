@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,6 +16,8 @@ import type { StreamCloseReason } from "../../../../shared/host-transport/i-stre
 import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
+import { config } from "../../config";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -99,6 +102,7 @@ vi.mock("../../internal/host-rpc", async () => {
 
 const resolveHostAuthMock = vi.mocked(resolveHostAuth);
 const resolveEndpointMock = vi.mocked(resolveEndpoint);
+const pendingWorktreeCommands = new Set<Promise<void>>();
 
 const ctx = {} as CommandContext;
 
@@ -136,10 +140,27 @@ function commandSession(): FakeSession {
   return session;
 }
 
+function startWorktreeDelete(
+  worktreePath: string,
+  commandContext: CommandContext,
+): Promise<CommandResult> {
+  const pending = buildWorktreeDeleteCommand({ worktreePath })(commandContext);
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingWorktreeCommands.add(settled);
+  void settled.then(() => pendingWorktreeCommands.delete(settled));
+  return pending;
+}
+
 async function waitForSessions(count: number): Promise<void> {
-  await vi.waitFor(() => {
-    expect(hoisted.state.sessions.length).toBeGreaterThanOrEqual(count);
-  });
+  await vi.waitFor(
+    () => {
+      expect(hoisted.state.sessions.length).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: 10_000 },
+  );
 }
 
 beforeEach(async () => {
@@ -196,6 +217,39 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const pendingAtCleanup = pendingWorktreeCommands.size;
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (pendingWorktreeCommands.size > 0) {
+    await vi.waitFor(
+      () => {
+        expect(
+          hoisted.state.sessions.length > 0 ||
+            pendingWorktreeCommands.size === 0,
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    for (const session of hoisted.state.sessions) {
+      session.frameHandler?.({
+        kind: "command.complete",
+        requestedCount: 1,
+        deletedCount: 1,
+        failedCount: 0,
+        hasBinaryPayload: false,
+      });
+    }
+    await Promise.all([...pendingWorktreeCommands]);
+  }
+  if (existsSync(lockPath)) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] worktree-delete cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms pending-at-entry=${pendingAtCleanup} fetches=${hoisted.state.fetch.mock.calls.length} sessions=${hoisted.state.sessions.length} lock-at-entry=${lockPresentAtCleanup}`,
+  );
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   const home = hoisted.state.home.path;
@@ -238,9 +292,8 @@ describe("buildWorktreeDeleteCommand input validation", () => {
 
   // A folder name may end in whitespace, so a real value is sent as written.
   it("sends a --path with a trailing space as written and reports it as is", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/feature ",
-    })(ctx);
+    const startedAt = performance.now();
+    const pending = startWorktreeDelete("/wt/feature ", ctx);
 
     await waitForSessions(1);
     const session = commandSession();
@@ -258,18 +311,19 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     });
 
     const result = await pending;
+    console.info(
+      `[timing] worktree-delete trailing-space session-and-command-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
     expect(result.data).toEqual({
       worktreePath: "/wt/feature ",
       deleted: true,
     });
-  });
+  }, 15_000);
 });
 
 describe("buildWorktreeDeleteCommand command shape", () => {
   it("opens ONE start-mode command carrying a uuid and the single target", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     const session = commandSession();
@@ -297,9 +351,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
 
   it("preserves the relayed phase and output lines", async () => {
     const recorded: ProgressInfo[] = [];
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(jsonCtx(recorded));
+    const pending = startWorktreeDelete("/wt/x", jsonCtx(recorded));
 
     await waitForSessions(1);
     const session = commandSession();
@@ -361,9 +413,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
 
 describe("buildWorktreeDeleteCommand stream-drop safety", () => {
   it("fails non-zero on a drop before a terminal frame, with no re-subscribe", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     const session = commandSession();
@@ -402,9 +452,7 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
 
 describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("resolves deleted=true on a target.complete frame", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -422,9 +470,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("resolves deleted=false with a non-zero exit when the host removed nothing", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -455,9 +501,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   ] as const)(
     "says why a %s decline left the worktree in place",
     async (declined, sentence) => {
-      const pending = buildWorktreeDeleteCommand({
-        worktreePath: "/wt/x",
-      })(ctx);
+      const pending = startWorktreeDelete("/wt/x", ctx);
 
       await waitForSessions(1);
       commandSession().frameHandler?.({
@@ -482,9 +526,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   );
 
   it("prints the generic line when the host named no decline kind", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -502,9 +544,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("keeps the success line and exit code for a deletion", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -520,9 +560,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("maps a target.failed frame to a CliError carrying the host's reason", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -544,9 +582,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   // outcome the runner must not report to Sentry; the code (not the prose,
   // which carries the user's absolute path) is what classifies it.
   it("maps a WORKTREE_BUSY target.failed frame to an expected code and keeps the host's reason", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -570,9 +606,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("keeps UNEXPECTED for a target.failed frame without a typed busy code", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -592,9 +626,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("maps a command.failed frame to a CliError carrying the host's reason", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -613,9 +645,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("falls back to the command counts when only the command terminal arrives", async () => {
     // What an observer that attached to an already-settled command sees: no
     // per-target frames are replayed, so the counts are the whole answer.
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().frameHandler?.({
@@ -632,9 +662,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("maps a retryable UNAUTHORIZED fatal close to the credential line", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
@@ -657,9 +685,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   });
 
   it("maps an INCOMPATIBLE fatal close to a host-incompatible CliError", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
@@ -682,9 +708,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
 describe("buildWorktreeDeleteCommand older-host fallback", () => {
   it("runs the released single-target stream once the host proves it lacks the command method", async () => {
     hoisted.state.methodSupport = "unsupported";
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     // The transport marks support on the openAck and then closes the session -
@@ -717,9 +741,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
   });
 
   it("does not fall back after a fatal close that is not an unsupported method", async () => {
-    const pending = buildWorktreeDeleteCommand({
-      worktreePath: "/wt/x",
-    })(ctx);
+    const pending = startWorktreeDelete("/wt/x", ctx);
 
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
@@ -751,7 +773,7 @@ async function startLegacyFallback(): Promise<{
   readonly legacy: FakeSession;
 }> {
   hoisted.state.methodSupport = "unsupported";
-  const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(ctx);
+  const pending = startWorktreeDelete("/wt/x", ctx);
 
   await waitForSessions(1);
   commandSession().statusHandler?.("closed", {
