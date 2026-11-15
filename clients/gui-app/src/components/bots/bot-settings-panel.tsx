@@ -14,6 +14,7 @@ import type {
   BotRecord,
   BotReplyMode,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -61,6 +62,7 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { useBotMemory } from "@/hooks/bots/use-bot-memory";
+import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 
 const BOT_TITLE_MAX = 500;
 
@@ -168,7 +170,7 @@ export function BotChannelSettingsPanel(props: {
           <BotsInChannel bots={environmentBots} />
         )}
         <BotSlackSettings botId={bot.botId} />
-        <BotUsageSection botId={bot.botId} onClose={onClose} />
+        <BotUsageSection bot={bot} onClose={onClose} />
         {mayChange ? (
           <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
         ) : null}
@@ -183,16 +185,16 @@ export function BotChannelSettingsPanel(props: {
  * inside a bot tab, what the bot knows.
  */
 function BotUsageSection(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   /** Closes the settings, which the memory pane opens in place of. */
   readonly onClose: () => void;
 }): ReactNode {
   const memory = useContext(BotMemoryContext);
   if (memory === null)
-    return <BotUsageGroup botId={props.botId} memoryEntry={null} />;
+    return <BotUsageGroup bot={props.bot} memoryEntry={null} />;
   return (
     <BotUsageWithMemory
-      botId={props.botId}
+      bot={props.bot}
       access={memory}
       onClose={props.onClose}
     />
@@ -201,7 +203,7 @@ function BotUsageSection(props: {
 
 /** The Usage group with the memory entry, where the host serves the memory. */
 function BotUsageWithMemory(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   readonly access: BotMemoryAccess;
   readonly onClose: () => void;
 }): ReactNode {
@@ -210,7 +212,7 @@ function BotUsageWithMemory(props: {
   const count = reading.kind === "ready" ? reading.memory.entries.length : null;
   return (
     <BotUsageGroup
-      botId={props.botId}
+      bot={props.bot}
       memoryEntry={
         reading.kind === "unsupported" ? null : (
           <BotMemoryEntry
@@ -228,13 +230,18 @@ function BotUsageWithMemory(props: {
 
 /** The group, drawn only when it holds a button. */
 function BotUsageGroup(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   readonly memoryEntry: ReactNode;
 }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const supported = useUsageSummarySupported(hostId);
   const [open, setOpen] = useState(false);
+  // Read while the dialog is open, for the by-chat table's thread names.
+  const threads = useBotThreadListQuery(client, bot.botId, {
+    enabled: supported && open,
+  });
   if (!supported && props.memoryEntry === null) return null;
   return (
     <SettingsGroup title="Usage" testId="bot-settings-usage">
@@ -254,14 +261,30 @@ function BotUsageGroup(props: {
       </div>
       {supported ? (
         <EpicUsageDialog
-          epicId={props.botId}
+          epicId={bot.botId}
           client={client}
           open={open}
           onOpenChange={setOpen}
+          chatTitles={botUsageChatTitles(bot, threads.data?.threads ?? [])}
         />
       ) : null}
     </SettingsGroup>
   );
+}
+
+/**
+ * The usage table's names for a bot's chats, which no epic tree holds: the
+ * trunk by the bot's name, each thread's session by the post it answers.
+ */
+function botUsageChatTitles(
+  bot: BotRecord,
+  threads: readonly BotThreadSummary[],
+): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>([[bot.trunkChatId, bot.title]]);
+  for (const thread of threads) {
+    titles.set(thread.sessionChatId, thread.anchor?.excerpt ?? "Thread");
+  }
+  return titles;
 }
 
 /**

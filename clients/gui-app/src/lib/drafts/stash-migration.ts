@@ -349,6 +349,7 @@ async function runStashConversion(
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: true,
       returnedSandbox: null,
+      namedHostId: null,
       // The stash entry stays until the receipt below, written once saved.
       durability: "saved",
     });
