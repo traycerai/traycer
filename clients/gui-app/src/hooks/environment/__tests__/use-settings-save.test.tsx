@@ -241,6 +241,16 @@ function profileCliState(profile: ProviderProfile): ProviderCliState {
   };
 }
 
+function providerMutationState(
+  providerId: ProviderCliState["providerId"],
+): ProviderCliState {
+  return {
+    ...profileCliState(editableManagedProfile(false)),
+    providerId,
+    profiles: [],
+  };
+}
+
 function renderManagedProfileDialog(
   harness: SaveHarness,
   profile: ProviderProfile,
@@ -523,11 +533,11 @@ function makeSaveHarness(overrides: {
         captureSave("providers.setEnvOverride", request);
         if (state.failSave) throw new Error("Test host write failed");
         hostEvents.push("answer:providers.setEnvOverride");
-        return { state: {} as never };
+        return { state: providerMutationState(request.providerId) };
       },
       "providers.deleteEnvOverride": (request) => {
         captureSave("providers.deleteEnvOverride", request);
-        return { state: {} as never };
+        return { state: providerMutationState(request.providerId) };
       },
       "config.shell.get": () => {
         hostRequests.push("config.shell.get");
@@ -553,19 +563,19 @@ function makeSaveHarness(overrides: {
       },
       "config.shell.set": (request) => {
         captureSave("config.shell.set", request);
-        return {} as never;
+        return { path: request.path, args: request.args };
       },
       "config.shell.add": (request) => {
         captureSave("config.shell.add", request);
-        return {} as never;
+        return { path: request.path, entries: [] };
       },
       "config.shell.remove": (request) => {
         captureSave("config.shell.remove", request);
-        return {} as never;
+        return { removed: true, path: request.path };
       },
       "config.shell.revertArgs": (request) => {
         captureSave("config.shell.revertArgs", request);
-        return {} as never;
+        return { path: request.path, reverted: true };
       },
       "providers.setPackPolicy": (request) => {
         captureSave("providers.setPackPolicy", request);
@@ -575,11 +585,11 @@ function makeSaveHarness(overrides: {
         captureSave("providers.usePackVersion", request);
         return {
           result: { ok: true, pinnedVersion: request.version },
-        } as never;
+        };
       },
       "providers.setEnabled": (request) => {
         captureSave("providers.setEnabled", request);
-        return {} as never;
+        return { state: providerMutationState(request.providerId) };
       },
     },
   });
@@ -1550,9 +1560,16 @@ describe("settings-save callers", () => {
       result.current.revertShellArgs("/bin/zsh", callbacks),
     );
 
-    const selections = harness.savePayloads.map(
-      ({ request }) => (request as { readonly selection: unknown }).selection,
-    );
+    const selections = harness.savePayloads.map(({ request }) => {
+      if (
+        typeof request !== "object" ||
+        request === null ||
+        !("selection" in request)
+      ) {
+        throw new Error("Expected shell save to state its selection");
+      }
+      return request.selection;
+    });
     const bash = { path: "/bin/bash", args: ["-x"] };
     const fish = {
       path: "/bin/fish",
@@ -1718,16 +1735,31 @@ describe("settings-save callers", () => {
       "providers.setEnabled",
     ]);
     expect(
-      harness.savePayloads.map(
-        ({ request }) =>
-          (
-            request as {
-              readonly profileAction: {
-                readonly environmentProfileId: string | null;
-              };
-            }
-          ).profileAction.environmentProfileId,
-      ),
+      harness.savePayloads.map(({ request }) => {
+        if (
+          typeof request !== "object" ||
+          request === null ||
+          !("profileAction" in request)
+        ) {
+          throw new Error("Expected profile save to state its action");
+        }
+        const { profileAction } = request;
+        if (
+          typeof profileAction !== "object" ||
+          profileAction === null ||
+          !("environmentProfileId" in profileAction)
+        ) {
+          throw new Error("Expected profile save action to name its profile");
+        }
+        const { environmentProfileId } = profileAction;
+        if (
+          environmentProfileId !== null &&
+          typeof environmentProfileId !== "string"
+        ) {
+          throw new Error("Expected profile id to be a string or null");
+        }
+        return environmentProfileId;
+      }),
     ).toEqual(["p1", "p1"]);
     expect(harness.recordsAtSend[0]).toMatchObject({
       kind: "managed_profile",
