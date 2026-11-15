@@ -41,7 +41,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { ProfileMoveDialog } from "../profile-move-dialog";
 import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
-import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-observation";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 

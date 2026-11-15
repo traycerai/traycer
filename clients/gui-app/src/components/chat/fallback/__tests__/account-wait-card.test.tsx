@@ -58,10 +58,8 @@ import {
 import type { LegacyChatSessionHarness } from "@/stores/chats/__tests__/chat-session-test-support";
 import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
-import {
-  observeComposerDraft,
-  type ComposerDraftSelectionRef,
-} from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-observation";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import {
   pinProfile,

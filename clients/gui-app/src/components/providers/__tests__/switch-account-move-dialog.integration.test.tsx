@@ -146,7 +146,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
-import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-observation";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
@@ -197,14 +197,10 @@ interface SwitchHarness {
   openManage(): void;
 }
 
-interface SwitchHarnessController {
-  openManage: (() => void) | null;
-}
-
 interface SwitchHarnessSceneProps {
   readonly input: SwitchHarnessInput;
   readonly selected: Mock<(profileId: string | null) => void>;
-  readonly controller: SwitchHarnessController;
+  readonly onManageReady: (openManage: (() => void) | null) => void;
 }
 
 interface MoveDialogInput {
@@ -345,15 +341,16 @@ function ManagedProfileEntry(props: {
 }
 
 function SwitchHarnessScene(props: SwitchHarnessSceneProps): ReactNode {
+  const { onManageReady } = props;
   const [managedProfileOpen, setManagedProfileOpen] = useState(
     props.input.managedProfileInitiallyOpen,
   );
   useLayoutEffect(() => {
-    props.controller.openManage = () => setManagedProfileOpen(true);
+    onManageReady(() => setManagedProfileOpen(true));
     return () => {
-      props.controller.openManage = null;
+      onManageReady(null);
     };
-  }, [props.controller]);
+  }, [onManageReady]);
   const source = props.input.before.find((row) => row.profileId === SOURCE_ID);
   if (source === undefined) throw new Error("The source profile is missing");
   return (
@@ -459,14 +456,17 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     listBody(input.offers, input.before),
   );
   const selected = vi.fn<(profileId: string | null) => void>();
-  const controller: SwitchHarnessController = { openManage: null };
+  let openManageDialog: (() => void) | null = null;
+  const onManageReady = (openManage: (() => void) | null): void => {
+    openManageDialog = openManage;
+  };
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <SwitchHarnessScene
           input={input}
           selected={selected}
-          controller={controller}
+          onManageReady={onManageReady}
         />
       </TooltipProvider>
     </QueryClientProvider>,
@@ -479,9 +479,9 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     previewRequests,
     commitRequests,
     openManage: () => {
-      const openManage = controller.openManage;
-      if (openManage === null) throw new Error("Manage dialog is not mounted");
-      openManage();
+      if (openManageDialog === null)
+        throw new Error("Manage dialog is not mounted");
+      openManageDialog();
     },
   };
 }
