@@ -1,8 +1,9 @@
 import { renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { usePhaseMigrateToEpic } from "@/hooks/migration/use-phase-migrate-to-epic-mutation";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const testState = vi.hoisted(() => ({
   capturedMethod: "",
@@ -51,6 +52,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 describe("usePhaseMigrateToEpic", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.getState().setSignedOut();
     testState.capturedMethod = "";
     testState.capturedOptions = null;
     testState.getActiveHostId.mockReturnValue("host-active-1");
@@ -82,9 +84,11 @@ describe("usePhaseMigrateToEpic", () => {
     });
   });
 
-  it("uses host error mapping on RPC failure", () => {
+  it("uses signed-out host error mapping on RPC failure", () => {
+    useAuthStore.getState().setSignedOut();
     renderHook(() => usePhaseMigrateToEpic("phase-1"));
 
+    vi.mocked(toast.error).mockClear();
     testState.capturedOptions?.onError?.(
       new HostRpcError({
         code: "UNAUTHORIZED",
@@ -95,6 +99,11 @@ describe("usePhaseMigrateToEpic", () => {
       }),
     );
 
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
   });
 });
