@@ -10,9 +10,11 @@ import type {
   TeamChatAutoArchiveRecord,
   TeamChatAutoArchiveSetRequest,
 } from "@traycer-clients/shared/host-client/team-chat-auto-archive";
-import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import { useHostBinding } from "@/lib/host";
-import { SupersededAuthEraError } from "@/lib/auth/auth-service";
+import {
+  SupersededAuthEraError,
+  type ChosenSignIn,
+} from "@/lib/auth/auth-service";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import {
   authQueryKeys,
@@ -57,7 +59,7 @@ export function useTeamChatAutoArchiveQuery(
  */
 export interface TeamChatAutoArchiveSave {
   readonly request: TeamChatAutoArchiveSetRequest;
-  readonly era: AuthEra;
+  readonly chosenBy: ChosenSignIn;
 }
 
 /**
@@ -83,7 +85,7 @@ export function useTeamChatAutoArchiveSetMutation(
       const result = await auth.setTeamChatAutoArchive(
         teamId,
         save.request,
-        save.era,
+        save.chosenBy,
       );
       if (result.kind !== "ok") throw new Error();
       return result.record;
@@ -91,7 +93,7 @@ export function useTeamChatAutoArchiveSetMutation(
     onSuccess: async (record, save) => {
       const queryKey = authQueryKeys.teamChatAutoArchive(
         auth,
-        save.era.identity,
+        save.chosenBy.userId,
         teamId,
       );
       // An older read still in flight must not land after this save.

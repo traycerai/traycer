@@ -66,10 +66,10 @@ function TeamChatAutoArchiveRowBody(props: {
   const save = useQueuedAutoArchiveSave(
     current,
     (request, callbacks) => {
-      // A read answered, so a sign-in exists; its era is taken now, at the
+      // A read answered, so a sign-in exists; it is taken now, at the
       // choice, not when the queued save's turn comes.
       if (auth === null) return;
-      setPolicy.mutate({ request, era: auth.currentAuthEra() }, callbacks);
+      setPolicy.mutate({ request, chosenBy: auth.chosenSignIn() }, callbacks);
     },
     () => {
       trackSettingChanged("storage", "chatAutoArchive");

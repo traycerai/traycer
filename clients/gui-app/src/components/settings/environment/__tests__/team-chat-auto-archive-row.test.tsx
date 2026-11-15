@@ -10,9 +10,11 @@ import type {
   TeamChatAutoArchiveWriteResult,
 } from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const ERA: AuthEra = { identity: "user-a", credentialGeneration: 1 };
+const CHOSEN: ChosenSignIn = { identityGeneration: 1, userId: "user-a" };
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn<
@@ -23,7 +25,7 @@ const mocks = vi.hoisted(() => ({
       (
         teamId: string,
         request: TeamChatAutoArchiveSetRequest,
-        era: AuthEra,
+        chosenBy: ChosenSignIn,
       ) => Promise<TeamChatAutoArchiveWriteResult>
     >(),
   list: { current: { environments: [] as unknown[] } },
@@ -34,6 +36,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => ({
     auth: {
       currentAuthEra: (): AuthEra => ERA,
+      chosenSignIn: (): ChosenSignIn => CHOSEN,
       getTeamChatAutoArchive: mocks.read,
       setTeamChatAutoArchive: mocks.write,
     },
@@ -123,7 +126,7 @@ describe("TeamChatAutoArchiveRow", () => {
     expect(mocks.write).toHaveBeenCalledExactlyOnceWith(
       "team-a",
       { enabled: true, includeUserCreated: false, idleSeconds: 3600 },
-      ERA,
+      CHOSEN,
     );
     expect(
       await screen.findByText("Include chats members started"),

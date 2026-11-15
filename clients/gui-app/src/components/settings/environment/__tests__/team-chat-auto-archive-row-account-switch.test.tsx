@@ -2,7 +2,8 @@
  * A team's auto-archive saves queue in order, so a save can be sent well after
  * the person chose it. The bearer is read when it is sent, from the one
  * `AuthService` that outlives an account switch: this pins that a save queued
- * under account A is never sent with account B's token.
+ * under account A is never sent with account B's token, and that one queued
+ * across A's own token refresh is still sent, with the refreshed token.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -142,102 +143,147 @@ afterEach(() => {
   bound.auth = null;
 });
 
-describe("TeamChatAutoArchiveRow across an account switch", () => {
+interface MountedRow {
+  readonly host: MockRunnerHost;
+  readonly service: AuthService;
+  readonly queryClient: QueryClient;
+  /** The Authorization header of every PUT, in the order sent. */
+  readonly puts: string[];
+  /** Answers the first PUT, which is held until then. */
+  readonly releaseFirstPut: () => void;
+}
+
+/**
+ * Account A signed in on a real AuthService, the row mounted and read, and
+ * A's two saves made: on (held at the server), then off, queued behind it.
+ */
+async function mountWithQueuedSave(): Promise<MountedRow> {
+  const puts: string[] = [];
+  const firstPut: { release: (() => void) | null } = { release: null };
+  restoreFetch = installFetch((input, init) => {
+    const url = String(input);
+    const authorization = init?.headers?.["Authorization"] ?? "";
+    if (url === VALIDATION_URL)
+      return Promise.resolve(
+        profileFor(authorization === "Bearer token-b" ? "user-b" : "user-a"),
+      );
+    if (url === TEAM_URL && init?.method === "PUT") {
+      puts.push(authorization);
+      if (puts.length === 1)
+        return new Promise<Response>((resolve) => {
+          firstPut.release = () => resolve(savedRecord(true));
+        });
+      return Promise.resolve(savedRecord(false));
+    }
+    if (url === TEAM_URL)
+      return Promise.resolve(
+        new Response("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    return Promise.resolve(new Response(null, { status: 500 }));
+  });
+  const host = new MockRunnerHost({
+    signInUrl:
+      "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const service = new AuthService({ runnerHost: host });
+  services.push(service);
+  await host.tokenStore.signIn(
+    { token: "token-a", refreshToken: "token-a-refresh" },
+    { id: "user-a", email: "user-a@example.com", name: "user-a" },
+  );
+  await service.start();
+  bound.auth = service;
+
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <TeamChatAutoArchiveRow environmentId="env-a" role={ACME.effectiveRole} />,
+    {
+      wrapper: (props: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      ),
+    },
+  );
+  const mainSwitch = (): HTMLElement =>
+    screen.getByRole("switch", {
+      name: "Archive idle agents automatically",
+    });
+  await waitFor(() =>
+    expect(mainSwitch().hasAttribute("disabled")).toBe(false),
+  );
+
+  await userEvent.click(mainSwitch());
+  await waitFor(() => expect(puts).toEqual(["Bearer token-a"]));
+  await userEvent.click(mainSwitch());
+  return {
+    host,
+    service,
+    queryClient,
+    puts,
+    releaseFirstPut: () => firstPut.release?.(),
+  };
+}
+
+function mutationStatuses(queryClient: QueryClient): string[] {
+  return queryClient
+    .getMutationCache()
+    .getAll()
+    .map((mutation) => mutation.state.status);
+}
+
+describe("TeamChatAutoArchiveRow across a sign-in change", () => {
   it("never sends a save queued under one account with the next account's token", async () => {
-    const puts: string[] = [];
-    const firstPut: { release: (() => void) | null } = { release: null };
-    restoreFetch = installFetch((input, init) => {
-      const url = String(input);
-      const authorization = init?.headers?.["Authorization"] ?? "";
-      if (url === VALIDATION_URL)
-        return Promise.resolve(
-          profileFor(authorization === "Bearer token-b" ? "user-b" : "user-a"),
-        );
-      if (url === TEAM_URL && init?.method === "PUT") {
-        puts.push(authorization);
-        if (puts.length === 1)
-          return new Promise<Response>((resolve) => {
-            firstPut.release = () => resolve(savedRecord(true));
-          });
-        return Promise.resolve(savedRecord(false));
-      }
-      if (url === TEAM_URL)
-        return Promise.resolve(
-          new Response("null", {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      return Promise.resolve(new Response(null, { status: 500 }));
-    });
-    const host = new MockRunnerHost({
-      signInUrl:
-        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-    const service = new AuthService({ runnerHost: host });
-    services.push(service);
-    await host.tokenStore.signIn(
-      { token: "token-a", refreshToken: "token-a-refresh" },
-      { id: "user-a", email: "user-a@example.com", name: "user-a" },
-    );
-    await service.start();
-    bound.auth = service;
+    const row = await mountWithQueuedSave();
 
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-    render(
-      <TeamChatAutoArchiveRow
-        environmentId="env-a"
-        role={ACME.effectiveRole}
-      />,
-      {
-        wrapper: (props: { readonly children: ReactNode }) => (
-          <QueryClientProvider client={queryClient}>
-            {props.children}
-          </QueryClientProvider>
-        ),
-      },
-    );
-    const mainSwitch = (): HTMLElement =>
-      screen.getByRole("switch", {
-        name: "Archive idle agents automatically",
-      });
-    await waitFor(() =>
-      expect(mainSwitch().hasAttribute("disabled")).toBe(false),
-    );
-
-    // A turns it on (held at the server), then off again, queued behind it.
-    await userEvent.click(mainSwitch());
-    await waitFor(() => expect(puts).toEqual(["Bearer token-a"]));
-    await userEvent.click(mainSwitch());
-
-    await host.tokenStore.signIn(
+    await row.host.tokenStore.signIn(
       { token: "token-b", refreshToken: "token-b-refresh" },
       { id: "user-b", email: "user-b@example.com", name: "user-b" },
     );
     await vi.waitFor(() => {
-      expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+      expect(row.service.getCurrentSessionSnapshot().token).toBe("token-b");
     });
 
-    firstPut.release?.();
+    row.releaseFirstPut();
     await waitFor(() =>
-      expect(
-        queryClient
-          .getMutationCache()
-          .getAll()
-          .map((mutation) => mutation.state.status),
-      ).toEqual(["success", "error"]),
+      expect(mutationStatuses(row.queryClient)).toEqual(["success", "error"]),
     );
-    expect(puts).toEqual(["Bearer token-a"]);
+    expect(row.puts).toEqual(["Bearer token-a"]);
+  });
+
+  it("sends a save queued across the same account's token refresh, with the refreshed token", async () => {
+    const row = await mountWithQueuedSave();
+    const credentialGeneration = row.service.getCredentialGeneration();
+
+    await row.host.tokenStore.signIn(
+      { token: "token-a2", refreshToken: "token-a2-refresh" },
+      { id: "user-a", email: "user-a@example.com", name: "user-a" },
+    );
+    await vi.waitFor(() => {
+      expect(row.service.getCurrentSessionSnapshot().token).toBe("token-a2");
+    });
+    expect(row.service.getCredentialGeneration()).toBeGreaterThan(
+      credentialGeneration,
+    );
+
+    row.releaseFirstPut();
+    await waitFor(() =>
+      expect(mutationStatuses(row.queryClient)).toEqual(["success", "success"]),
+    );
+    expect(row.puts).toEqual(["Bearer token-a", "Bearer token-a2"]);
   });
 });

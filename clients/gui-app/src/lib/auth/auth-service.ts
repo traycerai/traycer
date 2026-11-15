@@ -241,6 +241,15 @@ const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
  * the same way, which is the correct one: no answer, retain what you have,
  * and let the refresh the new era triggers for itself provide the real one.
  */
+/**
+ * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
+ * write sent later can tell an ended sign-in from a refreshed token.
+ */
+export interface ChosenSignIn {
+  readonly identityGeneration: number;
+  readonly userId: string | null;
+}
+
 export class SupersededAuthEraError extends Error {
   constructor() {
     super("Refusing a read issued for a superseded credential era");
@@ -3305,20 +3314,37 @@ export class AuthService {
     return result;
   }
 
+  /** The sign-in a write is chosen under, read at the press. */
+  chosenSignIn(): ChosenSignIn {
+    return {
+      identityGeneration: this.identityGeneration,
+      userId: this.currentProfile?.userId ?? null,
+    };
+  }
+
   /**
    * Saves a team's setting with the bearer of the sign-in that made the
-   * choice. A save queued behind another one is sent later, so `era` is the
-   * sign-in captured when the person chose, and a different live one throws
-   * {@link SupersededAuthEraError} instead of sending it as someone else.
+   * choice. A save queued behind another one is sent later, so `chosenBy` is
+   * read when the person chose. A sign-in that has ended since throws
+   * {@link SupersededAuthEraError} instead of sending it as someone else; a
+   * same-user token refresh has not ended it, and the save goes out with the
+   * refreshed token. The user check covers a switch projected from another
+   * window, which leaves the identity generation where it was; the profile
+   * is committed with the bearer (`commitLiveCredential`), so it names the
+   * bearer's owner.
    */
   async setTeamChatAutoArchive(
     teamId: string,
     request: TeamChatAutoArchiveSetRequest,
-    era: AuthEra,
+    chosenBy: ChosenSignIn,
   ): Promise<TeamChatAutoArchiveWriteResult> {
     if (this.sandboxControlUnavailableReason() !== null)
       return { kind: "failed" };
-    this.assertLiveAuthEra(era);
+    if (
+      !this.isIdentityCurrent(chosenBy.identityGeneration) ||
+      (this.currentProfile?.userId ?? null) !== chosenBy.userId
+    )
+      throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setTeamChatAutoArchive(bearer, teamId, request);
