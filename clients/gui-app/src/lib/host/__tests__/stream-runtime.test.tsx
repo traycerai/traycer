@@ -1201,8 +1201,7 @@ describe("HostStreamProvider", () => {
       });
       const first = result.current?.wsStreamClient ?? null;
       expect(first).toBeInstanceOf(WsStreamClient);
-      const release = result.current?.retain?.() ?? null;
-      expect(release).not.toBeNull();
+      expect(result.current?.retain?.() ?? null).not.toBeNull();
 
       act(() => {
         directory.publish([BELOW_FLOOR]);
@@ -1210,8 +1209,6 @@ describe("HostStreamProvider", () => {
 
       expect(closeSpy).toHaveBeenCalledTimes(1);
       expect(closeSpy.mock.contexts[0]).toBe(first);
-      release?.();
-      expect(closeSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

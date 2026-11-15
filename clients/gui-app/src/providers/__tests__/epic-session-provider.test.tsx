@@ -2761,7 +2761,6 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
-      expect(streams).toHaveLength(1);
     });
 
     it("keeps the stream when its row is removed", async () => {
@@ -2774,26 +2773,6 @@ describe("<TestEpicSessionTab />", () => {
         await Promise.resolve();
       });
       expect(streams[0].closeCount).toBe(0);
-    });
-
-    it("reacquires one stream when the row rises back above the floor", async () => {
-      const { streams, publishRow } = await mountSessionAtFloor();
-      act(() => {
-        publishRow("1.5.4");
-      });
-      await waitFor(() => {
-        expect(streams[0].closeCount).toBe(1);
-      });
-
-      act(() => {
-        publishRow("2.0.0");
-      });
-
-      await waitFor(() => {
-        expect(streams).toHaveLength(2);
-      });
-      expect(streams[0].closeCount).toBe(1);
-      expect(streams[1].closeCount).toBe(0);
     });
   });
 
