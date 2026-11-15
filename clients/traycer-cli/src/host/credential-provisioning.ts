@@ -1,7 +1,9 @@
+import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "../internal/local-open-auth";
+  createCliHostTokens,
+  type CliHostTokenFailure,
+} from "../internal/cli-host-tokens";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -15,6 +17,7 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "../../../shared/auth/bearer-revalidator";
+import type { HostTokenSessionRevalidator } from "../../../shared/auth/host-token-lease";
 import type { HostCredentialMintOutcome } from "../../../shared/host-transport/host-credential-mint-flow";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import type {
@@ -183,7 +186,9 @@ type AckObservation =
   | { readonly kind: "state"; readonly state: HostCredentialState }
   | { readonly kind: "opened-silent" }
   | { readonly kind: "fatal"; readonly reason: StreamCloseReason | null }
-  | { readonly kind: "timeout" };
+  | { readonly kind: "timeout" }
+  // authn refused this host's token for good: no open can be made.
+  | { readonly kind: "token-refused" };
 
 export async function provisionInstalledHostCredential(
   options: ProvisionHostCredentialOptions,
@@ -281,12 +286,36 @@ export async function provisionInstalledHostCredential(
   // because the terminal fallback is `unreachable`, whose copy says the host
   // never came up - false on its face once the host has spoken to us.
   let hostAnswered = false;
+  // The door refused with its reason, retryably, and has admitted no open
+  // since. Cleared by an admitted open; set again by the next such refusal.
+  let doorRetried = false;
   // CONSECUTIVE silent opens - reset by any ack that carries a state, so an
   // occasional ack losing the race with the grace timer cannot accumulate
   // into a false "this host has no credential capability" verdict.
   let consecutiveSilentOpens = 0;
+  // A mint of the host-only token authn refused for good, and the wake-up of
+  // the lap waiting on an ack that can now never come.
+  let mintRefusal: CliHostTokenFailure | null = null;
+  let wakeOnMintRefusal: (() => void) | null = null;
+  let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
+  // A recovery still in flight is waited for only as long as the bound has
+  // left, never past it. A CANCELABLE deadline, not `sleep()`: an uncleared
+  // `setTimeout` keeps the Node event loop alive, and the CLI exits by
+  // draining it rather than calling `process.exit`, so a plain race would
+  // hold `host install` open for the whole remaining budget every time the
+  // recovery won.
+  const waitForInFlightRevalidation = async (): Promise<void> => {
+    if (inFlightRevalidation === null) return;
+    const pending: Promise<RevalidateOutcome> = inFlightRevalidation;
+    const bound = cancelableDelay(remaining());
+    try {
+      await Promise.race([pending.catch(() => undefined), bound.promise]);
+    } finally {
+      bound.cancel();
+    }
+  };
 
   try {
     await refreshEndpoint();
@@ -327,38 +356,59 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
+    // The open presents this CLI's host-only token for the host, as every
+    // other CLI open does; the stored sign-in is spent at authn alone (the
+    // token's mint and its refresh, and the delegated credential's mint).
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.revalidateCurrentContext(),
+      signal: probeAbort.signal,
+    });
+    // A mint authn refuses for good (a computer with no row answers a bare
+    // 404) can never become a token, so the probe ends at once rather than
+    // waiting out its budget.
+    stopMintRefusals = tokens.onMintRefused((hostId, failure) => {
+      if (endpoint?.hostId !== hostId) return;
+      options.logger.warn("Host credential provisioning token mint refused", {
+        environment: options.environment,
+        failure: failure.kind,
+      });
+      mintRefusal = failure;
+      if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
+    });
+    // Recovery of a refused token, as on every other CLI open: one fresh
+    // token and one more open, and a second refusal is final.
     const streamAuth: StreamAuthRevalidator = {
-      revalidateForReconnect: () => {
-        // Reaching this callback at all means the host answered and rejected
-        // the bearer we presented - it was up and talking, whatever happens
-        // to the refresh below. Recorded before the early return so even a
-        // rotation the deadline cannot cover still counts as contact.
-        hostAnswered = true;
-        // Never START a rotation the deadline cannot cover. The CLI sets
-        // `process.exitCode` rather than calling `process.exit` (see
-        // `runner/exit.ts`), so the process waits for the event loop to
-        // drain: a refresh begun as the budget ran out would keep
-        // `host install` alive past its advertised bound, and disposing the
-        // store does not cancel one already in flight.
-        if (remaining() <= 0) {
-          return Promise.resolve<RevalidateOutcome>("rejected");
-        }
-        const settled = revalidator.revalidateCurrentContext();
-        inFlightRevalidation = settled;
-        // A terminal rejection means the stored sign-in is dead, which the
-        // fatal close alone cannot tell us apart from an unreachable host.
-        void settled.then((outcome) => {
-          if (outcome === "rejected") {
-            credentialRejected = true;
-          }
-        });
-        return settled;
-      },
+      revalidateForReconnect: () =>
+        recoverHostToken((recovery) => recovery.revalidateForReconnect()),
+      revalidateRefused: (refusal) =>
+        recoverHostToken((recovery) => recovery.revalidateRefused(refusal)),
+    };
+    const recoverHostToken = (
+      recover: (
+        recovery: HostTokenSessionRevalidator,
+      ) => Promise<RevalidateOutcome>,
+    ): Promise<RevalidateOutcome> => {
+      // Reaching this callback at all means the host answered and refused
+      // the token we presented - it was up and talking, whatever happens to
+      // the recovery below. Recorded before the early return so even a
+      // recovery the deadline cannot cover still counts as contact.
+      hostAnswered = true;
+      // Never START a recovery the deadline cannot cover. The CLI sets
+      // `process.exitCode` rather than calling `process.exit` (see
+      // `runner/exit.ts`), so the process waits for the event loop to
+      // drain: a mint or refresh begun as the budget ran out would keep
+      // `host install` alive past its advertised bound.
+      if (remaining() <= 0 || endpoint === null) {
+        return Promise.resolve<RevalidateOutcome>("rejected");
+      }
+      const settled = recover(tokens.streamRecovery(endpoint.hostId));
+      inFlightRevalidation = settled;
+      return settled;
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
       onClientClosed: (message) => options.logger.debug(message, {}),
-      localOpenAuth: createCliLocalOpenAuth(options.auth.authnBaseUrl),
       registry: hostStreamRpcRegistry,
       // `null`, and not a stale read of the slot below: `endpoint` is declared
       // `null` here and filled in by the poller, so at CONSTRUCTION this run
@@ -367,9 +417,22 @@ export async function provisionInstalledHostCredential(
       // has no earlier handshake in this process to seed from anyway.
       hostId: null,
       endpoint: () => endpoint,
-      bearer: () => lease,
+      // `null` (the transport's wait) until a host-only token is held for
+      // the host the endpoint names.
+      bearer: () =>
+        endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
       userId: lease.identity.userId,
       auth: streamAuth,
+      // Each admitted open resets the host's recovery, so the one fresh token
+      // is earned again after a good open.
+      door: {
+        refused: () => undefined,
+        admitted: () => {
+          doorRetried = false;
+          if (endpoint !== null)
+            tokens.streamRecovery(endpoint.hostId).admitted();
+        },
+      },
       // No tracker wired yet on the CLI side: this is a short-lived
       // provisioning probe, not a long-lived session a user could rescue by
       // fixing their clock mid-run, and nothing here yet feeds server-time
@@ -433,9 +496,10 @@ export async function provisionInstalledHostCredential(
       // First: a dead sign-in explains every other symptom below it (the
       // stream never opens, nothing is ever minted) and is the only one that
       // does not self-heal, so it must not be reported as "unreachable".
-      if (credentialRejected) {
+      if (credentialRejected || tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
+      if (mintRefusal !== null) return mintRefusalOutcome(mintRefusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
       }
@@ -457,6 +521,12 @@ export async function provisionInstalledHostCredential(
       if (mintWithheld || sawSilentOpen) {
         return { kind: "unsupported" };
       }
+      // The door refused with its reason (a claimed host that has not read
+      // its owner yet) and has admitted no open since: the host answered and
+      // did not take the credential in time.
+      if (doorRetried) {
+        return { kind: "not-adopted" };
+      }
       // The host spoke to us but never got as far as reporting a credential
       // state - the shape of an expired stored bearer whose refresh could
       // not complete (authn unreachable), where the host answers
@@ -471,6 +541,15 @@ export async function provisionInstalledHostCredential(
       }
       return { kind: "unreachable" };
     };
+    // How the probe ended is read only once a recovery still in flight has
+    // answered, or the bound has passed: a sign-in refused inside the bound
+    // is then reported as refused, not as an authorization that did not
+    // complete. A refusal landing after the bound is still not seen.
+    const settleAfterRecovery =
+      async (): Promise<HostCredentialProvisionOutcome> => {
+        await waitForInFlightRevalidation();
+        return settledOutcome();
+      };
     // True when NOTHING observed this run accounts for how it ended - no
     // dead sign-in, no mint history, no capability gap. Deliberately does
     // not consult `hostAnswered`: this asks "is the outcome unexplained?",
@@ -481,6 +560,8 @@ export async function provisionInstalledHostCredential(
     // this probe can report.
     const nothingExplainsTheClose = (): boolean =>
       !credentialRejected &&
+      !tokens.signInRejected() &&
+      mintRefusal === null &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&
@@ -492,15 +573,25 @@ export async function provisionInstalledHostCredential(
       if (remainingMs <= 0) {
         break;
       }
+      if (mintRefusal !== null) return await settleAfterRecovery();
       const { observation, session } = await observeNextAck(
         activeClient,
         (resolver) => {
           observeState = resolver;
         },
+        (wake) => {
+          wakeOnMintRefusal = wake;
+        },
+        () => {
+          doorRetried = true;
+        },
         remainingMs,
       );
       observeState = null;
+      wakeOnMintRefusal = null;
       switch (observation.kind) {
+        case "token-refused":
+          return await settleAfterRecovery();
         case "state": {
           // This ack carried a state, so any silent-open streak was a race
           // with the grace timer, not a capability gap - start it over.
@@ -585,19 +676,19 @@ export async function provisionInstalledHostCredential(
             // guarded, so a second lap must not slip past this branch while
             // the first is still settling.
             mintUnauthorizedConfirmed = true;
-            const confirm = revalidator.revalidateCurrentContext();
+            // Recorded on the rotation itself, so an answer that lands after
+            // this lap stopped waiting still reaches the outcome read at the
+            // exit, inside the bound.
+            const confirm = revalidator
+              .revalidateCurrentContext()
+              .then((outcome) => {
+                if (outcome === "rejected") credentialRejected = true;
+                return outcome;
+              });
             inFlightRevalidation = confirm;
             const confirmBound = cancelableDelay(remaining());
             try {
-              const outcome = await Promise.race([
-                confirm,
-                confirmBound.promise.then(
-                  (): RevalidateOutcome => "network-error",
-                ),
-              ]);
-              if (outcome === "rejected") {
-                credentialRejected = true;
-              }
+              await Promise.race([confirm, confirmBound.promise]);
             } finally {
               confirmBound.cancel();
             }
@@ -653,6 +744,7 @@ export async function provisionInstalledHostCredential(
             // otherwise-unexplained probe, so keying off the returned kind
             // would swallow this close the moment a reconnect revalidation
             // had fired. Its code stays in the structured diagnostic above.
+            await waitForInFlightRevalidation();
             if (nothingExplainsTheClose()) {
               return {
                 kind: "error",
@@ -662,10 +754,10 @@ export async function provisionInstalledHostCredential(
             }
             return settledOutcome();
           }
-          return settledOutcome();
+          return await settleAfterRecovery();
         }
         case "timeout":
-          return settledOutcome();
+          return await settleAfterRecovery();
       }
       // Both exits here are the same idea: the answer is a constant for this
       // client, so the remaining laps would spend the budget re-measuring it.
@@ -685,7 +777,7 @@ export async function provisionInstalledHostCredential(
       await sleep(Math.min(verifyBackoffMs, remaining()));
       verifyBackoffMs = Math.min(verifyBackoffMs * 2, VERIFY_BACKOFF_MAX_MS);
     }
-    return settledOutcome();
+    return await settleAfterRecovery();
   } catch (err) {
     const error = errorFromUnknown(err);
     options.logger.warn("Host credential provisioning failed unexpectedly", {
@@ -695,36 +787,18 @@ export async function provisionInstalledHostCredential(
     });
     return { kind: "error", message: error.message };
   } finally {
+    stopMintRefusals();
     // Null-checked because setup now happens inside the `try`: a throw part
     // way through it must still release whatever was already acquired.
     if (poll !== null) {
       clearInterval(poll);
     }
-    if (inFlightRevalidation !== null) {
-      // Annotated for the same reason as `pendingMint`: assigned only inside
-      // a callback, so TS's linear flow narrows this branch to `never`.
-      const pendingRevalidation: Promise<RevalidateOutcome> =
-        inFlightRevalidation;
-      // A revalidation only ever STARTS with budget left, so the remainder is
-      // the most a started rotation gets to land cleanly (a landed rotation
-      // leaves the credentials file consistent; an interrupted one leaves its
-      // spent-base marker armed for the next process to resolve). Whatever is
-      // still pending when the bound fires is cancelled just below.
-      // A CANCELABLE deadline, not `sleep()`: an uncleared `setTimeout` keeps
-      // the Node event loop alive, and the CLI exits by draining it rather
-      // than calling `process.exit`. A plain race would therefore hold
-      // `host install` open for the whole remaining budget every time the
-      // revalidation won - the exact hang this block exists to prevent.
-      const deadline = cancelableDelay(remaining());
-      try {
-        await Promise.race([
-          pendingRevalidation.catch(() => undefined),
-          deadline.promise,
-        ]);
-      } finally {
-        deadline.cancel();
-      }
-    }
+    // A revalidation only ever STARTS with budget left, so the remainder is
+    // the most a started rotation gets to land cleanly (a landed rotation
+    // leaves the credentials file consistent; an interrupted one leaves its
+    // spent-base marker armed for the next process to resolve). Whatever is
+    // still pending when the bound fires is cancelled just below.
+    await waitForInFlightRevalidation();
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
     }
@@ -745,6 +819,25 @@ export async function provisionInstalledHostCredential(
 }
 
 /**
+ * A host-only token authn refused for good: a rejected or missing sign-in
+ * needs `traycer login`; a person who is not a member of the computer's team
+ * reads the membership refusal a door gives them; every other refusal (a
+ * computer with no row, a frozen sandbox) means the handoff did not complete.
+ */
+function mintRefusalOutcome(
+  failure: CliHostTokenFailure,
+): HostCredentialProvisionOutcome {
+  if (failure.kind === "sign-in-rejected" || failure.kind === "no-sign-in")
+    return { kind: "unauthorized" };
+  if (failure.kind === "not-a-member")
+    return {
+      kind: "error",
+      message: hostTokenFailureCliError(failure).message,
+    };
+  return { kind: "mint-unavailable" };
+}
+
+/**
  * Opens one probe session and resolves on the first credential-state ack, a
  * silent open (state never reported), a fatal close, or the bound. The session
  * is closed here on every path EXCEPT `state`: a non-active state needs the
@@ -754,6 +847,8 @@ export async function provisionInstalledHostCredential(
 function observeNextAck(
   client: WsStreamClient<HostStreamRpcRegistry>,
   bindObserver: (resolver: (state: HostCredentialState) => void) => void,
+  bindMintRefusal: (wake: () => void) => void,
+  onDoorRetry: () => void,
   timeoutMs: number,
 ): Promise<{
   readonly observation: AckObservation;
@@ -788,8 +883,19 @@ function observeNextAck(
       // handoff on this very session.
       finish({ kind: "state", state }, false);
     });
+    bindMintRefusal(() => {
+      finish({ kind: "token-refused" }, true);
+    });
     session.onStatusChange((status, reason, retryCause) => {
-      if (retryCause && localTeamAdmissionCliError(retryCause) !== null) {
+      if (retryCause && retryCause.doorReason !== undefined) onDoorRetry();
+      // A retryable refusal that carries the door's reason (a claimed host
+      // that has not read its owner yet answers `not_admitted`) is retried
+      // quietly inside the bound, whatever code carries it.
+      if (
+        retryCause &&
+        retryCause.doorReason === undefined &&
+        localTeamAdmissionCliError(retryCause) !== null
+      ) {
         finish(
           {
             kind: "fatal",

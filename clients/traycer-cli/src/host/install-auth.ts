@@ -10,10 +10,7 @@ import {
   runEnvironmentMove,
   type EnvironmentMoveHost,
 } from "@traycer-clients/shared/environment/environment-move-flow";
-import type {
-  EnvironmentDescriptor,
-  EnvironmentHostBinding,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentOperationTarget } from "@traycer/protocol/host/environment/move-contracts";
 import {
   mayHaveReachedHost,
@@ -21,14 +18,16 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   callHostRpcAtResolvedEndpoint,
-  callHostRpcWithDispatch,
   PLAIN_DISPATCH,
   resolveEndpoint,
   hostRpcToCliError,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { createCliEnvironmentCloud } from "../internal/cli-environment-cloud";
-import { storedCredentialRejectedCliError } from "../internal/host-door-words";
+import {
+  HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+  storedCredentialRejectedCliError,
+} from "../internal/host-door-words";
 import {
   readCredentialsFile,
   type StoredCredentials,
@@ -47,6 +46,10 @@ import {
   readHostPidMetadata,
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import {
+  readSignInEnvironments,
+  type SignInEnvironment,
+} from "../internal/sign-in-environments";
 import { errorFromUnknown } from "../logger";
 import {
   CLI_ERROR_CODES,
@@ -656,16 +659,12 @@ export async function useInstalledHostTeam(
     requiredHostMethodVersion: MOVE_PLAN_FLOOR,
   };
   const selector = teamSlugFromSelector(team);
-  const { environments } = await toAgentCliError(
-    callHostRpcWithDispatch("environment.list", {}, dispatch),
-  );
-  const teams = environments.filter(
+  // The teams the sign-in's own record lists, labelled by slug.
+  const teams = (await readSignInEnvironments()).filter(
     (environment) => environment.ownerKind === "organization",
   );
   const exactMatches = teams.filter(
-    (environment) =>
-      environment.environmentId === selector ||
-      environment.providerHandle === selector,
+    (environment) => environment.environmentId === selector,
   );
   const matches =
     exactMatches.length > 0
@@ -699,7 +698,7 @@ export async function useInstalledHostTeam(
   if (host === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: "This computer's ownership could not be confirmed. Try again.",
+      message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
       details: null,
       exitCode: 1,
     });
@@ -795,7 +794,7 @@ export async function useInstalledHostTeam(
 async function giveInstalledHostToTeam(
   endpoint: HostTransportEndpoint,
   auth: HostAuth,
-  target: EnvironmentDescriptor,
+  target: SignInEnvironment,
   moveTarget: EnvironmentOperationTarget,
   planHash: string,
 ): Promise<EnvironmentHostBinding> {
@@ -905,7 +904,7 @@ function acceptanceFailure(
 async function awaitGivenBinding(
   hostId: string,
   auth: HostAuth,
-  target: EnvironmentDescriptor,
+  target: SignInEnvironment,
   attemptId: string,
 ): Promise<EnvironmentHostBinding | null> {
   const settled: {

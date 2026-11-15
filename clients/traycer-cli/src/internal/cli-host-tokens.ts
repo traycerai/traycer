@@ -40,9 +40,9 @@ export interface CliSignIn {
   /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
   readonly refresh: () => Promise<RevalidateOutcome>;
   /**
-   * The command's own cancellation for every mint these tokens make, the
-   * recoveries the shared revalidator asks for included; null for tokens
-   * that live as long as the process.
+   * Cancels this process's own mints, so a mint a deadline abandons cannot
+   * keep the CLI from exiting. `null` for a caller that lives as long as its
+   * command.
    */
   readonly signal: AbortSignal | null;
 }
@@ -183,6 +183,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // credentials lock stayed busy, or its write failed) is unavailable, as a
   // mint that could not reach authn is: transient, never a rejected sign-in,
   // and never a rejection for a caller that cannot handle one.
+  // A mint asked with no signal of its own (the shared recovery after a
+  // host's refusal asks so) is cancelled with this process's own mints.
   const source: HostTokenAccess = {
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
@@ -334,7 +336,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     // after the refresh authn accepted is a rejected sign-in; one that
     // another mint got to first is recovered as any 401 is.
     renewAfterSignInRefresh: async (hostId) => {
-      const renewed = await source.obtain(userId, hostId, true, null);
+      const renewed = await source.obtain(userId, hostId, true, signIn.signal);
       if (renewed.kind === "no-sign-in") report(hostId, renewed);
       if (renewed.kind !== "sign-in-rejected") return renewed.kind === "ok";
       if (refusedAfterRefresh) {
