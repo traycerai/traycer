@@ -901,13 +901,19 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
   useAuthStore.setState({ status: "signed-in" });
   useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   const authHarness = buildTeamAuthRuntime(queryClient);
-  const assembly = assembleTeamPage(options, queryClient, authHarness);
+  const assembly = assembleTeamPage(
+    { ...options, pinBoundaryWindowHost: true },
+    queryClient,
+    authHarness,
+  );
   return createTeamPageHarness(assembly, (props) => (
-    <QueryClientProvider client={queryClient}>
-      <ConfigurationSourceContext.Provider value={options.source}>
-        {props.children}
-      </ConfigurationSourceContext.Provider>
-    </QueryClientProvider>
+    <HostRuntimeContext.Provider value={assembly.binding}>
+      <QueryClientProvider client={queryClient}>
+        <ConfigurationSourceContext.Provider value={options.source}>
+          {props.children}
+        </ConfigurationSourceContext.Provider>
+      </QueryClientProvider>
+    </HostRuntimeContext.Provider>
   ));
 }
 
