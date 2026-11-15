@@ -167,12 +167,15 @@ function stageWedgedHost(
       await import("../../../../shared/host-transport/host-messenger");
     const FailureError =
       failure === "transport" ? HostTransportFailureError : HostRpcError;
+    // Loaded here, with the module, and not on the first attempt: a module
+    // load is real I/O, and inside the bounded call it spans as many turns as
+    // the machine is loaded for, while the test's clock moves on every turn.
+    const { hostNotYetErrors } = await import("./host-not-yet-errors");
     let attempt = 0;
     return {
       ...actual,
       callHostRpcAtEndpoint: async () => {
         if (typeof failure === "function") {
-          const { hostNotYetErrors } = await import("./host-not-yet-errors");
           return failure(attempt++, hostNotYetErrors);
         }
         throw new FailureError({
