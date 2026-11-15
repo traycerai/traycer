@@ -856,6 +856,56 @@ describe("buildHostInstallCommand", () => {
     expect(urls.some((url) => url.includes("remote-access"))).toBe(false);
   });
 
+  it("leaves a sign-in made during the command alone when --team enrols the computer", async () => {
+    const token = "inline-team-token";
+    await writeCredentialsFile(
+      cliCredentialsPath("production"),
+      {
+        token,
+        refreshToken: "inline-refresh",
+        savedAt: "2026-11-10T00:00:00.000Z",
+        user: {
+          id: "test-person",
+          email: "fixture@example.test",
+          name: "Member",
+        },
+      },
+      0,
+    );
+    mocks.attendedTeamInstallMock.mockResolvedValue({
+      kind: "enrol",
+      session: {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      },
+      slug: "acme",
+      token: "attended-install-token",
+      environmentId: "resolved-environment-acme",
+    });
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue({
+      hostId: "host-local",
+      environmentId: "resolved-environment-acme",
+    });
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    const ctx = fakeCtx();
+
+    await buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx);
+
+    // The enrol path has no sign-out step and no warning about one.
+    expect(ctx.output.humanRequired).not.toHaveBeenCalled();
+    expect(
+      (await readCredentialsFile(cliCredentialsPath("production")))?.token,
+    ).toBe(token);
+  });
+
   it("does not stage or install when authn rejects a non-member", async () => {
     mocks.attendedTeamInstallMock.mockRejectedValue(
       cliError({
@@ -1080,11 +1130,10 @@ describe("buildHostInstallCommand", () => {
     });
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
     expect(legacyHost.requests).toEqual([]);
-    expect(ctx.progress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: "host-team",
-        message: "Restarting Traycer on this computer to run as acme…",
-      }),
+    // The plan is read before anything is printed, so a host that cannot
+    // transfer is refused with no disclosure and no restart line.
+    expect(ctx.progress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "host-team" }),
     );
   });
 
