@@ -1,3 +1,4 @@
+import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
@@ -116,10 +117,7 @@ import {
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import { mergeOrder } from "@/lib/order-merge";
 import {
@@ -2176,7 +2174,7 @@ function ProfileRateLimitProviderBlock({
   const fetchScope = useProviderRateLimitFetchScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
-  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+  const setProfileEnabled = useAccountProfileSetEnabledForClient(
     client,
     providerId,
   );
