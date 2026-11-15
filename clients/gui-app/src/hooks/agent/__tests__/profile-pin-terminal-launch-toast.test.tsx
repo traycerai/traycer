@@ -73,13 +73,16 @@ function start(error: HostRpcError): {
 } {
   const queryClient = createAppQueryClient();
   const client = launchClient(error);
-  const view = renderHook(() => useAgentStartTerminalSession(client), {
-    wrapper: (props: { readonly children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
-    ),
-  });
+  const view = renderHook(
+    () => useAgentStartTerminalSession(client, "gesture"),
+    {
+      wrapper: (props: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      ),
+    },
+  );
   view.result.current.mutate(LAUNCH);
   return { currentError: () => view.result.current.error };
 }

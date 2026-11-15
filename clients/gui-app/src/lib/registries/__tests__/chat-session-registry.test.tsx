@@ -468,7 +468,7 @@ function accountWaitClient(): {
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
 } {
   const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
-  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "1.0.0");
+  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "2.0.0");
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -1037,7 +1037,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     signIn();
     openTransportRef.fn = createTrackedOpenTransport().openTransport;
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
     const { result } = renderHook(
       () => useChatSessionHandle(ACCOUNT_WAIT_CHAT_ID, LOCAL_HOST_ID, true),
       { wrapper },
