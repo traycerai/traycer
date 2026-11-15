@@ -1,5 +1,5 @@
 import { createElement, lazy } from "react";
-import { Bot } from "lucide-react";
+import { TracyTabIcon } from "@/components/bots/tracy-entry-picture";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { isTracyPath, tracyPathname, tracyRoute } from "@/lib/routes";
 import type { TabKindModule, TabRef } from "@/stores/tabs/types";
@@ -46,7 +46,7 @@ export const tracyTabModule: TabKindModule<"tracy", TracySurfaceSource> = {
     botId: source.botId,
     route: tracyPathname(source.botId),
     name: TRACY_TAB_LABEL,
-    icon: Bot,
+    icon: TracyTabIcon,
     canDuplicate: false,
     canOpenInNewWindow: false,
     appearance: null,

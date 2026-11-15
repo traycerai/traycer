@@ -989,6 +989,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     const composer = renderHook<void, { readonly draftId: string }>(
