@@ -769,7 +769,7 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          return { outcome: "removed" };
+          return { outcome: "revoked" };
         },
       },
     );
@@ -800,7 +800,7 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          return { outcome: "removed" };
+          return { outcome: "revoked" };
         },
       },
     );

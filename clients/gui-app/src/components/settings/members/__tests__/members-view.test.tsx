@@ -43,6 +43,7 @@ import type {
   EnvironmentMembersInviteResponse,
   EnvironmentMembersRemovePreviewResponse,
   EnvironmentMembersRemoveResponse,
+  EnvironmentMembersResponseV12,
   EnvironmentMembersSetRoleResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -149,9 +150,15 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
 function membersRead(
   members: readonly MembersListMember[],
   legacyRoleNoticeSeenAt: number | null,
-) {
+): EnvironmentMembersResponseV12 {
   return {
-    members: members.map((entry) => ({ ...entry, avatarUrl: null })),
+    // A seat holding no authority is the wire's retired "viewer", which the
+    // app reads back as no role.
+    members: members.map((entry) => ({
+      ...entry,
+      effectiveRole: entry.effectiveRole ?? "viewer",
+      avatarUrl: null,
+    })),
     nextCursor: null,
     legacyRoleNoticeSeenAt,
     legacyMembers: [],
