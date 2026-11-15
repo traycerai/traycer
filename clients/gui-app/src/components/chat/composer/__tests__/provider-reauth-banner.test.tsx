@@ -36,6 +36,15 @@ import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__
 import { AuthService } from "@/lib/auth/auth-service";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
+import type { ProvidersAwaitLoginResponse } from "@traycer/protocol/host/provider-schemas";
+import {
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 
 // The banner shows only for web-login providers; it receives live provider
 // `state` as a prop (from the composer's re-auth gate). Reconnect methods are
@@ -137,9 +146,24 @@ const mocks = vi.hoisted(() => ({
   credentialRefusal: null as string | null,
 }));
 
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => mocks.credentialRefusal,
 }));
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
 
 afterEach(() => {
   mocks.credentialRefusal = null;
@@ -164,7 +188,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
       return mocks.hostClient;
     },
     useAuthService: (): AuthService => {
-      if (!mocks.useRealKeyChange) return actual.useAuthService();
+      if (!mocks.useRealKeyChange) return currentAuthService();
       if (mocks.authService === null) {
         throw new Error("The provider-key test service is unavailable.");
       }
@@ -198,6 +222,7 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
   return {
     ...actual,
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
+    useAuthService: currentAuthService,
   };
 });
 // The login flow starts through `mutateAsync` (its promise settles even where
@@ -340,6 +365,10 @@ afterEach(() => {
     rig.spine.dispose();
   }
   resetNegotiatedManifests();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
 });
 
 function render(ui: ReactElement) {
@@ -2691,5 +2720,176 @@ describe("<ProviderReauthBanner /> report action code", () => {
     const code = lastReportCode();
     expect(code).toBe("codex:profile_unauthenticated");
     expect(code ?? "").not.toContain("prof-SECRET-123");
+  });
+});
+
+describe("ProviderReauthBanner sign-in request recording", () => {
+  function signInRequestAnswer(): ProvidersAwaitLoginResponse {
+    return providersAwaitLoginResponseSchema.parse({
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      signInRequest: SIGN_IN_REQUEST_FIXTURE,
+    });
+  }
+
+  function finalAuthenticatedAnswer(): ProvidersAwaitLoginResponse {
+    const state = claudeState(CLAUDE_CAP);
+    return providersAwaitLoginResponseSchema.parse({
+      state: {
+        ...state,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+    });
+  }
+
+  function realAwaitClient(answers: readonly ProvidersAwaitLoginResponse[]) {
+    let answerIndex = 0;
+    return buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [claudeState(CLAUDE_CAP)],
+          native: null,
+        }),
+        "providers.awaitLogin": () => {
+          if (answerIndex >= answers.length)
+            throw new Error("banner scenario has no await answer");
+          const answer = answers[answerIndex];
+          answerIndex += 1;
+          return answer;
+        },
+      },
+    });
+  }
+
+  function renderRealBanner() {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([signInRequestAnswer()]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    return messenger;
+  }
+
+  it("records before the second await and settles from its final answer", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([
+      signInRequestAnswer(),
+      finalAuthenticatedAnswer(),
+    ]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    activeSignInFetch?.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "providers.list"),
+      ).toHaveLength(1);
+    });
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(2);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(awaitCalls[1]?.params).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(activeSignInFetch?.fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Sign-in did not finish. Try again.")).toBeNull();
+    expect(screen.queryByText(/Approve sign-in in your browser/)).toBeNull();
+  });
+
+  it("returns to its start banner when recording is forbidden", async () => {
+    const harness = activeSignInFetch;
+    if (harness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    harness.enqueue(FORBIDDEN_SIGN_IN_REQUEST_REPLY);
+    const messenger = renderRealBanner();
+
+    await clickAuthenticate();
+
+    await waitFor(() => {
+      expect(mocks.realAwaitLoginSuccess).toBe(true);
+      expect(
+        screen.getByText("Sign in to Claude Code to run it."),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByText("Sign-in did not finish. Try again.")).toBeNull();
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
+    expect(harness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's await unchanged without recording", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([
+      providersAwaitLoginResponseSchema.parse({
+        state: null,
+        existingProfileId: null,
+        codeRejected: false,
+        refusal: null,
+      }),
+    ]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(1);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(activeSignInFetch?.fetchMock).not.toHaveBeenCalled();
   });
 });
