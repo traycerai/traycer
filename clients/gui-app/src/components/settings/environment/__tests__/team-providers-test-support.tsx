@@ -197,11 +197,10 @@ export function profileTriggerName(
     : `Claude Code profile: ${profileName}`;
 }
 
-export function openProfileMenu(accessibleName: string): HTMLElement {
+export function openProfileMenu(accessibleName: string): void {
   const trigger = screen.getByRole("button", { name: accessibleName });
   fireEvent.pointerDown(trigger);
   fireEvent.click(trigger);
-  return trigger;
 }
 
 export function profileRowSwitch(profileName: string): HTMLElement {

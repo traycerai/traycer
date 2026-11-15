@@ -4,7 +4,6 @@ import {
   BOT_MASCOT_ACCESSORIES,
   BOT_MASCOT_EYEWEAR,
   type BotAppearance,
-  type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -12,9 +11,8 @@ import { BotMascotPreview } from "@/components/bots/bot-avatars";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
-import { useBotUpdateAppearanceMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotLookSaver } from "@/hooks/bots/use-bot-look-save";
 import {
   MASCOT_SHAPES,
   botMascot,
@@ -48,23 +46,6 @@ const COLORS: readonly number[] = Array.from(
   (_, index) => index,
 );
 
-/** Which part of the look a write changes, read off its request. */
-type AppearanceField =
-  | "mark"
-  | "color"
-  | "eyewear"
-  | "accessory"
-  | "background";
-
-function fieldOf(request: BotUpdateAppearanceRequest): AppearanceField | null {
-  if (request.mark !== undefined) return "mark";
-  if (request.color !== undefined) return "color";
-  if (request.eyewear !== undefined) return "eyewear";
-  if (request.accessory !== undefined) return "accessory";
-  if (request.background !== undefined) return "background";
-  return null;
-}
-
 /** A part's name as its button reads it: "Blob", "Shades", "None". */
 function partName(part: string): string {
   return part.charAt(0).toUpperCase() + part.slice(1);
@@ -81,12 +62,10 @@ export function BotAppearanceSettings(props: {
   const { botId } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "bot.updateAppearance") === true;
-  const update = useBotUpdateAppearanceMutation(client);
+  const saver = useBotLookSaver(client, hostId, botId);
   const look = useBotLook(botId);
   const main = useBotIsMain(botId);
-  if (!supported) return null;
+  if (!saver.supported) return null;
   const appearance: BotAppearance = look ?? {
     mark: null,
     color: null,
@@ -94,12 +73,7 @@ export function BotAppearanceSettings(props: {
     eyewear: null,
     accessory: null,
   };
-  const pending = update.isPending ? fieldOf(update.variables) : null;
-  const failed = update.isError ? fieldOf(update.variables) : null;
-  const refusal = (field: AppearanceField): string | null =>
-    failed === field && update.error !== null ? update.error.message : null;
-  const change = (request: Omit<BotUpdateAppearanceRequest, "botId">): void =>
-    update.mutate({ botId, ...request });
+  const change = saver.choose;
   const current = botMascot(botId, appearance, main);
   return (
     <>
@@ -111,9 +85,8 @@ export function BotAppearanceSettings(props: {
         chosen={current.shape}
         isDefault={appearance.mark === null}
         preview={(shape) => ({ ...current, shape })}
-        pending={pending === "mark"}
-        disabled={update.isPending}
-        refusal={refusal("mark")}
+        pending={saver.saving("mark")}
+        refusal={saver.refusal("mark")}
         onChange={(shape) =>
           change({ mark: shape === null ? null : { kind: "mascot", shape } })
         }
@@ -122,9 +95,8 @@ export function BotAppearanceSettings(props: {
         label="Colour"
         testId="bot-settings-colour"
         chosen={appearance.color}
-        pending={pending === "color"}
-        disabled={update.isPending}
-        refusal={refusal("color")}
+        pending={saver.saving("color")}
+        refusal={saver.refusal("color")}
         onChange={(color) => change({ color })}
       />
       <MascotPartSection
@@ -135,9 +107,8 @@ export function BotAppearanceSettings(props: {
         chosen={current.eyewear}
         isDefault={(appearance.eyewear ?? null) === null}
         preview={(eyewear) => ({ ...current, eyewear })}
-        pending={pending === "eyewear"}
-        disabled={update.isPending}
-        refusal={refusal("eyewear")}
+        pending={saver.saving("eyewear")}
+        refusal={saver.refusal("eyewear")}
         onChange={(eyewear) => change({ eyewear })}
       />
       <MascotPartSection
@@ -148,18 +119,16 @@ export function BotAppearanceSettings(props: {
         chosen={current.accessory}
         isDefault={(appearance.accessory ?? null) === null}
         preview={(accessory) => ({ ...current, accessory })}
-        pending={pending === "accessory"}
-        disabled={update.isPending}
-        refusal={refusal("accessory")}
+        pending={saver.saving("accessory")}
+        refusal={saver.refusal("accessory")}
         onChange={(accessory) => change({ accessory })}
       />
       <ColorSection
         label="Background"
         testId="bot-settings-background"
         chosen={appearance.background}
-        pending={pending === "background"}
-        disabled={update.isPending}
-        refusal={refusal("background")}
+        pending={saver.saving("background")}
+        refusal={saver.refusal("background")}
         onChange={(background) => change({ background })}
       />
     </>
@@ -227,7 +196,6 @@ function MascotPartSection<Part extends string>(props: {
   readonly isDefault: boolean;
   readonly preview: (option: Part) => MascotLook;
   readonly pending: boolean;
-  readonly disabled: boolean;
   readonly refusal: string | null;
   readonly onChange: (option: Part | null) => void;
 }): ReactNode {
@@ -253,7 +221,6 @@ function MascotPartSection<Part extends string>(props: {
             aria-pressed={option === chosen}
             className={CHOICE_CLASS}
             data-testid={`${choiceTestId}-${option}`}
-            disabled={props.disabled}
             onClick={() => onChange(option)}
           >
             <BotMascotPreview mascot={preview(option)} size="default" />
@@ -263,7 +230,7 @@ function MascotPartSection<Part extends string>(props: {
       <div>
         <UseDefaultButton
           testId={`${testId}-default`}
-          disabled={props.disabled || props.isDefault}
+          disabled={props.isDefault}
           onClick={() => onChange(null)}
         />
       </div>
@@ -279,7 +246,6 @@ function ColorSection(props: {
   /** The chosen colour; one this client cannot read presses none. */
   readonly chosen: BotAppearance["color"];
   readonly pending: boolean;
-  readonly disabled: boolean;
   readonly refusal: string | null;
   readonly onChange: (color: number | null) => void;
 }): ReactNode {
@@ -305,7 +271,6 @@ function ColorSection(props: {
             aria-pressed={chosen === index}
             className={CHOICE_CLASS}
             data-testid={`${testId}-${String(index)}`}
-            disabled={props.disabled}
             onClick={() => onChange(index)}
           >
             <span
@@ -319,7 +284,7 @@ function ColorSection(props: {
       <div>
         <UseDefaultButton
           testId={`${testId}-default`}
-          disabled={props.disabled || chosen === null}
+          disabled={chosen === null}
           onClick={() => onChange(null)}
         />
       </div>

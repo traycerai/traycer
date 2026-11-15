@@ -398,7 +398,7 @@ describe("TeamProviders items", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("says on its Env tab that the team's variables reach every host running the team", async () => {
+  it("describes the selected provider's variables on its Env tab with a reachable host", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [envOverride("https://old.example", 7)]),
       "environment.host.list": () => ({ hosts: [reachableHost] }),
@@ -415,10 +415,9 @@ describe("TeamProviders items", () => {
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
     expect(subtitle.textContent).toBe("Variables for the selected provider.");
-    expect(subtitle.textContent).not.toContain("Personal");
   });
 
-  it("names no mechanism on its Env tab while the team has no reachable host to confirm the scope from", async () => {
+  it("describes the selected provider's variables on its Env tab without a reachable host", async () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers(() => [envOverride("https://old.example", 7)]),
@@ -429,11 +428,9 @@ describe("TeamProviders items", () => {
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
     expect(subtitle.textContent).toBe("Variables for the selected provider.");
-    expect(subtitle.textContent).not.toContain("each time it starts");
-    expect(subtitle.textContent).not.toContain("conversations");
   });
 
-  it("says on its Env tab that a native-config-only provider's variables never reach its conversations", async () => {
+  it("describes a native-config-only provider's variables on its Env tab", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => []),
       "environment.host.list": () => ({ hosts: [reachableHost] }),
@@ -451,7 +448,6 @@ describe("TeamProviders items", () => {
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
     expect(subtitle.textContent).toBe("Variables for the selected provider.");
-    expect(subtitle.textContent).not.toContain("conversations");
   });
 
   it("edits a pack policy against its revision for an editor and shows a viewer the text", async () => {

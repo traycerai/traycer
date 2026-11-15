@@ -174,7 +174,7 @@ function resolveAndOpenArtifactRelativeHref(
  * it was written; `null` gives it no folder candidate, as for an artifact
  * whose chain cannot be rebuilt.
  */
-export type ArtifactTreeLinkOpener = (
+type ArtifactTreeLinkOpener = (
   link: OpenableArtifactLink,
   event: LinkClickEvent,
   folderChain: readonly string[] | null,
@@ -184,7 +184,7 @@ export type ArtifactTreeLinkOpener = (
  * Opens what `path`, read from `folderChain`, names in the artifacts tree, and
  * nothing outside it: no workspace or disk file, no other Epic.
  */
-export type ArtifactTreeOnlyOpener = (
+type ArtifactTreeOnlyOpener = (
   path: string,
   folderChain: readonly string[],
 ) => void;
@@ -343,7 +343,7 @@ function markdownFileLink(
   };
 }
 
-export function useArtifactTreeLinkOpener(args: {
+function useArtifactTreeLinkOpener(args: {
   readonly epicId: string;
   readonly viewTabId: string;
 }): ArtifactTreeLinkOpener {

@@ -1,11 +1,12 @@
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 
 /**
- * Why a task the bot started is on its Activity list, in the list's order: a
+ * Why a task is on the bot's Activity list, in the list's order: a
  * surface in it waits on a person, an agent in it is working, an agent in it
- * carries a result not yet seen, or it is a periodic check-in still tracking.
+ * carries a result not yet seen, it is a periodic check-in still tracking,
+ * or its quiet state is not yet attested.
  */
-export type BotActiveBand =
+type BotActiveBand =
   | "needs-you"
   | "working"
   | "unseen"

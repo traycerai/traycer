@@ -184,7 +184,6 @@ function followedThreadsOf(
         newReplies: threadHasNewReplies(
           cursors,
           thread.threadId,
-          thread.lastReplyAt,
           !channelMuted(levels?.levels, thread.conversationId),
         ),
       });

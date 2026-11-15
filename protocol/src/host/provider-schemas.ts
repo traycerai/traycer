@@ -49,10 +49,12 @@ import {
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
   nativeMutationResultSchemaV14,
+  nativeMutationResultSchemaV15,
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
   nativeMutationSchemaV12,
+  nativeMutationSchemaV15,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
@@ -4581,6 +4583,20 @@ export type ProvidersNativeMutateRequestV14 = z.infer<
 >;
 
 /**
+ * `providers.nativeMutate@1.5` request: `@1.4` with the `promoteToPersonal`
+ * arm carrying `intentOperationId` (`nativePromoteToPersonalMutationSchemaV15`).
+ * The field is on the arm, not on the request.
+ */
+export const providersNativeMutateRequestSchemaV15 = lazySchema(() =>
+  providersNativeMutateRequestSchemaV14.extend({
+    mutation: nativeMutationSchemaV15,
+  }),
+);
+export type ProvidersNativeMutateRequestV15 = z.infer<
+  typeof providersNativeMutateRequestSchemaV15
+>;
+
+/**
  * `providers.nativeMutate@1.0` response. Returns only the mutated native
  * collection: the old `setEnabled` carrier also echoed the full
  * `ProviderCliState`, but no client ever read it on the native arm, and
@@ -4607,6 +4623,14 @@ export const providersNativeMutateResponseSchemaV14 = lazySchema(() =>
 );
 export type ProvidersNativeMutateResponseV14 = z.infer<
   typeof providersNativeMutateResponseSchemaV14
+>;
+
+/** `providers.nativeMutate@1.5` response: the promote arm's seven codes. */
+export const providersNativeMutateResponseSchemaV15 = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV15 }),
+);
+export type ProvidersNativeMutateResponseV15 = z.infer<
+  typeof providersNativeMutateResponseSchemaV15
 >;
 
 // ── Model providers (optional capability channel) ──────────────────────────
