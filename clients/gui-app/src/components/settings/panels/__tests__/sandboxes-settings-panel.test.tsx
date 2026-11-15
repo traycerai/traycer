@@ -23,6 +23,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -153,11 +154,27 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => mocks.binding,
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => {
+      const binding = actual.useHostBinding();
+      return mocks.binding === null
+        ? binding
+        : {
+            ...binding,
+            ...mocks.binding,
+            auth: {
+              ...mocks.binding.auth,
+              listEnvironments: () => requireTeamCloudAuth().listEnvironments(),
+              environmentCloud: () => requireTeamCloudAuth().environmentCloud(),
+            },
+          };
+    },
+  };
+});
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -508,6 +525,20 @@ function hostPage(): TeamPageHarness {
     }),
     "environment.configuration.items.put": () =>
       host.put === null ? { outcome: "saved", revision: 1 } : host.put(),
+  });
+  useAuthStore.setState({
+    shareableTeams: host.environments.flatMap((environment) =>
+      environment.ownerKind === "organization" &&
+      environment.providerHandle !== null
+        ? [
+            {
+              teamId: environment.ownerId,
+              slug: environment.providerHandle,
+              avatarUrl: null,
+            },
+          ]
+        : [],
+    ),
   });
   return harness;
 }

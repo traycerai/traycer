@@ -557,16 +557,19 @@ describe("TeamVariablesAndShells", () => {
         "value",
         "/bin/zsh",
       );
-      const reads = harness.paramsOf("environment.configuration.items").length;
+      const shellReads = () =>
+        harness.cloudRequests.filter(
+          (request) =>
+            new URL(request.url).searchParams.get("kind") === "shell",
+        );
+      const reads = shellReads().length;
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(
         await screen.findByText(
           "Saved, but latest settings haven't refreshed.",
         ),
       ).toBeTruthy();
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 1,
-      );
+      expect(shellReads()).toHaveLength(reads + 1);
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(1);
@@ -696,7 +699,12 @@ describe("TeamVariablesAndShells", () => {
         "disabled",
         true,
       );
-      const reads = harness.paramsOf("environment.configuration.items").length;
+      const shellReads = () =>
+        harness.cloudRequests.filter(
+          (request) =>
+            new URL(request.url).searchParams.get("kind") === "shell",
+        );
+      const reads = shellReads().length;
       items = [{ ...shellItem, revision: 4 }];
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(
@@ -716,9 +724,7 @@ describe("TeamVariablesAndShells", () => {
           false,
         );
       });
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 2,
-      );
+      expect(shellReads()).toHaveLength(reads + 2);
       expect(
         harness.paramsOf("environment.configuration.items.delete"),
       ).toEqual([
