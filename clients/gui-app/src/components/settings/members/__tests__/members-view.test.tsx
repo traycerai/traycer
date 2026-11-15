@@ -151,7 +151,13 @@ function membersRead(
   legacyRoleNoticeSeenAt: number | null,
 ) {
   return {
-    members: members.map((entry) => ({ ...entry, avatarUrl: null })),
+    // A seat holding no authority is the wire's retired "viewer", which the
+    // app reads back as no role.
+    members: members.map((entry) => ({
+      ...entry,
+      effectiveRole: entry.effectiveRole ?? "viewer",
+      avatarUrl: null,
+    })),
     nextCursor: null,
     legacyRoleNoticeSeenAt,
     legacyMembers: [],
