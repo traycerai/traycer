@@ -1,4 +1,5 @@
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import {
   listBots,
@@ -6,6 +7,12 @@ import {
   readBotSnapshot,
   type BotSnapshot,
 } from "../internal/bot-host";
+import { resolveHostAuth } from "../internal/host-auth";
+import {
+  hostTokenFailureCliError,
+  signedOutCliError,
+  storedCredentialRejectedCliError,
+} from "../internal/host-door-words";
 import type { CommandFn } from "../runner/runner";
 import {
   readSignInEnvironments,
@@ -39,22 +46,28 @@ export interface BotListGroup {
  * `traycer bot list` - every bot in every environment the person belongs to,
  * grouped by environment, each with the host it runs on and its open
  * requests. There is no default environment: personal and every team are
- * listed side by side, an environment with no bots included.
+ * listed side by side, an environment with no bots included. On a team's
+ * computer only that team's environment is listed.
  *
  * The open-request count is the `bot.subscribe` snapshot's, read once per
  * bot; the conversation rows stay authoritative and the count is a hint.
  */
 export function buildBotListCommand(): CommandFn {
   return async () => {
-    const [environments, bots] = await Promise.all([
+    const [signedIn, bots] = await Promise.all([
       readSignInEnvironments(),
       listBots(),
     ]);
     const { client, endpoint } = await openLocalStreamClient();
     // Every read settles (each has its own deadline) before the client
     // closes, so no subscription outlives the command.
+    let environments: readonly SignInEnvironment[];
     let settled: readonly PromiseSettledResult<BotListRow | null>[];
     try {
+      environments = await environmentsOnThisComputer(
+        signedIn,
+        endpoint.hostId,
+      );
       settled = await Promise.allSettled(
         bots.map(async (bot): Promise<BotListRow | null> => {
           let snapshot: BotSnapshot | null;
@@ -98,6 +111,44 @@ export function buildBotListCommand(): CommandFn {
       exitCode: listed.some((row) => row.readFailed) ? 1 : 0,
     };
   };
+}
+
+/**
+ * The sign-in's environments as this computer sees them, by authn's host
+ * directory: on a team's computer, that team's environment alone; on a
+ * personal computer, or one the directory has no row for, all of them.
+ */
+async function environmentsOnThisComputer(
+  signedIn: readonly SignInEnvironment[],
+  hostId: string,
+): Promise<readonly SignInEnvironment[]> {
+  const auth = await resolveHostAuth();
+  if (auth === null) throw signedOutCliError();
+  const directory = await readHostOwnershipViaHttp(
+    auth.authnBaseUrl,
+    auth.token,
+    hostId,
+  );
+  switch (directory.kind) {
+    case "unauthorized":
+      throw storedCredentialRejectedCliError();
+    case "network-error":
+      throw hostTokenFailureCliError({
+        kind: "unavailable",
+        detail: "this computer's owner could not be read",
+      });
+    case "not-found":
+      return signedIn;
+    case "ok": {
+      const owner = directory.host.owner;
+      if (owner.kind !== "team") return signedIn;
+      return signedIn.filter(
+        (environment) =>
+          environment.ownerKind === "organization" &&
+          environment.ownerId === owner.id,
+      );
+    }
+  }
 }
 
 function toRow(

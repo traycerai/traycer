@@ -50,6 +50,7 @@ const hoisted = vi.hoisted(() => ({
   openLocalStreamClient: vi.fn(),
   resolveHostAuth: vi.fn(),
   validateIdentity: vi.fn(),
+  readHostOwnership: vi.fn(),
   createCredentialsStore: vi.fn(),
   createStoreBackedRevalidator: vi.fn(),
   revalidateCurrentContext: vi.fn(),
@@ -62,6 +63,22 @@ vi.mock("../../internal/host-auth", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-auth")>();
   return { ...actual, resolveHostAuth: hoisted.resolveHostAuth };
 });
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >();
+    return {
+      ...actual,
+      readHostOwnershipViaHttp: (
+        ...callArgs: Parameters<typeof actual.readHostOwnershipViaHttp>
+      ) => hoisted.readHostOwnership(...callArgs),
+    };
+  },
+);
 
 vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   const actual =
@@ -231,6 +248,8 @@ beforeEach(() => {
     kind: "valid",
     user: signInUser({ personalEnvironmentId: null, teams: [] }),
   });
+  // No row for this computer: the sign-in's list is shown unchanged.
+  hoisted.readHostOwnership.mockResolvedValue({ kind: "not-found" });
 });
 
 afterEach(() => {
