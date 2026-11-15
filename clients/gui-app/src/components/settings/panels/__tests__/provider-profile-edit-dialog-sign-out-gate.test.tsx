@@ -408,8 +408,8 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     });
   });
 
-  it("offers the broker action for a mirror row even when this computer has no credential home", async () => {
-    fixture.supportsSignOut = true;
+  it("offers the record action without local credentials or legacy host support", async () => {
+    fixture.supportsSignOut = false;
     fixture.offersSignIns = true;
     const messenger = installSignOutClient();
     const mirrorProfile = { ...profile(undefined, undefined), aliases: [] };
@@ -428,24 +428,6 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     expect(
       screen.queryByRole("button", { name: "Sign out on every host" }),
     ).toBeNull();
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    await waitFor(() => expect(messenger.calls).toHaveLength(1));
-    expect(messenger.calls[0]?.params).toEqual({
-      providerId: "claude-code",
-      profileId: "profile-work",
-    });
-  });
-
-  it("signs out the sole enabled record through its binding environment without a local home or legacy host support", async () => {
-    fixture.offersSignIns = true;
-    const messenger = installSignOutClient();
-    renderDialog({ ...profile(undefined, undefined), aliases: [] });
-
-    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    expect(
-      screen.getByText("Sign out of Work account in this environment?"),
-    ).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() =>
