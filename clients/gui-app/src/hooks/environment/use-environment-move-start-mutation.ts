@@ -1,8 +1,6 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -43,37 +41,42 @@ export function useEnvironmentMoveStartMutation(
 > {
   const queryClient = useQueryClient();
   const cloud = useEnvironmentCloud();
-  return useMutation<
+  return usePressCapturedMutation<
     EnvironmentMoveResult,
     HostRpcError,
-    EnvironmentMoveAcceptance
-  >({
-    mutationKey: environmentMutationKeys.moveStart(),
-    mutationFn: (accepted) =>
-      withHostQueryErrorBoundary(METHOD, async () => {
-        cloudVerdictPreflight(METHOD)();
-        if (client === null || cloud === null)
-          throw hostClientUnavailableError(METHOD);
-        try {
-          return await runEnvironmentMove(
-            {
-              stage: (request) =>
-                client.request("environment.move.stage", request),
-              start: (request) =>
-                client.request("environment.move.start", request),
-            },
-            cloud(),
-            accepted,
-          );
-        } catch (error) {
-          throw environmentCloudHostError(METHOD, error);
-        }
-      }),
-    onSettled: () => {
-      void invalidateEnvironmentReads(queryClient, MOVE_READS);
+    EnvironmentMoveAcceptance,
+    EnvironmentCloud | null
+  >(
+    () => (cloud === null ? null : cloud()),
+    {
+      mutationKey: environmentMutationKeys.moveStart(),
+      mutationFn: (accepted, operation) =>
+        withHostQueryErrorBoundary(METHOD, async () => {
+          cloudVerdictPreflight(METHOD)();
+          if (client === null || operation === null)
+            throw hostClientUnavailableError(METHOD);
+          if (!operation.onOriginSignIn()) return { kind: "sign_in_changed" } as const;
+          try {
+            return await runEnvironmentMove(
+              {
+                stage: (request) =>
+                  client.request("environment.move.stage", request),
+                start: (request) =>
+                  client.request("environment.move.start", request),
+              },
+              operation,
+              accepted,
+            );
+          } catch (error) {
+            throw environmentCloudHostError(METHOD, error);
+          }
+        }),
+      onSettled: () => {
+        void invalidateEnvironmentReads(queryClient, MOVE_READS);
+      },
+      onError: (error) => {
+        if (errorMessage !== null) toastFromHostError(error, errorMessage);
+      },
     },
-    onError: (error) => {
-      if (errorMessage !== null) toastFromHostError(error, errorMessage);
-    },
-  });
+  );
 }

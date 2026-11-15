@@ -1,5 +1,4 @@
 import {
-  useMutation,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -29,6 +28,7 @@ import {
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { BotSetupRow } from "@traycer-clients/shared/host-client/bot-setup";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -43,7 +43,11 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 import { applyBotSettingsToViews } from "@/hooks/bots/use-bot-subscription";
 import { botSetupError } from "@/hooks/bots/bot-setup-error";
-import { pressSignIn, type PressSignIn } from "@/hooks/bots/bot-write-sign-in";
+import {
+  captureBotWriteOrigin,
+  type BotWriteOrigin,
+  type PressSignIn,
+} from "@/hooks/bots/bot-write-sign-in";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -101,21 +105,30 @@ export function useBotDeleteMutation(): UseMutationResult<
 > {
   const queryClient = useQueryClient();
   const binding = useHostBinding();
-  return useMutation({
-    mutationKey: botMutationKeys.delete(),
-    mutationFn: async (request) => {
-      if (binding === null) throw botSetupError({ kind: "no_response" });
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.deleteBot(request);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind !== "ok") throw botSetupError(result);
-      return { deleted: result.deleted };
+  return usePressCapturedMutation<
+    BotDeleteResponse | null,
+    Error,
+    BotDeleteRequest,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botMutationKeys.delete(),
+      mutationFn: async (request, origin) => {
+        if (origin === null) throw botSetupError({ kind: "no_response" });
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.deleteBot(request);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind !== "ok") throw botSetupError(result);
+        return { deleted: result.deleted };
+      },
+      onSuccess: (answer) => {
+        if (answer === null) return;
+        invalidateBotLists(queryClient);
+      },
     },
-    onSuccess: (answer) => {
-      if (answer === null) return;
-      invalidateBotLists(queryClient);
-    },
-  });
+  );
 }
 
 export function useBotUpdateTitleMutation(
@@ -149,22 +162,31 @@ export function useBotUpdateRunSettingsMutation(): UseMutationResult<
 > {
   const queryClient = useQueryClient();
   const binding = useHostBinding();
-  return useMutation({
-    mutationKey: botMutationKeys.updateRunSettings(),
-    mutationFn: async (request) => {
-      if (binding === null) throw botSetupError({ kind: "no_response" });
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.updateBotRunSettings(request);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind !== "ok") throw botSetupError(result);
-      return { bot: result.bot, signIn };
+  return usePressCapturedMutation<
+    BotRunSettingsWrite | null,
+    Error,
+    BotUpdateRunSettingsRequest,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botMutationKeys.updateRunSettings(),
+      mutationFn: async (request, origin) => {
+        if (origin === null) throw botSetupError({ kind: "no_response" });
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.updateBotRunSettings(request);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind !== "ok") throw botSetupError(result);
+        return { bot: result.bot, signIn };
+      },
+      onSuccess: (written) => {
+        if (written === null) return;
+        applyBotSettingsToViews(queryClient, written.bot);
+        invalidateBotLists(queryClient);
+      },
     },
-    onSuccess: (written) => {
-      if (written === null) return;
-      applyBotSettingsToViews(queryClient, written.bot);
-      invalidateBotLists(queryClient);
-    },
-  });
+  );
 }
 
 /**
@@ -184,22 +206,31 @@ export function useBotUpdateReplyModeMutation(): UseMutationResult<
 > {
   const queryClient = useQueryClient();
   const binding = useHostBinding();
-  return useMutation({
-    mutationKey: botMutationKeys.updateReplyMode(),
-    mutationFn: async (request) => {
-      if (binding === null) throw botSetupError({ kind: "no_response" });
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.updateBotReplyMode(request);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind !== "ok") throw botSetupError(result);
-      return result.bot;
+  return usePressCapturedMutation<
+    BotSetupRow | null,
+    Error,
+    BotUpdateReplyModeRequest,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botMutationKeys.updateReplyMode(),
+      mutationFn: async (request, origin) => {
+        if (origin === null) throw botSetupError({ kind: "no_response" });
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.updateBotReplyMode(request);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind !== "ok") throw botSetupError(result);
+        return result.bot;
+      },
+      onSuccess: (bot) => {
+        if (bot === null) return;
+        applyBotSettingsToViews(queryClient, bot);
+        invalidateBotLists(queryClient);
+      },
     },
-    onSuccess: (bot) => {
-      if (bot === null) return;
-      applyBotSettingsToViews(queryClient, bot);
-      invalidateBotLists(queryClient);
-    },
-  });
+  );
 }
 
 /**

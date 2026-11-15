@@ -1,19 +1,19 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   SlackAppRegisterRequest,
   SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { SlackAppFailure } from "@traycer-clients/shared/host-client/slack-app";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import { useHostBinding } from "@/lib/host";
 import { botSlackMutationKeys, botSlackQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotSlackPendingInstallStore } from "@/stores/bots/bot-slack-pending-install-store";
 import { BotSlackAppError } from "@/hooks/bots/bot-slack-app-error";
-import { pressSignIn } from "@/hooks/bots/bot-write-sign-in";
+import {
+  captureBotWriteOrigin,
+  type BotWriteOrigin,
+} from "@/hooks/bots/bot-write-sign-in";
 
 const WRITE_FAILED_LINE = "Couldn't update Slack settings. Try again.";
 
@@ -48,27 +48,36 @@ export function useBotSlackRegisterMutation(
   const binding = useHostBinding();
   const clear = useBotSlackPendingInstallStore((s) => s.clear);
   const invalidate = useInvalidateBotSlackApp(botId);
-  return useMutation({
-    mutationKey: botSlackMutationKeys.register(botId),
-    mutationFn: async (request) => {
-      if (binding === null) {
-        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-      }
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.registerSlackApp(request);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind === "ok") return result.app;
-      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+  return usePressCapturedMutation<
+    SlackAppView | null,
+    Error,
+    SlackAppRegisterRequest,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botSlackMutationKeys.register(botId),
+      mutationFn: async (request, origin) => {
+        if (origin === null) {
+          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+        }
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.registerSlackApp(request);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind === "ok") return result.app;
+        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+      },
+      gcTime: 0,
+      onSuccess: async (app) => {
+        if (app === null) return;
+        // A new registration replaces the app's credentials, so an install URL
+        // minted before it no longer leads anywhere.
+        clear(botId);
+        await invalidate();
+      },
     },
-    gcTime: 0,
-    onSuccess: async (app) => {
-      if (app === null) return;
-      // A new registration replaces the app's credentials, so an install URL
-      // minted before it no longer leads anywhere.
-      clear(botId);
-      await invalidate();
-    },
-  });
+  );
 }
 
 export interface BotSlackInstallUrl {
@@ -91,29 +100,38 @@ export function useBotSlackInstallUrlMutation(
 > {
   const binding = useHostBinding();
   const begin = useBotSlackPendingInstallStore((s) => s.begin);
-  return useMutation({
-    mutationKey: botSlackMutationKeys.installUrl(botId),
-    mutationFn: async () => {
-      if (binding === null) {
-        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-      }
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.mintSlackAppInstallUrl(botId);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind === "ok") {
-        return { url: result.url, expiresAt: result.expiresAt };
-      }
-      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+  return usePressCapturedMutation<
+    BotSlackInstallUrl | null,
+    Error,
+    { readonly baselineInstalledAt: number | null },
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botSlackMutationKeys.installUrl(botId),
+      mutationFn: async (_variables, origin) => {
+        if (origin === null) {
+          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+        }
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.mintSlackAppInstallUrl(botId);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind === "ok") {
+          return { url: result.url, expiresAt: result.expiresAt };
+        }
+        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+      },
+      onSuccess: (minted, variables) => {
+        if (minted === null) return;
+        begin({
+          botId,
+          expiresAt: minted.expiresAt,
+          baselineInstalledAt: variables.baselineInstalledAt,
+        });
+      },
     },
-    onSuccess: (minted, variables) => {
-      if (minted === null) return;
-      begin({
-        botId,
-        expiresAt: minted.expiresAt,
-        baselineInstalledAt: variables.baselineInstalledAt,
-      });
-    },
-  });
+  );
 }
 
 /**
@@ -126,24 +144,33 @@ export function useBotSlackDisconnectMutation(
   const binding = useHostBinding();
   const clear = useBotSlackPendingInstallStore((s) => s.clear);
   const invalidate = useInvalidateBotSlackApp(botId);
-  return useMutation({
-    mutationKey: botSlackMutationKeys.disconnect(botId),
-    mutationFn: async () => {
-      if (binding === null) {
-        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-      }
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.disconnectSlackApp(botId);
-      if (!signIn.isCurrent()) return null;
-      if (result.kind === "ok") return result.app;
-      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+  return usePressCapturedMutation<
+    SlackAppView | null,
+    Error,
+    void,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botSlackMutationKeys.disconnect(botId),
+      mutationFn: async (_variables, origin) => {
+        if (origin === null) {
+          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+        }
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.disconnectSlackApp(botId);
+        if (!signIn.isCurrent()) return null;
+        if (result.kind === "ok") return result.app;
+        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+      },
+      onSuccess: async (app) => {
+        if (app === null) return;
+        clear(botId);
+        await invalidate();
+      },
     },
-    onSuccess: async (app) => {
-      if (app === null) return;
-      clear(botId);
-      await invalidate();
-    },
-  });
+  );
 }
 
 /** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
@@ -152,18 +179,27 @@ export function useBotSlackDmsMutation(
 ): UseMutationResult<SlackAppView | null, Error, boolean> {
   const binding = useHostBinding();
   const invalidate = useInvalidateBotSlackApp(botId);
-  return useMutation({
-    mutationKey: botSlackMutationKeys.dms(botId),
-    mutationFn: async (dmsEnabled) => {
-      if (binding === null) {
-        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-      }
-      const signIn = pressSignIn(binding.auth);
-      const result = await binding.auth.setSlackAppDms({ botId, dmsEnabled });
-      if (!signIn.isCurrent()) return null;
-      if (result.kind === "ok") return result.app;
-      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+  return usePressCapturedMutation<
+    SlackAppView | null,
+    Error,
+    boolean,
+    BotWriteOrigin | null
+  >(
+    () => captureBotWriteOrigin(binding?.auth ?? null),
+    {
+      mutationKey: botSlackMutationKeys.dms(botId),
+      mutationFn: async (dmsEnabled, origin) => {
+        if (origin === null) {
+          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+        }
+        const { auth, signIn } = origin;
+        if (!signIn.isCurrent()) return null;
+        const result = await auth.setSlackAppDms({ botId, dmsEnabled });
+        if (!signIn.isCurrent()) return null;
+        if (result.kind === "ok") return result.app;
+        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+      },
+      onSuccess: (app) => (app === null ? undefined : invalidate()),
     },
-    onSuccess: (app) => (app === null ? undefined : invalidate()),
-  });
+  );
 }
