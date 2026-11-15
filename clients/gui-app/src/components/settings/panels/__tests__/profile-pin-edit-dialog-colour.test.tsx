@@ -213,7 +213,6 @@ describe("ProfileEditDialog colour", () => {
     const auth = await signedInAuthService({
       writeStatus: 204,
       onWriteAccepted: () => {
-        if (host === null) throw new Error("expected the computer fixture");
         setListedAccentColor(host, NEW_COLOR);
       },
     });
@@ -249,14 +248,13 @@ describe("ProfileEditDialog colour", () => {
       revision: 23,
       upload: null,
     });
-    if (host === null) throw new Error("expected the computer fixture");
     expect(host.rpcCalls.map((call) => call.method)).not.toContain(
       "providers.setEnabled",
     );
     expect(host.rpcCalls.map((call) => call.method)).not.toContain(
       "providers.answerProfileName",
     );
-    await waitFor(() => expect(host?.listCalls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(host.listCalls.length).toBeGreaterThan(1));
     await waitFor(() =>
       expect(pickerSwatchStyle()).toBe(`--swatch: ${NEW_COLOR};`),
     );
