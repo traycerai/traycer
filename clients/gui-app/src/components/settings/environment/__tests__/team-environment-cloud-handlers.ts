@@ -41,6 +41,20 @@ import { z } from "zod";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 import { SANDBOX_PLAINTEXT_DISCLOSURE_VERSION } from "@traycer/protocol/host/secret-intake-catalogue";
 
+function planConnectionStatus(
+  status: "linked" | "empty" | "pending" | "expired",
+): "connected" | "absent" | "pending" | "expired" {
+  if (status === "linked") return "connected";
+  if (status === "empty") return "absent";
+  return status;
+}
+
+function appliedItemStatus(state: string): "applied" | "failed" | "pending" {
+  if (state === "applied") return "applied";
+  if (state === "not_applied") return "failed";
+  return "pending";
+}
+
 function authnMcpServer(
   server: EnvironmentConfigurationMcpServersListResponse["servers"][number],
 ): AuthnMcpServer {
@@ -109,19 +123,16 @@ export function createTeamEnvironmentCloudHandlers(
     const response = await invoke("environment.list", {});
     return response === undefined ? null : { kind: "ok", list: response };
   }
-  async function onRequest(
-    request: EnvironmentTransportRequest,
-  ): Promise<EnvironmentTransportAnswer | null> {
-    requests.push(request);
-    if (request.method !== "GET") return answerWrite(request);
-
-    const url = new URL(request.url);
-    const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
-    if (match === null) return null;
-
-    const environmentId = decodeURIComponent(match[1] ?? "");
-    switch (match[2]) {
-      case "items": {
+  const readRoutes = new Map<
+    string,
+    (
+      environmentId: string,
+      url: URL,
+    ) => Promise<EnvironmentTransportAnswer | null>
+  >([
+    [
+      "items",
+      async (environmentId, url) => {
         const response = await invoke("environment.configuration.items", {
           environmentId,
         });
@@ -162,16 +173,22 @@ export function createTeamEnvironmentCloudHandlers(
           : jsonEnvironmentAnswer({
               items: response.items.filter((item) => item.kind === kind),
             });
-      }
-      case "revision": {
+      },
+    ],
+    [
+      "revision",
+      async (environmentId) => {
         const response = await invoke("environment.configuration.revision", {
           environmentId,
         });
         return response === undefined
           ? null
           : jsonEnvironmentAnswer({ revision: response.revision });
-      }
-      case "mcp-servers": {
+      },
+    ],
+    [
+      "mcp-servers",
+      async (environmentId) => {
         const response = await invoke(
           "environment.configuration.mcpServers.list",
           { environmentId },
@@ -181,15 +198,21 @@ export function createTeamEnvironmentCloudHandlers(
           : jsonEnvironmentAnswer({
               servers: response.servers.map(authnMcpServer),
             });
-      }
-      case "secrets": {
+      },
+    ],
+    [
+      "secrets",
+      async (environmentId) => {
         const response = await invoke("environment.secrets.list", {
           environmentId,
         });
         if (response === undefined) return null;
         return jsonEnvironmentAnswer(authnSecretsList(response));
-      }
-      case "secrets/harness-connections": {
+      },
+    ],
+    [
+      "secrets/harness-connections",
+      async (environmentId) => {
         const response = await invoke("environment.plans.list", {
           environmentId,
         });
@@ -200,12 +223,7 @@ export function createTeamEnvironmentCloudHandlers(
             harnessId: plan.harness,
             bindingVersion: plan.bindingVersion ?? null,
             kind: plan.harness === "api_key" ? "api_key" : "harness",
-            status:
-              plan.status === "linked"
-                ? "connected"
-                : plan.status === "empty"
-                  ? "absent"
-                  : plan.status,
+            status: planConnectionStatus(plan.status),
             linkedBy:
               plan.linkedBy === null
                 ? null
@@ -215,8 +233,11 @@ export function createTeamEnvironmentCloudHandlers(
                   },
           })),
         });
-      }
-      case "hosts": {
+      },
+    ],
+    [
+      "hosts",
+      async (environmentId, url) => {
         if (!url.searchParams.has("include")) return null;
         const response = await invoke("environment.host.list", {
           environmentId,
@@ -242,19 +263,17 @@ export function createTeamEnvironmentCloudHandlers(
                     ? item.itemKey
                     : item.itemKey.slice(0, separator),
                 key: separator < 0 ? "" : item.itemKey.slice(separator + 1),
-                status:
-                  item.state === "applied"
-                    ? "applied"
-                    : item.state === "not_applied"
-                      ? "failed"
-                      : "pending",
+                status: appliedItemStatus(item.state),
                 code: item.reason ?? "ok",
               };
             }),
           })),
         });
-      }
-      case "history": {
+      },
+    ],
+    [
+      "history",
+      async (environmentId, url) => {
         const subject = url.searchParams.get("subject");
         const separator = subject?.indexOf(":") ?? -1;
         const params = environmentHistoryRequestSchema.parse({
@@ -276,8 +295,11 @@ export function createTeamEnvironmentCloudHandlers(
               hostStates: [],
             },
         );
-      }
-      case "members": {
+      },
+    ],
+    [
+      "members",
+      async (environmentId) => {
         const response = await invoke("environment.members", {
           environmentId,
           cursor: null,
@@ -306,16 +328,33 @@ export function createTeamEnvironmentCloudHandlers(
             legacyMembers: response.legacyMembers,
           },
         });
-      }
-      case "members/seats": {
+      },
+    ],
+    [
+      "members/seats",
+      async (environmentId) => {
         const response = await invoke("environment.members.seats", {
           environmentId,
         });
         return response === undefined ? null : jsonEnvironmentAnswer(response);
-      }
-      default:
-        return answerSecret(request, environmentId, match[2] ?? "");
-    }
+      },
+    ],
+  ]);
+
+  async function onRequest(
+    request: EnvironmentTransportRequest,
+  ): Promise<EnvironmentTransportAnswer | null> {
+    requests.push(request);
+    if (request.method !== "GET") return answerWrite(request);
+    const url = new URL(request.url);
+    const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
+    if (match === null) return null;
+    const environmentId = decodeURIComponent(match[1]);
+    const route = match[2];
+    const read = readRoutes.get(route);
+    return read === undefined
+      ? answerSecret(request, environmentId, route)
+      : read(environmentId, url);
   }
 
   function itemWriteAnswer(
@@ -382,49 +421,156 @@ export function createTeamEnvironmentCloudHandlers(
     };
   }
 
-  async function answerWrite(
+  const memberWrites = new Map<
+    string,
+    (
+      environmentId: string,
+      body: Record<string, unknown>,
+    ) => Promise<EnvironmentTransportAnswer | null>
+  >([
+    [
+      "members/notice-seen",
+      async (environmentId) => {
+        const response = await invoke("environment.members.noticeSeen", {
+          environmentId,
+        });
+        return response === undefined
+          ? null
+          : jsonEnvironmentAnswer({
+              legacyRoleNoticeSeenAt: "2026-11-15T00:00:00.000Z",
+            });
+      },
+    ],
+    [
+      "members",
+      async (environmentId, body) => {
+        const member = z
+          .object({
+            members: z
+              .array(z.object({ email: z.string(), role: z.string() }))
+              .length(1),
+          })
+          .parse(body).members[0];
+        const response = await invoke(
+          "environment.members.invite",
+          environmentMembersInviteRequestSchema.parse({
+            environmentId,
+            email: member.email,
+            role: member.role.toLowerCase(),
+          }),
+        );
+        if (response === undefined) return null;
+        if (response.outcome === "forbidden")
+          return { status: 403, text: "{}" };
+        if (response.outcome === "seat_limit")
+          return { status: 409, text: JSON.stringify({ code: "seat_limit" }) };
+        return jsonEnvironmentAnswer({});
+      },
+    ],
+    [
+      "members/seats",
+      async (environmentId, body) => {
+        const member = z
+          .object({
+            members: z
+              .array(
+                z.object({
+                  id: z.string(),
+                  role: z.string().optional(),
+                  remove: z.boolean().optional(),
+                }),
+              )
+              .length(1),
+          })
+          .parse(body).members[0];
+        const response =
+          member.remove === true
+            ? await invoke("environment.members.remove", {
+                environmentId,
+                userId: member.id,
+              })
+            : await invoke(
+                "environment.members.setRole",
+                environmentMembersSetRoleRequestSchema.parse({
+                  environmentId,
+                  userId: member.id,
+                  role: member.role?.toLowerCase(),
+                }),
+              );
+        if (response === undefined) return null;
+        if (response.outcome === "forbidden")
+          return { status: 403, text: "{}" };
+        if (response.outcome === "last_admin")
+          return { status: 409, text: JSON.stringify({ code: "last_admin" }) };
+        if (response.outcome === "plan_required")
+          return {
+            status: 404,
+            text: JSON.stringify({ code: "subscription_not_found" }),
+          };
+        return jsonEnvironmentAnswer({
+          receiptId: response.outcome === "pending" ? response.receiptId : null,
+        });
+      },
+    ],
+    [
+      "members/removal-preview",
+      async (environmentId, body) => {
+        const memberIds = z
+          .object({ memberIds: z.array(z.string()).length(1) })
+          .parse(body).memberIds;
+        const response = await invoke("environment.members.removePreview", {
+          environmentId,
+          userId: memberIds[0] ?? "",
+        });
+        return response === undefined
+          ? null
+          : jsonEnvironmentAnswer({
+              sandboxesToRekey: response.paidSandboxes.length,
+            });
+      },
+    ],
+  ]);
+  async function answerItemWrite(
     request: EnvironmentTransportRequest,
+    environmentId: string,
+    route: string,
+    body: Record<string, unknown>,
   ): Promise<EnvironmentTransportAnswer | null> {
-    const url = new URL(request.url);
-    const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
-    if (match === null) return null;
-    const environmentId = decodeURIComponent(match[1] ?? "");
-    const route = match[2] ?? "";
-    const body =
-      request.body === null
-        ? {}
-        : z.record(z.string(), z.unknown()).parse(request.body);
-    if (route.startsWith("items/")) {
-      const kind = decodeURIComponent(route.slice("items/".length));
-      if (request.method === "PUT") {
-        const params = environmentConfigurationItemPutRequestSchema.parse({
-          environmentId,
-          kind,
-          ...body,
-        });
-        const response = await invoke(
-          "environment.configuration.items.put",
-          params,
-        );
-        return response === undefined
-          ? null
-          : itemWriteAnswer(params, response);
-      }
-      if (request.method === "DELETE") {
-        const params = environmentConfigurationItemDeleteRequestSchema.parse({
-          environmentId,
-          kind,
-          ...body,
-        });
-        const response = await invoke(
-          "environment.configuration.items.delete",
-          params,
-        );
-        return response === undefined
-          ? null
-          : itemWriteAnswer(params, response);
-      }
+    const kind = decodeURIComponent(route.slice("items/".length));
+    if (request.method === "PUT") {
+      const params = environmentConfigurationItemPutRequestSchema.parse({
+        environmentId,
+        kind,
+        ...body,
+      });
+      const response = await invoke(
+        "environment.configuration.items.put",
+        params,
+      );
+      return response === undefined ? null : itemWriteAnswer(params, response);
     }
+    if (request.method === "DELETE") {
+      const params = environmentConfigurationItemDeleteRequestSchema.parse({
+        environmentId,
+        kind,
+        ...body,
+      });
+      const response = await invoke(
+        "environment.configuration.items.delete",
+        params,
+      );
+      return response === undefined ? null : itemWriteAnswer(params, response);
+    }
+
+    return null;
+  }
+
+  async function answerMcpWrite(
+    request: EnvironmentTransportRequest,
+    environmentId: string,
+    route: string,
+    body: Record<string, unknown>,
+  ): Promise<EnvironmentTransportAnswer | null> {
     if (
       route.startsWith("mcp-servers/") &&
       request.method === "PATCH" &&
@@ -449,132 +595,223 @@ export function createTeamEnvironmentCloudHandlers(
         return { status: 400, text: JSON.stringify({ code: response.reason }) };
       return jsonEnvironmentAnswer({ deleted: true });
     }
-    if (route === "policy" && request.method === "PUT") {
-      const response = await invoke(
-        "environment.configuration.policy.put",
-        environmentConfigurationPolicyPutRequestSchema.parse({
-          environmentId,
-          ...body,
-        }),
-      );
-      if (response === undefined) return null;
-      if (response.outcome === "forbidden") return { status: 403, text: "{}" };
-      if (response.outcome === "refused")
-        return { status: 400, text: JSON.stringify({ code: response.reason }) };
-      return jsonEnvironmentAnswer({});
-    }
+
+    return null;
+  }
+
+  async function answerPolicyWrite(
+    environmentId: string,
+    body: Record<string, unknown>,
+  ): Promise<EnvironmentTransportAnswer | null> {
+    const response = await invoke(
+      "environment.configuration.policy.put",
+      environmentConfigurationPolicyPutRequestSchema.parse({
+        environmentId,
+        ...body,
+      }),
+    );
+    if (response === undefined) return null;
+    if (response.outcome === "forbidden") return { status: 403, text: "{}" };
+    if (response.outcome === "refused")
+      return { status: 400, text: JSON.stringify({ code: response.reason }) };
+    return jsonEnvironmentAnswer({});
+  }
+
+  async function answerPlanWrite(
+    environmentId: string,
+    route: string,
+    body: Record<string, unknown>,
+  ): Promise<EnvironmentTransportAnswer | null> {
+    const response = await invoke("environment.plans.unlink", {
+      environmentId,
+      profileId: decodeURIComponent(
+        route.slice("secrets/harness-connections/".length),
+      ),
+      expectedBindingVersion: z
+        .number()
+        .int()
+        .nullable()
+        .parse(body.expectedBindingVersion),
+    });
+    if (response === undefined) return null;
+    if (response.outcome === "forbidden") return { status: 403, text: "{}" };
+    return jsonEnvironmentAnswer({
+      disconnected: response.outcome === "unlinked",
+    });
+  }
+
+  async function answerWrite(
+    request: EnvironmentTransportRequest,
+  ): Promise<EnvironmentTransportAnswer | null> {
+    const url = new URL(request.url);
+    const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
+    if (match === null) return null;
+    const environmentId = decodeURIComponent(match[1]);
+    const route = match[2];
+    const body =
+      request.body === null
+        ? {}
+        : z.record(z.string(), z.unknown()).parse(request.body);
+    if (route.startsWith("items/"))
+      return answerItemWrite(request, environmentId, route, body);
+    if (route.startsWith("mcp-servers/"))
+      return answerMcpWrite(request, environmentId, route, body);
+    if (route === "policy" && request.method === "PUT")
+      return answerPolicyWrite(environmentId, body);
     if (
       route.startsWith("secrets/harness-connections/") &&
       request.method === "DELETE"
-    ) {
-      const response = await invoke("environment.plans.unlink", {
-        environmentId,
-        profileId: decodeURIComponent(
-          route.slice("secrets/harness-connections/".length),
-        ),
-        expectedBindingVersion: z
-          .number()
-          .int()
-          .nullable()
-          .parse(body.expectedBindingVersion),
-      });
-      if (response === undefined) return null;
-      if (response.outcome === "forbidden") return { status: 403, text: "{}" };
-      return jsonEnvironmentAnswer({
-        disconnected: response.outcome === "unlinked",
-      });
-    }
-    if (route === "members/notice-seen" && request.method === "POST") {
-      const response = await invoke("environment.members.noticeSeen", {
-        environmentId,
-      });
-      return response === undefined
-        ? null
-        : jsonEnvironmentAnswer({
-            legacyRoleNoticeSeenAt: "2026-11-15T00:00:00.000Z",
-          });
-    }
-    if (route === "members" && request.method === "POST") {
-      const member = z
-        .object({
-          members: z
-            .array(z.object({ email: z.string(), role: z.string() }))
-            .length(1),
-        })
-        .parse(body).members[0];
-      if (member === undefined) throw new Error("missing member invite");
-      const response = await invoke(
-        "environment.members.invite",
-        environmentMembersInviteRequestSchema.parse({
-          environmentId,
-          email: member.email,
-          role: member.role.toLowerCase(),
-        }),
-      );
-      if (response === undefined) return null;
-      if (response.outcome === "forbidden") return { status: 403, text: "{}" };
-      if (response.outcome === "seat_limit")
-        return { status: 409, text: JSON.stringify({ code: "seat_limit" }) };
-      return jsonEnvironmentAnswer({});
-    }
-    if (route === "members/seats" && request.method === "POST") {
-      const member = z
-        .object({
-          members: z
-            .array(
-              z.object({
-                id: z.string(),
-                role: z.string().optional(),
-                remove: z.boolean().optional(),
-              }),
-            )
-            .length(1),
-        })
-        .parse(body).members[0];
-      if (member === undefined) throw new Error("missing member change");
-      const response =
-        member.remove === true
-          ? await invoke("environment.members.remove", {
-              environmentId,
-              userId: member.id,
-            })
-          : await invoke(
-              "environment.members.setRole",
-              environmentMembersSetRoleRequestSchema.parse({
-                environmentId,
-                userId: member.id,
-                role: member.role?.toLowerCase(),
-              }),
-            );
-      if (response === undefined) return null;
-      if (response.outcome === "forbidden") return { status: 403, text: "{}" };
-      if (response.outcome === "last_admin")
-        return { status: 409, text: JSON.stringify({ code: "last_admin" }) };
-      if (response.outcome === "plan_required")
-        return {
-          status: 404,
-          text: JSON.stringify({ code: "subscription_not_found" }),
-        };
-      return jsonEnvironmentAnswer({
-        receiptId: response.outcome === "pending" ? response.receiptId : null,
-      });
-    }
-    if (route === "members/removal-preview" && request.method === "POST") {
-      const memberIds = z
-        .object({ memberIds: z.array(z.string()).length(1) })
-        .parse(body).memberIds;
-      const response = await invoke("environment.members.removePreview", {
-        environmentId,
-        userId: memberIds[0] ?? "",
-      });
-      return response === undefined
-        ? null
-        : jsonEnvironmentAnswer({
-            sandboxesToRekey: response.paidSandboxes.length,
-          });
-    }
+    )
+      return answerPlanWrite(environmentId, route, body);
+    const memberWrite = memberWrites.get(route);
+    if (memberWrite !== undefined && request.method === "POST")
+      return memberWrite(environmentId, body);
     return answerSecret(request, environmentId, route);
   }
+
+  const secretRoutes = new Map<
+    string,
+    (context: {
+      readonly environmentId: string;
+      readonly secretId: string;
+      readonly versionId: string;
+      readonly route: string;
+      readonly body: Record<string, unknown>;
+    }) => Promise<EnvironmentTransportAnswer | null>
+  >([
+    [
+      "POST:create",
+      async ({ environmentId, body }) => {
+        const response = await invoke(
+          "environment.secrets.create",
+          environmentSecretsCreateRequestSchemaV11.parse({
+            ...body,
+            environmentId,
+            ...RETIRED_SECRET_CREATE_FIELDS,
+            plaintextConsent:
+              body.plaintextConsent === true
+                ? { disclosureVersion: SANDBOX_PLAINTEXT_DISCLOSURE_VERSION }
+                : null,
+          }),
+        );
+        if (response === undefined) return null;
+        if (response.outcome === "refused")
+          return { status: 422, text: JSON.stringify({ code: response.code }) };
+        if (response.outcome !== "created")
+          throw new Error(
+            `authn create fixture cannot answer ${response.outcome}`,
+          );
+        return jsonEnvironmentAnswer({ secret: authnSecret(response.secret) });
+      },
+    ],
+    [
+      "POST:verify",
+      async ({ environmentId, body, route, secretId }) => {
+        const params = environmentSecretsVerifyRequestSchemaV11.parse(
+          route === "secrets/verify"
+            ? { ...body, environmentId, target: "candidate" }
+            : { environmentId, target: "secret", secretId },
+        );
+        const response = await invoke("environment.secrets.verify", params);
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+    [
+      "PATCH:value",
+      async ({ environmentId, secretId, body }) => {
+        const response = await invoke(
+          "environment.secrets.replaceValue",
+          environmentSecretsReplaceValueRequestSchemaV11.parse({
+            ...body,
+            environmentId,
+            secretId,
+          }),
+        );
+        if (response === undefined) return null;
+        if (response.outcome === "stale")
+          return {
+            status: 409,
+            text: JSON.stringify({
+              code: "secret_version_stale",
+              currentVersionId: response.currentVersionId,
+              changedBy: response.changedBy,
+            }),
+          };
+        if (response.outcome !== "accepted")
+          throw new Error(
+            `authn replace fixture cannot answer ${response.outcome}`,
+          );
+        return jsonEnvironmentAnswer({
+          rotation: {
+            rotationId: response.rotationId,
+            versionId: response.versionId,
+          },
+        });
+      },
+    ],
+    [
+      "POST:undo",
+      async ({ environmentId, secretId, body, versionId }) => {
+        const response = await invoke(
+          "environment.secrets.undo",
+          environmentSecretsUndoRequestSchemaV11.parse({
+            ...body,
+            environmentId,
+            secretId,
+            versionId,
+          }),
+        );
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+    [
+      "POST:consent",
+      async ({ environmentId, secretId, body }) => {
+        const response = await invoke(
+          "environment.secrets.consent",
+          environmentSecretsConsentRequestSchemaV11.parse({
+            ...body,
+            environmentId,
+            secretId,
+            disclosure: "plaintext_gateway",
+            scope: "secret",
+          }),
+        );
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+    [
+      "GET:versions",
+      async ({ environmentId, secretId }) => {
+        const response = await invoke("environment.secrets.versions", {
+          environmentId,
+          secretId,
+        });
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+    [
+      "GET:rotation",
+      async ({ environmentId, secretId }) => {
+        const response = await invoke("environment.secrets.rotation", {
+          environmentId,
+          secretId,
+        });
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+    [
+      "POST:destroy",
+      async ({ environmentId, secretId, versionId }) => {
+        const response = await invoke("environment.secrets.destroy", {
+          environmentId,
+          secretId,
+          versionId,
+        });
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    ],
+  ]);
 
   async function answerSecret(
     request: EnvironmentTransportRequest,
@@ -582,130 +819,24 @@ export function createTeamEnvironmentCloudHandlers(
     route: string,
   ): Promise<EnvironmentTransportAnswer | null> {
     if (route !== "secrets" && !route.startsWith("secrets/")) return null;
-    const body =
-      request.body === null
-        ? {}
-        : z.record(z.string(), z.unknown()).parse(request.body);
-    if (route === "secrets" && request.method === "POST") {
-      const response = await invoke(
-        "environment.secrets.create",
-        environmentSecretsCreateRequestSchemaV11.parse({
-          ...body,
-          environmentId,
-          ...RETIRED_SECRET_CREATE_FIELDS,
-          plaintextConsent:
-            body.plaintextConsent === true
-              ? { disclosureVersion: SANDBOX_PLAINTEXT_DISCLOSURE_VERSION }
-              : null,
-        }),
-      );
-      if (response === undefined) return null;
-      if (response.outcome !== "created")
-        throw new Error(
-          `authn create fixture cannot answer ${response.outcome}`,
-        );
-      return jsonEnvironmentAnswer({ secret: authnSecret(response.secret) });
-    }
     const parts = route.split("/").map(decodeURIComponent);
-    const secretId = parts[1] ?? "";
-    if (
-      request.method === "POST" &&
-      (route === "secrets/verify" || parts[2] === "verify")
-    ) {
-      const params = environmentSecretsVerifyRequestSchemaV11.parse(
-        route === "secrets/verify"
-          ? { ...body, environmentId, target: "candidate" }
-          : { environmentId, target: "secret", secretId },
-      );
-      const response = await invoke("environment.secrets.verify", params);
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    if (request.method === "PATCH" && parts.length === 2) {
-      const response = await invoke(
-        "environment.secrets.replaceValue",
-        environmentSecretsReplaceValueRequestSchemaV11.parse({
-          ...body,
-          environmentId,
-          secretId,
-        }),
-      );
-      if (response === undefined) return null;
-      if (response.outcome === "stale")
-        return {
-          status: 409,
-          text: JSON.stringify({
-            code: "secret_version_stale",
-            currentVersionId: response.currentVersionId,
-            changedBy: response.changedBy,
-          }),
-        };
-      if (response.outcome !== "accepted")
-        throw new Error(
-          `authn replace fixture cannot answer ${response.outcome}`,
-        );
-      return jsonEnvironmentAnswer({
-        rotation: {
-          rotationId: response.rotationId,
-          versionId: response.versionId,
-        },
-      });
-    }
-    if (
-      request.method === "POST" &&
-      parts[2] === "versions" &&
-      parts[4] === "undo"
-    ) {
-      const response = await invoke(
-        "environment.secrets.undo",
-        environmentSecretsUndoRequestSchemaV11.parse({
-          ...body,
-          environmentId,
-          secretId,
-          versionId: parts[3],
-        }),
-      );
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    if (request.method === "POST" && parts[2] === "consent") {
-      const response = await invoke(
-        "environment.secrets.consent",
-        environmentSecretsConsentRequestSchemaV11.parse({
-          ...body,
-          environmentId,
-          secretId,
-          disclosure: "plaintext_gateway",
-          scope: "secret",
-        }),
-      );
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    if (request.method === "GET" && parts[2] === "versions") {
-      const response = await invoke("environment.secrets.versions", {
-        environmentId,
-        secretId,
-      });
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    if (request.method === "GET" && parts[2] === "rotation") {
-      const response = await invoke("environment.secrets.rotation", {
-        environmentId,
-        secretId,
-      });
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    if (
-      request.method === "POST" &&
-      parts[2] === "versions" &&
-      parts[4] === "destroy"
-    ) {
-      const response = await invoke("environment.secrets.destroy", {
-        environmentId,
-        secretId,
-        versionId: parts[3] ?? "",
-      });
-      return response === undefined ? null : jsonEnvironmentAnswer(response);
-    }
-    return null;
+    let action = parts[2] ?? "value";
+    if (route === "secrets") action = "create";
+    if (route === "secrets/verify") action = "verify";
+    if (action === "versions" && request.method === "POST")
+      action = parts[4] ?? "";
+    const respond = secretRoutes.get(`${request.method}:${action}`);
+    if (respond === undefined) return null;
+    return respond({
+      environmentId,
+      secretId: parts[1] ?? "",
+      versionId: parts[3] ?? "",
+      route,
+      body:
+        request.body === null
+          ? {}
+          : z.record(z.string(), z.unknown()).parse(request.body),
+    });
   }
 
   return { calls, requests, onRequest, listEnvironments };

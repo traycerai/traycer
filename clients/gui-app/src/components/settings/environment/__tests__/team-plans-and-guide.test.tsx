@@ -292,6 +292,19 @@ describe("TeamPlans", () => {
         { environmentId: "env-a", profileId: "prof-1", ...sent },
       ]);
     });
+    expect(
+      harness.cloudRequests.filter((request) => request.method === "DELETE"),
+    ).toMatchObject([
+      {
+        url: "https://auth.example.invalid/api/v3/environments/env-a/secrets/harness-connections/prof-1",
+        body: sent,
+      },
+    ]);
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "environment.plans.unlink",
+      ),
+    ).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 
