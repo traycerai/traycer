@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -78,8 +79,15 @@ export interface ConfigurationItemWrites {
   readonly checking: boolean;
   /** The person's own write. */
   readonly write: (write: ConfigurationItemWrite) => Promise<void>;
-  /** A row's write as it unmounts, which the person did not make. */
-  readonly writeOnUnmount: (write: ConfigurationItemWrite) => Promise<void>;
+  /**
+   * A row's write as it unmounts, which the person did not make, on the
+   * sign-in its text was typed on (`typedOn`); nothing is sent once that
+   * sign-in has ended.
+   */
+  readonly writeOnUnmount: (
+    write: ConfigurationItemWrite,
+    typedOn: EnvironmentCloud | null,
+  ) => Promise<void>;
   readonly retry: () => void;
   readonly updateDraft: (draft: ConfigurationItemWrite) => void;
   readonly discardDraft: (
@@ -270,7 +278,7 @@ export function useConfigurationItemWrites(
 ): ConfigurationItemWrites {
   const source = useConfigurationSource();
   const scope = source.kind === "pool" ? source.environmentId : null;
-  const { put, remove } = useConfigurationItemMutations();
+  const { put, remove, armOrigin } = useConfigurationItemMutations();
   const [state, setState] = useState<ItemWriteState>({
     scope,
     pending: null,
@@ -395,8 +403,17 @@ export function useConfigurationItemWrites(
   const send = async (
     asked: ConfigurationItemWrite,
     trigger: ConfigurationWriteTrigger,
+    typedOn: EnvironmentCloud | null,
   ): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
+    // An unmount's text goes only on the sign-in it was typed on; once that
+    // sign-in has ended (another account, or the same one signed in again),
+    // the write is abandoned before it is sent, silently.
+    if (
+      trigger === "unmount" &&
+      (typedOn === null || !typedOn.onOriginSignIn())
+    )
+      return;
     const basis = writeBasis(asked, trigger, state.drafts);
     if (basis === null) return;
     const { write, revision } = basis;
@@ -420,6 +437,7 @@ export function useConfigurationItemWrites(
     };
     let result: EnvironmentConfigurationItemWriteResponse;
     try {
+      armOrigin(trigger === "unmount" ? typedOn : null);
       result = await (write.action === "put"
         ? put.mutateAsync({ ...request, value: write.value })
         : remove.mutateAsync(request));
@@ -491,8 +509,8 @@ export function useConfigurationItemWrites(
     updateDraft,
     discardDraft,
     checking: bounded.pending,
-    write: (write) => send(write, "person"),
-    writeOnUnmount: (write) => send(write, "unmount"),
+    write: (write) => send(write, "person", null),
+    writeOnUnmount: (write, typedOn) => send(write, "unmount", typedOn),
     retry: bounded.retry,
   };
 }

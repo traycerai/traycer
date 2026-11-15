@@ -10,4 +10,42 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
+  /**
+   * authn's listing of `hostId` in `environmentId`, as a save on that host
+   * reads it in one editor session.
+   */
+  settingsSaveHost: (
+    environmentId: string,
+    hostId: string,
+    viewerId: string,
+    session: string,
+  ) =>
+    [
+      "environment",
+      "settings-save",
+      "host",
+      environmentId,
+      hostId,
+      viewerId,
+      session,
+    ] as const,
+  /**
+   * authn's rows of `kind` in `environmentId`, as the person's edit was made
+   * over them in one editor session.
+   */
+  settingsSaveItems: (
+    environmentId: string,
+    kind: string,
+    viewerId: string,
+    session: string,
+  ) =>
+    [
+      "environment",
+      "settings-save",
+      "items",
+      environmentId,
+      kind,
+      viewerId,
+      session,
+    ] as const,
 };
