@@ -16,7 +16,7 @@ import { AccountNotificationHooksSection } from "@/components/settings/panels/ac
 const saveMutation = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
-  error: null,
+  error: null as Error | null,
   reset: vi.fn(),
 }));
 
@@ -82,6 +82,7 @@ const account: AccountNotificationSettingsResponse = {
 afterEach(() => {
   cleanup();
   saveMutation.mutate.mockClear();
+  saveMutation.error = null;
   saveMutation.reset.mockClear();
 });
 
@@ -161,5 +162,41 @@ describe("account notification hooks", () => {
         '"Build alerts" will stop being sent from your computers.',
       ),
     ).toBeTruthy();
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a failed Delete only in its confirmation and not in a new Delete opening", async () => {
+    const shownAccount = {
+      ...account,
+      settings: { ...accountSettings, hooks: [literalHook] },
+    };
+    const { rerender } = render(
+      <AccountNotificationHooksSection account={shownAccount} />,
+    );
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+    const firstDialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(firstDialog).queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(firstDialog).getByRole("button", { name: "Delete" }),
+    );
+
+    saveMutation.error = new Error(
+      "Cloud service is temporarily unavailable. Please try again shortly.",
+    );
+    rerender(<AccountNotificationHooksSection account={shownAccount} />);
+
+    expect(await within(firstDialog).findByRole("alert")).toHaveTextContent(
+      "Cloud service is temporarily unavailable. Please try again shortly.",
+    );
+    fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+    const secondDialog = await screen.findByTestId(
+      "confirm-destructive-dialog",
+    );
+    expect(within(secondDialog).queryByRole("alert")).toBeNull();
   });
 });
