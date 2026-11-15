@@ -111,7 +111,7 @@ async function fetchAuthn(
   authnBaseUrl: string,
   path: string,
   bearerToken: string,
-  init: Omit<RequestInit, "headers" | "signal">,
+  init: Omit<RequestInit, "headers" | "signal" | "redirect">,
   callerSignal: AbortSignal | null,
 ): Promise<Response | null> {
   const abort = composeRequestAbort(
