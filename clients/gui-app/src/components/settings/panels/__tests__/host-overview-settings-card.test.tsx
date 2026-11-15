@@ -35,6 +35,7 @@ import type {
 } from "@traycer/protocol/host/environment/move-contracts";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   fakeEnvironmentCloud,
   type FakeEnvironmentCloud,
@@ -683,17 +684,29 @@ describe("<HostOverviewSettingsCard />", () => {
 
   it("keeps the running-chat count unknown when the computer does not serve the method", async () => {
     const calls = giveCalls();
-    await openAdminGiveDialog(
-      giveHandlers(
-        calls,
-        () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
-        null,
-      ),
-      false,
+    const handlers = giveHandlers(
+      calls,
+      () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
+      null,
     );
+    handlers["environment.previewLocalFacts"] = (request) => {
+      calls.localFacts.push(
+        environmentPreviewLocalFactsRequestSchema.parse(request),
+      );
+      throw new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "unknown method",
+        requestId: "local-facts-unsupported",
+        method: "environment.previewLocalFacts",
+        fatalDetails: null,
+      });
+    };
+    await openAdminGiveDialog(handlers, true);
 
     expect(await screen.findByText("Running chats will stop.")).toBeTruthy();
-    expect(calls.localFacts).toEqual([]);
+    expect(calls.localFacts).toEqual([
+      { environmentId: "personal", subject: { kind: "computer" } },
+    ]);
   });
 
   it("gives a computer through the team plan, acceptance and status read", async () => {

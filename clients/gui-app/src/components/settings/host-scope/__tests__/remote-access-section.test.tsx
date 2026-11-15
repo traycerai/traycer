@@ -738,7 +738,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       body: { remoteAccess: { enabled: true, epoch: 1 } },
     });
     const queryClient = renderTab(host, ACCESS_METHODS, false);
-    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    expect(await screen.findByTestId("remote-access-question")).toBeTruthy();
 
     fireEvent.click(await screen.findByRole("button", { name: "On" }));
 
@@ -764,6 +764,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     expect(
       screen.queryByText("Couldn't change remote access. Try again."),
     ).toBeNull();
+    expect(screen.queryByTestId("remote-access-question")).toBeNull();
     host.state.status = environmentStatusFixture({ remoteAccess: "on" });
     await rereadStatus(queryClient, host);
     await waitFor(() => {
