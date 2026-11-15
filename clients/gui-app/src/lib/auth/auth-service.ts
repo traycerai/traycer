@@ -3192,24 +3192,8 @@ export class AuthService {
     return this.runnerHost.listEnvironments(bearer);
   }
 
-  /**
-   * Saves the account's auto-approve policy on traycer-server with the bearer
-   * of the sign-in that made the choice. A save queued behind another one is
-   * sent later, so `era` is the sign-in captured when the person chose, and a
-   * different live one throws {@link SupersededAuthEraError} before the
-   * bearer is read, instead of sending it as someone else. The same era check
-   * `readHostOwnership` makes.
-   */
-  async saveAutoPolicy(
-    body: string,
-    era: AuthEra,
-  ): Promise<AutoPolicySaveResult> {
-    const live = this.currentAuthEra();
-    if (
-      live.identity !== era.identity ||
-      live.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+  /** Saves the account's auto-approve policy on traycer-server, on the signed-in person's bearer. */
+  async saveAutoPolicy(body: string): Promise<AutoPolicySaveResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.saveAutoPolicy(bearer, body);

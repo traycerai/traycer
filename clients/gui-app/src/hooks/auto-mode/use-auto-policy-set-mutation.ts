@@ -17,8 +17,7 @@ import {
   HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
-import { SupersededAuthEraError } from "@/lib/auth/auth-service";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   useHostBinding,
   useHostClient,
@@ -45,13 +44,15 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 const METHOD = "autoPolicy.set";
 
 /**
- * One save: the policy, and the sign-in that made it, read when the person
- * pressed Save or Reset. Saves queue, so the one sent later must still go out
- * as them.
+ * One save: the policy, and the operation on the sign-in that made it, taken
+ * when the person pressed Save or Reset (`AuthService.environmentCloud()`).
+ * Saves queue, so the one sent later must still go out as them: it is not
+ * sent once that sign-in has ended or been entered again, and a refreshed
+ * bearer of the same sign-in sends it normally.
  */
 export interface AutoPolicySave {
   readonly request: AutoPolicySetRequest;
-  readonly era: AuthEra;
+  readonly operation: EnvironmentCloud;
 }
 
 type SetAutoPolicyContext = {
@@ -116,22 +117,18 @@ async function saveOnSignIn(
   { binding, client, hostId, viewerId, stream }: SignInSave,
   save: AutoPolicySave,
 ): Promise<AutoPolicySetResponse> {
-  const { onOriginSignIn } = binding.auth.environmentCloud();
-  const result = await binding.auth
-    .saveAutoPolicy(save.request.body, save.era)
-    .catch((error: unknown) => {
-      // Its sign-in ended before its turn: not sent, and nothing is said to
-      // whoever is signed in now.
-      if (error instanceof SupersededAuthEraError) {
-        throw new HostRequestAbortedError({
-          message: "The account changed before the save was sent",
-          requestId: crypto.randomUUID(),
-          method: METHOD,
-          mayHaveDispatched: false,
-        });
-      }
-      throw error;
+  const { onOriginSignIn } = save.operation;
+  // Its sign-in ended before its turn: not sent, and nothing is said to
+  // whoever is signed in now. Checked before the bearer is read.
+  if (!onOriginSignIn()) {
+    throw new HostRequestAbortedError({
+      message: "The account changed before the save was sent",
+      requestId: crypto.randomUUID(),
+      method: METHOD,
+      mayHaveDispatched: false,
     });
+  }
+  const result = await binding.auth.saveAutoPolicy(save.request.body);
   if (result.kind !== "ok") throw saveFailure(result.kind);
   if (binding.directory.findById(hostId) === null) {
     await client

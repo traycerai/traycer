@@ -78,10 +78,15 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
-import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 
-/** The sign-in a save was pressed on; these saves go to the host, which reads none of it. */
-const PRESSED_ERA: AuthEra = { identity: null, credentialGeneration: 0 };
+/** The operation a save was pressed on; these saves go to the host, which reads none of it. */
+const PRESSED_ON: EnvironmentCloud = {
+  authnBaseUrl: "",
+  bearer: { kind: "cloud", getBearerToken: () => null },
+  transport: () => Promise.reject(new Error("not sent")),
+  onOriginSignIn: () => true,
+};
 
 interface CapturedMutation {
   readonly options: {
@@ -270,11 +275,11 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
 
     result.current.mutate({
       request: { body: "policy draft one" },
-      era: PRESSED_ERA,
+      operation: PRESSED_ON,
     });
     result.current.mutate({
       request: { body: "policy draft two" },
-      era: PRESSED_ERA,
+      operation: PRESSED_ON,
     });
 
     await waitFor(() => {

@@ -447,11 +447,11 @@ function RulesEditor(props: {
   });
   const commit = (): void => {
     const body = joinAutoPolicySections(editor.sections);
-    // The sign-in's era is taken now, at the press, not when a queued save's
-    // turn comes.
+    // The sign-in's operation is taken now, at the press, not when a queued
+    // save's turn comes.
     if (binding === null) return;
     setPolicy.mutate(
-      { request: { body }, era: binding.auth.currentAuthEra() },
+      { request: { body }, operation: binding.auth.environmentCloud() },
       {
         onSuccess: (response) => {
           setEditorState((current) =>
@@ -471,7 +471,7 @@ function RulesEditor(props: {
   const reset = (): void => {
     if (saving || resetBlockedReason !== null || binding === null) return;
     setPolicy.mutate(
-      { request: { body: "" }, era: binding.auth.currentAuthEra() },
+      { request: { body: "" }, operation: binding.auth.environmentCloud() },
       {
         onSuccess: (response) => {
           setResetConfirm(false);
