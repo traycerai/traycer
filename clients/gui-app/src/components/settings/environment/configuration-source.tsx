@@ -68,6 +68,19 @@ export function useCanAdministerConfiguration(): boolean {
   );
 }
 
+/** Team account edits use the person's session, independent of the serving computer. */
+export function canManageTeamProviderAccounts(
+  source: ConfigurationSource,
+): boolean {
+  return (
+    source.kind === "pool" &&
+    source.configuration === "team" &&
+    (source.effectiveRole === "owner" ||
+      source.effectiveRole === "admin" ||
+      source.effectiveRole === "editor")
+  );
+}
+
 /** An older inventory cannot authorize edits to a team, and answers `null`. */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
