@@ -263,9 +263,16 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     const response = new Promise<EnvironmentMembersResponseV12>((resolve) => {
       finish = resolve;
     });
+    // The environment list reads the roster's first page for the viewer's
+    // role, and the page reads the roster only once that row is there: the
+    // first read answers the list, and the one held is the page's own.
+    let reads = 0;
     mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
-      () => response,
+      () => {
+        reads += 1;
+        return reads === 1 ? MEMBERS_RESPONSE : response;
+      },
     );
     expect(await screen.findByText("Loading editors and admins…")).toBeTruthy();
     await act(async () => {
