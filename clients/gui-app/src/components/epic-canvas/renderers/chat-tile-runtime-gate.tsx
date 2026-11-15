@@ -1,6 +1,7 @@
 import { useContext, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -118,7 +119,7 @@ export function ChatTilePreContent(props: {
     // an attributed skew.
     hostBehindClient: hostIsBehindClient({
       hostAppVersion: hostUpdate.hostAppVersion,
-      clientAppVersion: hostUpdate.clientAppVersion,
+      clientAppVersion: MINIMUM_HOST_VERSION,
     }),
     hasReadySession: frame.hasReadySession,
     elapsed: chatPreContentElapsed(slow, overdue),

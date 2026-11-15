@@ -1,3 +1,4 @@
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { createContext, use, useEffect, useRef, type Context } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -769,7 +770,8 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
 function isPendingHostProbeError(error: unknown): boolean {
   return (
     error instanceof RetryableTransportError ||
-    error instanceof HostRequestAbortedError
+    error instanceof HostRequestAbortedError ||
+    error instanceof HostBelowMinimumError
   );
 }
 

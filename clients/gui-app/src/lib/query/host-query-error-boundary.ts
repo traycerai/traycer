@@ -4,6 +4,7 @@ import {
   type HostRequestControlFlowReason,
 } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 
 /**
  * The TanStack cancellation minted for coordinator control flow, carrying
@@ -33,6 +34,21 @@ export function hostControlFlowReasonOf(
  * only layer that may depend on both the coordinator error and TanStack.
  */
 export async function withHostQueryErrorBoundary<T>(
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await withHostMutationErrorBoundary(method, run);
+  } catch (error) {
+    if (error instanceof HostBelowMinimumError) {
+      throw new CancelledError({ revert: true, silent: true });
+    }
+    throw error;
+  }
+}
+
+/** Mutations retain the local floor failure so a press can show its remedy. */
+export async function withHostMutationErrorBoundary<T>(
   method: string,
   run: () => Promise<T>,
 ): Promise<T> {

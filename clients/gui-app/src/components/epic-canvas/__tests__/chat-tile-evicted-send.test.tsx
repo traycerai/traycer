@@ -119,6 +119,8 @@ const MOCK_HOST_ENTRY = {
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
+  getLocalEntry: () => null,
+  getLocalHostId: () => null,
   findById: (hostId: string) => {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return hostId === poolEntry.hostId ? poolEntry : null;
@@ -127,8 +129,17 @@ const MOCK_HOST_DIRECTORY = {
 
 // ENUMERATES deliberately, as `chat-tile-queue-edit-steer.test.tsx` does: the
 // barrel's un-overridden residue is provider-coupled and throws.
+// The one binding carries the directory `useHostDirectory` answers, as in the
+// app: `useHostDirectoryEntry` reads it off the binding.
+const MOCK_HOST_BINDING = {
+  directory: MOCK_HOST_DIRECTORY,
+  hostClient: {
+    ...MOCK_HOST_CLIENT,
+    resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
+  },
+};
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () => MOCK_HOST_BINDING,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
@@ -149,7 +160,10 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
