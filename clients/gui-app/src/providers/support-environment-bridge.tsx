@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecretsRotationResponse } from "@traycer/protocol/host/environment-schemas";
 import { autoPolicyReadStateFor } from "@/components/settings/panels/auto-policy-document";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
+import { useHostOwnEnvironment } from "@/hooks/environment/use-host-own-environment";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -46,7 +47,6 @@ export function SupportEnvironmentBridge(): ReactNode {
 }
 
 const NO_PARAMS = {};
-const OWN_ENVIRONMENT_PARAMS = { environmentId: null };
 
 function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
   const { hostId } = props;
@@ -85,12 +85,17 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
       enabled: statusSupported === true && attemptsSupported === true,
     },
   });
-  const list = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: undefined,
-    client,
+  const secretsRead = statusSupported === true && listSupported === true;
+  // The secrets of the environment this host runs, read from authn on the
+  // person's sign-in, as the host read them when asked for its own.
+  const own = useHostOwnEnvironment(client, hostId, secretsRead);
+  const list = useEnvironmentCloudQuery({
     method: "environment.secrets.list",
-    params: OWN_ENVIRONMENT_PARAMS,
-    options: { enabled: statusSupported === true && listSupported === true },
+    params: { environmentId: own.environmentId },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: secretsRead && own.resolved,
+    poll: false,
   });
   const reach = useHostQuery<HostRpcRegistry, "environment.reachDiagnostics">({
     cacheKeyIdentity: undefined,
@@ -166,12 +171,12 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
       {policySupported === true ? (
         <SupportPolicyRead onRead={setPolicy} />
       ) : null}
-      {client === null || secrets === null
+      {secrets === null
         ? null
         : secrets.map((secret) => (
             <SupportRotationRead
               key={secret.secretId}
-              client={client}
+              environmentId={own.environmentId}
               secretId={secret.secretId}
               secretName={secret.name}
               onRead={onRotation}
@@ -240,7 +245,7 @@ function SupportPolicyRead(props: {
 
 /** One listed secret's rotation, re-read only while it is still moving. */
 function SupportRotationRead(props: {
-  readonly client: HostClient<HostRpcRegistry>;
+  readonly environmentId: string | null;
   readonly secretId: string;
   readonly secretName: string;
   readonly onRead: (
@@ -250,15 +255,13 @@ function SupportRotationRead(props: {
 }): null {
   const { secretId, secretName, onRead } = props;
   const [moving, setMoving] = useState(true);
-  const rotation = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.rotation"
-  >({
-    cacheKeyIdentity: undefined,
-    client: props.client,
+  const rotation = useEnvironmentCloudQuery({
     method: "environment.secrets.rotation",
-    params: { secretId, environmentId: null },
-    options: { enabled: true, poll: moving },
+    params: { secretId, environmentId: props.environmentId },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: true,
+    poll: moving,
   });
   const current: EnvironmentSecretsRotationResponse["rotation"] | undefined =
     rotation.data?.rotation;
