@@ -293,6 +293,7 @@ describe("StopSharingSheet", () => {
           changedRows={null}
           previewStatus="ready"
           confirmPending={false}
+          personalAccounts={null}
           onOpenChange={vi.fn()}
           onStop={vi.fn()}
         />,

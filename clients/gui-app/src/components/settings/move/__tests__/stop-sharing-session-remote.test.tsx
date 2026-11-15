@@ -250,7 +250,10 @@ function makeHarness(
     livenessProbe: null,
     mintMemberCredential: null,
   });
-  const remoteMessenger = new RemoteHostMessenger(session);
+  const remoteMessenger = new RemoteHostMessenger<
+    HostRpcRegistry,
+    typeof emptyStreamRegistry
+  >(session);
   let armedFloorDowngrade: {
     readonly method: HostMethod;
     readonly version: HostVersion;
@@ -386,7 +389,7 @@ function preview(
   const base = { managed: [], needsChoice: [] };
   return profiles === undefined
     ? base
-    : { ...base, personalProfiles: profiles };
+    : { ...base, personalProfiles: [...profiles] };
 }
 
 function providerList(profiles: readonly ProviderProfile[]): ProvidersList {

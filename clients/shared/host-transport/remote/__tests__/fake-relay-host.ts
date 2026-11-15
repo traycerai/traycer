@@ -14,25 +14,18 @@ import {
   type NoiseKeyPair,
 } from "@traycer/protocol/crypto/noise";
 import {
-  FINE_INBOUND_CREDIT_GRANT_BATCH,
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
-  SESSION_CAPABILITY_BODY_COMPRESSION,
-  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
-  OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
   type MuxFrame,
-  type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
 import {
   ChunkReassembler,
-  encodeMuxMessageBody,
   nextSeqValue,
   OutboundChunkSource,
   type OutboundMessage,
@@ -42,12 +35,12 @@ import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
-} from "../ws-stream-factory";
+} from "../../ws-stream-factory";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
   WebSocketOpenEvent,
-} from "../ws-factory";
+} from "../../ws-factory";
 
 const EMPTY_AD = new Uint8Array(0);
 
