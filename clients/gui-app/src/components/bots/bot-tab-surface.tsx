@@ -876,7 +876,7 @@ function BotTabBody(props: {
   }, [paneVisible]);
   // The reader's standing on the bot's environment, for its settings and its
   // failed turns' Switch, from the list the tab already reads.
-  const mayChangeBot = useReaderMayChangeBot(client, subscription.snapshot);
+  const mayChangeBot = useReaderMayChangeBot(subscription.snapshot);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
