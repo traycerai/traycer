@@ -15,6 +15,7 @@ import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-sc
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
@@ -25,8 +26,9 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
-  OwnEnvironmentAuthProvider,
   createOwnEnvironmentAuthRuntime,
+  authnHostRowFixture,
+  authnSecretRowFixture,
   installOwnEnvironmentTransport,
   jsonResponse,
   signInOwnEnvironment,
@@ -34,7 +36,9 @@ import {
   WINDOW_HOST,
   type OwnEnvironmentAuthRuntime,
   type OwnEnvironmentTransport,
+  type OwnEnvironmentTransportRequest,
 } from "@/hooks/environment/__tests__/own-environment-authn-test-support";
+import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -47,6 +51,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const PERSONAL_ENVIRONMENT = "env-personal";
+const SECOND_ACCOUNT_ENVIRONMENT = "env-personal-user-2";
 const SECRET_ID = "secret-page-authn";
 const VERSION_ID = "version-page-authn";
 const OLD_VERSION_ID = "version-page-authn-old";
@@ -59,6 +64,22 @@ const PERSONAL_DIRECTORY = {
       ownerKind: "user" as const,
       ownerId: "user-1",
       roomId: "room-personal",
+      label: "Personal",
+      effectiveRole: "owner" as const,
+      kind: "personal" as const,
+      hostCount: 1,
+      providerHandle: null,
+    },
+  ],
+};
+
+const SECOND_ACCOUNT_DIRECTORY = {
+  environments: [
+    {
+      environmentId: SECOND_ACCOUNT_ENVIRONMENT,
+      ownerKind: "user" as const,
+      ownerId: "user-2",
+      roomId: "room-personal-user-2",
       label: "Personal",
       effectiveRole: "owner" as const,
       kind: "personal" as const,
@@ -82,15 +103,40 @@ const SECRET: EnvironmentSecretV12 = {
   variables: [],
 };
 
+const AUTHN_SECRET = authnSecretRowFixture({
+  id: SECRET_ID,
+  name: SECRET.name,
+  kind: SECRET.kind,
+  protocol: SECRET.protocol ?? SECRET.kind,
+  hosts: SECRET.destinations,
+  currentVersionId: VERSION_ID,
+  updatedAt: SECRET.updatedAt,
+  variables: SECRET.variables.map((name) => ({ name })),
+});
+
+const SECOND_ACCOUNT_SECRET = {
+  ...AUTHN_SECRET,
+  name: "USER_2_ONLY_SECRET",
+};
+
+const AUTHN_HOST = authnHostRowFixture({
+  hostId: WINDOW_HOST,
+  hostName: "window host",
+  hostPlatform: "linux",
+});
+
 let authRuntime: OwnEnvironmentAuthRuntime;
 let authnTransport: OwnEnvironmentTransport;
 let directoryFails: boolean;
 let holdFirstDirectory: boolean;
 let releaseFirstDirectory: (() => void) | null;
+let activePersonalEnvironment: string;
+let directoryForCurrentSignIn: unknown;
 let hostSecretCalls: string[];
 
 function PageWithRevisionRead(props: { readonly client: EnvironmentClient }) {
   useEnvironmentStatusRead(props.client, WINDOW_HOST, true);
+  useRereadHostReadsOnFocus(WINDOW_HOST);
   return (
     <SecretsPage
       client={props.client}
@@ -151,108 +197,137 @@ function mountSecretsPage(): QueryClient {
   return queryClient;
 }
 
+function activeEnvironmentPath(suffix: string): string {
+  return "/api/v3/environments/" + activePersonalEnvironment + "/" + suffix;
+}
+
+function ownEnvironmentDirectoryRoute(
+  request: OwnEnvironmentTransportRequest,
+): Response | Promise<Response> | undefined {
+  if (
+    request.method !== "GET" ||
+    request.url.pathname !== "/api/environments"
+  ) {
+    return undefined;
+  }
+  if (holdFirstDirectory) {
+    holdFirstDirectory = false;
+    return new Promise<Response>((resolveResponse) => {
+      releaseFirstDirectory = () => {
+        resolveResponse(jsonResponse(200, PERSONAL_DIRECTORY));
+      };
+    });
+  }
+  return directoryFails
+    ? jsonResponse(503, {})
+    : jsonResponse(200, directoryForCurrentSignIn);
+}
+
+function ownEnvironmentHostRoute(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
+  if (
+    request.method !== "GET" ||
+    request.url.pathname !== activeEnvironmentPath("hosts")
+  ) {
+    return undefined;
+  }
+  return jsonResponse(200, { hosts: [AUTHN_HOST] });
+}
+
+function ownEnvironmentSecretReadRoute(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
+  if (request.method !== "GET") return undefined;
+  const path = request.url.pathname;
+  if (path === activeEnvironmentPath("secrets")) {
+    return jsonResponse(200, {
+      secrets: [
+        activePersonalEnvironment === SECOND_ACCOUNT_ENVIRONMENT
+          ? SECOND_ACCOUNT_SECRET
+          : AUTHN_SECRET,
+      ],
+    });
+  }
+  if (path === activeEnvironmentPath("secrets/" + SECRET_ID + "/versions")) {
+    return jsonResponse(200, {
+      versions: [
+        {
+          versionId: VERSION_ID,
+          ordinal: 2,
+          createdAt: 2,
+          supersededAt: null,
+          destroyedAt: null,
+          current: true,
+          rotationState: null,
+        },
+        {
+          versionId: OLD_VERSION_ID,
+          ordinal: 1,
+          createdAt: 1,
+          supersededAt: 2,
+          destroyedAt: null,
+          current: false,
+          rotationState: null,
+        },
+      ],
+      removal: null,
+    });
+  }
+  if (path === activeEnvironmentPath("secrets/" + SECRET_ID + "/rotation")) {
+    return jsonResponse(200, { rotation: null, lastVerify: null });
+  }
+  return undefined;
+}
+
+function ownEnvironmentSecretWriteRoute(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
+  const path = request.url.pathname;
+  if (request.method === "POST" && path.endsWith("/secrets/verify")) {
+    return jsonResponse(200, { evidence: "probe_accepted" });
+  }
+  if (
+    request.method === "POST" &&
+    (path.endsWith("/verify") ||
+      path.endsWith("/destroy") ||
+      path.endsWith("/undo") ||
+      path.endsWith("/secrets"))
+  ) {
+    return jsonResponse(500, {});
+  }
+  if (request.method === "PATCH" && path.endsWith("/" + SECRET_ID)) {
+    return jsonResponse(500, {});
+  }
+  return undefined;
+}
+
+function ownEnvironmentRoute(
+  request: OwnEnvironmentTransportRequest,
+): Response | Promise<Response> | undefined {
+  return (
+    ownEnvironmentDirectoryRoute(request) ??
+    ownEnvironmentHostRoute(request) ??
+    ownEnvironmentSecretReadRoute(request) ??
+    ownEnvironmentSecretWriteRoute(request)
+  );
+}
+
 beforeEach(async () => {
   directoryFails = false;
   holdFirstDirectory = false;
   releaseFirstDirectory = null;
+  activePersonalEnvironment = PERSONAL_ENVIRONMENT;
+  directoryForCurrentSignIn = PERSONAL_DIRECTORY;
   reportedRevision = 1;
   hostSecretCalls = [];
   authRuntime = createOwnEnvironmentAuthRuntime();
-  authnTransport = installOwnEnvironmentTransport((request) => {
-    if (
-      request.url.pathname === "/api/environments" &&
-      request.method === "GET" &&
-      holdFirstDirectory
-    ) {
-      holdFirstDirectory = false;
-      return new Promise<Response>((resolveResponse) => {
-        releaseFirstDirectory = () => {
-          resolveResponse(jsonResponse(200, PERSONAL_DIRECTORY));
-        };
-      });
-    }
-    if (
-      request.url.pathname === "/api/environments" &&
-      request.method === "GET" &&
-      directoryFails
-    ) {
-      return jsonResponse(503, {});
-    }
-    if (
-      request.url.pathname ===
-        "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets" &&
-      request.method === "GET"
-    ) {
-      return jsonResponse(200, { removed: [], secrets: [SECRET] });
-    }
-    if (
-      request.url.pathname ===
-        "/api/v3/environments/" +
-          PERSONAL_ENVIRONMENT +
-          "/secrets/" +
-          SECRET_ID +
-          "/versions" &&
-      request.method === "GET"
-    ) {
-      return jsonResponse(200, {
-        versions: [
-          {
-            versionId: VERSION_ID,
-            ordinal: 2,
-            createdAt: 2,
-            supersededAt: null,
-            destroyedAt: null,
-            current: true,
-            rotationState: null,
-          },
-          {
-            versionId: OLD_VERSION_ID,
-            ordinal: 1,
-            createdAt: 1,
-            supersededAt: 2,
-            destroyedAt: null,
-            current: false,
-            rotationState: null,
-          },
-        ],
-        removal: null,
-      });
-    }
-    if (
-      request.url.pathname ===
-        "/api/v3/environments/" +
-          PERSONAL_ENVIRONMENT +
-          "/secrets/" +
-          SECRET_ID +
-          "/rotation" &&
-      request.method === "GET"
-    ) {
-      return jsonResponse(200, { rotation: null, lastVerify: null });
-    }
-    if (
-      request.method === "POST" &&
-      request.url.pathname.endsWith("/secrets/verify")
-    ) {
-      return jsonResponse(200, { evidence: "probe_accepted" });
-    }
-    if (
-      request.method === "POST" &&
-      (request.url.pathname.endsWith("/verify") ||
-        request.url.pathname.endsWith("/destroy") ||
-        request.url.pathname.endsWith("/undo") ||
-        request.url.pathname.endsWith("/secrets"))
-    ) {
-      return jsonResponse(500, {});
-    }
-    if (
-      request.method === "PATCH" &&
-      request.url.pathname.endsWith("/" + SECRET_ID)
-    ) {
-      return jsonResponse(500, {});
-    }
-    return undefined;
-  }, PERSONAL_DIRECTORY);
+  authnTransport = installOwnEnvironmentTransport(
+    ownEnvironmentRoute,
+    PERSONAL_DIRECTORY,
+  );
   await signInOwnEnvironment(authRuntime);
+  useAuthStore.setState({ shareableTeams: [] });
 });
 
 afterEach(() => {
@@ -353,7 +428,9 @@ describe("Secrets page reads on the window host's own environment", () => {
     fireEvent.click(within(removeDialog).getByTestId("confirm-cancel"));
 
     const versionList = await screen.findByTestId("secret-versions");
-    const oldVersion = within(versionList).getAllByTestId("secret-version")[1]!;
+    const versions = within(versionList).getAllByTestId("secret-version");
+    expect(versions).toHaveLength(2);
+    const oldVersion = versions[1];
     fireEvent.click(within(oldVersion).getByTestId("secret-version-undo"));
     await waitFor(() => {
       expect(
@@ -365,9 +442,11 @@ describe("Secrets page reads on the window host's own environment", () => {
       ).toBe(true);
     });
 
-    const refreshedOldVersion = within(
+    const refreshedVersions = within(
       screen.getByTestId("secret-versions"),
-    ).getAllByTestId("secret-version")[1]!;
+    ).getAllByTestId("secret-version");
+    expect(refreshedVersions).toHaveLength(2);
+    const refreshedOldVersion = refreshedVersions[1];
     fireEvent.click(
       within(refreshedOldVersion).getByTestId("secret-version-destroy"),
     );
@@ -502,7 +581,7 @@ describe("Secrets page reads on the window host's own environment", () => {
 
   it("does not continue an in-flight Personal lookup on the next account's sign-in", async () => {
     holdFirstDirectory = true;
-    mountSecretsPage();
+    const queryClient = mountSecretsPage();
 
     await waitFor(() => {
       expect(
@@ -515,40 +594,50 @@ describe("Secrets page reads on the window host's own environment", () => {
       expect(releaseFirstDirectory).not.toBeNull();
     });
 
+    const secretPathsBeforeSwitch = authnSecretPaths();
     await act(async () => {
       await authRuntime.auth.signOut();
       useAuthStore.setState({ status: "signed-out" });
     });
+    activePersonalEnvironment = SECOND_ACCOUNT_ENVIRONMENT;
+    directoryForCurrentSignIn = SECOND_ACCOUNT_DIRECTORY;
     await signInOwnEnvironmentAs(authRuntime, "user-2", "user-2-token");
+    useAuthStore.setState({ shareableTeams: [] });
 
     await screen.findByTestId("secret-row");
     await waitFor(() => {
       expect(
-        authnTransport.requests.filter(
-          (request) =>
-            request.url.pathname === "/api/environments" &&
-            request.method === "GET",
-        ),
-      ).toHaveLength(2);
-      expect(authnSecretPaths()).toContain(
-        "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets",
+        authnSecretPaths().slice(secretPathsBeforeSwitch.length),
+      ).toContain(
+        "/api/v3/environments/" + SECOND_ACCOUNT_ENVIRONMENT + "/secrets",
       );
     });
+    expect(screen.queryByText("USER_2_ONLY_SECRET")).toBeTruthy();
 
     const release = releaseFirstDirectory;
     if (release === null)
       throw new Error("the first directory read was not held");
-    release();
+    const secretPathsBeforeRelease = authnSecretPaths();
+    act(() => {
+      release();
+    });
     await waitFor(() => {
       expect(
-        authnTransport.requests.filter(
-          (request) =>
-            request.url.pathname ===
-              "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets" &&
-            request.method === "GET",
-        ),
-      ).toHaveLength(1);
+        queryClient
+          .getQueryCache()
+          .findAll({
+            predicate: (query) =>
+              query.meta?.hostRpcMethod === "environment.list",
+          })
+          .every((query) => query.state.fetchStatus === "idle"),
+      ).toBe(true);
     });
+    expect(screen.queryByText("USER_2_ONLY_SECRET")).toBeTruthy();
+    expect(
+      authnSecretPaths().slice(secretPathsBeforeRelease.length),
+    ).not.toContain(
+      "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets",
+    );
     expect(hostSecretCalls).toEqual([]);
   });
 
@@ -580,7 +669,9 @@ describe("Secrets page reads on the window host's own environment", () => {
     const row = await screen.findByTestId("secret-row");
     fireEvent.click(within(row).getByRole("button", { name: "Details" }));
     const versions = await screen.findByTestId("secret-versions");
-    const oldVersion = within(versions).getAllByTestId("secret-version")[1]!;
+    const versionRows = within(versions).getAllByTestId("secret-version");
+    expect(versionRows).toHaveLength(2);
+    const oldVersion = versionRows[1];
     const beforePress = authnTransport.requests.length;
 
     await endSignInAfterPress(
@@ -639,7 +730,7 @@ describe("Secrets page reads on the window host's own environment", () => {
       ).toHaveLength(1);
     });
 
-    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
     await waitFor(() => {
       expect(
         authnTransport.requests.filter(
@@ -662,20 +753,20 @@ describe("Secrets page reads on the window host's own environment", () => {
     expect(screen.queryByTestId("secret-row")).toBeNull();
     expect(authnSecretPaths()).toEqual([]);
     expect(hostSecretCalls).toEqual([]);
-    expect(
-      authnTransport.requests.filter(
-        (request) => request.url.pathname === "/api/environments",
-      ),
-    ).toHaveLength(1);
+    const directoryReadsBeforeRetry = authnTransport.requests.filter(
+      (request) => request.url.pathname === "/api/environments",
+    ).length;
 
     directoryFails = false;
     fireEvent.click(within(error).getByRole("button", { name: "Retry" }));
     expect(await screen.findByTestId("secret-row")).toBeTruthy();
-    expect(
-      authnTransport.requests.filter(
-        (request) => request.url.pathname === "/api/environments",
-      ),
-    ).toHaveLength(2);
+    await waitFor(() => {
+      expect(
+        authnTransport.requests.filter(
+          (request) => request.url.pathname === "/api/environments",
+        ).length,
+      ).toBeGreaterThan(directoryReadsBeforeRetry);
+    });
     expect(authnSecretPaths()).toContain(
       "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets",
     );

@@ -13,7 +13,6 @@ import { HostTransportFailureError } from "@traycer-clients/shared/host-transpor
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
-  EnvironmentSecretsCreateResponse,
   EnvironmentSecretsVerifyRequest,
   SecretVerifyResult,
 } from "@traycer/protocol/host/environment-schemas";
@@ -29,6 +28,19 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  authnHostRowFixture,
+  authnSecretRowFixture,
+  createOwnEnvironmentAuthRuntime,
+  installOwnEnvironmentTransport,
+  jsonResponse,
+  signInOwnEnvironment,
+  type OwnEnvironmentAuthRuntime,
+  type OwnEnvironmentTransport,
+  type OwnEnvironmentTransportRequest,
+} from "@/hooks/environment/__tests__/own-environment-authn-test-support";
+import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -64,11 +76,11 @@ function buildBoundClient(options: {
  */
 
 const HOST_ID = "host-secrets-refusal";
+const PERSONAL_ENVIRONMENT = "env-secrets-refusal";
 const TYPED_VALUE = 'p"ss\\w0rd-UNIQUE-7731';
 
 interface SecretsHostState {
   verifyAnswer: SecretVerifyResult;
-  createAnswer: EnvironmentSecretsCreateResponse;
   /** The create rejects with this. */
   createError: Error | null;
 }
@@ -78,6 +90,10 @@ interface SecretsHost {
   readonly verifyRequests: EnvironmentSecretsVerifyRequest[];
   readonly createRequests: EnvironmentSecretsCreateRequest[];
 }
+
+let authRuntime: OwnEnvironmentAuthRuntime;
+let authnTransport: OwnEnvironmentTransport;
+let authnState: SecretsHostState;
 
 function createdSecret(): EnvironmentSecretV12 {
   return {
@@ -98,10 +114,10 @@ function createdSecret(): EnvironmentSecretV12 {
 function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   const state: SecretsHostState = {
     verifyAnswer: { evidence: "probe_accepted" },
-    createAnswer: { outcome: "created", secret: createdSecret() },
     createError: null,
     ...overrides,
   };
+  authnState = state;
   const verifyRequests: EnvironmentSecretsVerifyRequest[] = [];
   const createRequests: EnvironmentSecretsCreateRequest[] = [];
   const { client } = buildBoundClient({
@@ -115,7 +131,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       "environment.secrets.create": (request) => {
         createRequests.push(request);
         if (state.createError !== null) throw state.createError;
-        return state.createAnswer;
+        return { outcome: "created", secret: createdSecret() };
       },
     },
   });
@@ -127,33 +143,115 @@ function renderPage(host: SecretsHost): QueryClient {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        <SecretsPage
-          client={host.client}
-          hostId={HOST_ID}
-          emptyText={SECRETS_EMPTY_TEXT}
-          hostName={() => "dev-box"}
-        />
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    <OwnEnvironmentAuthProvider binding={authRuntime.binding}>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+          <SecretsPage
+            client={host.client}
+            hostId={HOST_ID}
+            emptyText={SECRETS_EMPTY_TEXT}
+            hostName={() => "dev-box"}
+          />
+        </RunnerHostContext.Provider>
+      </QueryClientProvider>
+    </OwnEnvironmentAuthProvider>,
   );
   return queryClient;
 }
 
-beforeEach(() => {
-  // A Local pick names the host's own environment: these cases are about the
-  // dialog and the list, not about which environment a call names.
+beforeEach(async () => {
+  // Each case exercises the real authn write path on Personal.
   useSettingsEnvironmentPickStore.setState({
-    pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+    defaultPick: { kind: "personal" },
+    pick: null,
   });
+  authnState = {
+    verifyAnswer: { evidence: "probe_accepted" },
+    createError: null,
+  };
+  authnTransport = installOwnEnvironmentTransport(
+    (request) => {
+      const path = request.url.pathname;
+      if (
+        path === "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/hosts" &&
+        request.method === "GET"
+      ) {
+        return jsonResponse(200, {
+          hosts: [
+            authnHostRowFixture({
+              hostId: HOST_ID,
+              hostName: "dev-box",
+              hostPlatform: "linux",
+            }),
+          ],
+        });
+      }
+      if (
+        path === "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets" &&
+        request.method === "GET"
+      ) {
+        return jsonResponse(200, { secrets: [] });
+      }
+      if (
+        path ===
+          "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets/verify" &&
+        request.method === "POST"
+      ) {
+        return jsonResponse(200, authnState.verifyAnswer);
+      }
+      if (
+        path === "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets" &&
+        request.method === "POST"
+      ) {
+        if (authnState.createError instanceof HostTransportFailureError) {
+          throw authnState.createError;
+        }
+        if (authnState.createError !== null) {
+          return jsonResponse(409, { message: authnState.createError.message });
+        }
+        return jsonResponse(201, {
+          secret: authnSecretRowFixture({
+            id: "sec-new",
+            name: "STRIPE_KEY",
+            kind: "api_key",
+            protocol: "https",
+            hosts: ["api.stripe.com"],
+            currentVersionId: "ver-1",
+            updatedAt: 1,
+            variables: [],
+          }),
+        });
+      }
+      return undefined;
+    },
+    {
+      environments: [
+        {
+          environmentId: PERSONAL_ENVIRONMENT,
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+        },
+      ],
+    },
+  );
+  authRuntime = createOwnEnvironmentAuthRuntime();
   openLinkMock.mockResolvedValue(undefined);
+  await signInOwnEnvironment(authRuntime);
+  useAuthStore.setState({ shareableTeams: [] });
 });
 
 afterEach(() => {
   cleanup();
+  authnTransport.restore();
+  authRuntime.dispose();
+  useAuthStore.setState({ status: "signed-out" });
   hostBoundary.client = null;
-  useSettingsEnvironmentPickStore.setState({ pick: null });
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+    pick: null,
+  });
   openLinkMock.mockReset();
 });
 
@@ -225,8 +323,28 @@ function expectValueNowhere(snapshot: string): void {
   expect(snapshot).not.toContain(encoded);
 }
 
+function findAuthnWrite(
+  method: string,
+  path: string,
+): OwnEnvironmentTransportRequest {
+  const request = authnTransport.requests.find(
+    (candidate) =>
+      candidate.method === method && candidate.url.pathname.endsWith(path),
+  );
+  if (request === undefined)
+    throw new Error(`missing authn request ${method} ${path}`);
+  return request;
+}
+
+function authnRequestBody(request: OwnEnvironmentTransportRequest): string {
+  if (typeof request.body !== "string") {
+    throw new Error("authn write request body was not serialized JSON");
+  }
+  return request.body;
+}
+
 describe("the typed secret value stays out of every cache when nothing is saved", () => {
-  it("keeps it out when the host rejects the create with its own words, and keeps it in the open dialog's input only", async () => {
+  it("keeps it out when authn refuses create with its own words, and keeps it in the open dialog's input only", async () => {
     const host = buildSecretsHost({
       createError: new Error("A secret named STRIPE_KEY already exists."),
     });
@@ -238,10 +356,14 @@ describe("the typed secret value stays out of every cache when nothing is saved"
 
     const note = await screen.findByTestId("secret-save-note");
     expect(note.textContent).toBe("A secret named STRIPE_KEY already exists.");
-    // The host did receive the value, so the checks below are about a value
-    // that was really sent.
-    expect(host.createRequests).toHaveLength(1);
-    expect(host.createRequests[0].value).toBe(TYPED_VALUE);
+    const createRequest = findAuthnWrite(
+      "POST",
+      "/" + PERSONAL_ENVIRONMENT + "/secrets",
+    );
+    expect(authnRequestBody(createRequest)).toContain(
+      `"value":${JSON.stringify(TYPED_VALUE)}`,
+    );
+    expect(host.createRequests).toEqual([]);
     expectValueNowhere(cacheSnapshot(queryClient));
 
     const dialog = screen.getByTestId("add-secret-dialog");
@@ -253,7 +375,7 @@ describe("the typed secret value stays out of every cache when nothing is saved"
     expectValueNowhere(cacheSnapshot(queryClient));
   });
 
-  it("keeps it out when the create fails in transport", async () => {
+  it("keeps it out when the authn transport fails during create", async () => {
     const host = buildSecretsHost({
       createError: new HostTransportFailureError({
         code: "RPC_ERROR",
@@ -270,9 +392,15 @@ describe("the typed secret value stays out of every cache when nothing is saved"
     fireEvent.click(await screen.findByTestId("secret-save"));
 
     const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe("Lost the connection to this computer.");
-    expect(host.createRequests).toHaveLength(1);
-    expect(host.createRequests[0].value).toBe(TYPED_VALUE);
+    expect(note.textContent).toBe("Connect to manage secrets.");
+    const createRequest = findAuthnWrite(
+      "POST",
+      "/" + PERSONAL_ENVIRONMENT + "/secrets",
+    );
+    expect(authnRequestBody(createRequest)).toContain(
+      `"value":${JSON.stringify(TYPED_VALUE)}`,
+    );
+    expect(host.createRequests).toEqual([]);
     expectValueNowhere(cacheSnapshot(queryClient));
     expect(screen.getByTestId("add-secret-dialog").textContent).not.toContain(
       TYPED_VALUE,
@@ -293,10 +421,14 @@ describe("the typed secret value stays out of every cache when nothing is saved"
     expect(line.textContent).toBe(
       "Reached the destination. The key is checked the first time an agent uses it.",
     );
-    expect(host.verifyRequests).toHaveLength(1);
-    const request = host.verifyRequests[0];
-    expect(request.target).toBe("candidate");
-    expect(request).toMatchObject({ target: "candidate", value: TYPED_VALUE });
+    const verifyRequest = findAuthnWrite(
+      "POST",
+      "/" + PERSONAL_ENVIRONMENT + "/secrets/verify",
+    );
+    expect(authnRequestBody(verifyRequest)).toContain(
+      `"value":${JSON.stringify(TYPED_VALUE)}`,
+    );
+    expect(host.verifyRequests).toEqual([]);
     expect(host.createRequests).toEqual([]);
     expectValueNowhere(cacheSnapshot(queryClient));
     expect(inputOf("secret-form-value").value).toBe(TYPED_VALUE);
@@ -316,11 +448,14 @@ describe("the typed secret value stays out of every cache when nothing is saved"
     expect(line.textContent).toBe(
       "The server refused the login. Check the login and value above.",
     );
-    expect(host.verifyRequests).toHaveLength(1);
-    expect(host.verifyRequests[0]).toMatchObject({
-      target: "candidate",
-      value: TYPED_VALUE,
-    });
+    const verifyRequest = findAuthnWrite(
+      "POST",
+      "/" + PERSONAL_ENVIRONMENT + "/secrets/verify",
+    );
+    expect(authnRequestBody(verifyRequest)).toContain(
+      `"value":${JSON.stringify(TYPED_VALUE)}`,
+    );
+    expect(host.verifyRequests).toEqual([]);
     expect(host.createRequests).toEqual([]);
     expectValueNowhere(cacheSnapshot(queryClient));
     expect(inputOf("secret-form-value").value).toBe(TYPED_VALUE);
