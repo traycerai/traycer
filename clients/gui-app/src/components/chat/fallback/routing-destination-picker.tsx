@@ -175,7 +175,9 @@ function routingProviderSwitchModel(): string {
  * rung on them. On a bot's failed turn (the surface's bot is the chat's
  * epic), Switch writes the pick to the bot's row - what the Channel settings'
  * Model group writes - and only once the host takes it sends `retry` on the
- * attempt, which reads the row afresh. It never sends `switch` there.
+ * attempt, which reads the row afresh. It never sends `switch` there. The
+ * failed-turn row offers this chooser on a bot's chat only where the role may
+ * change the bot (`useBotChatMaySwitch`).
  */
 export function RoutingDestinationPicker(props: {
   readonly entry: RoutingDestinationEntry;

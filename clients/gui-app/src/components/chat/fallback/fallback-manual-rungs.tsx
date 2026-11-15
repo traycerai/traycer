@@ -13,6 +13,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -49,6 +50,7 @@ import {
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 import { RoutingDestinationPicker } from "./routing-destination-picker";
+import { useBotChatMaySwitch } from "./use-bot-chat-may-switch";
 
 /**
  * The failed-turn card's actions: Retry, Switch to…, and "Wait until <time>".
@@ -146,6 +148,7 @@ export function ManualRungActions({
     hostId,
   });
   const standing = useChatFallbackActionStanding({ epicId, chatId, hostId });
+  const surfaceBot = useBotIdentity();
 
   if (attempt === undefined) return null;
   // While the composer draws a routing card, THAT card owns the routing
@@ -183,7 +186,19 @@ export function ManualRungActions({
   // them with "Reconnecting…" would promise something that is not coming.
   if (standing === "viewer") return null;
 
-  return (
+  // A bot's chat is the one the surface's bot identity names, the test the
+  // chooser makes. Only there does the switch write a shared row, so only
+  // there is the role read; every other chat reads nothing for it.
+  return surfaceBot !== null && surfaceBot.botId === epicId ? (
+    <BotChatManualRungAffordances
+      attempt={attempt}
+      client={client}
+      botId={epicId}
+      chatId={chatId}
+      hostId={hostId}
+      reconnecting={standing === "reconnecting"}
+    />
+  ) : (
     <ManualRungAffordances
       attempt={attempt}
       client={client}
@@ -191,6 +206,35 @@ export function ManualRungActions({
       chatId={chatId}
       hostId={hostId}
       reconnecting={standing === "reconnecting"}
+      maySwitch
+    />
+  );
+}
+
+/**
+ * The affordances on a bot's chat. There the switch is Switch and retry, which
+ * writes the bot's run settings, so it is offered only where the role may
+ * change the bot's environment, and not while that role is unknown
+ * (`useBotChatMaySwitch`). Retry and Wait are offered as anywhere else.
+ */
+function BotChatManualRungAffordances(props: {
+  readonly attempt: LastFailedAttempt;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly botId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly reconnecting: boolean;
+}) {
+  const maySwitch = useBotChatMaySwitch(props.botId);
+  return (
+    <ManualRungAffordances
+      attempt={props.attempt}
+      client={props.client}
+      epicId={props.botId}
+      chatId={props.chatId}
+      hostId={props.hostId}
+      reconnecting={props.reconnecting}
+      maySwitch={maySwitch}
     />
   );
 }
@@ -363,6 +407,7 @@ function ManualRungAffordances({
   chatId,
   hostId,
   reconnecting,
+  maySwitch,
 }: {
   readonly attempt: LastFailedAttempt;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -371,6 +416,8 @@ function ManualRungAffordances({
   readonly hostId: string;
   /** The stream is down: draw the actions greyed and say "Reconnecting…". */
   readonly reconnecting: boolean;
+  /** False on a bot's chat whose role may not change the bot, or not yet known. */
+  readonly maySwitch: boolean;
 }) {
   const publishConfirmed = usePublishConfirmedManualFallbackAction({
     epicId,
@@ -470,7 +517,11 @@ function ManualRungAffordances({
       retry: attempt.eligibleRungs.includes("retry") && leaves.retry,
       // The composer's banner predicate asks the same function, so the card
       // and the banner cannot disagree about whether "Switch to…" is here.
-      switch: failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
+      // The role gate is not in it: only a bot's surface names a bot's chat,
+      // and a bot's surface has no chat composer, so wherever the banner is
+      // drawn the gate answers true.
+      switch:
+        failedTurnSwitchOffered({ attempt, refusal, seedTuple }) && maySwitch,
       wait: waitUntil !== null && leaves.wait,
     },
   });
