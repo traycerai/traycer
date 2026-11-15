@@ -14,7 +14,6 @@ import type {
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
@@ -112,9 +111,6 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant; the host
-  // no longer reads it on a remove or a tool toggle, which are sent without.
-  const grant = useExecutableWriteGrant();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   // The save is prepared by the editor of the render the person acted in,
   // on the sign-in current as they act, which `onMutate` sees and the
@@ -182,21 +178,16 @@ export function useProvidersMcpMutate(): UseMutationResult<
           mutation: variables.mutation,
         },
       };
-      const sent =
-        variables.mutation.action === "remove" ||
-        variables.mutation.action === "toggleTool"
-          ? request
-          : await grant(request, client);
       const save: SettingsSave = {
         method: "providers.nativeMutate",
-        request: sent,
+        request,
       };
       // A save with no press recorded is not sent.
       const response = await sendFollowedSave(
         pressed === undefined
           ? { kind: "abandoned", method: save.method }
           : await pressed.prepare(save, hostId, pressed.pressedOn),
-        () => client.request("providers.nativeMutate", sent),
+        () => client.request("providers.nativeMutate", request),
         everyAnswerProposes,
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
