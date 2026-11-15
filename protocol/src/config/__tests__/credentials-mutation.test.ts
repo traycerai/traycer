@@ -76,6 +76,9 @@ const canForceCommitFailure = !isWindows && !isRoot;
 // The lock wait the desktop and CLI stores pass in production.
 const PRODUCTION_LOCK_WAIT_MS = 12_000;
 
+// The continuation retry interval the desktop and CLI stores pass in production.
+const PRODUCTION_CONTINUATION_RETRY_MS = 1_000;
+
 describe("credentials mutation store", () => {
   let workDir: string;
   let credentialsPath: string;
@@ -91,13 +94,21 @@ describe("credentials mutation store", () => {
     refresh: RefreshFn,
     lockWaitMs: number,
   ): CredentialsMutationStore {
+    return makeStoreTimed(refresh, lockWaitMs, 15);
+  }
+
+  function makeStoreTimed(
+    refresh: RefreshFn,
+    lockWaitMs: number,
+    continuationRetryMs: number,
+  ): CredentialsMutationStore {
     const store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       onDiskPressure: null,
       refresh,
       lockWaitMs,
       lockPollIntervalMs: 25,
-      continuationRetryMs: 15,
+      continuationRetryMs,
     });
     stores.push(store);
     return store;
@@ -991,7 +1002,11 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
-        const store = makeStore(refresh.fn);
+        const store = makeStoreTimed(
+          refresh.fn,
+          PRODUCTION_LOCK_WAIT_MS,
+          PRODUCTION_CONTINUATION_RETRY_MS,
+        );
         await seedSignedIn(store);
         const result = await store.rotate({
           expectedUserId: CREDS.user.id,
@@ -1009,10 +1024,15 @@ describe("credentials mutation store", () => {
         expect((await store.read())?.token).toBe("tok-0::r");
         // Unfreeze and let the continuation land the pair.
         chmodSync(workDir, 0o700);
+        let lockBusyCount = 0;
+        lockContention.onLockBusy = () => {
+          lockBusyCount += 1;
+        };
         const rerun = await store.signIn(CREDS, false, null);
-        // (the interactive signIn's preamble drives the continuation first)
-        expect(store.hasPendingContinuation()).toBe(false);
         expect(rerun.outcome).toBe("applied");
+        expect(lockBusyCount).toBe(0);
+        // The interactive signIn's preamble drives the continuation first.
+        expect(store.hasPendingContinuation()).toBe(false);
       },
     );
 
