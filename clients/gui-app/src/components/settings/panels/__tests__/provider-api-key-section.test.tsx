@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { z } from "zod";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
 import { apiKeyState } from "./provider-api-key-section-fixture";
@@ -25,6 +26,23 @@ const mocks = vi.hoisted(() => ({
   credentialRefusal: null as string | null,
 }));
 const openLink = mocks.openLink;
+
+const apiKeyMutationVariablesSchema = z.strictObject({
+  providerId: z.string(),
+  apiKey: z.string(),
+});
+const apiKeyMutationCallsSchema = z.array(
+  z.tuple([apiKeyMutationVariablesSchema]).rest(z.unknown()),
+);
+type ApiKeyMutationVariables = z.infer<typeof apiKeyMutationVariablesSchema>;
+
+function parseApiKeyMutationCalls(
+  calls: unknown,
+): ApiKeyMutationVariables[] | null {
+  const parsed = apiKeyMutationCallsSchema.safeParse(calls);
+  if (!parsed.success) return null;
+  return parsed.data.map(([variables]) => variables);
+}
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: (expectedEnvironmentId: string | null) => {
@@ -179,16 +197,15 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
 
-    const calls = mocks.setApiKeyMutate.mock.calls;
-    const firstCall = calls.at(0);
-    const secondCall = calls.at(1);
+    const calls = parseApiKeyMutationCalls(mocks.setApiKeyMutate.mock.calls);
+    const firstCall = calls?.at(0);
+    const secondCall = calls?.at(1);
     expect(
-      calls.length === 2 &&
-        firstCall !== undefined &&
-        secondCall !== undefined &&
-        firstCall[0].providerId === "cursor" &&
-        firstCall[0].apiKey === "sk-secret" &&
-        secondCall[0].apiKey === "sk-secret",
+      calls !== null &&
+        calls.length === 2 &&
+        firstCall?.providerId === "cursor" &&
+        firstCall.apiKey === "sk-secret" &&
+        secondCall?.apiKey === "sk-secret",
     ).toBe(true);
   });
 });
@@ -240,12 +257,15 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
         screen.getByLabelText("API key").getAttribute("aria-invalid"),
       ).toBe("false");
       fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
-      const savedCall = mocks.setApiKeyMutate.mock.calls.at(0);
+      const savedCalls = parseApiKeyMutationCalls(
+        mocks.setApiKeyMutate.mock.calls,
+      );
+      const savedCall = savedCalls?.at(0);
       expect(
-        mocks.setApiKeyMutate.mock.calls.length === 1 &&
-          savedCall !== undefined &&
-          savedCall[0].providerId === "openrouter" &&
-          savedCall[0].apiKey === draft,
+        savedCalls !== null &&
+          savedCalls.length === 1 &&
+          savedCall?.providerId === "openrouter" &&
+          savedCall.apiKey === draft,
       ).toBe(true);
       unmount();
     }
@@ -307,12 +327,15 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
     ).toBe(false);
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
-    const savedCall = mocks.setApiKeyMutate.mock.calls.at(0);
+    const savedCalls = parseApiKeyMutationCalls(
+      mocks.setApiKeyMutate.mock.calls,
+    );
+    const savedCall = savedCalls?.at(0);
     expect(
-      mocks.setApiKeyMutate.mock.calls.length === 1 &&
-        savedCall !== undefined &&
-        savedCall[0].providerId === "openrouter" &&
-        savedCall[0].apiKey === OPENROUTER_KEY,
+      savedCalls !== null &&
+        savedCalls.length === 1 &&
+        savedCall?.providerId === "openrouter" &&
+        savedCall.apiKey === OPENROUTER_KEY,
     ).toBe(true);
   });
 

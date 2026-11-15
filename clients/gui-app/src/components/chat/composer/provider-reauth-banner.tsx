@@ -78,6 +78,7 @@ import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
   providerKeyIsPersonalSecret,
+  providerKeyEnvironmentName,
   recordKeyCustodyLine,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
@@ -1044,12 +1045,7 @@ function PastedKeyCustody(props: {
   const { providerId, keyCustody } = props;
   if (keyCustody.recordEnvironmentId !== null) {
     const principal = keyCustody.principal;
-    const environmentName =
-      principal?.kind === "personal"
-        ? "Personal"
-        : principal?.kind === "team"
-          ? principal.teamName
-          : null;
+    const environmentName = providerKeyEnvironmentName(principal);
     return (
       <>
         <p className="max-w-[72ch] text-ui-xs text-muted-foreground">

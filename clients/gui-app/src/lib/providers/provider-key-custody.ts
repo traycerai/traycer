@@ -4,6 +4,14 @@ import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environme
 /** The configuration a host runs, from its `environment.status`; `null` for none. */
 export type ProviderKeyPrincipal = EnvironmentStatusResponse["principal"];
 
+export function providerKeyEnvironmentName(
+  principal: ProviderKeyPrincipal,
+): string | null {
+  if (principal?.kind === "personal") return "Personal";
+  if (principal?.kind === "team") return principal.teamName;
+  return null;
+}
+
 /**
  * The providers whose key, saved through `providers.setApiKey` on a host
  * running Personal, becomes Personal's `provider` secret: the host forwards it

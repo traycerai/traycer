@@ -22,6 +22,7 @@ import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
   providerKeyIsPersonalSecret,
+  providerKeyEnvironmentName,
   recordKeyCustodyLine,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
@@ -254,14 +255,7 @@ export function ProviderApiKeySection({
         hostName={hostName}
         principal={principal}
         recordEnvironmentId={state.apiKey.recordEnvironmentId ?? null}
-        environmentName={
-          environmentName ??
-          (principal?.kind === "personal"
-            ? "Personal"
-            : principal?.kind === "team"
-              ? principal.teamName
-              : null)
-        }
+        environmentName={environmentName}
       />
     </div>
   );
@@ -279,6 +273,43 @@ function ApiKeySourceLines(props: {
 }): ReactNode {
   const { providerId, fromShell, personalSecret } = props;
   const envVar = envNamePlaceholder(providerId);
+  let custody: ReactNode;
+  if (props.recordEnvironmentId !== null) {
+    custody = (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {recordKeyCustodyLine(
+            providerId,
+            props.environmentName ??
+              providerKeyEnvironmentName(props.principal),
+          )}
+        </p>
+        {personalSecret ? (
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        ) : null}
+      </>
+    );
+  } else if (personalSecret) {
+    custody = (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {SECRET_CUSTODY_SENTENCE}
+        </p>
+        <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+      </>
+    );
+  } else {
+    custody = (
+      <p className="text-ui-xs text-muted-foreground">
+        {deviceKeyCustodyLine(
+          props.hostName,
+          PROVIDER_DISPLAY_NAMES[providerId],
+          envVar,
+          hostRunsPersonal(props.principal),
+        )}
+      </p>
+    );
+  }
   return (
     <>
       {fromShell ? (
@@ -286,33 +317,7 @@ function ApiKeySourceLines(props: {
           {`Using ${envVar} from your shell. Save a key here to override it.`}
         </p>
       ) : null}
-      {props.recordEnvironmentId !== null ? (
-        <>
-          <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-            {recordKeyCustodyLine(providerId, props.environmentName)}
-          </p>
-          {personalSecret ? (
-            <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
-          ) : null}
-        </>
-      ) : personalSecret ? (
-        <>
-          <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-            {SECRET_CUSTODY_SENTENCE}
-          </p>
-          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
-        </>
-      ) : null}
-      {personalSecret || props.recordEnvironmentId !== null ? null : (
-        <p className="text-ui-xs text-muted-foreground">
-          {deviceKeyCustodyLine(
-            props.hostName,
-            PROVIDER_DISPLAY_NAMES[providerId],
-            envVar,
-            hostRunsPersonal(props.principal),
-          )}
-        </p>
-      )}
+      {custody}
     </>
   );
 }
