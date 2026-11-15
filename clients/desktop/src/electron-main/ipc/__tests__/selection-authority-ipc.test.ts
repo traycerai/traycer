@@ -1223,11 +1223,17 @@ describe("local auth-session restore", () => {
   it("re-reads the same pair after a duplicate credentials watcher hint", async () => {
     const { promise: pendingFirstRead, resolve: resolveRead } =
       Promise.withResolvers<StoredCredentials | null>();
+    const installRead = Promise.resolve<StoredCredentials | null>(null);
     const stored = buildStoredCredentials("user-a", "stored-token");
     const readResults = [pendingFirstRead, Promise.resolve(stored)];
-    const tokenStore = new FakeAuthTokenStore(
-      () => readResults.shift() ?? Promise.resolve(null),
-    );
+    let servingInstallRead = true;
+    const tokenStore = new FakeAuthTokenStore(() => {
+      if (servingInstallRead) {
+        servingInstallRead = false;
+        return installRead;
+      }
+      return readResults.shift() ?? Promise.resolve(null);
+    });
     const { bridge, registry, authSession } = await buildBridge({
       authTokenStore: tokenStore,
     });
@@ -1235,6 +1241,11 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
+      // The sign-in watcher reads the store once at install, separate from restore.
+      expect(servingInstallRead).toBe(false);
+      await installRead;
+      tokenStore.readCount = 0;
+
       const restorePending = restoreLocalHandler()(sender(101), {
         userId: "user-a",
         token: "stored-token",
@@ -1256,13 +1267,19 @@ describe("local auth-session restore", () => {
   it("discards a stale first read when a credentials watcher hint reveals deletion", async () => {
     const { promise: pendingFirstRead, resolve: resolveRead } =
       Promise.withResolvers<StoredCredentials | null>();
+    const installRead = Promise.resolve<StoredCredentials | null>(null);
     const readResults = [
       pendingFirstRead,
       Promise.resolve<StoredCredentials | null>(null),
     ];
-    const tokenStore = new FakeAuthTokenStore(
-      () => readResults.shift() ?? Promise.resolve(null),
-    );
+    let servingInstallRead = true;
+    const tokenStore = new FakeAuthTokenStore(() => {
+      if (servingInstallRead) {
+        servingInstallRead = false;
+        return installRead;
+      }
+      return readResults.shift() ?? Promise.resolve(null);
+    });
     const { bridge, registry, authSession } = await buildBridge({
       authTokenStore: tokenStore,
     });
@@ -1270,6 +1287,11 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
+      // The sign-in watcher reads the store once at install, separate from restore.
+      expect(servingInstallRead).toBe(false);
+      await installRead;
+      tokenStore.readCount = 0;
+
       const restorePending = restoreLocalHandler()(sender(101), {
         userId: "user-a",
         token: "stored-token",

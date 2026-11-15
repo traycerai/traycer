@@ -1027,6 +1027,58 @@ describe("HostStreamProvider", () => {
     expect(sessionForKeyB.closeCalls).toBe(0);
   });
 
+  it("re-dials the SAME client once when its remote's owner changes, and not on an unchanged row or a rename", () => {
+    installRemoteTransport({ "pubkey-a": fakeRemoteSession() });
+    const reconnectSpy = vi.spyOn(RemoteStreamClient.prototype, "reconnectAll");
+    const personal: RemoteHostDirectoryEntry = {
+      ...remoteTarget("pubkey-a"),
+      owner: { kind: "user", id: "user-a" },
+    };
+    const team: RemoteHostDirectoryEntry = {
+      ...personal,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    const directory = new TestHostDirectory();
+    directory.publishUnannounced([personal]);
+    const client = buildClient(directory);
+    installDirectory(directory);
+    pointWindowAt(client, "remote-host-a");
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(RemoteStreamClient);
+    expect(reconnectSpy).not.toHaveBeenCalled();
+
+    // Only the owner moves: same host, user, key, relay and version. The
+    // client is kept, and its stream re-dials at once, so the host judges a
+    // fresh open against the computer's new owner.
+    act(() => {
+      directory.publish([team]);
+    });
+    expect(result.current).toBe(first);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    // The same owner again, then renamed: whose computer it is has not
+    // changed, so nothing re-dials.
+    act(() => {
+      directory.publish([{ ...team }]);
+    });
+    const renamed: RemoteHostDirectoryEntry = {
+      ...team,
+      owner: { kind: "team", id: "team-a", name: "Alpha renamed" },
+    };
+    act(() => {
+      directory.publish([renamed]);
+    });
+    expect(result.current).toBe(first);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {
     // The client is keyed on the resolved host identity, not on
     // default-host surface readiness. Pointing the window at ∅ drops the
