@@ -156,6 +156,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         { epic: { light: { title } } },
       ]),
     ),
+    resolutionsById: new Map(),
+    pendingTaskIds: new Set<string>(),
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -608,8 +610,9 @@ describe("<BotActivityPage /> subscriptions", () => {
     expect(screen.queryByText("No notification subscriptions")).toBeNull();
     // Nothing in either list: the page says so once.
     expect(screen.getByTestId("bot-activity-empty").textContent).toBe(
-      "No activity yet",
+      "No activity yetKeep track of work Tracy is handling. Tasks and updates that need your attention will appear here.",
     );
+    expect(screen.getByTestId("bot-activity-empty-art")).toBeTruthy();
   });
 
   it("opens the session a subscription names", async () => {
@@ -866,8 +869,9 @@ describe("<BotActivityPage /> what is listed", () => {
     expect(rows()).toHaveLength(0);
     expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
     expect(screen.getByTestId("bot-activity-empty").textContent).toBe(
-      "No activity yet",
+      "No activity yetKeep track of work Tracy is handling. Tasks and updates that need your attention will appear here.",
     );
+    expect(screen.getByTestId("bot-activity-empty-art")).toBeTruthy();
 
     // Subscriptions unread or present: no empty message, and still no heading.
     for (const subscriptions of [

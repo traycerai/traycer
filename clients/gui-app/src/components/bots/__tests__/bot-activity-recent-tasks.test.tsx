@@ -65,6 +65,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         { epic: { light: { title } } },
       ]),
     ),
+    resolutionsById: new Map(),
+    pendingTaskIds: new Set<string>(),
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
