@@ -133,6 +133,9 @@ async function post<T>(
         headers,
         body: JSON.stringify(body),
         signal: abort.signal,
+        // The bearer and the app's secrets ride along: a redirect is
+        // answered here, as a failure, and never followed with them.
+        redirect: "manual",
       }),
       abort.signal,
     );
