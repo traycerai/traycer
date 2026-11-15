@@ -55,6 +55,7 @@ const NOT_CHANGED = `${PROFILE_LABEL} was not changed.`;
 const WAITING_FOR_PROFILE = "Waiting for Traycer. Your sign-in is complete.";
 const DID_NOT_FINISH = "Sign-in did not finish. Try again.";
 const ADD_AS_NEW = "Add as a new profile";
+const SWITCH_ACCOUNT = "Switch account";
 const BROWSER_WAIT = "Approve sign-in in your browser";
 
 type Offers = true | false | "absent";
@@ -404,7 +405,7 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     },
   );
 
-  it("shows the different-account sentence, Done, and Add as a new profile", async () => {
+  it("shows the different-account sentence, Done, and Switch account", async () => {
     const harness = renderReauth({
       ...REAUTH_DEFAULTS,
       offers: true,
@@ -413,11 +414,16 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     });
     expect(await screen.findByText(DIFFERENT_ACCOUNT)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: ADD_AS_NEW }));
+    fireEvent.click(screen.getByRole("button", { name: SWITCH_ACCOUNT }));
+    expect(screen.queryByRole("button", { name: ADD_AS_NEW })).toBeNull();
     expect(harness.onOpenChange).toHaveBeenCalledWith(false);
     const flow = useProviderProfileAddFlowStore.getState();
     expect(flow.harnessId).toBe("claude");
     expect(flow.hostId).toBe(HOST_ID);
+    expect(flow.switchSource).toEqual({
+      profileId: PROFILE_ID,
+      label: PROFILE_LABEL,
+    });
     flow.onProfileCreated?.(PROFILE_ID);
     expect(harness.selected).toHaveBeenCalledWith(PROFILE_ID);
   });
