@@ -16,10 +16,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 
 /**
- * What one stored `host_claimed` state has read: the teams whose claims it
- * started, answered and failed, and the consumers to tell when one answers. A
- * state raised again is a new object and reads every team again; the same
- * state, remounted, reads nothing more.
+ * What one stored `host_claimed` state has read for one account: the teams
+ * whose claims it started, answered and failed, and the consumers to tell
+ * when one answers. A state raised again is a new object and reads every team
+ * again; the same state, remounted, reads nothing more; another account reads
+ * its own.
  */
 interface StateReads {
   readonly started: Set<string>;
@@ -29,10 +30,27 @@ interface StateReads {
   version: number;
 }
 
-const readsByState = new WeakMap<HostDoorState, StateReads>();
+const readsByState = new WeakMap<
+  HostDoorState,
+  WeakMap<AuthService, Map<string, StateReads>>
+>();
 
-function readsOf(state: HostDoorState): StateReads {
-  const known = readsByState.get(state);
+function readsOf(
+  state: HostDoorState,
+  auth: AuthService,
+  userId: string,
+): StateReads {
+  let byAuth = readsByState.get(state);
+  if (byAuth === undefined) {
+    byAuth = new WeakMap();
+    readsByState.set(state, byAuth);
+  }
+  let byUser = byAuth.get(auth);
+  if (byUser === undefined) {
+    byUser = new Map();
+    byAuth.set(auth, byUser);
+  }
+  const known = byUser.get(userId);
   if (known !== undefined) return known;
   const reads: StateReads = {
     started: new Set(),
@@ -41,7 +59,7 @@ function readsOf(state: HostDoorState): StateReads {
     listeners: new Set(),
     version: 0,
   };
-  readsByState.set(state, reads);
+  byUser.set(userId, reads);
   return reads;
 }
 
@@ -127,22 +145,23 @@ export function useHostClaim(
   const auth = binding?.auth ?? null;
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const queryClient = useQueryClient();
+  const reads =
+    claimedState === null || auth === null || userId === null
+      ? null
+      : readsOf(claimedState, auth, userId);
   // Re-renders when any read of this state answers, whichever consumer of
   // the state started it.
   const subscribe = useCallback(
     (listener: () => void) => {
-      if (claimedState === null) return () => undefined;
-      const listeners = readsOf(claimedState).listeners;
-      listeners.add(listener);
+      if (reads === null) return () => undefined;
+      reads.listeners.add(listener);
       return () => {
-        listeners.delete(listener);
+        reads.listeners.delete(listener);
       };
     },
-    [claimedState],
+    [reads],
   );
-  useSyncExternalStore(subscribe, () =>
-    claimedState === null ? 0 : readsOf(claimedState).version,
-  );
+  useSyncExternalStore(subscribe, () => reads?.version ?? 0);
   // The null-tolerant read: the window's narration mounts at the app root,
   // where a tree with no host runtime is a legitimate answer.
   const environments = useEnvironmentListQuery(
@@ -165,8 +184,13 @@ export function useHostClaim(
   });
 
   useEffect(() => {
-    if (claimedState === null || auth === null || userId === null) return;
-    const reads = readsOf(claimedState);
+    if (
+      claimedState === null ||
+      reads === null ||
+      auth === null ||
+      userId === null
+    )
+      return;
     for (const team of teams) {
       const environmentId = team.environmentId;
       if (reads.finished.has(environmentId) || reads.failed.has(environmentId))
@@ -217,10 +241,10 @@ export function useHostClaim(
         });
       }
     };
-  }, [auth, claimedState, queryClient, teams, userId]);
+  }, [auth, claimedState, queryClient, reads, teams, userId]);
 
-  if (claimedState === null) return null;
-  const finished = readsOf(claimedState).finished;
+  if (claimedState === null || reads === null) return null;
+  const finished = reads.finished;
   return newestClaim(
     claimedState.hostId,
     teams.map((team, index) => ({
