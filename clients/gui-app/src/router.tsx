@@ -65,13 +65,24 @@ export function createAppRouter(
     ...(history === undefined ? {} : { history }),
   });
   bindAuthInvalidation(router);
-  // Installed on `router.history` rather than the local `history`, because the
-  // browser web app passes none and lets TanStack build its own: this is the
-  // one place every backend's history is in hand.
-  observeNestedFocusTraversals(router.history);
-  observeTracyPlaceTraversals(router.history);
   warmRouteChunks();
   return router;
+}
+
+/**
+ * Observes `router`'s history for the traversals the app reads: installed on
+ * `router.history` rather than the local `history`, because the browser web
+ * app passes none and lets TanStack build its own. Returns the unsubscribe, so
+ * an effect that mounts it can take it back on cleanup; a StrictMode remount
+ * then re-observes the same router instead of stacking a second observer.
+ */
+export function observeAppRouterHistory(router: AppRouter): () => void {
+  const unsubscribeNestedFocus = observeNestedFocusTraversals(router.history);
+  const unsubscribeTracyPlace = observeTracyPlaceTraversals(router.history);
+  return () => {
+    unsubscribeNestedFocus();
+    unsubscribeTracyPlace();
+  };
 }
 
 export interface AuthInvalidationRouter {

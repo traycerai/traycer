@@ -139,11 +139,11 @@ function entryIdentity(location: HistoryLocation): string {
  *
  * This is the ONLY point that claims a traversal's intent, which is why
  * `navigateHistory` makes no prediction of its own. It does not need to: this
- * observer is subscribed in `createAppRouter`, before `<RouterProvider>`'s
- * transitioner effect subscribes the router's own loader, and `createHistory`'s
- * `notify` walks its insertion-ordered subscriber set synchronously - so it has
- * already decided before the route reacts to the landing, on the branded
- * backend as much as the plain one.
+ * observer is subscribed in `AppRouterProvider`'s layout effect, before
+ * `<RouterProvider>`'s transitioner effect subscribes the router's own loader,
+ * and `createHistory`'s `notify` walks its insertion-ordered subscriber set
+ * synchronously - so it has already decided before the route reacts to the
+ * landing, on the branded backend as much as the plain one.
  *
  * Returns the unsubscribe, for a router that is torn down.
  */

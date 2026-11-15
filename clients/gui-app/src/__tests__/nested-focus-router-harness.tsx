@@ -24,10 +24,9 @@ import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
  * is the raw constructor, so a fixture built from it carries none of what
  * `createAppRouter` wires onto a real app's history, and a history step inside
  * `ui` would be observed by nothing. Installed in the same position as
- * production - on the router's history, before `<RouterProvider>` mounts and
- * subscribes the router's own loader - so the subscriber ORDER a step depends
- * on is the real one. (`src/__tests__/router.test.ts` is what pins that
- * `createAppRouter` itself still does this; this is the fixture matching it,
+ * production - on the router's history, before the router's loader subscribes
+ * to it - so the subscriber ORDER a step depends on is the real one. (`src/__tests__/router.test.ts` is what pins that
+ * `observeAppRouterHistory` itself does this; this is the fixture matching it,
  * not a substitute for it.)
  */
 export function renderNestedFocusFixture(

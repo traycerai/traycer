@@ -114,8 +114,8 @@ let current: Harness | null = null;
 /**
  * Mounts a router over a persistent history keyed `WINDOW_KEY`, seeded from
  * whatever stack that key already holds. The traversal observer is installed
- * on `router.history` before `RouterProvider` mounts, as `createAppRouter`
- * does.
+ * on `router.history` before the router's loader subscribes to it, as
+ * `TraycerApp` does.
  */
 async function mount(initialRoute: string | null): Promise<Harness> {
   const router = buildRouter(
