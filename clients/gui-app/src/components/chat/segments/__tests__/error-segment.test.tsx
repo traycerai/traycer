@@ -691,12 +691,15 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     expect(screen.queryByText("Error")).toBeNull();
   });
 
-  it("recognises the same turn from the message prefix when the block has no code", () => {
+  // `renderRow` mounts the row with no transcript, so no host places the
+  // sandbox: the headline is the neutral one, not Personal's.
+  it("recognises the same turn from the message prefix when the block has no code, with no transcript host to place it", () => {
     const root = renderRow({ code: null, message: RAW_MESSAGE });
 
     expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
     expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
-    expect(screen.getByText("Paused: account out of credits")).toBeDefined();
+    expect(screen.getByText("This sandbox is out of credits.")).toBeDefined();
+    expect(screen.queryByText("Paused: account out of credits")).toBeNull();
   });
 
   it("leaves any other error as the red error row with its own message", () => {
@@ -1016,39 +1019,46 @@ describe("<ErrorSegment /> sandbox refusals", () => {
   // host directory says whose sandbox froze. Every other state keeps the cut:
   // the turn's ending and no remedy.
   const CUT_COPY = "This sandbox ran out of credits, which ended the turn.";
+  const OUT_OF_CREDITS_HEADLINE = "This sandbox is out of credits.";
+  const PERSONAL_HEADLINE = "Paused: account out of credits";
+
+  /** The row for a reader the app cannot place: the neutral headline over the cut. */
+  function expectUnplacedRow(): void {
+    expect(screen.getByText(OUT_OF_CREDITS_HEADLINE)).toBeTruthy();
+    expect(screen.getByText(CUT_COPY)).toBeTruthy();
+    expect(screen.queryByText(PERSONAL_HEADLINE)).toBeNull();
+    expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+  }
   const ADD_CREDITS_COPY =
     "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
 
   it.each(["SANDBOX_FROZEN", null] as const)(
-    "keeps the cut when the directory has no row for the transcript's host (%s)",
+    "keeps the neutral headline and the cut when the directory has no row for the transcript's host (%s)",
     (code) => {
       renderFrozenOnHostRows([], { code, message: RAW_MESSAGE });
 
-      expect(screen.getByText(CUT_COPY)).toBeTruthy();
-      expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+      expectUnplacedRow();
     },
   );
 
   it.each(["SANDBOX_FROZEN", null] as const)(
-    "keeps the cut when the directory row names no owner (%s)",
+    "keeps the neutral headline and the cut when the directory row names no owner (%s)",
     (code) => {
       renderFrozenOnHostRows(
         [sandboxHostEntryWithoutOwner(TRANSCRIPT_HOST_ID)],
         { code, message: RAW_MESSAGE },
       );
 
-      expect(screen.getByText(CUT_COPY)).toBeTruthy();
-      expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+      expectUnplacedRow();
     },
   );
 
-  it("keeps the cut when the transcript host is a computer that is not a sandbox", () => {
+  it("keeps the neutral headline and the cut when the transcript host is a computer that is not a sandbox", () => {
     renderFrozenOnHostRows([plainHostEntry(TRANSCRIPT_HOST_ID)], {
       code: "SANDBOX_FROZEN",
       message: RAW_MESSAGE,
     });
 
-    expect(screen.getByText(CUT_COPY)).toBeTruthy();
-    expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+    expectUnplacedRow();
   });
 });
