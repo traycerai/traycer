@@ -12,6 +12,7 @@ import {
   isRemoteHostDirectoryEntry,
   type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   sandboxFrozenLine,
@@ -22,6 +23,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
@@ -29,6 +31,7 @@ import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 import { TileDoorCoverLayer } from "@/components/hosts/tile-door-cover";
 import { useTileDoorCover } from "@/hooks/host/use-tile-door-cover";
@@ -143,9 +146,22 @@ function TileOverlay(props: {
       hostId={props.hostId}
       overlay={overlay}
       state={facts?.state ?? null}
-      teamName={facts?.ownerTeamName ?? null}
     />
   );
+}
+
+/**
+ * Why a frozen sandbox's tile is covered, by whose credits it is on: the
+ * Personal remedy only on the person's own sandbox, the team's line on a
+ * team's named one, and the line with no remedy while it is not known whose
+ * it is.
+ */
+function frozenCauseFor(payer: StageConfiguration | null): string {
+  if (payer?.kind === "personal") return sandboxFrozenLine(null);
+  if (payer?.kind === "team" && payer.teamName.length > 0) {
+    return sandboxTeamFrozenLine(payer.teamName);
+  }
+  return SANDBOX_OUT_OF_CREDITS;
 }
 
 /** A tab-open wake takes precedence over the directory's resting state. */
@@ -164,20 +180,12 @@ function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
   readonly state: HostSandboxState | null;
-  /**
-   * The owning team's name, or null for a personal sandbox: a team's frozen
-   * sandbox says whose bundle is out, not "your credits".
-   */
-  readonly teamName: string | null;
 }): ReactNode {
   const list = useSandboxList();
   const summary =
     list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
   const { overlay } = props;
-  const frozenCause =
-    props.teamName === null
-      ? sandboxFrozenLine(null)
-      : sandboxTeamFrozenLine(props.teamName);
+  const frozenCause = frozenCauseFor(useSandboxHostPayer(props.hostId));
   const removal =
     summary === null ? null : sandboxFrozenClock(summary.frozenAt);
   return (
