@@ -30,10 +30,7 @@ import type {
   HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import { setMobileApp } from "@/lib/mobile-app";
-import {
-  noteHostDoorState,
-  useHostDoorStateStore,
-} from "@/stores/host/host-door-state-store";
+import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
@@ -716,13 +713,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       renderTabOnTheWindowsComputer();
       await waitForTaskShown();
 
-      act(() => {
-        noteHostDoorState({
-          hostId: TAB_HOST_ID,
-          kind: "older-host",
-          detail: null,
-        });
-      });
       publishTabRow("1.5.4");
 
       const cover = await screen.findByTestId(testCase.cover);

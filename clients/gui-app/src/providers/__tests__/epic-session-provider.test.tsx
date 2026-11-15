@@ -2823,6 +2823,8 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
+      // Nothing was built below the floor.
+      expect(streams).toHaveLength(1);
       // Rising back to the floor acquires exactly one more session; the
       // released stream is not closed a second time on the way.
       act(() => {
