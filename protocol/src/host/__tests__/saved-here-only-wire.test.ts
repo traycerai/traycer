@@ -129,7 +129,7 @@ describe("saved-here-only setting RPC minors", () => {
       text: "echo setup",
       expectedRevision: null,
       executableWriteGrant: null,
-    };
+    } as const;
     expect(environmentSetupPutV10.requestSchema.parse(request)).toEqual(
       request,
     );
