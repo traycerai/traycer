@@ -81,12 +81,18 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   localEntry,
   remoteEntry,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildRawHostMessengerForTarget } from "@/lib/host/host-messenger";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
@@ -115,9 +121,19 @@ function localRow(version: string): HostDirectoryEntry {
   return { ...localEntry, hostId: FLOOR_HOST, version };
 }
 
+function hostTokens() {
+  return createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => Date.now(),
+  });
+}
+
 function messengerFor(target: HostDirectoryEntry) {
   return buildRawHostMessengerForTarget({
     target,
+    hostTokens: hostTokens(),
     registry: hostRpcRegistry,
     bearer: () => null,
     cloudAuthorized: () => false,
@@ -131,6 +147,7 @@ function messengerFor(target: HostDirectoryEntry) {
 function streamFor(target: HostDirectoryEntry) {
   return buildHostStreamClient({
     target,
+    hostTokens: hostTokens(),
     endpoint: () => null,
     bearer: () => null,
     cloudAuthorized: () => false,
@@ -159,6 +176,14 @@ function tookOlderHost(state: WindowNarrationState): boolean {
     state.variant.kind === "update-host" &&
     state.variant.detail.code === "older-host"
   );
+}
+
+function narrationQueryClientWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return ({ children }: { readonly children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
 beforeEach(() => {
@@ -221,32 +246,40 @@ describe("older host floor gate", () => {
     narratedEntry.current = remoteRow("1.5.4");
     attachNarration();
 
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
-    expect(tookOlderHost(result.current)).toBe(true);
+    expect(tookOlderHost(result.current.narration)).toBe(true);
     if (
-      result.current.kind !== "narrating" ||
-      result.current.variant.kind !== "update-host"
+      result.current.narration.kind !== "narrating" ||
+      result.current.narration.variant.kind !== "update-host"
     ) {
       throw new Error("expected the older-host narration");
     }
-    expect(result.current.variant.detail.hostVersion).toBe("1.5.4");
-    expect(result.current.variant.detail.minSupportedVersion).toBe("2.0.0");
-    expect(result.current.variant.detail.code).toBe("older-host");
+    expect(result.current.narration.variant.detail.hostVersion).toBe("1.5.4");
+    expect(result.current.narration.variant.detail.minSupportedVersion).toBe(
+      "2.0.0",
+    );
+    expect(result.current.narration.variant.detail.code).toBe("older-host");
   });
 
   it("does not take the older-host arm when the remote app version meets the floor", () => {
     narratedEntry.current = remoteRow("2.0.0");
     attachNarration();
 
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
-    expect(tookOlderHost(result.current)).toBe(false);
+    expect(tookOlderHost(result.current.narration)).toBe(false);
   });
 
   it("does not throw when the narrator has no directory row and no runtime binding", () => {
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
-    expect(tookOlderHost(result.current)).toBe(false);
+    expect(tookOlderHost(result.current.narration)).toBe(false);
   });
 });

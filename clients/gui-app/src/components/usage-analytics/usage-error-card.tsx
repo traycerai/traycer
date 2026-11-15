@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Button } from "@/components/ui/button";
+import { credentialRefusalHeadline } from "@/lib/host-error-toast";
 
 export interface UsageErrorCardProps {
   readonly error: Error;
@@ -53,12 +54,15 @@ export function UsageErrorCard(props: UsageErrorCardProps): ReactNode {
  * specific cause is not lost: the card renders `error.message` underneath,
  * and the host's cloud-unavailable path says so in that message.
  */
+const USAGE_ERROR_HEADLINE = "Couldn't load usage data.";
+
 function errorHeadline(error: Error): string {
   if (error instanceof HostRpcError) {
-    if (error.code === "UNAUTHORIZED") return "Please sign in again.";
+    const credential = credentialRefusalHeadline(error, USAGE_ERROR_HEADLINE);
+    if (credential !== null) return credential;
     if (error.code === "FORBIDDEN") {
       return "You don't have permission to view usage for this host.";
     }
   }
-  return "Couldn't load usage data.";
+  return USAGE_ERROR_HEADLINE;
 }

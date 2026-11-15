@@ -3,16 +3,8 @@ import type { HostIdentityGetResponse } from "@traycer/protocol/host/identity/sc
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  HostRpcError,
-  isTransientHostRpcFailure,
-} from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  TEAM_MEMBERSHIP_REQUIRED,
-  TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
-  TEAM_MEMBERSHIP_UNAVAILABLE,
-  TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
-} from "@traycer-clients/shared/host-transport/local-open-auth";
+import { TEAM_MEMBERSHIP_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-transport/local-open-auth";
+import { hostDoorStateFor } from "@/stores/host/host-door-state-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
@@ -30,6 +22,7 @@ import { appLogger } from "@/lib/logger";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
+  isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import {
@@ -329,8 +322,8 @@ function useHostScopeWithOptions(
   // hope — so only the `following` branch may swap in the ambient client.
   // Any other branch handing back `ambientClient` would be the exact
   // substitution this status enum exists to make impossible.
-  const resolvedClient =
-    status === "following" ? ambientClient : overrideClient;
+  const scopedClient = status === "following" ? ambientClient : overrideClient;
+  const resolvedClient = isHostScopeUsable(status) ? scopedClient : null;
 
   // The local-maintenance fallback wrap, HERE and nowhere else: this is the
   // one point where every scope consumer's client is decided, so decorating
@@ -502,11 +495,11 @@ async function requestLocalHostActivation(
   if (context === null || option.entry === null) return false;
   try {
     await probe(option);
-  } catch (error: unknown) {
+  } catch {
     // A different account must not inherit this account's refusal or pick.
     if (context.abortSignal.aborted || client.getRequestContext() !== context)
       return false;
-    showLocalHostActivationFailure(error, option.name, () => {
+    showLocalHostActivationFailure(option.hostId, option.name, () => {
       if (
         !context.abortSignal.aborted &&
         client.getRequestContext() === context
@@ -521,28 +514,18 @@ async function requestLocalHostActivation(
 }
 
 function showLocalHostActivationFailure(
-  error: unknown,
+  hostId: string,
   hostName: string,
   switchAccount: () => void,
 ): void {
-  if (error instanceof HostRpcError) {
-    const code = error.fatalDetails?.code ?? error.code;
-    if (code === TEAM_MEMBERSHIP_REQUIRED) {
-      toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
-        action: {
-          label: "Switch account",
-          onClick: switchAccount,
-        },
-      });
-      return;
-    }
-    if (
-      code === TEAM_MEMBERSHIP_UNAVAILABLE ||
-      isTransientHostRpcFailure(error)
-    ) {
-      toast.error(TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE);
-      return;
-    }
+  if (hostDoorStateFor(hostId)?.kind === "not-a-member") {
+    toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
+      action: {
+        label: "Switch account",
+        onClick: switchAccount,
+      },
+    });
+    return;
   }
   toast.error(activateRefusalMessage("unrecognized", hostName));
 }

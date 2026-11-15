@@ -22,6 +22,7 @@ import {
   HostRpcError,
   type IHostMessenger,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -32,6 +33,7 @@ import {
 } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { EpicsList } from "@/components/epics/epics-list";
+import { EpicsListError } from "@/components/epics/epics-list-shared";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
@@ -225,6 +227,30 @@ function setInitialAuthState(status: AuthStatus): void {
     return;
   }
   useAuthStore.getState().setSignedOut();
+}
+
+function epicHeadlineError(
+  code: HostRpcError["code"],
+  doorReason: string | undefined,
+): HostRpcError {
+  const doorRefusal: FatalErrorDetails | null =
+    doorReason === undefined
+      ? null
+      : {
+          code,
+          reason: "host refused the request",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason,
+        };
+  return new HostRpcError({
+    code,
+    message: "host refused the request",
+    requestId: "req-epics-headline",
+    method: "epic.listTasks",
+    fatalDetails: null,
+    doorRefusal,
+  });
 }
 
 function installAuthFetch(): () => void {
@@ -718,6 +744,46 @@ describe("<EpicsList />", () => {
       (await screen.findByTestId("epics-list-error-details")).textContent,
     ).toContain("host unhappy");
     result.cleanupOnly();
+  });
+
+  it.each([
+    {
+      name: "token_expired while signed in",
+      code: "UNAUTHORIZED",
+      doorReason: "token_expired",
+      authStatus: "signed-in",
+      headline: "Couldn't load your tasks",
+    },
+    {
+      name: "reasonless UNAUTHORIZED while signed in",
+      code: "UNAUTHORIZED",
+      doorReason: undefined,
+      authStatus: "signed-in",
+      headline: "Couldn't load your tasks",
+    },
+    {
+      name: "reasonless UNAUTHORIZED while signed out",
+      code: "UNAUTHORIZED",
+      doorReason: undefined,
+      authStatus: "signed-out",
+      headline: "Please sign in again.",
+    },
+    {
+      name: "reasonless FORBIDDEN",
+      code: "FORBIDDEN",
+      doorReason: undefined,
+      authStatus: "signed-in",
+      headline: "You don't have permission to view these epics.",
+    },
+  ] as const)("renders the $name headline", ({ code, doorReason, authStatus, headline }) => {
+    setInitialAuthState(authStatus);
+    render(
+      <EpicsListError
+        error={epicHeadlineError(code, doorReason)}
+        onRetry={() => undefined}
+      />,
+    );
+    expect(screen.getByText(headline)).not.toBeNull();
   });
 
   it("re-fires the epic.listTasks query when Refresh is clicked", async () => {
