@@ -2823,18 +2823,20 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
-      // Nothing was built below the floor.
-      expect(streams).toHaveLength(1);
-      // Rising back to the floor acquires exactly one more session; the
-      // released stream is not closed a second time on the way.
+      // The opener refused the reacquire: no transport was minted below the
+      // floor. (The worker's own stream attach is not a session build, so the
+      // transports are what is counted.)
+      const transports = fakeDurableStreamTransports().records;
+      expect(transports).toHaveLength(1);
+      // Rising back to the floor mints exactly one more; the released stream is
+      // not closed a second time on the way.
       act(() => {
         publishRow("2.0.0");
       });
       await waitFor(() => {
-        expect(streams).toHaveLength(2);
+        expect(transports).toHaveLength(2);
       });
       expect(streams[0].closeCount).toBe(1);
-      expect(streams[1].closeCount).toBe(0);
     });
 
     it("keeps the stream when its row is removed", async () => {
