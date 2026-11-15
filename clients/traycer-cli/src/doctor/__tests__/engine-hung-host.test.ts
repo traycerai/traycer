@@ -9,6 +9,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DoctorResult } from "..";
 import type { HostNotYetErrors } from "./host-not-yet-errors";
 
 // traycer#1563 D3c: a host whose event loop is wedged still owns its port.
@@ -314,9 +315,7 @@ const FORCE_RESTART_COMMAND = "traycer host restart --force";
  * everything else doctor reads (files, the listening socket) answers on real
  * macrotask turns between the steps.
  */
-async function runDoctorOnFakeClock(): Promise<
-  Awaited<ReturnType<typeof import("../engine").runDoctor>>
-> {
+async function runDoctorOnFakeClock(): Promise<DoctorResult> {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const { runDoctor } = await import("../engine");
   let settled = false;
