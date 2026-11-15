@@ -796,6 +796,11 @@ describe("StopSharingSession over the real remote session", () => {
         ],
       },
     ]);
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("personal-leave-codex-folder-one"),
+      ).toBeNull(),
+    );
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
     await screen.findByText("stop complete");
     await waitFor(() =>
