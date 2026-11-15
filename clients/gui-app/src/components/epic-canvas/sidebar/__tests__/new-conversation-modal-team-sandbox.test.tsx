@@ -1492,16 +1492,8 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   );
 
   it("keeps the staged chat and draft when the account changes during attachment", async () => {
-    useAuthStore
-      .getState()
-      .setSignedIn(
-        { userId: "modal-user", userName: "Modal", email: "modal@example.com" },
-        { userId: "modal-user", username: "Modal" },
-        [],
-      );
-    const attach = deferred<{ readonly attached: true }>();
-    testState.attachEnvironment.mockReturnValue(attach.promise);
-    const fixture = await renderSignedInModal(null);
+    const post = deferred<TaskEnvironmentAttachmentResult>();
+    const fixture = await renderSignedInModal(post.promise);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
@@ -1517,20 +1509,12 @@ describe("new-conversation modal's send on a staged sandbox", () => {
         },
       });
     });
-    act(() => {
-      useAuthStore.getState().setSignedIn(
-        {
-          userId: "other-user",
-          userName: "Other",
-          email: "other@example.com",
-        },
-        { userId: "other-user", username: "Other" },
-        [],
-      );
-    });
+    await fixture.auth.signOut();
+    useAuthStore.getState().setSignedOut();
+    await signInAs(fixture, "other-user", "modal-token-b");
     await act(async () => {
-      attach.resolve({ attached: true });
-      await attach.promise;
+      post.resolve({ kind: "ok" });
+      await post.promise;
     });
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});

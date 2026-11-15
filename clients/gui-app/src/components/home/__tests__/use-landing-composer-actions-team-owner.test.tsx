@@ -70,6 +70,7 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
@@ -244,6 +245,7 @@ interface LandingAuthBinding {
   };
   readonly auth: {
     currentAuthEra(): AuthEra;
+    environmentCloud(): EnvironmentCloud;
     readHostOwnership(
       hostId: string,
       era: AuthEra,
@@ -292,6 +294,15 @@ function createPendingLocalOwnership(): PendingLocalOwnership {
     },
     auth: {
       currentAuthEra: () => LOCAL_OWNERSHIP_ERA,
+      environmentCloud: () => ({
+        authnBaseUrl: "https://authn.traycer.invalid",
+        bearer: {
+          kind: "cloud",
+          getBearerToken: () => "landing-token-a",
+        },
+        transport: () => Promise.resolve({ status: 200, text: "" }),
+        onOriginSignIn: () => true,
+      }),
       readHostOwnership: (hostId, era) => {
         reads.push({ hostId, era });
         return reads.length === 1 ? deferred.promise : refreshed.promise;
