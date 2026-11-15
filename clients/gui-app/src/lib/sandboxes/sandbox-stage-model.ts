@@ -11,7 +11,6 @@ import type {
 import {
   sandboxCreateTeams,
   teamCannotCoverAnHour,
-  teamSandboxBalanceMc,
 } from "@/components/hosts/sandbox-create-model";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
 import {
@@ -21,7 +20,8 @@ import {
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
   notEnoughCreditsLine,
-  teamAllowanceShortLine,
+  teamCreditsShortLine,
+  teamPossessive,
   audienceClause,
   costLine,
   moveClause,
@@ -548,17 +548,22 @@ export function stagePrice(
   };
 }
 
+/** A team's own balance in millicredits by team id; `null` while unknown. */
+export type TeamBalanceMc = (teamId: string) => number | null;
+
 /**
- * The balance a create in this configuration draws on: the personal credits,
- * or the person's own assignment under the team. `null` while unknown.
+ * The balance a create or wake in this configuration draws on: the personal
+ * credits, or the team's own (its bundles pay for every wake of its
+ * sandboxes). `null` while unknown.
  */
 export function stageBalanceMc(
   user: AuthenticatedUser | null,
   configuration: StageConfiguration,
+  teamBalanceMc: TeamBalanceMc,
 ): number | null {
   return configuration.kind === "personal"
     ? sandboxBalanceMc(user)
-    : teamSandboxBalanceMc(user, configuration.teamId);
+    : teamBalanceMc(configuration.teamId);
 }
 
 /**
@@ -623,14 +628,14 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
       kind: "price",
       text:
         copy.kind === "team"
-          ? teamAllowanceShortLine(copy.teamName, input.shortfallMc ?? null)
+          ? teamCreditsShortLine(copy.teamName, input.shortfallMc ?? null)
           : notEnoughCreditsLine(input.shortfallMc ?? null),
     };
   }
   if (input.wakingName && copy.kind === "team") {
     return {
       kind: "price",
-      text: `Waking ${input.wakingName} uses your ${copy.teamName} allowance and makes you the payer.`,
+      text: `Waking ${input.wakingName} uses ${teamPossessive(copy.teamName)} credits.`,
     };
   }
   if (input.price === null) {

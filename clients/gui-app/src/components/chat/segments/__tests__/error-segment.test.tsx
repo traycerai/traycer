@@ -1,6 +1,22 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   knownField,
   setSupportContextSnapshot,
@@ -8,7 +24,31 @@ import {
 } from "@/lib/support-context-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  SandboxBillingRuntime,
+  type SandboxBillingEnvironmentAnswer,
+} from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import {
+  ACME_TEAM,
+  serveEnvironmentList,
+} from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
+import {
+  createFakeSandboxBinding,
+  type FakeSandboxBinding,
+} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { ErrorSegment } from "../error-segment";
+
+const billing = vi.hoisted(() => ({
+  binding: null as FakeSandboxBinding | null,
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => billing.binding,
+}));
+
+const environmentListRequests: number[] = [];
 
 describe("<ErrorSegment />", () => {
   afterEach(() => {
@@ -16,6 +56,13 @@ describe("<ErrorSegment />", () => {
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
     __resetSupportContextRegistryForTests();
+    billing.binding = null;
+    environmentListRequests.length = 0;
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
   });
 
   // Every error - auth included - renders through this component as the
@@ -588,7 +635,17 @@ describe("<ErrorSegment />", () => {
 // interruption with the sandbox's own words, not a red error carrying the
 // host's raw `SANDBOX_FROZEN: sandbox host '...'` message.
 describe("<ErrorSegment /> sandbox refusals", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    resetHostDirectoryRows();
+    billing.binding = null;
+    environmentListRequests.length = 0;
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
+  });
 
   const RAW_MESSAGE =
     "SANDBOX_FROZEN: sandbox host 'build-box': frozen, out of credits";
@@ -619,8 +676,11 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     return root;
   }
 
-  it("renders SANDBOX_FROZEN in the interrupted presentation with the frozen copy", () => {
-    const root = renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
+  it("renders SANDBOX_FROZEN in the interrupted presentation with the frozen copy on the person's own sandbox", () => {
+    const root = renderFrozenOnHostRows(
+      [sandboxHostEntry(TRANSCRIPT_HOST_ID, null)],
+      { code: "SANDBOX_FROZEN", message: RAW_MESSAGE },
+    );
 
     expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
     expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
@@ -635,12 +695,15 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     expect(screen.queryByText("Error")).toBeNull();
   });
 
-  it("recognises the same turn from the message prefix when the block has no code", () => {
+  // `renderRow` mounts the row with no transcript, so no host places the
+  // sandbox: the headline is the neutral one, not Personal's.
+  it("recognises the same turn from the message prefix when the block has no code, with no transcript host to place it", () => {
     const root = renderRow({ code: null, message: RAW_MESSAGE });
 
     expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
     expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
-    expect(screen.getByText("Paused: account out of credits")).toBeDefined();
+    expect(screen.getByText("This sandbox is out of credits.")).toBeDefined();
+    expect(screen.queryByText("Paused: account out of credits")).toBeNull();
   });
 
   it("leaves any other error as the red error row with its own message", () => {
@@ -723,5 +786,293 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
 
     expect(screen.queryByTestId("sandbox-refusal-host-detail")).toBeNull();
+  });
+
+  const TRANSCRIPT_HOST_ID = "sandbox-host-acme";
+
+  /**
+   * The error row inside a transcript whose host is read from `rows` (the
+   * person's host directory), with no billing runtime: the cases here never
+   * reach a team's role read.
+   */
+  function renderFrozenOnHostRows(
+    rows: ReadonlyArray<HostDirectoryEntry>,
+    input: { readonly code: string | null; readonly message: string },
+  ): HTMLElement {
+    installHostDirectoryRows(rows);
+    const { container } = render(
+      <ChatTranscriptProvider
+        value={{
+          chatId: "chat-on-frozen-host",
+          hostId: TRANSCRIPT_HOST_ID,
+          payerHostId: TRANSCRIPT_HOST_ID,
+        }}
+      >
+        <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
+          turnId={null}
+          message={input.message}
+          code={input.code}
+          recoverable={false}
+          findUnitId={null}
+          harnessId="traycer"
+          failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
+        />
+      </ChatTranscriptProvider>,
+    );
+    const root = container.querySelector("[data-failure-presentation]");
+    if (!(root instanceof HTMLElement)) {
+      throw new Error("the error row did not render");
+    }
+    return root;
+  }
+
+  function renderTranscriptRow(input: {
+    readonly team: { readonly id: string; readonly name: string } | null;
+    readonly code: string | null;
+    readonly answer: SandboxBillingEnvironmentAnswer;
+  }): QueryClient {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const binding = createFakeSandboxBinding();
+    billing.binding = binding;
+    // This file reads the sandbox binding as the host binding, so the list is
+    // served on it as well as on the runtime's own.
+    serveEnvironmentList(binding.auth, {
+      answer: input.answer,
+      environmentId: "env-acme",
+      team: ACME_TEAM,
+      onRead: () => {
+        environmentListRequests.push(1);
+      },
+    });
+    if (input.team !== null) {
+      binding.auth.getTeamEnvironment.mockResolvedValue({
+        kind: "ok",
+        environmentId: "env-acme",
+      });
+    }
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer",
+        userName: "Viewer",
+        email: "viewer@example.test",
+      },
+      contextMetadata: { userId: "viewer", username: "viewer" },
+    });
+    render(
+      <SandboxBillingRuntime
+        answer={input.answer}
+        environmentId="env-acme"
+        hostId="billing-host"
+        queryClient={queryClient}
+        onBinding={() => {
+          installHostDirectoryRows([
+            sandboxHostEntry(TRANSCRIPT_HOST_ID, input.team),
+          ]);
+        }}
+        onEnvironmentListRead={() => {
+          environmentListRequests.push(1);
+        }}
+      >
+        <ChatTranscriptProvider
+          value={{
+            chatId: "chat-with-frozen-sandbox",
+            hostId: TRANSCRIPT_HOST_ID,
+            payerHostId: TRANSCRIPT_HOST_ID,
+          }}
+        >
+          <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
+            turnId={null}
+            message={RAW_MESSAGE}
+            code={input.code}
+            recoverable={false}
+            findUnitId={null}
+            harnessId="traycer"
+            failure={null}
+            settledNotice={null}
+            settledNoticeFindUnitId={null}
+          />
+        </ChatTranscriptProvider>
+      </SandboxBillingRuntime>,
+    );
+    return queryClient;
+  }
+
+  async function expectEnvironmentListRead(
+    queryClient: QueryClient,
+  ): Promise<void> {
+    await waitFor(() => {
+      const cache = queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => {
+          const data = query.state.data;
+          return {
+            queryKey: query.queryKey.map((part) =>
+              typeof part === "object" && part !== null
+                ? Object.keys(part)
+                : part,
+            ),
+            status: query.state.status,
+            fetchStatus: query.state.fetchStatus,
+            dataKind:
+              data !== null && typeof data === "object" && "kind" in data
+                ? data.kind
+                : null,
+          };
+        });
+      expect(
+        environmentListRequests.length,
+        JSON.stringify({ cache, environmentListRequests }),
+      ).toBeGreaterThan(0);
+    });
+  }
+
+  it.each([
+    ["Editor", { kind: "ready", role: "editor" }],
+    ["Viewer", { kind: "ready", role: "viewer" }],
+    ["role loading", { kind: "loading" }],
+    ["environment list failed", { kind: "failed" }],
+  ] as const)(
+    "loads through ErrorSegment and shows the team's C29 copy for an %s, with a code",
+    async (_role, answer) => {
+      const queryClient = renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        code: "SANDBOX_FROZEN",
+        answer,
+      });
+
+      await expectEnvironmentListRead(queryClient);
+      expect(
+        await screen.findByText("Paused: Acme is out of credits"),
+      ).toBeTruthy();
+      expect(
+        await screen.findByText(
+          "This sandbox ran out of credits, which ended the turn. Once Acme has credits again, send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["Editor", { kind: "ready", role: "editor" }],
+    ["Viewer", { kind: "ready", role: "viewer" }],
+    ["role loading", { kind: "loading" }],
+    ["environment list failed", { kind: "failed" }],
+  ] as const)(
+    "uses the same team copy for an %s when SANDBOX_FROZEN appears only in the message prefix",
+    async (_role, answer) => {
+      const queryClient = renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        code: null,
+        answer,
+      });
+
+      await expectEnvironmentListRead(queryClient);
+      expect(
+        await screen.findByText("Paused: Acme is out of credits"),
+      ).toBeTruthy();
+      expect(
+        await screen.findByText(
+          "This sandbox ran out of credits, which ended the turn. Once Acme has credits again, send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the team title and admin recovery line for a team Admin (%s)",
+    async (code) => {
+      const queryClient = renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        code,
+        answer: { kind: "ready", role: "admin" },
+      });
+
+      await expectEnvironmentListRead(queryClient);
+      expect(
+        await screen.findByText("Paused: Acme is out of credits"),
+      ).toBeTruthy();
+      expect(
+        await screen.findByText(
+          "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps Personal's transcript copy (%s)",
+    async (code) => {
+      renderTranscriptRow({
+        team: null,
+        code,
+        answer: { kind: "ready", role: "editor" },
+      });
+
+      expect(
+        await screen.findByText("Paused: account out of credits"),
+      ).toBeTruthy();
+      expect(
+        await screen.findByText(
+          "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  // The chat error row tells a remedy as the reader's only when the person's
+  // host directory says whose sandbox froze. Every other state keeps the cut:
+  // the turn's ending and no remedy.
+  const CUT_COPY = "This sandbox ran out of credits, which ended the turn.";
+  const OUT_OF_CREDITS_HEADLINE = "This sandbox is out of credits.";
+  const PERSONAL_HEADLINE = "Paused: account out of credits";
+
+  /** The row for a reader the app cannot place: the neutral headline over the cut. */
+  function expectUnplacedRow(): void {
+    expect(screen.getByText(OUT_OF_CREDITS_HEADLINE)).toBeTruthy();
+    expect(screen.getByText(CUT_COPY)).toBeTruthy();
+    expect(screen.queryByText(PERSONAL_HEADLINE)).toBeNull();
+    expect(screen.queryByText(ADD_CREDITS_COPY)).toBeNull();
+  }
+  const ADD_CREDITS_COPY =
+    "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the neutral headline and the cut when the directory has no row for the transcript's host (%s)",
+    (code) => {
+      renderFrozenOnHostRows([], { code, message: RAW_MESSAGE });
+
+      expectUnplacedRow();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the neutral headline and the cut when the directory row names no owner (%s)",
+    (code) => {
+      renderFrozenOnHostRows(
+        [sandboxHostEntryWithoutOwner(TRANSCRIPT_HOST_ID)],
+        { code, message: RAW_MESSAGE },
+      );
+
+      expectUnplacedRow();
+    },
+  );
+
+  it("keeps the neutral headline and the cut when the transcript host is a computer that is not a sandbox", () => {
+    renderFrozenOnHostRows([plainHostEntry(TRANSCRIPT_HOST_ID)], {
+      code: "SANDBOX_FROZEN",
+      message: RAW_MESSAGE,
+    });
+
+    expectUnplacedRow();
   });
 });

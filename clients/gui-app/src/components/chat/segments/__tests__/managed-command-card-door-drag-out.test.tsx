@@ -224,7 +224,9 @@ function Harness(props: {
     </QueryClientProvider>
   );
   return (
-    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+    >
       <EpicSessionContext.Provider value={epicHandle}>
         <TabHostProvider hostId={HOST_ID}>
           <TooltipProvider>

@@ -30,6 +30,7 @@ import {
   sandboxShapeAndCostLine,
   sandboxStartedByLabel,
   sandboxRowActions,
+  sandboxRowShapeAndCostLine,
   sandboxRowMatches,
   sandboxSessionsLine,
   sandboxSupportReferenceLine,
@@ -44,7 +45,7 @@ interface MatrixCase {
   readonly name: string;
   readonly summary: Partial<SandboxSummary>;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
   readonly primary: SandboxRowAction | null;
   readonly menu: readonly SandboxRowAction[];
@@ -64,7 +65,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "awake",
     summary: { state: "awake" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "suspend",
     menu: AWAKE_MENU,
@@ -73,7 +74,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "awake agent",
     summary: { state: "awake", burst: true },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "keep",
     menu: AWAKE_MENU,
@@ -82,7 +83,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "stopped agent",
     summary: { state: "stopped", burst: true },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "start",
     menu: ["rename", "idle-settings", "destroy"],
@@ -95,7 +96,7 @@ const MATRIX: readonly MatrixCase[] = [
       keptBy: { userId: "u-priya", displayName: "Priya" },
     },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "suspend",
     menu: AWAKE_MENU,
@@ -104,7 +105,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "suspended",
     summary: { state: "suspended" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "resume",
     menu: ["open-tab", "open-terminal", "rename", "idle-settings", "destroy"],
@@ -113,7 +114,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "stopped",
     summary: { state: "stopped" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "start",
     menu: ["rename", "idle-settings", "destroy"],
@@ -122,16 +123,16 @@ const MATRIX: readonly MatrixCase[] = [
     name: "frozen",
     summary: { state: "suspended", frozen: true },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
-    primary: "resume-paying",
+    primary: "resume",
     menu: ["rename", "destroy"],
   },
   {
     name: "frozen, viewer's own credits short",
     summary: { state: "suspended", frozen: true },
     unreachable: false,
-    frozenNeedsOwnCredits: true,
+    frozenOffersAddCredits: true,
     settingsFailed: false,
     primary: "add-credits",
     menu: ["rename", "destroy"],
@@ -140,7 +141,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "failed",
     summary: { state: "failed" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "retry",
     menu: ["destroy"],
@@ -150,7 +151,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "failed agent",
     summary: { state: "failed", burst: true },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: null,
     menu: ["destroy"],
@@ -159,7 +160,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "awake but unreachable",
     summary: { state: "awake" },
     unreachable: true,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "stop",
     menu: ["rename", "destroy"],
@@ -168,7 +169,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "awake, settings did not apply",
     summary: { state: "awake", guestConfigured: false },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "retry-applying",
     menu: ["open-terminal", "rename", "stop", "destroy"],
@@ -178,7 +179,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "awake, environment settings did not apply",
     summary: { state: "awake", guestConfigured: true },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: true,
     primary: "retry-applying",
     menu: ["open-terminal", "rename", "stop", "destroy"],
@@ -187,7 +188,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "automations",
     summary: { state: "awake", kind: "automation" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "open-terminal",
     menu: ["rename"],
@@ -196,7 +197,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "released automations",
     summary: { state: "stopped", kind: "automation" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: "open-terminal",
     menu: ["rename"],
@@ -205,7 +206,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "suspending",
     summary: { state: "suspending" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: null,
     menu: ["destroy"],
@@ -214,7 +215,7 @@ const MATRIX: readonly MatrixCase[] = [
     name: "resuming",
     summary: { state: "resuming" },
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
     primary: null,
     menu: [],
@@ -227,7 +228,7 @@ describe("sandboxRowActions (Flow 6 matrix)", () => {
       sandboxRowActions({
         summary: sandboxSummaryFixture(row.summary),
         unreachable: row.unreachable,
-        frozenNeedsOwnCredits: row.frozenNeedsOwnCredits,
+        frozenOffersAddCredits: row.frozenOffersAddCredits,
         settingsFailed: row.settingsFailed,
       }),
     ).toEqual({ primary: row.primary, menu: row.menu });
@@ -239,7 +240,7 @@ describe("sandboxRowActions, the Automations row", () => {
     sandboxRowActions({
       summary: sandboxSummaryFixture({ kind: "automation", ...summary }),
       unreachable: false,
-      frozenNeedsOwnCredits: false,
+      frozenOffersAddCredits: false,
       settingsFailed: false,
     });
 
@@ -382,27 +383,25 @@ describe("sandboxClockLine", () => {
       name: "a team with an unknown payer",
       configuration: teamConfiguration,
       wakePayer: null,
-      expected: "Your Acme credits ran out.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose payer is the viewer",
       configuration: teamConfiguration,
       wakePayer: { userId: "viewer", displayName: "Me" },
-      expected: "Your Acme credits ran out.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose payer is another member",
       configuration: teamConfiguration,
       wakePayer: { userId: "payer", displayName: "Priya" },
-      expected:
-        "Priya's Acme credits ran out. Resuming changes the payer to you.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose other payer has no name",
       configuration: teamConfiguration,
       wakePayer: { userId: "payer", displayName: null },
-      expected:
-        "A member's Acme credits ran out. Resuming changes the payer to you.",
+      expected: "Acme's credits ran out.",
     },
   ] as const)(
     "names whose credits ran out for $name",
@@ -416,6 +415,7 @@ describe("sandboxClockLine", () => {
             wakePayer,
           }),
           configuration,
+          credits: configuration,
           cost: null,
           wakeString: null,
           viewerUserId: "viewer",
@@ -435,6 +435,7 @@ describe("sandboxClockLine", () => {
           idleMinutes: 45,
         }),
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
@@ -451,6 +452,7 @@ describe("sandboxClockLine", () => {
         sandboxClockLine({
           summary: sandboxSummaryFixture({ state, kind: "automation" }),
           configuration: { kind: "personal" },
+          credits: { kind: "personal" },
           cost: null,
           wakeString: null,
           viewerUserId: null,
@@ -473,6 +475,7 @@ describe("sandboxClockLine", () => {
           failureCode: "envelope-delivery:x",
         }),
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
@@ -491,6 +494,7 @@ describe("sandboxClockLine", () => {
           lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
         }),
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
@@ -516,6 +520,7 @@ describe("sandboxClockLine", () => {
         sandboxClockLine({
           summary: sandboxSummaryFixture({ state: "destroying", frozen }),
           configuration: { kind: "personal" },
+          credits: { kind: "personal" },
           cost: null,
           wakeString: null,
           viewerUserId: null,
@@ -531,6 +536,7 @@ describe("sandboxClockLine", () => {
       sandboxClockLine({
         summary: sandboxSummaryFixture({ state: "awake" }),
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
@@ -551,6 +557,7 @@ describe("a released sandbox's line in its chat", () => {
         state: "released",
       }),
       configuration: { kind: "personal" },
+      credits: { kind: "personal" },
       cost: null,
       wakeString: null,
       viewerUserId: null,
@@ -597,6 +604,7 @@ describe("sandboxClockLine, a resting row", () => {
         ...summary,
       }),
       configuration: { kind: "personal" },
+      credits: { kind: "personal" },
       cost: cost(todayMillicredits),
       wakeString: "Suspend keeps memory",
       viewerUserId: null,
@@ -668,6 +676,7 @@ describe("sandboxClockLine, a resting row", () => {
           destroyAfterRestingMinutes: null,
         }),
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: cost(0),
         wakeString: "Suspend keeps memory",
         viewerUserId: null,
@@ -858,7 +867,6 @@ describe("sandboxShapeAndCostLine", () => {
         createdByTaskTitle: "Sandbox setup",
       }),
       { kind: "personal" },
-      "viewer",
     );
     expect(line).toBe(
       "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner for Sandbox setup",
@@ -873,7 +881,6 @@ describe("sandboxShapeAndCostLine", () => {
           createdByTaskTitle: null,
         }),
         { kind: "personal" },
-        "viewer",
       ),
     ).toBe(
       "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner",
@@ -887,7 +894,7 @@ describe("sandboxShapeAndCostLine", () => {
       createdByAgentName: "Planner",
       createdByTaskTitle: "Sandbox setup",
     });
-    expect(sandboxShapeAndCostLine(kept, { kind: "personal" }, "viewer")).toBe(
+    expect(sandboxShapeAndCostLine(kept, { kind: "personal" })).toBe(
       "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits · created by Planner for Sandbox setup",
     );
     expect(
@@ -897,7 +904,6 @@ describe("sandboxShapeAndCostLine", () => {
           createdByTaskTitle: "Sandbox setup",
         }),
         { kind: "personal" },
-        "viewer",
       ),
     ).toBe(
       "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits · for Sandbox setup",
@@ -980,6 +986,7 @@ describe("a stopped row's clock, by who stopped it", () => {
         operation: stopped,
       }),
       configuration: { kind: "personal" },
+      credits: { kind: "personal" },
       cost: null,
       wakeString: null,
       viewerUserId: "u-me",
@@ -1098,6 +1105,7 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
         lastTransitionAt: NOW - 60_000,
       }),
       configuration: { kind: "personal" },
+      credits: { kind: "personal" },
       cost: ledger,
       wakeString: null,
       viewerUserId: null,
@@ -1113,6 +1121,7 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
     sandboxClockLine({
       summary: sandboxSummaryFixture({ state, burst: false }),
       configuration: { kind: "personal" },
+      credits: { kind: "personal" },
       cost: cost(300, todayAwakeMs),
       wakeString: null,
       viewerUserId: null,
@@ -1165,7 +1174,7 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
   });
 });
 
-describe("team payer in the resource line", () => {
+describe("team credits in the resource line", () => {
   const team: SandboxPageConfiguration = {
     kind: "team",
     teamId: "team-a",
@@ -1178,72 +1187,53 @@ describe("team payer in the resource line", () => {
     priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
   });
   const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
-  const CREDITS = `${HOURLY} · uses your Acme credits`;
-  const WAKE = "waking it makes you the payer";
+  const CREDITS = `${HOURLY} · uses Acme's credits`;
 
-  it("names whose credits pay when the viewer is not a team non-payer", () => {
-    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(CREDITS);
-    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(HOURLY);
-    expect(sandboxShapeAndCostLine(summary, team, "other")).not.toContain(
-      "paid by",
+  it("names the team's credits whether another member paid last or no payer is named", () => {
+    expect(sandboxShapeAndCostLine(summary, team)).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine(summary, team)).not.toContain("paid by");
+    expect(sandboxShapeAndCostLine({ ...summary, wakePayer: null }, team)).toBe(
+      CREDITS,
     );
   });
-  it("warns a resting team non-payer that waking changes the payer", () => {
+  it("keeps the same team credit line on suspended and stopped rows", () => {
     expect(
-      sandboxShapeAndCostLine(
-        { ...summary, state: "suspended" },
-        team,
-        "other",
-      ),
-    ).toBe(`${HOURLY} · ${WAKE}`);
+      sandboxShapeAndCostLine({ ...summary, state: "suspended" }, team),
+    ).toBe(CREDITS);
     expect(
-      sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team, "other"),
-    ).toBe(`${HOURLY} · ${WAKE}`);
-  });
-  it("keeps the payer's credit line, with no wake warning, when that row rests", () => {
-    expect(
-      sandboxShapeAndCostLine(
-        { ...summary, state: "suspended" },
-        team,
-        "payer",
-      ),
+      sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team),
     ).toBe(CREDITS);
   });
-  it("keeps the funding clause when the payer has no name", () => {
+  it("uses the team's name when the wake payer has no display name", () => {
     const unnamed = {
       ...summary,
       wakePayer: { userId: "payer", displayName: null },
     };
-    expect(sandboxShapeAndCostLine(unnamed, team, "other")).toBe(CREDITS);
-    expect(sandboxShapeAndCostLine(unnamed, team, "other")).not.toContain(
-      "a member",
-    );
+    expect(sandboxShapeAndCostLine(unnamed, team)).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine(unnamed, team)).not.toContain("a member");
     expect(
-      sandboxShapeAndCostLine(
-        { ...unnamed, state: "suspended" },
-        team,
-        "other",
-      ),
+      sandboxShapeAndCostLine({ ...unnamed, state: "suspended" }, team),
     ).toBe(CREDITS);
     expect(
-      sandboxShapeAndCostLine({ ...unnamed, state: "stopped" }, team, "other"),
+      sandboxShapeAndCostLine({ ...unnamed, state: "stopped" }, team),
     ).not.toContain("waking it makes you the payer");
-    expect(
-      sandboxShapeAndCostLine({ ...unnamed, state: "awake" }, team, "payer"),
-    ).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine({ ...unnamed, state: "awake" }, team)).toBe(
+      CREDITS,
+    );
     const restingClock = sandboxClockLine({
       summary: sandboxSummaryFixture({
         state: "suspended",
         wakePayer: { userId: "payer", displayName: null },
       }),
       configuration: team,
+      credits: team,
       cost: null,
       wakeString: null,
       viewerUserId: "other",
       reachability: { unreachable: false, lastContactAt: null },
       now: 1_791_100_000_000,
     });
-    expect(restingClock).not.toContain("storage uses");
+    expect(restingClock).toContain("storage uses Acme's credits");
     expect(restingClock).not.toContain("a member");
     expect(
       sandboxClockLine({
@@ -1252,27 +1242,26 @@ describe("team payer in the resource line", () => {
           wakePayer: { userId: "payer", displayName: null },
         }),
         configuration: team,
+        credits: team,
         cost: null,
         wakeString: null,
         viewerUserId: "payer",
         reachability: { unreachable: false, lastContactAt: null },
         now: 1_791_100_000_000,
       }),
-    ).toContain("storage uses your Acme credits");
+    ).toContain("storage uses Acme's credits");
   });
-  it("leaves the wake warning off a frozen row and off a personal resting row", () => {
+  it("keeps team credits on frozen rows and preserves personal credits", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended", frozen: true },
         team,
-        "other",
       ),
-    ).toBe(HOURLY);
+    ).toBe(`${HOURLY} · uses Acme's credits`);
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
         { kind: "personal" },
-        "other",
       ),
     ).toBe(
       "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
@@ -1290,31 +1279,22 @@ describe("team payer in the resource line", () => {
     });
 
     it.each(["suspended", "stopped"] as const)(
-      "puts the creator on a %s row beside the wake warning",
+      "puts the creator on a %s burst row",
       (state) => {
-        expect(
-          sandboxShapeAndCostLine(agentRow({ state }), team, "other"),
-        ).toBe(`${HOURLY} · ${WAKE} · ${CREATOR}`);
+        expect(sandboxShapeAndCostLine(agentRow({ state }), team)).toBe(
+          `${HOURLY} · ${CREATOR}`,
+        );
       },
     );
 
-    it("puts the creator on awake and personal rows without a wake warning", () => {
+    it("keeps the creator on awake and personal rows", () => {
+      expect(sandboxShapeAndCostLine(agentRow({ state: "awake" }), team)).toBe(
+        `${HOURLY} · ${CREATOR}`,
+      );
       expect(
-        sandboxShapeAndCostLine(
-          agentRow({ state: "suspended" }),
-          team,
-          "payer",
-        ),
-      ).toBe(`${HOURLY} · ${CREATOR}`);
-      expect(
-        sandboxShapeAndCostLine(agentRow({ state: "awake" }), team, "other"),
-      ).toBe(`${HOURLY} · ${CREATOR}`);
-      expect(
-        sandboxShapeAndCostLine(
-          agentRow({ state: "suspended" }),
-          { kind: "personal" },
-          "other",
-        ),
+        sandboxShapeAndCostLine(agentRow({ state: "suspended" }), {
+          kind: "personal",
+        }),
       ).toBe(`${HOURLY} · ${CREATOR}`);
     });
   });
@@ -1326,7 +1306,7 @@ describe("team payer in the resource line", () => {
       ...overrides,
     });
 
-    it("names the wake change and the creator without inventing a rate", () => {
+    it("names the creator without inventing a rate", () => {
       expect(
         sandboxShapeAndCostLine(
           unpriced({
@@ -1337,25 +1317,95 @@ describe("team payer in the resource line", () => {
             createdByTaskTitle: "Sandbox setup",
           }),
           team,
-          "other",
         ),
-      ).toBe(`${SHAPE} · ${WAKE} · created by Planner for Sandbox setup`);
+      ).toBe(`${SHAPE} · created by Planner for Sandbox setup`);
     });
 
-    it("warns that waking changes the payer on an unpriced stopped row", () => {
+    it("leaves an unpriced stopped row at its shape", () => {
       expect(
-        sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team, "other"),
-      ).toBe(`${SHAPE} · ${WAKE}`);
+        sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team),
+      ).toBe(SHAPE);
     });
 
     it("leaves a personal resting row as the shape alone when no rate is available", () => {
       expect(
-        sandboxShapeAndCostLine(
-          unpriced({ state: "suspended" }),
-          { kind: "personal" },
-          "other",
-        ),
+        sandboxShapeAndCostLine(unpriced({ state: "suspended" }), {
+          kind: "personal",
+        }),
       ).toBe(SHAPE);
     });
+  });
+});
+
+// A row's credits are whose sandbox it is, which is not always the page it is
+// listed under: the page's configuration names the settings, `credits` names
+// the money. `null` is a row whose owner is not known, which tells no money.
+describe("a row's credits are not the page's", () => {
+  const ACME: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-acme",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
+  const PERSONAL: SandboxPageConfiguration = { kind: "personal" };
+
+  function clock(
+    summary: Partial<SandboxSummary>,
+    credits: SandboxPageConfiguration | null,
+  ): string {
+    return sandboxClockLine({
+      summary: sandboxSummaryFixture(summary),
+      configuration: PERSONAL,
+      credits,
+      cost: null,
+      wakeString: null,
+      viewerUserId: "viewer",
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    });
+  }
+
+  it("names no cause for a frozen row whose owner is not known", () => {
+    const frozen = {
+      state: "suspended",
+      frozen: true,
+      frozenAt: null,
+    } as const;
+
+    expect(clock(frozen, PERSONAL)).toBe("Your credits ran out.");
+    expect(clock(frozen, null)).toBe("");
+  });
+
+  it("names the storage credits of the row's owner, not the page's, and none while it is not known", () => {
+    const stopped = { state: "stopped" } as const;
+
+    expect(clock(stopped, ACME)).toContain("storage uses Acme's credits");
+    expect(clock(stopped, PERSONAL)).toContain("storage uses your credits");
+    expect(clock(stopped, null)).not.toContain("storage uses");
+  });
+
+  it("states what an Automations host is for and costs by its owner, and only what it cannot run while that is not known", () => {
+    const automations = sandboxSummaryFixture({ kind: "automation" });
+
+    expect(sandboxRowShapeAndCostLine(automations, PERSONAL)).toBe(
+      "Runs your long-running shells · agents can't run here · no charge",
+    );
+    expect(sandboxRowShapeAndCostLine(automations, ACME)).toBe(
+      "Runs Acme's long-running shells · agents can't run here · uses Acme's shared credits, not a member's allowance",
+    );
+    expect(sandboxRowShapeAndCostLine(automations, null)).toBe(
+      "agents can't run here",
+    );
+  });
+
+  it("leaves the funding clause off a priced row whose owner is not known", () => {
+    const priced = sandboxSummaryFixture({ burst: false });
+
+    expect(sandboxRowShapeAndCostLine(priced, PERSONAL)).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits",
+    );
+    expect(sandboxRowShapeAndCostLine(priced, null)).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+    );
   });
 });
