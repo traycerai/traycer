@@ -77,8 +77,13 @@ describe("InviteDialog", () => {
       "Can change the team's settings; every change reaches every team sandbox.",
     );
 
-    await user.click(picker);
-    expect(screen.queryByRole("option", { name: "Viewer" })).toBeNull();
+    await user.click(screen.getByRole("combobox", { name: "Role" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    expect(line.textContent).toBe(
+      "Can see the team's settings but not change them.",
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Role" }));
     await user.click(await screen.findByRole("option", { name: "Admin" }));
     expect(line.textContent).toBe(
       "Can change the team's settings, invite and remove people, and change roles.",
