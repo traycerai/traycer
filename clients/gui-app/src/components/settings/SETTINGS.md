@@ -6053,8 +6053,11 @@ wrap`). Each row names the account its first usable match runs on, the
   - Every control writes its item's whole value through
     `environment.configuration.items.put` with the revision it read (`null`
     creates the item), so a concurrent edit of one field cannot lose
-    another. While a write is pending, every control shows the value being
-    saved, is disabled, and the changed control has a spinner beside it.
+    another. While a write is pending, every control is disabled, in every
+    environment; in the environment the write addresses, its item's controls
+    show the value being saved and the changed control has a spinner beside
+    it. Another environment picked meanwhile shows its own values, no spinner
+    and none of the write's outcome.
     Once the write is saved, its item's controls keep that value, disabled,
     with the spinner, until the read of that environment reports the item at
     the saved revision or a later one; the other item's controls are free

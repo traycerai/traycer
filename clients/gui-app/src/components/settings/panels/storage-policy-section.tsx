@@ -118,11 +118,10 @@ function StoragePolicySectionBody(props: {
   const { put } = useConfigurationItemMutations();
   // The control whose save is in flight, for its spinner.
   const [saving, setSaving] = useState<StorageControl | null>(null);
-  const issue =
-    put.data === undefined ? null : configurationWriteIssue(put.data);
+  const environmentId = environment?.environmentId ?? null;
+  const { pending, issue } = lastSaveIn(put, environmentId);
   const policy = read.data;
-  const held = useHeldSaves(environment?.environmentId ?? null, policy);
-  const pending = put.isPending ? put.variables : null;
+  const held = useHeldSaves(environmentId, policy);
   const shown = shownValue(
     storagePolicyValueSchema,
     pickedValue(pending, STORAGE_POLICY_KIND, held.storage),
@@ -182,7 +181,7 @@ function StoragePolicySectionBody(props: {
     });
   };
   const spinner = (field: StorageControl): ReactNode =>
-    (put.isPending && saving === field) ||
+    (pending !== null && saving === field) ||
     held.storage?.field === field ||
     held.snapshots?.field === field ? (
       <AgentSpinningDots
@@ -462,6 +461,31 @@ function useHeldSaves(
         window.setTimeout(() => expire(id), READ_BOUND_MS),
       );
     },
+  };
+}
+
+/**
+ * The page's last save as the shown environment sees it: its value while in
+ * flight and its answer's issue, only when it addressed that environment.
+ * Another environment's save shows nothing here.
+ */
+function lastSaveIn(
+  put: {
+    readonly isPending: boolean;
+    readonly variables: EnvironmentConfigurationItemPutRequest | undefined;
+    readonly data: EnvironmentConfigurationItemWriteResponse | undefined;
+  },
+  environmentId: string | null,
+): {
+  readonly pending: EnvironmentConfigurationItemPutRequest | null;
+  readonly issue: ConfigurationWriteIssue | null;
+} {
+  const save = put.variables;
+  if (save === undefined || save.environmentId !== environmentId)
+    return { pending: null, issue: null };
+  return {
+    pending: put.isPending ? save : null,
+    issue: put.data === undefined ? null : configurationWriteIssue(put.data),
   };
 }
 
