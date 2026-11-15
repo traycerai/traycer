@@ -438,7 +438,9 @@ describe("desktop main local streams open with host tokens", () => {
       const equalitySocket = FakeNativeWebSocket.instances[1];
       if (equalitySocket === undefined)
         throw new Error("the equality reconnect socket was not constructed");
-      expect(equalitySocket.url).toBe(websocketUrl);
+      expect(equalitySocket.url).toBe(
+        websocketUrl.replace(/\/rpc$/, "/stream"),
+      );
       equalitySocket.fireOpen();
       await settle();
 
