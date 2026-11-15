@@ -343,8 +343,13 @@ describe("useEnvironmentMembers", () => {
     roster.ids = [ids[0], joined, ...ids.slice(1)];
     await mounted.refetchFirstPage();
 
+    // The new first page and the new second page, which now holds the
+    // member the first page's end moved off.
     await waitFor(() => {
       expect(mounted.resolver()(joined)?.displayName).toBe(`Name of ${joined}`);
+      expect(mounted.resolver()(ids[PAGE_SIZE - 1])?.displayName).toBe(
+        `Name of ${ids[PAGE_SIZE - 1]}`,
+      );
     });
     expect(mounted.cursorsAsked()).toEqual([
       null,

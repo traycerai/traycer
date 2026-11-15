@@ -17,6 +17,7 @@ import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-m
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
 import { MembersPage } from "@/components/settings/members/members-page";
 import {
+  hostIdsOf,
   mountTeamPage,
   poolSource,
   resetTeamPageHarness,
@@ -94,6 +95,17 @@ const TEAM_ENVIRONMENTS: EnvironmentListResponseV11 = {
   ],
 };
 
+/**
+ * Members a page holds: the app pages authn's one list by user id, this many
+ * to a page (`configuration-members.ts`).
+ */
+const PAGE_SIZE = 100;
+/** u-admin and these fill the first page; a member written later is on the second. */
+const FILLERS = Array.from(
+  { length: PAGE_SIZE - 1 },
+  (_, index) => `u-filler-${String(index).padStart(3, "0")}`,
+);
+
 describe("useEnvironmentMembersList", () => {
   it("refreshes its pages through each real members write", async () => {
     let revision = 0;
@@ -103,6 +115,7 @@ describe("useEnvironmentMembersList", () => {
         page(
           [
             member("u-admin", "admin"),
+            ...FILLERS.map((userId) => member(userId, "viewer")),
             ...(revision === 0
               ? []
               : [member(`u-revision-${String(revision)}`, "viewer")]),
@@ -138,6 +151,7 @@ describe("useEnvironmentMembersList", () => {
     await waitFor(() => {
       expect(result.current.list.members.map(({ userId }) => userId)).toEqual([
         "u-admin",
+        ...FILLERS,
       ]);
     });
 
@@ -156,9 +170,15 @@ describe("useEnvironmentMembersList", () => {
           ),
         ).toBe(true);
       });
+      // The member the write added is past the first page's end.
+      expect(
+        result.current.list.members.map(({ userId }) => userId),
+      ).toHaveLength(PAGE_SIZE + 1);
       expect(harness.paramsOf("environment.members").length).toBeGreaterThan(
         readsBefore,
       );
+      // The read went to authn and to no host.
+      expect(hostIdsOf(harness, "environment.members")).toEqual([]);
     };
 
     await expectRefreshedPage(
@@ -170,18 +190,21 @@ describe("useEnvironmentMembersList", () => {
       1,
     );
     expect(harness.paramsOf("environment.members.invite")).toHaveLength(1);
+    expect(hostIdsOf(harness, "environment.members.invite")).toEqual([]);
 
     await expectRefreshedPage(
       () => result.current.writes.setRole({ userId: "u-admin", role: "admin" }),
       2,
     );
     expect(harness.paramsOf("environment.members.setRole")).toHaveLength(1);
+    expect(hostIdsOf(harness, "environment.members.setRole")).toEqual([]);
 
     await expectRefreshedPage(
       () => result.current.writes.remove({ userId: "u-admin" }),
       3,
     );
     expect(harness.paramsOf("environment.members.remove")).toHaveLength(1);
+    expect(hostIdsOf(harness, "environment.members.remove")).toEqual([]);
   });
 
   it("sends the real Members invite dialog with no active host", async () => {
@@ -215,6 +238,7 @@ describe("useEnvironmentMembersList", () => {
     await waitFor(() => {
       expect(harness.paramsOf("environment.members.seats")).toHaveLength(1);
     });
+    expect(hostIdsOf(harness, "environment.members.seats")).toEqual([]);
     await userEvent.type(
       screen.getByTestId("members-invite-email"),
       "new@acme.test",
@@ -226,5 +250,6 @@ describe("useEnvironmentMembersList", () => {
       { email: "new@acme.test", role: "editor" },
     ]);
     expect(harness.paramsOf("environment.members.invite")).toHaveLength(1);
+    expect(hostIdsOf(harness, "environment.members.invite")).toEqual([]);
   });
 });
