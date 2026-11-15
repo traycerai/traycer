@@ -2889,6 +2889,37 @@ describe("WorktreesList delete flow", () => {
     );
   });
 
+  it("reports an unconfirmed delete and refreshes the list when an older host's stream drops after the request went out", () => {
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+    confirmDelete("feat-clean");
+    expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
+
+    act(() => {
+      callbacksFor("/wt/clean").onDroppedAfterStart();
+    });
+
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "Check the refreshed list to see whether this worktree was removed.",
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
+      refetchType: "active",
+    });
+    expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
+  });
+
   it("falls back to a per-path force delete on an older host", () => {
     streamMock.unsupportedForPaths.add("/wt/clean");
     renderDefault();

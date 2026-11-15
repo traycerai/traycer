@@ -705,12 +705,9 @@ describe("runWorktreeCleanup while the host holds the stream", () => {
       null,
       "held",
     );
-    legacyCallbacksFor("/wt/a").onConnectionStatus(
-      "reconnecting",
-      null,
-      null,
-      null,
-    );
+    // A plain reconnect after the hold reaches the caller as a drop after the
+    // request went out: the stream client closes rather than re-send it.
+    legacyCallbacksFor("/wt/a").onDroppedAfterStart();
 
     await expect(promise).resolves.toEqual({
       removed: [],

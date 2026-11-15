@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -9,10 +17,20 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
 } from "../i-stream-session";
-import { WorktreeDeleteStreamClient } from "../worktree-delete-stream-client";
+import {
+  WorktreeDeleteStreamClient,
+  type WorktreeDeleteStreamClientOptions,
+} from "../worktree-delete-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import {
+  completeHandshake,
+  makeStubSocketFactory,
+  makeStubSocketStreamClient,
+  subscribeParams,
+} from "../__testing__/stub-stream-socket";
 
 const HOLDERS: readonly WorktreeBusyHolder[] = [
   {
@@ -107,6 +125,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed: () => {},
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -131,6 +150,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed: () => {},
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -156,6 +176,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed,
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -188,6 +209,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed,
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -219,6 +241,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed,
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -262,6 +285,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onOutput: () => {},
         onComplete: () => {},
         onFailed,
+        onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
       },
     });
@@ -276,6 +300,102 @@ describe("WorktreeDeleteStreamClient", () => {
       "Worktree is in use",
       HOLDERS,
       undefined,
+    );
+    client.close();
+  });
+});
+
+describe("WorktreeDeleteStreamClient replay safety", () => {
+  function openDelete(
+    wsStreamClient: WorktreeDeleteStreamClientOptions["wsStreamClient"],
+  ): {
+    readonly client: WorktreeDeleteStreamClient;
+    readonly onDroppedAfterStart: Mock<() => void>;
+    readonly onConnectionStatus: Mock<StatusChangeHandler>;
+  } {
+    const onDroppedAfterStart = vi.fn<() => void>();
+    const onConnectionStatus = vi.fn<StatusChangeHandler>();
+    const client = new WorktreeDeleteStreamClient({
+      wsStreamClient,
+      worktreePath: "/wt/a",
+      scripts: null,
+      stopOwners: false,
+      callbacks: {
+        onStarted: () => {},
+        onPhase: () => {},
+        onOutput: () => {},
+        onComplete: () => {},
+        onFailed: () => {},
+        onDroppedAfterStart,
+        onConnectionStatus,
+      },
+    });
+    return { client, onDroppedAfterStart, onConnectionStatus };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("closes on a drop after the request went out, so the transport never sends the delete again", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const { client, onDroppedAfterStart } = openDelete(
+      makeStubSocketStreamClient(factory),
+    );
+
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toEqual({
+      worktreePath: "/wt/a",
+      scripts: null,
+    });
+
+    sockets[0].fireClose(1006, "abnormal");
+    vi.advanceTimersByTime(5_000);
+
+    expect(sockets).toHaveLength(1);
+    expect(onDroppedAfterStart).toHaveBeenCalledTimes(1);
+    client.close();
+  });
+
+  it("keeps the transport's retry when the drop came before the request went out", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const { client, onDroppedAfterStart } = openDelete(
+      makeStubSocketStreamClient(factory),
+    );
+
+    expect(sockets[0].textSent).toHaveLength(0);
+    sockets[0].fireClose(1006, "abnormal");
+    vi.advanceTimersByTime(50);
+    expect(sockets).toHaveLength(2);
+
+    completeHandshake(sockets[1]);
+    expect(subscribeParams(sockets[1])).toEqual({
+      worktreePath: "/wt/a",
+      scripts: null,
+    });
+    expect(onDroppedAfterStart).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("keeps the session while the host holds the subscription", () => {
+    const fake = new FakeStreamClient(true);
+    const { client, onDroppedAfterStart, onConnectionStatus } =
+      openDelete(fake);
+    const session = fake.sessions[0];
+
+    session.emitContinuityStatus("reconnecting", "held");
+
+    expect(session.closed).toBe(false);
+    expect(onDroppedAfterStart).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith(
+      "reconnecting",
+      null,
+      null,
+      "held",
     );
     client.close();
   });

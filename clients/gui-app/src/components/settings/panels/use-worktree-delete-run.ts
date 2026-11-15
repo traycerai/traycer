@@ -81,6 +81,11 @@ const CONNECTION_LOST_MESSAGE =
 // "deleted" or "failed" for it would be a guess presented as a result.
 const REATTACHED_MESSAGE =
   "Reconnected without confirming this delete. Check the refreshed list to see whether this worktree was removed.";
+// The fallback stream's connection dropped after the host received the delete.
+// It is never re-sent (a replay would delete again), so, as above, the
+// refreshed list is the authority on whether this worktree was removed.
+const DROPPED_AFTER_START_MESSAGE =
+  "Lost connection to the host before this delete was confirmed. Check the refreshed list to see whether this worktree was removed.";
 
 export interface WorktreeDeleteRunRecord {
   readonly key: string;
@@ -1100,9 +1105,17 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
               closeDeleteClient(item.key);
               settle();
             },
+            onDroppedAfterStart: () => {
+              useWorktreeDeleteRunStore
+                .getState()
+                .failRun(item.key, DROPPED_AFTER_START_MESSAGE, undefined);
+              closeDeleteClient(item.key);
+              settle();
+            },
             onConnectionStatus: (status, reason) => {
               // Only a terminal stream close BEFORE an app-level terminal frame
-              // is an error. Recoverable reconnects surface as "reconnecting".
+              // is an error. A drop before the request went out surfaces as
+              // "reconnecting" and is retried by the transport.
               if (status !== "closed" || reason === null) return;
               useWorktreeDeleteRunStore
                 .getState()

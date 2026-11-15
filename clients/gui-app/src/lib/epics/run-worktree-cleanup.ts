@@ -462,6 +462,15 @@ function deleteOneWorktree(input: {
       requestClose(holder);
       resolve(outcome);
     };
+    const finishUncertain = (status: "reconnecting" | "closed"): void => {
+      if (!state.settled) {
+        appLogger.warn(
+          "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
+          { worktreePath: input.worktreePath, status },
+        );
+      }
+      finish({ kind: "uncertain" });
+    };
 
     try {
       const owned = openOwnedDurableStreamClient(
@@ -484,6 +493,7 @@ function deleteOneWorktree(input: {
                     : { kind: "failed", reason: DECLINED_REASON },
                 ),
               onFailed: (reason) => finish({ kind: "failed", reason }),
+              onDroppedAfterStart: () => finishUncertain("reconnecting"),
               onConnectionStatus: (
                 status,
                 _reason,
@@ -491,30 +501,22 @@ function deleteOneWorktree(input: {
                 continuity,
               ) => {
                 if (continuity === "held") return;
-                // Fail fast on the FIRST drop after start. The one-shot delete
-                // stream must not silently re-run, but WsStreamClient's own
-                // reconnect loop keeps rescheduling `reconnecting` (reason:
-                // null) drops - which would both re-issue the subscribe (re-run
-                // the host pipeline) AND leave this promise hanging (the summary
-                // toast + cache invalidation would never fire).
-                // `connecting`/`open` are the normal startup; a `closed` fired
-                // by our own teardown after a terminal frame is absorbed by
-                // the `settled` guard.
+                // Fail fast on any other end of the stream, so this promise
+                // never waits on the transport's reconnect loop (the summary
+                // toast + cache invalidation would never fire). A drop after
+                // the request went out arrives as `onDroppedAfterStart`, so a
+                // `reconnecting` here came before it: nothing was sent, and
+                // this fails without a retry. `connecting`/`open` are the
+                // normal startup.
                 if (status === "open") {
                   state.reachedHost = true;
                   return;
                 }
-                if (status !== "reconnecting" && status !== "closed") return;
-                if (state.reachedHost) {
-                  if (!state.settled) {
-                    appLogger.warn(
-                      "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
-                      { worktreePath: input.worktreePath, status },
-                    );
-                  }
-                  finish({ kind: "uncertain" });
+                if (status === "closed" && state.reachedHost) {
+                  finishUncertain(status);
                   return;
                 }
+                if (status !== "reconnecting" && status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });
               },
             },
