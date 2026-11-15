@@ -1350,11 +1350,12 @@ export function useProviderDestinationLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginResult): void => {
             if (attemptAbandoned()) return;
-            if (target !== null && result.profileOutcome != null) {
+            const profileOutcome = result.profileOutcome ?? null;
+            if (target !== null && profileOutcome !== null) {
               setState({
                 ...result,
                 kind: "target-outcome",
-                profileOutcome: result.profileOutcome,
+                profileOutcome,
                 admissionId: nextProfileId,
               });
               return;
@@ -1363,7 +1364,7 @@ export function useProviderDestinationLoginFlow(
               target !== null || profileOutcomes === null
                 ? null
                 : resolveProfileOutcome(
-                    result.profileOutcome ?? null,
+                    profileOutcome,
                     mode,
                     () =>
                       (result.state?.profiles ?? []).map((profile) =>
