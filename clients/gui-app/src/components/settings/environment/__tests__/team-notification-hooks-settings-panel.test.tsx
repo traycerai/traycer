@@ -21,11 +21,18 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { TeamNotificationHooksSettingsPanel } from "@/components/settings/environment/team-notification-hooks-settings-panel";
 
-const fixtures = vi.hoisted(() => ({
-  hooks: [] as CloudNotificationHook[],
-  requests: [] as EnvironmentTransportRequest[],
+interface TeamHookFixtures {
+  hooks: CloudNotificationHook[];
+  requests: EnvironmentTransportRequest[];
+  status: number;
+  body: unknown;
+}
+
+const fixtures = vi.hoisted((): TeamHookFixtures => ({
+  hooks: [],
+  requests: [],
   status: 204,
-  body: null as unknown,
+  body: null,
 }));
 
 vi.mock("@/hooks/environment/team/use-configuration-items-query", () => ({
@@ -41,12 +48,12 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => (): EnvironmentCloud => ({
     authnBaseUrl: "https://authn.example/",
     bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
-    transport: async (request) => {
+    transport: (request) => {
       fixtures.requests.push(request);
-      return {
+      return Promise.resolve({
         status: fixtures.status,
         text: fixtures.status === 204 ? "" : JSON.stringify(fixtures.body),
-      };
+      });
     },
     onOriginSignIn: () => true,
   }),
@@ -89,14 +96,7 @@ afterEach(() => {
 function source(
   role: "admin" | "editor" | "viewer" | "unknown",
 ): ConfigurationSource {
-  const effectiveRole =
-    role === "admin"
-      ? "admin"
-      : role === "editor"
-        ? "editor"
-        : role === "viewer"
-          ? "viewer"
-          : null;
+  const effectiveRole = role === "unknown" ? null : role;
   return {
     kind: "pool",
     configuration: "team",
@@ -169,7 +169,7 @@ describe("team Notification hooks page", () => {
     fixtures.hooks = [buildHook];
     renderPage("admin");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Add hook" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Add hook" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Release alerts" },
@@ -206,9 +206,7 @@ describe("team Notification hooks page", () => {
     renderPage("editor");
 
     const manager = screen.getByTestId("cloud-notification-hooks-manager");
-    fireEvent.click(
-      within(manager).getAllByRole("button", { name: "Edit" })[0],
-    );
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Build alerts revised" },
@@ -307,16 +305,16 @@ describe("team Notification hooks page", () => {
     }
     const errorText =
       code === "hook_local_only"
-        ? ((
+        ? (
             await within(dialog).findByText(
               "A team's hook can't read $NAME from a computer. Type the value itself.",
             )
-          ).textContent ?? "")
-        : ((
+          ).textContent
+        : (
             await within(manager).findByText(
               "The settings request was refused.",
             )
-          ).textContent ?? "");
+          ).textContent;
     expect(errorText).not.toContain(buildHook.id);
     expect(errorText).not.toContain(buildHook.action.url);
     expect(errorText).not.toContain(code);

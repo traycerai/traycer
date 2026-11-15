@@ -246,7 +246,7 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
 async function convertCommandHookToHttp(): Promise<void> {
   const manager = await screen.findByTestId("notification-hooks-manager");
   await screen.findByTestId("notification-hook-row-convert-this-hook");
-  fireEvent.click(within(manager).getAllByRole("button", { name: "Edit" })[0]);
+  fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
   fireEvent.click(await screen.findByRole("option", { name: "POST to a URL" }));
@@ -461,7 +461,7 @@ describe("computer hook saves and the host's answered account part", () => {
       (hook) => hook.id === firstDraft?.id,
     );
     expect(retriedDrafts).toHaveLength(1);
-    expect(retriedDrafts?.[0]).toEqual(firstDraft);
+    expect(retriedDrafts[0]).toEqual(firstDraft);
     expect(saves[1]?.hooks).toHaveLength(commandHooks.length + 1);
     expect(accountCloud.requests[2]?.method).toBe("GET");
     expect(accountCloud.requests[3]?.body).toEqual({
