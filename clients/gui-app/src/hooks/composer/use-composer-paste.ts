@@ -1184,10 +1184,15 @@ export function useComposerPasteEvents<Attrs>(args: {
  * Base64 paste adapter for chat / new-conversation: accepted files are read as
  * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. This
  * is the behavior every non-landing surface relies on — do NOT change it.
+ *
+ * `admitImages` sees every image a paste, a drop or a pick hands the adapter,
+ * before the source ceiling and before a byte is read: only what it returns
+ * is read.
  */
 export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
+  admitImages: (files: ReadonlyArray<File>) => ReadonlyArray<File>,
 ): UseComposerPasteResult {
   // One session per mount: each `attachImageFiles` call is its own background
   // job and they do not await one another, so the session is what keeps two
@@ -1199,7 +1204,7 @@ export function useComposerPasteAdapter(
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
       convert: (files, signal) =>
-        filesToImageAttrs(files, signal, preparationSession),
+        filesToImageAttrs(admitImages(files), signal, preparationSession),
       onSettled: (accepted) => {
         accepted.forEach(() => {
           Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
@@ -1229,7 +1234,7 @@ export function useComposerPasteAdapter(
         );
       },
     }),
-    [preparationSession],
+    [admitImages, preparationSession],
   );
   return useComposerPasteEvents({
     imageIngest,
@@ -1238,6 +1243,10 @@ export function useComposerPasteAdapter(
     captureImageInsertion: undefined,
     fileAttach: null,
   });
+}
+
+function everyImage(files: ReadonlyArray<File>): ReadonlyArray<File> {
+  return files;
 }
 
 function hostStorableImage(file: File): boolean {
@@ -1592,7 +1601,7 @@ export function useComposerPaste(
     }),
     [fileDrops, mentionRoots, beginPathInsertion],
   );
-  return useComposerPasteAdapter(insertAttrs, filePaths);
+  return useComposerPasteAdapter(insertAttrs, filePaths, everyImage);
 }
 
 /**

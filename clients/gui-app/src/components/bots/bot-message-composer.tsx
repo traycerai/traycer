@@ -27,7 +27,6 @@ import {
   useKeyboardFocusLayoutWithin,
 } from "@/hooks/ui/use-keyboard-focus-layout";
 import {
-  carriedPickedImages,
   pastedImagesVerdict,
   useBotBoxImageIngest,
 } from "@/hooks/bots/use-bot-box-images";
@@ -118,9 +117,9 @@ function NO_PASTED_IMAGE_BYTES(): boolean {
 const BOX_PICKER_ACCEPT = BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES.join(",");
 
 /**
- * The box's Attach, where it takes images: a picked image the message can
- * carry goes where a paste goes, and anything else is refused unread. Off
- * while the box cannot send and while a send is on its way.
+ * The box's Attach, where it takes images: a picked image goes where a paste
+ * goes, and a picked file that is no image is refused. Off while the box
+ * cannot send and while a send is on its way.
  */
 function BoxAttach(props: {
   readonly shown: boolean;
@@ -130,13 +129,9 @@ function BoxAttach(props: {
   readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
   readonly testId: string;
 }): ReactNode {
-  const { onAttachImages } = props;
   const picker = useComposerAttachPicker({
     accept: BOX_PICKER_ACCEPT,
-    onAttachImages: (files) => {
-      const carried = carriedPickedImages(files);
-      if (carried.length > 0) onAttachImages(carried);
-    },
+    onAttachImages: props.onAttachImages,
     onAttachFiles: props.onAttachFiles,
   });
   if (!props.shown) return null;
