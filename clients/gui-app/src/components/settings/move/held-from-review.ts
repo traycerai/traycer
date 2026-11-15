@@ -47,7 +47,8 @@ export function heldRowsFromReview(
  * and the Overview's banner read: the name it goes by, what it does
  * (`(MCP server) runs <command>`), and who gets it once approved. `acts` is
  * false when the clause names the kind alone (a host below
- * `environment.review@1.2`, or a row the host could not describe).
+ * `environment.review@1.2`, or a row the host could not describe). `reach`
+ * is empty for a removal and for a kind that runs nothing.
  */
 export interface HeldCommandLine {
   readonly name: string;
@@ -99,12 +100,15 @@ export function heldCommandLine(entry: ReviewHeldEntry): HeldCommandLine {
           reach: RUNS_EVERYWHERE,
         };
       }
-      // A kind newer than this line set: named as the host spells it.
-      return runsLine(
-        entry.key,
-        entry.kind.replaceAll("_", " "),
-        facts.command,
-      );
+      // Any other kind (a profile, a policy, browser access, the guide, or a
+      // kind newer than this line set) runs nothing: named as the host spells
+      // it, with no reach, as a removal is.
+      return {
+        name: entry.key,
+        clause: `(${entry.kind.replaceAll("_", " ")})`,
+        acts: false,
+        reach: "",
+      };
   }
 }
 
