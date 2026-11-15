@@ -163,7 +163,7 @@ const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "E_ROLE_FORBIDDEN",
   invalid: "E_INVALID_ARGUMENT",
-  not_readable: "NOT_FOUND",
+  not_readable: "E_ENVIRONMENT_NOT_A_MEMBER",
   refused: "RPC_ERROR",
   unavailable: "RPC_ERROR",
   no_response: "RPC_ERROR",
