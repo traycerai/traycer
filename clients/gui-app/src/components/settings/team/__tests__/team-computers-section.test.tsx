@@ -16,6 +16,7 @@ import type {
 } from "@traycer-clients/shared/host-client/team-computers";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
@@ -74,6 +75,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 const listTeamComputers =
   vi.fn<(environmentId: string) => Promise<TeamComputersResult>>();
+const listEnvironments = vi.fn<() => Promise<EnvironmentDirectoryResult>>();
 const releaseTeamComputer =
   vi.fn<
     (
@@ -84,7 +86,11 @@ const releaseTeamComputer =
 const auth = {
   listTeamComputers,
   releaseTeamComputer,
-} satisfies Pick<AuthService, "listTeamComputers" | "releaseTeamComputer">;
+  listEnvironments,
+} satisfies Pick<
+  AuthService,
+  "listTeamComputers" | "releaseTeamComputer" | "listEnvironments"
+>;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
 function computer(overrides: Partial<TeamComputer>): TeamComputer {
@@ -163,6 +169,7 @@ function mountSection(
     }),
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
+  listEnvironments.mockImplementation(() => harness.auth.listEnvironments());
   const runnerHost = dashboardRunnerHost();
   const view = render(
     sectionTree(harness, environmentId, effectiveRole, runnerHost),
@@ -188,6 +195,7 @@ beforeEach(() => {
   previewLocalFacts.answer = () => ({ activeTurns: null, terminals: null });
   askedHostIds.length = 0;
   listTeamComputers.mockReset();
+  listEnvironments.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
   directory.refresh.mockClear();
@@ -238,6 +246,7 @@ describe("TeamComputersSection", () => {
     mountSection(ENVIRONMENT_ID, "admin", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
+    await waitFor(() => expect(listEnvironments).toHaveBeenCalledOnce());
     await user.click(
       await screen.findByRole("button", { name: "Add a computer" }),
     );
@@ -253,6 +262,7 @@ describe("TeamComputersSection", () => {
   it("does not offer a command when the team has no provider handle", async () => {
     mountSection(ENVIRONMENT_ID, "admin", null);
 
+    await waitFor(() => expect(listEnvironments).toHaveBeenCalledOnce());
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
     );
