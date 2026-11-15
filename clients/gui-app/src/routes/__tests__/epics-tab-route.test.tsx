@@ -95,6 +95,10 @@ vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
 vi.mock("@/providers/team-removal-tile-closer", () => ({
   TeamRemovalTileCloser: () => null,
 }));
+// The claimed-computer notifier reads the query client the same way.
+vi.mock("@/providers/claimed-computer-notifier", () => ({
+  ClaimedComputerNotifier: () => null,
+}));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
