@@ -1861,7 +1861,7 @@ describe("a redirect answered to a sandbox control call", () => {
     {
       name: "a 302 with a Location",
       answer: () =>
-        new Response(null, {
+        new Response(JSON.stringify({ sandboxes: [] }), {
           status: 302,
           headers: { location: "https://elsewhere.test/sandboxes" },
         }),

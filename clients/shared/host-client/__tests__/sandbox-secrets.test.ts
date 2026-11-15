@@ -1231,10 +1231,12 @@ describe("a redirect answered to a sandbox secrets request", () => {
           status: 307,
           headers: { location: "https://elsewhere.test/collect" },
         }),
+      status: 307,
     },
     {
       name: "a browser's opaque redirect",
       answer: () => createOpaqueRedirectResponse(),
+      status: 0,
     },
   ];
 
@@ -1263,7 +1265,7 @@ describe("a redirect answered to a sandbox secrets request", () => {
   it.each(redirects)(
     "reads $name on a decision as a network error, with the decision sent once and never followed",
     async ({ answer }) => {
-      const fetchMock = stubFetch(() => answer({}));
+      const fetchMock = stubFetch(() => answer({ status: "approved" }));
 
       const result = await decideSecretRequestViaHttp(
         BASE,
@@ -1305,8 +1307,10 @@ describe("a redirect answered to a sandbox secrets request", () => {
 
   it.each(redirects)(
     "reads $name on the providers read as a network error, with both requests told not to follow",
-    async ({ answer }) => {
-      const fetchMock = stubFetch(() => answer([]));
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(() =>
+        answer({ secrets: [{ kind: "provider" }], connections: [] }),
+      );
 
       const result = await fetchEnvironmentProvidersViaHttp(
         BASE,
@@ -1314,7 +1318,10 @@ describe("a redirect answered to a sandbox secrets request", () => {
         ENV_ID,
       );
 
-      expect(result).toMatchObject({ kind: "network-error" });
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the broker answered HTTP ${status}`,
+      });
       expect(fetchMock).toHaveBeenCalledTimes(2);
       for (const [, init] of fetchMock.mock.calls) {
         expect(init?.redirect).toBe("manual");

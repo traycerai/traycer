@@ -529,7 +529,11 @@ describe("a redirect answered to a devices and sessions request", () => {
     async ({ answer }) => {
       const fetchMock = vi.fn(
         async (_url: string, _init: RequestInit | undefined) =>
-          answer({ access_token: "step-up" }),
+          answer({
+            access_token: "step-up-word",
+            token_type: "Bearer",
+            expires_in: 300,
+          }),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -554,7 +558,8 @@ describe("a redirect answered to a devices and sessions request", () => {
     "reads $name on a single-session revoke as a network error, with the bearer sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn(
-        async (_url: string, _init: RequestInit | undefined) => answer({}),
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer({ familyId: "family-1", revoked: true }),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -578,7 +583,13 @@ describe("a redirect answered to a devices and sessions request", () => {
     "reads $name on a revoke of every session as a network error, with the bearer sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn(
-        async (_url: string, _init: RequestInit | undefined) => answer({}),
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer({
+            ok: true,
+            tokenVersion: 2,
+            hostsSignaled: 0,
+            residual: { githubProviderTokenHours: 0 },
+          }),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -631,7 +642,8 @@ describe("a redirect answered to a devices and sessions request", () => {
     "reads $name on a step-up challenge request as a network error, with the bearer sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn(
-        async (_url: string, _init: RequestInit | undefined) => answer({}),
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer({ ok: true, expires_in: 300 }),
       );
       vi.stubGlobal("fetch", fetchMock);
 

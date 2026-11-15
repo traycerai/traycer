@@ -538,7 +538,11 @@ describe("a redirect answered to a link-login request", () => {
     "reads $name on the mint as a network error, with the bearer sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
-        answer({ code: CODE, expiresInSeconds: 60 }),
+        answer({
+          code: CODE,
+          expires_in: 60,
+          expires_at: 1_791_000_060_000,
+        }),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -580,7 +584,11 @@ describe("a redirect answered to a link-login request", () => {
     "reads $name on the token poll as a network error, with the secret sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
-        answer({ token: "token-word", refreshToken: "refresh-word" }),
+        answer({
+          token: "token-word",
+          refreshToken: "refresh-word",
+          familyId: "family-word",
+        }),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -601,7 +609,7 @@ describe("a redirect answered to a link-login request", () => {
     "reads $name on the status poll as a network error, with the bearer and code sent once and never followed",
     async ({ answer }) => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
-        answer({ status: "claimed" }),
+        answer({ status: "claimed", claimant: null }),
       );
       vi.stubGlobal("fetch", fetchMock);
 

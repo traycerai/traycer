@@ -422,7 +422,7 @@ describe("a redirect answered to a Slack app request", () => {
     async (status) => {
       const fetchMock = stubFetch(
         async () =>
-          new Response(null, {
+          new Response(JSON.stringify({ app: APP }), {
             status,
             headers: { location: "https://elsewhere.test/collect" },
           }),
