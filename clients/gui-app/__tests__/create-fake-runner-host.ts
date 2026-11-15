@@ -28,11 +28,25 @@ import {
  * the fixture directory and send authn requests through the supplied fake
  * transport.
  */
-export function createFakeEnvironmentCloudAuth(options: {
+export interface FakeEnvironmentCloudAuthOptions {
   readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
   readonly transport: EnvironmentTransport;
-}): AuthService {
+}
+
+export interface FakeEnvironmentCloudServicesOptions extends FakeEnvironmentCloudAuthOptions {
+  readonly runnerHostOverrides: Partial<IRunnerHost>;
+}
+
+export interface FakeEnvironmentCloudServices {
+  readonly auth: AuthService;
+  readonly runnerHost: IRunnerHost;
+}
+
+export function createFakeEnvironmentCloudServices(
+  options: FakeEnvironmentCloudServicesOptions,
+): FakeEnvironmentCloudServices {
   const runnerHost = createFakeRunnerHost({
+    ...options.runnerHostOverrides,
     listEnvironments: () => options.listEnvironments(),
     environmentTransport: options.transport,
   });
@@ -42,12 +56,21 @@ export function createFakeEnvironmentCloudAuth(options: {
     authnBaseUrl: runnerHost.authnBaseUrl,
     bearer: {
       kind: "cloud",
-      getBearerToken: () => Promise.resolve("test-bearer"),
+      getBearerToken: () => "test-bearer",
     },
     transport: runnerHost.environmentTransport,
     onOriginSignIn: () => true,
   });
-  return auth;
+  return { auth, runnerHost };
+}
+
+export function createFakeEnvironmentCloudAuth(
+  options: FakeEnvironmentCloudAuthOptions,
+): AuthService {
+  return createFakeEnvironmentCloudServices({
+    ...options,
+    runnerHostOverrides: {},
+  }).auth;
 }
 
 /** Shared authn transport fake for the list join and settings reads. */
@@ -65,61 +88,65 @@ export function createFakeEnvironmentCloudTransport(options: {
     if (customAnswer !== null && customAnswer !== undefined) {
       return customAnswer;
     }
+    return (
+      answerEnvironmentHostRead(request, options.environments()) ??
+      answerEnvironmentGetRead(request) ?? { status: 404, text: "{}" }
+    );
+  };
+}
 
-    const url = new URL(request.url);
-    const pathname = url.pathname;
-    const route =
-      /\/api\/v3\/environments\/([^/]+)\/(hosts|members|review)$/u.exec(
-        pathname,
-      );
-    if (route !== null) {
-      const environmentId = decodeURIComponent(route[1] ?? "");
-      const row = options
-        .environments()
-        .find((environment) => environment.environmentId === environmentId);
-      switch (route[2]) {
-        case "hosts":
-          if (url.searchParams.has("include")) {
-            return jsonEnvironmentAnswer({ hosts: [] });
-          }
-          return jsonEnvironmentAnswer({
-            hosts: Array.from({ length: row?.hostCount ?? 0 }, () => ({
+function answerEnvironmentHostRead(
+  request: EnvironmentTransportRequest,
+  environments: readonly EnvironmentDescriptorV11[],
+): EnvironmentTransportAnswer | null {
+  const url = new URL(request.url);
+  const route =
+    /\/api\/v3\/environments\/([^/]+)\/(hosts|members|review)$/u.exec(
+      url.pathname,
+    );
+  if (route === null) return null;
+
+  const environmentId = decodeURIComponent(route[1]);
+  const row = environments.find(
+    (environment) => environment.environmentId === environmentId,
+  );
+  switch (route[2]) {
+    case "hosts":
+      return jsonEnvironmentAnswer({
+        hosts: url.searchParams.has("include")
+          ? []
+          : Array.from({ length: row?.hostCount ?? 0 }, () => ({
               purgePending: false,
             })),
-          });
-        case "members":
-          if (row === undefined || row.providerHandle === null) {
-            return { status: 404, text: "{}" };
-          }
-          return jsonEnvironmentAnswer({
-            viewer: {
-              effectiveRole: row.effectiveRole,
-            },
-          });
-        case "review":
-          return jsonEnvironmentAnswer({ review: null });
+      });
+    case "members":
+      if (row === undefined || row.providerHandle === null) {
+        return { status: 404, text: "{}" };
       }
-    }
+      return jsonEnvironmentAnswer({
+        viewer: { effectiveRole: row.effectiveRole },
+      });
+    case "review":
+      return jsonEnvironmentAnswer({ review: null });
+    default:
+      return null;
+  }
+}
 
-    if (request.method === "GET") {
-      if (pathname.endsWith("/items")) {
-        return jsonEnvironmentAnswer({ items: [] });
-      }
-      if (pathname.endsWith("/revision")) {
-        return jsonEnvironmentAnswer({ revision: 0 });
-      }
-      if (pathname.endsWith("/mcp-servers")) {
-        return jsonEnvironmentAnswer({ servers: [] });
-      }
-      if (pathname.endsWith("/secrets/harness-connections")) {
-        return jsonEnvironmentAnswer({ connections: [] });
-      }
-      if (pathname.endsWith("/secrets")) {
-        return jsonEnvironmentAnswer({ secrets: [], removed: [] });
-      }
-    }
-    return { status: 404, text: "{}" };
-  };
+function answerEnvironmentGetRead(
+  request: EnvironmentTransportRequest,
+): EnvironmentTransportAnswer | null {
+  if (request.method !== "GET") return null;
+  const pathname = new URL(request.url).pathname;
+  const responses = [
+    ["/items", { items: [] }],
+    ["/revision", { revision: 0 }],
+    ["/mcp-servers", { servers: [] }],
+    ["/secrets/harness-connections", { connections: [] }],
+    ["/secrets", { secrets: [], removed: [] }],
+  ] as const;
+  const match = responses.find(([suffix]) => pathname.endsWith(suffix));
+  return match === undefined ? null : jsonEnvironmentAnswer(match[1]);
 }
 
 export function jsonEnvironmentAnswer(
