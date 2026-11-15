@@ -5,6 +5,7 @@ import {
 } from "node:crypto";
 import { z } from "zod";
 import type { DesktopAuthSessionRefusalReason } from "../../ipc-contracts/window-types";
+import { log } from "../app/logger";
 
 /**
  * Local verification of the renderer-supplied user bearer, before main is
@@ -90,6 +91,16 @@ const claimsSchema = z.object({
   exp: z.number(),
 });
 
+type JwksRefreshFailure =
+  | { readonly kind: "http-status"; readonly status: number }
+  | { readonly kind: "invalid-body" | "no-usable-key" };
+
+class JwksRefreshError extends Error {
+  constructor(readonly failure: JwksRefreshFailure) {
+    super("JWKS refresh failed");
+  }
+}
+
 export function createDesktopBearerVerifier(
   config: DesktopBearerVerifierConfig,
 ): DesktopBearerVerifier {
@@ -106,11 +117,23 @@ export function createDesktopBearerVerifier(
       signal: AbortSignal.timeout(JWKS_TIMEOUT_MS),
     });
     if (!response.ok) {
-      throw new Error(`JWKS fetch returned status ${response.status}`);
+      throw new JwksRefreshError({
+        kind: "http-status",
+        status: response.status,
+      });
     }
-    const body = jwksBodySchema.parse(await response.json());
+    const rawBody: unknown = await response.json().catch((error: unknown) => {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw error;
+      }
+      throw new JwksRefreshError({ kind: "invalid-body" });
+    });
+    const body = jwksBodySchema.safeParse(rawBody);
+    if (!body.success) {
+      throw new JwksRefreshError({ kind: "invalid-body" });
+    }
     const parsed = new Map<string, KeyObject>();
-    for (const raw of body.keys) {
+    for (const raw of body.data.keys) {
       const key = jwkSchema.safeParse(raw);
       if (!key.success || key.data.traycer_class !== BEARER_SIGNING_CLASS) {
         continue;
@@ -138,7 +161,7 @@ export function createDesktopBearerVerifier(
       // Every published key was of another class, so this response verifies
       // nothing. A failed fetch, not an answer: it must not overwrite a good
       // prior set nor become a verdict against every token.
-      throw new Error("JWKS carried no bearer-class signing keys");
+      throw new JwksRefreshError({ kind: "no-usable-key" });
     }
     return parsed;
   }
@@ -163,10 +186,21 @@ export function createDesktopBearerVerifier(
       keys = await fetchBearerKeys();
       fetchedAtMs = nowMs;
       lastAttemptFailed = false;
-    } catch {
+    } catch (error) {
       // Keep serving the stale set: it is public key material, and a network
       // blip must not turn every token into a forgery.
       lastAttemptFailed = true;
+      log.warn(
+        "[bearer-verifier] JWKS refresh failed",
+        error instanceof JwksRefreshError
+          ? error.failure
+          : {
+              kind:
+                error instanceof Error && error.name === "TimeoutError"
+                  ? "timeout"
+                  : "network",
+            },
+      );
     }
   }
 

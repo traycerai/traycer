@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { log } from "../../app/logger";
 import {
   createDesktopBearerVerifier,
+  type FetchLike,
   type DesktopBearerVerifier,
 } from "../bearer-verifier";
 import {
@@ -9,6 +11,10 @@ import {
   jwksResponse,
   userBearerClaims,
 } from "./jws-fixture";
+
+vi.mock("../../app/logger", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const USER_ID = "user-victim";
@@ -233,4 +239,87 @@ describe("desktop bearer verifier", () => {
     // Public key material does not stop being valid because the network did.
     expect(await harness.verifier.verify(token, USER_ID)).toBeNull();
   });
+});
+
+type ExpectedRefreshFailure =
+  | { readonly kind: "timeout" }
+  | { readonly kind: "http-status"; readonly status: number }
+  | { readonly kind: "invalid-body" }
+  | { readonly kind: "no-usable-key" };
+
+interface RefreshFailureCase {
+  readonly name: string;
+  readonly fetchImpl: FetchLike;
+  readonly warning: ExpectedRefreshFailure;
+}
+
+describe("JWKS refresh failure logging", () => {
+  const nowMs = Date.UTC(2026, 8, 2, 12, 0, 0);
+  const timeoutMs = 60_000;
+  const signingKey = createSigningKey("log-test-kid", "bearer");
+  const token = signingKey.sign(userBearerClaims(USER_ID, nowMs + timeoutMs));
+  const unusedKey = createSigningKey("unused-kid", "attach-grant");
+  const keyMaterial = JSON.stringify(unusedKey.publicJwk);
+  const urlWithQuery = `${AUTHN_BASE_URL}/api/jwks?account=${USER_ID}`;
+  const sensitiveFailure = `${token} ${keyMaterial} ${USER_ID} ${urlWithQuery}`;
+  const failures: readonly RefreshFailureCase[] = [
+    {
+      name: "timeout",
+      fetchImpl: () => {
+        const timeoutError = new Error(sensitiveFailure);
+        timeoutError.name = "TimeoutError";
+        return Promise.reject(timeoutError);
+      },
+      warning: { kind: "timeout" },
+    },
+    {
+      name: "non-2xx response",
+      fetchImpl: () =>
+        Promise.resolve(new Response(sensitiveFailure, { status: 503 })),
+      warning: { kind: "http-status", status: 503 },
+    },
+    {
+      name: "unparseable body",
+      fetchImpl: () => Promise.resolve(new Response(sensitiveFailure)),
+      warning: { kind: "invalid-body" },
+    },
+    {
+      name: "answer with no usable bearer key",
+      fetchImpl: () =>
+        Promise.resolve(
+          jwksResponse([{ ...unusedKey.publicJwk, marker: sensitiveFailure }]),
+        ),
+      warning: { kind: "no-usable-key" },
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(log.warn).mockClear();
+  });
+
+  it.each(failures)(
+    "logs $name once without changing the refusal",
+    async ({ fetchImpl, warning }) => {
+      const verifier = createDesktopBearerVerifier({
+        authnBaseUrl: `${AUTHN_BASE_URL}?account=${USER_ID}`,
+        fetchImpl,
+        now: () => nowMs,
+      });
+
+      expect(await verifier.verify(token, USER_ID)).toBe(
+        "key-source-unavailable",
+      );
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        "[bearer-verifier] JWKS refresh failed",
+        warning,
+      );
+
+      const logged = JSON.stringify(vi.mocked(log.warn).mock.calls);
+      expect(logged).not.toContain(token);
+      expect(logged).not.toContain(keyMaterial);
+      expect(logged).not.toContain(USER_ID);
+      expect(logged).not.toContain(urlWithQuery);
+    },
+  );
 });
