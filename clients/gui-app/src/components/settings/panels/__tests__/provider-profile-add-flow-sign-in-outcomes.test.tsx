@@ -5,27 +5,45 @@
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
+const openLinkMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
 
 // The flow host reads `useHostClient` through the barrel, and Vite rewrites
 // that re-export onto `@/lib/host/runtime`. Both have to answer the pinned
 // client or the session throws before the dialog mounts.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
   return {
     ...actual,
-    useOpenLink: () => () => Promise.resolve(),
+    useOpenLink: () => openLinkMock,
   };
 });
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -62,6 +80,19 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 const HOST_ID = "host-add-flow";
 const PROFILE_ID = "work";
@@ -78,10 +109,14 @@ const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
   { native: null },
 );
 
-type Offers = true | false | "absent";
+type Offers = true | false | "absent" | "10.11";
 type ListResponse = ResponseOfMethod<HostRpcRegistry, "providers.list">;
 type StartResponse = ResponseOfMethod<HostRpcRegistry, "providers.startLogin">;
 type AwaitResponse = ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">;
+type SubmitLoginCodeResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.submitLoginCode"
+>;
 type SetEnabledResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.setEnabled"
@@ -100,43 +135,71 @@ interface AddFlowHarness {
   readonly listsAfterAwait: () => number;
   readonly listCalls: () => number;
   readonly releaseListRefresh: () => void;
+  readonly releaseStart: () => void;
   readonly releaseRecolor: () => void;
+  readonly signInFetch: SignInRequestFetchHarness;
 }
 
+let settleHeldStart: () => void = () => undefined;
 let settleHeldRecolor: () => void = () => undefined;
+let settleHeldAwait: () => void = () => undefined;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
 
 const ADD_FLOW_DEFAULTS = {
   echoedProfiles: undefined,
+  echoedExistingProfileId: undefined,
+  renameFailures: 0,
+  submitOutcome: "accepted",
   listFailuresAfterAwait: 0,
-  ownership: false,
   seedCache: false,
   cacheSeed: undefined,
   holdListRefresh: false,
   unknownProfileOutcome: false,
+  codePaste: false,
+  holdStart: false,
+  holdAwait: false,
   failRecolor: false,
   freshlyLinkedProfile: false,
+  ownership: false,
+  awaitAnswers: [],
 } satisfies {
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
+  readonly echoedExistingProfileId: string | null | undefined;
+  readonly renameFailures: number;
+  readonly submitOutcome: SubmitLoginCodeResponse["outcome"];
   readonly listFailuresAfterAwait: number;
-  readonly ownership: boolean;
   readonly seedCache: boolean;
   readonly cacheSeed:
     | (ListResponse & { readonly futureKey: string })
     | undefined;
   readonly holdListRefresh: boolean;
   readonly unknownProfileOutcome: boolean;
+  readonly codePaste: boolean;
+  readonly holdStart: boolean;
+  readonly holdAwait: boolean;
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
+  readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 };
 
 afterEach(() => {
+  settleHeldStart();
+  settleHeldStart = () => undefined;
   settleHeldRecolor();
   settleHeldRecolor = () => undefined;
+  settleHeldAwait();
+  settleHeldAwait = () => undefined;
   cleanup();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   useProviderProfileAddFlowStore.getState().close();
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
   clientMock.current = null;
   resetNegotiatedManifests();
+  openLinkMock.mockClear();
 });
 
 function workProfile(): ProviderProfile {
@@ -190,12 +253,27 @@ function projectedWorkProfile(): ProviderProfile {
 function listBody(
   offers: Offers,
   profiles: readonly ProviderProfile[],
+  codePaste: boolean,
 ): ListResponse {
   const body: ListResponse = {
-    providers: [provider("claude-code", [...profiles])],
+    providers: [
+      {
+        ...provider("claude-code", [...profiles]),
+        loginCapability: codePaste
+          ? {
+              oauthArgs: ["auth", "login"],
+              token: null,
+              codePaste: {},
+              terminalLogin: null,
+              remoteSafe: null,
+              selfOpensBrowser: null,
+            }
+          : null,
+      },
+    ],
     native: null,
   };
-  if (offers === "absent") return body;
+  if (offers === "absent" || offers === "10.11") return body;
   return { ...body, offersSignIns: offers };
 }
 
@@ -223,6 +301,13 @@ function nothingChanged(
     refusal: null,
     installation: null,
     profileOutcome: outcome,
+  };
+}
+
+function asksToRecordSignIn(): AwaitResponse {
+  return {
+    ...nothingChanged(null),
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
   };
 }
 
@@ -255,9 +340,9 @@ function setEnabledEcho(): SetEnabledResponse {
 function echoedAwait(
   outcome: ProviderLoginProfileOutcome | null,
   echoed: readonly ProviderProfile[],
+  existingProfileId: string | null,
 ): AwaitResponse {
   const base = setEnabledEcho().state;
-  const first = echoed.at(0);
   return {
     state: {
       ...base,
@@ -269,7 +354,7 @@ function echoedAwait(
       },
       profiles: [...echoed],
     },
-    existingProfileId: first === undefined ? null : first.profileId,
+    existingProfileId,
     codeRejected: false,
     refusal: null,
     installation: null,
@@ -284,10 +369,12 @@ function renderAddFlow(input: {
   readonly outcome: ProviderLoginProfileOutcome | null;
   /** When set, the await answer carries these rows. Omitted keeps state null. */
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
+  /** Overrides the old answer's existing-profile verdict when rows are echoed. */
+  readonly echoedExistingProfileId: string | null | undefined;
+  /** Number of rename requests that fail before one succeeds. */
+  readonly renameFailures: number;
   /** How many providers.list calls after the await reject before one succeeds. */
   readonly listFailuresAfterAwait: number;
-  /** Record the login-ownership manifest before the dialog mounts. */
-  readonly ownership: boolean;
   /** Seed a fresh providers.list entry so opening the dialog only reads it. */
   readonly seedCache: boolean;
   readonly cacheSeed:
@@ -296,17 +383,27 @@ function renderAddFlow(input: {
   /** Leave the first post-await list request pending until the test releases it. */
   readonly holdListRefresh: boolean;
   readonly unknownProfileOutcome: boolean;
+  readonly codePaste: boolean;
+  readonly holdStart: boolean;
+  readonly holdAwait: boolean;
+  readonly submitOutcome: SubmitLoginCodeResponse["outcome"];
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
+  /** Record the login-ownership manifest before the dialog mounts. */
+  readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 }): AddFlowHarness {
   const calls: RecordedCall[] = [];
   const created = vi.fn<(profileId: string) => void>();
   let awaitStarted = false;
+  let awaitAnswerIndex = 0;
   let listsAfterAwait = 0;
   let listCalls = 0;
   let release: ((value: SetEnabledResponse) => void) | null = null;
   let releaseList: (() => void) | null = null;
+  let releaseStart: (() => void) | null = null;
   let profilesAfter = input.profilesAfter;
+  let renameFailures = input.renameFailures;
   let released = false;
   const failuresAfterAwait = input.listFailuresAfterAwait;
   const { client, messenger } = buildEnvironmentClient({
@@ -322,26 +419,53 @@ function renderAddFlow(input: {
           if (input.holdListRefresh && listsAfterAwait === 1) {
             return new Promise<ListResponse>((resolve) => {
               releaseList = () =>
-                resolve(listBody(input.offers, input.profilesAfter));
+                resolve(
+                  listBody(input.offers, input.profilesAfter, input.codePaste),
+                );
             });
           }
         }
         return listBody(
           input.offers,
           awaitStarted ? profilesAfter : input.profilesBefore,
+          input.codePaste,
         );
       },
       "providers.startLogin": (params) => {
         calls.push({ method: "providers.startLogin", params });
+        if (input.holdStart) {
+          return new Promise<StartResponse>((resolve) => {
+            releaseStart = () => resolve(startedBody());
+            settleHeldStart = () => releaseStart?.();
+          });
+        }
         return startedBody();
       },
-      "providers.awaitLogin": () => {
-        calls.push({ method: "providers.awaitLogin", params: null });
+      "providers.awaitLogin": (params) => {
+        calls.push({ method: "providers.awaitLogin", params });
         awaitStarted = true;
+        if (input.holdAwait) {
+          return new Promise<AwaitResponse>((resolve) => {
+            const release = () => resolve(nothingChanged(input.outcome));
+            settleHeldAwait = release;
+          });
+        }
+        if (awaitAnswerIndex < input.awaitAnswers.length) {
+          const scriptedAnswer = input.awaitAnswers[awaitAnswerIndex];
+          awaitAnswerIndex += 1;
+          return scriptedAnswer;
+        }
+        awaitAnswerIndex += 1;
         const echoedAnswer =
           input.echoedProfiles === undefined
             ? nothingChanged(input.outcome)
-            : echoedAwait(input.outcome, input.echoedProfiles);
+            : echoedAwait(
+                input.outcome,
+                input.echoedProfiles,
+                input.echoedExistingProfileId === undefined
+                  ? (input.echoedProfiles.at(0)?.profileId ?? null)
+                  : input.echoedExistingProfileId,
+              );
         const answer = input.freshlyLinkedProfile
           ? { ...echoedAnswer, existingProfileId: null }
           : echoedAnswer;
@@ -358,6 +482,10 @@ function renderAddFlow(input: {
         calls.push({ method: "providers.setEnabled", params });
         const profileAction = params.profileAction;
         if (profileAction?.type === "rename") {
+          if (renameFailures > 0) {
+            renameFailures -= 1;
+            throw new Error("rename unavailable");
+          }
           profilesAfter = profilesAfter.map((profile) =>
             profile.profileId === profileAction.profileId
               ? { ...profile, label: profileAction.label }
@@ -376,9 +504,29 @@ function renderAddFlow(input: {
         calls.push({ method: "providers.cancelLogin", params });
         return { cancelled: true };
       },
+      "providers.submitLoginCode": (params) => {
+        calls.push({ method: "providers.submitLoginCode", params });
+        return { outcome: input.submitOutcome };
+      },
+      "providers.touchLogin": (params) => {
+        calls.push({ method: "providers.touchLogin", params });
+        return { extended: true };
+      },
     },
   });
   clientMock.current = client;
+  const signInFetch = installSignInRequestFetchHarness();
+  activeSignInFetch = signInFetch;
+  authServiceForTest = signInRequestAuthService(signInFetch.client);
+  const oldComputer = input.offers === "10.11" || input.offers === "absent";
+  recordNegotiatedHostManifest(HOST_ID, {
+    "providers.list": { major: 10, minor: oldComputer ? 11 : 12 },
+    "providers.startLogin": { major: 1, minor: oldComputer ? 4 : 5 },
+    "providers.awaitLogin": { major: 2, minor: oldComputer ? 2 : 5 },
+    "providers.cancelLogin": { major: 1, minor: 2 },
+    "providers.submitLoginCode": { major: 1, minor: 0 },
+    "providers.touchLogin": { major: 1, minor: 0 },
+  });
   if (input.ownership) {
     recordNegotiatedHostManifest(HOST_ID, {
       "providers.startLogin": { major: 1, minor: 4 },
@@ -399,7 +547,8 @@ function renderAddFlow(input: {
   if (input.seedCache) {
     queryClient.setQueryData(
       LIST_KEY,
-      input.cacheSeed ?? listBody(input.offers, input.profilesBefore),
+      input.cacheSeed ??
+        listBody(input.offers, input.profilesBefore, input.codePaste),
     );
   }
   useProviderProfileAddFlowStore
@@ -425,6 +574,12 @@ function renderAddFlow(input: {
       }
       releaseList();
     },
+    releaseStart: () => {
+      if (releaseStart === null) {
+        throw new Error("providers.startLogin was not held");
+      }
+      releaseStart();
+    },
     releaseRecolor: () => {
       if (release === null) {
         throw new Error("providers.setEnabled was not called");
@@ -433,6 +588,7 @@ function renderAddFlow(input: {
       released = true;
       release(setEnabledEcho());
     },
+    signInFetch,
   };
 }
 
@@ -504,7 +660,6 @@ function expectNoSuccessSentence(): void {
   expect(screen.queryByText(SIGNED_IN)).toBeNull();
   expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
   expect(screen.queryByText(WAITING)).toBeNull();
-  expect(screen.queryByText("Account already linked")).toBeNull();
   expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
 }
 
@@ -624,7 +779,6 @@ describe("Add a profile around one sign-in", () => {
     expect(
       screen.queryByRole("heading", { name: "Add new Claude Code profile" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
   });
 
   it("keeps today's title and Link account when offersSignIns is false", async () => {
@@ -646,10 +800,10 @@ describe("Add a profile around one sign-in", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
-  it("keeps today's title and Link account when offersSignIns is absent", async () => {
-    renderAddFlow({
+  it("keeps today's Add dialog on a computer negotiating providers.list 10.11", async () => {
+    const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
-      offers: "absent",
+      offers: "10.11",
       profilesBefore: [],
       profilesAfter: [],
       outcome: null,
@@ -659,10 +813,183 @@ describe("Add a profile around one sign-in", () => {
         name: "Add new Claude Code profile",
       }),
     ).toBeTruthy();
-    const link = screen.getByRole("button", { name: "Link account" });
-    expect(link.textContent).toContain("Link account");
+    expect(screen.getByRole("button", { name: "Link account" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    await waitFor(() => {
+      expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
+    });
+    const start = harness.calls.find(
+      (call) => call.method === "providers.startLogin",
+    );
+    expect(start?.params).toMatchObject({
+      profileId: null,
+      createProfile: { label: "New profile" },
+    });
+    expect(start?.params).toHaveProperty("target", null);
   });
+
+  it.each([true, "10.11"] as const)(
+    "does not submit a pasted code again when Enter follows with offersSignIns %s",
+    async (offers) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        codePaste: true,
+        holdStart: true,
+        holdAwait: true,
+      });
+      await pressAccount(offers);
+      expect(screen.queryByLabelText("Paste the code")).toBeNull();
+      await waitFor(() => {
+        expect(
+          methodCount(harness.messenger.calls, "providers.startLogin"),
+        ).toBe(1);
+      });
+      await act(async () => {
+        harness.releaseStart();
+        await Promise.resolve();
+      });
+      const input = await screen.findByLabelText("Paste the code");
+      fireEvent.paste(input, {
+        clipboardData: { getData: () => "abcd#1234" },
+      });
+      await waitFor(() => {
+        expect(
+          methodCount(harness.messenger.calls, "providers.submitLoginCode"),
+        ).toBe(1);
+      });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(
+        methodCount(harness.messenger.calls, "providers.submitLoginCode"),
+      ).toBe(1);
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+        1,
+      );
+    },
+  );
+
+  it.each([true, "10.11"] as const)(
+    "copies the active sign-in link from the real Add dialog with offersSignIns %s",
+    async (offers) => {
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+        navigator,
+        "clipboard",
+      );
+      const writeText = vi.fn((_value: string) => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        const harness = renderAddFlow({
+          ...ADD_FLOW_DEFAULTS,
+          offers,
+          profilesBefore: [],
+          profilesAfter: [],
+          outcome: null,
+          holdAwait: true,
+        });
+        await pressAccount(offers);
+        const copyButton = await screen.findByRole("button", {
+          name: /Copy sign-in link/,
+        });
+        await act(async () => {
+          fireEvent.click(copyButton);
+          await Promise.resolve();
+        });
+        expect(writeText).toHaveBeenCalledWith("https://example.test/sign-in");
+        expect(
+          methodCount(harness.messenger.calls, "providers.startLogin"),
+        ).toBe(1);
+      } finally {
+        if (clipboardDescriptor === undefined) {
+          Reflect.deleteProperty(navigator, "clipboard");
+        } else {
+          Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+        }
+      }
+    },
+  );
+
+  it.each([true, "10.11"] as const)(
+    "opens the active sign-in link from the real Add dialog with offersSignIns %s",
+    async (offers) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        codePaste: true,
+        holdAwait: true,
+      });
+      await pressAccount(offers);
+      const openButton = await screen.findByRole("button", {
+        name: /Open browser/,
+      });
+      expect(screen.getByText("Didn't return automatically?")).toBeTruthy();
+      expect(openLinkMock).toHaveBeenCalledWith(
+        "https://example.test/sign-in",
+        "auth",
+        null,
+      );
+      const callsBeforeClick = openLinkMock.mock.calls.length;
+      fireEvent.click(openButton);
+      expect(openLinkMock).toHaveBeenCalledTimes(callsBeforeClick + 1);
+      expect(openLinkMock).toHaveBeenLastCalledWith(
+        "https://example.test/sign-in",
+        "auth",
+        null,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
+    },
+  );
+
+  it.each([true, "10.11"] as const)(
+    "cancels an in-progress sign-in through providers.cancelLogin with offersSignIns %s",
+    async (offers) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        codePaste: true,
+        submitOutcome: "noActiveLogin",
+        holdAwait: true,
+      });
+      await pressAccount(offers);
+      const input = await screen.findByLabelText("Paste the code");
+      fireEvent.paste(input, {
+        clipboardData: { getData: () => "abcd#1234" },
+      });
+      await waitFor(() => {
+        expect(
+          methodCount(harness.messenger.calls, "providers.submitLoginCode"),
+        ).toBe(1);
+      });
+      expect(
+        await screen.findByRole("button", { name: "Cancel sign-in" }),
+      ).toHaveProperty("disabled", false);
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      await waitFor(() => {
+        expect(
+          methodCount(harness.messenger.calls, "providers.cancelLogin"),
+        ).toBe(1);
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
 
   it("names the signed-in profile that the list already has, then chooses it", async () => {
     const row = workProfile();
@@ -724,6 +1051,68 @@ describe("Add a profile around one sign-in", () => {
     );
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
   });
+
+  it.each([true, "10.11"] as const)(
+    "names a same-email distinct profile through the real dialog with offersSignIns %s",
+    async (offers) => {
+      const { existing, created } = sameEmailRenameProfiles();
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [existing],
+        profilesAfter: [existing, created],
+        outcome:
+          offers === true
+            ? { kind: "signed-in", profileId: MINTED_PROFILE_ID }
+            : null,
+        echoedProfiles: [existing, created],
+        echoedExistingProfileId: null,
+        seedCache: offers === true,
+      });
+      await pressAccount(offers);
+      expect(
+        await screen.findByText(
+          "Terminal account already uses this email. Name this profile so you can tell them apart.",
+        ),
+      ).toBeTruthy();
+      if (offers === true) {
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+        expect(
+          methodCount(harness.messenger.calls, "providers.setEnabled"),
+        ).toBe(0);
+      }
+      fireEvent.change(screen.getByLabelText("Profile name"), {
+        target: { value: "Personal" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+      await waitFor(() => {
+        expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(
+          methodCount(harness.messenger.calls, "providers.setEnabled"),
+        ).toBe(1);
+        if (offers === true) {
+          expect(methodCount(harness.messenger.calls, "providers.list")).toBe(
+            2,
+          );
+        }
+      });
+      expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+        1,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
+      expect(
+        harness.calls
+          .filter((call) => call.method === "providers.setEnabled")
+          .map((call) => renamedLabel(call.params)),
+      ).toEqual(["Personal"]);
+      expect(
+        methodCount(harness.messenger.calls, "providers.cancelLogin"),
+      ).toBe(0);
+    },
+  );
 
   it("says signed in when the profile color save fails after sign-in", async () => {
     const harness = renderAddFlow({
@@ -838,121 +1227,175 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.created).not.toHaveBeenCalled();
   });
 
-  it("renames a same-email distinct profile with exactly two providers.list reads", async () => {
-    const { existing, created } = sameEmailRenameProfiles();
-    const harness = renderAddFlow({
-      ...ADD_FLOW_DEFAULTS,
-      offers: true,
-      profilesBefore: [existing],
-      profilesAfter: [existing, created],
-      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
-      echoedProfiles: [existing, created],
-      seedCache: true,
-    });
-    await pressAccount(true);
-    expect(
-      await screen.findByText(
-        "Terminal account already uses this email. Name this profile so you can tell them apart.",
-      ),
-    ).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Personal" },
-    });
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
-      0,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
-    await waitFor(() => {
-      expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
-      expect(screen.queryByRole("dialog")).toBeNull();
-      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+  it.each([true, "10.11"] as const)(
+    "finishes a distinct-email sign-in without a naming step when offersSignIns is %s",
+    async (offers) => {
+      const row: ProviderProfile = {
+        ...mintedSignedInRow(),
+        identity: {
+          email: "fresh@example.test",
+          tier: "Team",
+          accountUuid: null,
+        },
+        accentColor: PROVIDER_PROFILE_ACCENT_COLORS[0],
+      };
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [],
+        profilesAfter: [row],
+        outcome:
+          offers === true
+            ? { kind: "signed-in", profileId: MINTED_PROFILE_ID }
+            : null,
+        echoedProfiles: [row],
+        echoedExistingProfileId: null,
+        seedCache: true,
+      });
+      await pressAccount(offers);
+      expect(
+        screen.queryByText(
+          "Terminal account already uses this email. Name this profile so you can tell them apart.",
+        ),
+      ).toBeNull();
+      await waitFor(() => {
+        expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
         1,
       );
-    });
-    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
-      1,
-    );
-    expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
-      1,
-    );
-    expect(
-      harness.calls
-        .filter((call) => call.method === "providers.setEnabled")
-        .map((call) => renamedLabel(call.params)),
-    ).toEqual(["Personal"]);
-    expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(
-      0,
-    );
-  });
+      expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+        1,
+      );
+    },
+  );
 
-  it("renames and recolors a same-email distinct profile with exactly three providers.list reads", async () => {
-    const { existing, created } = sameEmailRenameProfiles();
-    const harness = renderAddFlow({
-      ...ADD_FLOW_DEFAULTS,
-      offers: true,
-      profilesBefore: [existing],
-      profilesAfter: [existing, created],
-      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
-      echoedProfiles: [existing, created],
-      seedCache: true,
-    });
-    await pressAccount(true);
-    expect(
+  it.each([true, "10.11"] as const)(
+    "keeps the naming step open after a failed save and allows retry with offersSignIns %s",
+    async (offers) => {
+      const { existing, created } = sameEmailRenameProfiles();
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [existing],
+        profilesAfter: [existing, created],
+        outcome:
+          offers === true
+            ? { kind: "signed-in", profileId: MINTED_PROFILE_ID }
+            : null,
+        echoedProfiles: [existing, created],
+        echoedExistingProfileId: null,
+        renameFailures: 1,
+      });
+      await pressAccount(offers);
       await screen.findByText(
         "Terminal account already uses this email. Name this profile so you can tell them apart.",
-      ),
-    ).toBeTruthy();
-    expect(harness.listsAfterAwait()).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+      );
+      fireEvent.change(screen.getByLabelText("Profile name"), {
+        target: { value: "Work org" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+      expect(
+        await screen.findByText("Couldn't save the name. Try again."),
+      ).toBeTruthy();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Save profile" })).toBeTruthy();
+      expect(harness.created).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Personal" },
-    });
-    const pickedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
-    expect(pickedColor).not.toBe(existing.accentColor);
-    fireEvent.click(
-      screen.getByRole("button", { name: `Use color ${pickedColor}` }),
-    );
-    expect(harness.listsAfterAwait()).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+      fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+      await waitFor(() => {
+        expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(
+        harness.calls
+          .filter((call) => call.method === "providers.setEnabled")
+          .map((call) => renamedLabel(call.params)),
+      ).toEqual(["Work org", "Work org"]);
+    },
+  );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
-    await waitFor(() => {
-      expect(methodCount(harness.calls, "providers.setEnabled")).toBe(2);
-      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-    });
-    expect(harness.listsAfterAwait()).toBe(2);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-    const setEnabledCalls = harness.calls.filter(
-      (call) => call.method === "providers.setEnabled",
-    );
-    expect(
-      setEnabledCalls.map((call) => setEnabledActionDetails(call.params)),
-    ).toEqual([
-      { label: "Personal", accentColor: null },
-      { label: null, accentColor: pickedColor },
-    ]);
+  it.each([true, "10.11"] as const)(
+    "renames and recolors a same-email distinct profile with offersSignIns %s",
+    async (offers) => {
+      const { existing, created } = sameEmailRenameProfiles();
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [existing],
+        profilesAfter: [existing, created],
+        outcome:
+          offers === true
+            ? { kind: "signed-in", profileId: MINTED_PROFILE_ID }
+            : null,
+        echoedProfiles: [existing, created],
+        echoedExistingProfileId: null,
+        seedCache: true,
+      });
+      await pressAccount(offers);
+      expect(
+        await screen.findByText(
+          "Terminal account already uses this email. Name this profile so you can tell them apart.",
+        ),
+      ).toBeTruthy();
+      if (offers === true) {
+        expect(harness.listsAfterAwait()).toBe(1);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+      }
 
-    harness.releaseRecolor();
-    await waitFor(() => {
-      expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
-      expect(screen.queryByRole("dialog")).toBeNull();
-      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(3);
-    });
-    expect(harness.listsAfterAwait()).toBe(3);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(3);
-    expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
-      1,
-    );
-    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
-      1,
-    );
-    expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(
-      0,
-    );
-  });
+      fireEvent.change(screen.getByLabelText("Profile name"), {
+        target: { value: "Personal" },
+      });
+      const pickedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
+      expect(pickedColor).not.toBe(existing.accentColor);
+      fireEvent.click(
+        screen.getByRole("button", { name: `Use color ${pickedColor}` }),
+      );
+      if (offers === true) {
+        expect(harness.listsAfterAwait()).toBe(1);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+      }
+
+      fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+      await waitFor(() => {
+        expect(methodCount(harness.calls, "providers.setEnabled")).toBe(2);
+      });
+      if (offers === true) {
+        expect(harness.listsAfterAwait()).toBe(2);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+      }
+      const setEnabledCalls = harness.calls.filter(
+        (call) => call.method === "providers.setEnabled",
+      );
+      expect(
+        setEnabledCalls.map((call) => setEnabledActionDetails(call.params)),
+      ).toEqual([
+        { label: "Personal", accentColor: null },
+        { label: null, accentColor: pickedColor },
+      ]);
+
+      harness.releaseRecolor();
+      await waitFor(() => {
+        expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      if (offers === true) {
+        expect(harness.listsAfterAwait()).toBe(3);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(3);
+      }
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+        1,
+      );
+      expect(
+        methodCount(harness.messenger.calls, "providers.cancelLogin"),
+      ).toBe(0);
+    },
+  );
 
   it("waits, with Done, when the signed-in id is still absent after one re-read", async () => {
     const harness = renderAddFlow({
@@ -970,31 +1413,71 @@ describe("Add a profile around one sign-in", () => {
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
   });
 
-  it("offers Use for an account that already has a profile, without recoloring it", async () => {
-    const row = workProfile();
-    const harness = renderAddFlow({
-      ...ADD_FLOW_DEFAULTS,
-      offers: true,
-      profilesBefore: [row],
-      profilesAfter: [row],
-      outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
-    });
-    await pressAccount(true);
-    expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
-    expect(harness.listsAfterAwait()).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-    expect(screen.queryByText("Account already linked")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
-    expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: "Use" }));
-    await waitFor(() => {
-      expect(harness.created).toHaveBeenCalledWith(PROFILE_ID);
-    });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(harness.listsAfterAwait()).toBe(1);
-    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-    expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
-  });
+  it.each([true, "10.11"] as const)(
+    "shows the existing account without recoloring it when offersSignIns is %s",
+    async (offers) => {
+      const row = workProfile();
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [row],
+        profilesAfter: [row],
+        outcome:
+          offers === true
+            ? { kind: "already-signed-in", profileId: PROFILE_ID }
+            : null,
+        echoedProfiles: [row],
+        echoedExistingProfileId: PROFILE_ID,
+      });
+      await pressAccount(offers);
+      if (offers === true) {
+        expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
+        expect(harness.listsAfterAwait()).toBe(1);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+        expect(
+          screen.getByLabelText("Profile name").hasAttribute("disabled"),
+        ).toBe(true);
+        expect(
+          screen.queryByRole("button", { name: "Save profile" }),
+        ).toBeNull();
+        expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+        fireEvent.click(screen.getByRole("button", { name: "Use" }));
+        await waitFor(() => {
+          expect(harness.created).toHaveBeenCalledWith(PROFILE_ID);
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(harness.listsAfterAwait()).toBe(1);
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+        expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+      } else {
+        expect(await screen.findByText("Account already linked")).toBeTruthy();
+        expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
+        expect(harness.created).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+        expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+        fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+        await waitFor(() => {
+          expect(
+            methodCount(harness.messenger.calls, "providers.startLogin"),
+          ).toBe(2);
+        });
+        const retries = harness.calls.filter(
+          (call) => call.method === "providers.startLogin",
+        );
+        expect(retries).toHaveLength(2);
+        const retry = retries[1];
+        expect(retry.params).toMatchObject({
+          providerId: "claude-code",
+          profileId: null,
+          target: null,
+        });
+        expect(startCreateProfile(retry.params)).toEqual({
+          label: "New profile",
+          shareSkillsAndPlugins: true,
+        });
+      }
+    },
+  );
 
   it("starts another sign-in at once from an account that already has a profile", async () => {
     const row = workProfile();
@@ -1075,7 +1558,6 @@ describe("Add a profile around one sign-in", () => {
         profilesBefore: [],
         profilesAfter: [],
         outcome,
-        ownership: true,
       });
       await pressAccount(true);
       await expectAddDidNotFinish(harness);
@@ -1093,7 +1575,6 @@ describe("Add a profile around one sign-in", () => {
         profilesAfter: [],
         outcome,
         echoedProfiles: [signedIn],
-        ownership: true,
       });
       await pressAccount(true);
       await expectAddDidNotFinish(harness);
@@ -1113,11 +1594,11 @@ describe("Add a profile around one sign-in", () => {
     const decisionReads = await expectSignedInDecision(harness);
     expect(decisionReads).toBe(1);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
-      listBody(true, []),
+      listBody(true, [], false),
     );
     await chooseSignedIn(harness, decisionReads);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
-      listBody(true, []),
+      listBody(true, [], false),
     );
   });
 
@@ -1136,7 +1617,7 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.listsAfterAwait()).toBe(1);
     expect(harness.created).not.toHaveBeenCalled();
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
-      listBody(true, []),
+      listBody(true, [], false),
     );
   });
 
@@ -1305,7 +1786,7 @@ describe("Add a profile around one sign-in", () => {
     const decisionReads = await expectSignedInDecision(harness);
     expect(decisionReads).toBe(1);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
-      listBody(true, [row]),
+      listBody(true, [row], false),
     );
     await chooseSignedIn(harness, decisionReads);
   });
@@ -1320,7 +1801,7 @@ describe("Add a profile around one sign-in", () => {
       },
     ];
     const cacheSeed = {
-      ...listBody(true, [projected]),
+      ...listBody(true, [projected], false),
       removedProfiles,
       futureKey: "kept",
     };
@@ -1369,7 +1850,7 @@ describe("Add a profile around one sign-in", () => {
       },
     ];
     const cacheSeed = {
-      ...listBody(true, [projected]),
+      ...listBody(true, [projected], false),
       removedProfiles,
       futureKey: "kept",
     };
@@ -1419,7 +1900,7 @@ describe("Add a profile around one sign-in", () => {
     expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
   });
 
-  it("reads today's unfinished sign-in when the outcome is null", async () => {
+  it("keeps today's result for an older computer without a sign-in request", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1431,6 +1912,118 @@ describe("Add a profile around one sign-in", () => {
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expectNoSuccessSentence();
     expect(harness.created).not.toHaveBeenCalled();
+    expect(harness.signInFetch.fetchMock).not.toHaveBeenCalled();
+    const awaitRequests = harness.messenger.calls
+      .filter((call) => call.method === "providers.awaitLogin")
+      .map((call) => call.params);
+    expect(awaitRequests).toHaveLength(1);
+    expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
+  });
+
+  it("records the request and asks again with its id before showing the signed-in profile", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: null,
+      awaitAnswers: [
+        asksToRecordSignIn(),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
+    const awaitRequests = harness.messenger.calls
+      .filter((call) => call.method === "providers.awaitLogin")
+      .map((call) => call.params);
+    expect(awaitRequests).toHaveLength(2);
+    expect(awaitRequests[1]).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "a 403", reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY },
+    { name: "a 404", reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY },
+    { name: "no answer", reply: noAnswerReply() },
+    { name: "a 401", reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+  }>)(
+    "shows the existing did-not-finish result after recording ends on $name",
+    async ({ reply }) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers: true,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        awaitAnswers: [asksToRecordSignIn()],
+      });
+      harness.signInFetch.enqueue(reply);
+      await pressAccount(true);
+
+      expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+      expect(
+        harness.messenger.calls.filter(
+          (call) => call.method === "providers.awaitLogin",
+        ),
+      ).toHaveLength(1);
+      expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+      expect(harness.created).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows the did-not-finish result after a duplicate record answer", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: null,
+      awaitAnswers: [
+        asksToRecordSignIn(),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    harness.signInFetch.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expectNoSuccessSentence();
+    expect(harness.created).not.toHaveBeenCalled();
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "providers.awaitLogin",
+      ),
+    ).toHaveLength(1);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not record twice when the computer asks again for the recorded id", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+      awaitAnswers: [asksToRecordSignIn(), asksToRecordSignIn()],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "providers.awaitLogin",
+      ),
+    ).toHaveLength(2);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, "absent"] as const)(
@@ -1555,7 +2148,6 @@ describe("Add a profile around one sign-in", () => {
       } else {
         expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       }
-      expect(screen.queryByText("Account already linked")).toBeNull();
       expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
         1,
       );

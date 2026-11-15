@@ -34,6 +34,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // on `requestWithResponseTimeout`, which no flow in this suite uses).
 const host = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+  signInRecordingService: {
+    recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+  },
   requestWithOptions:
     vi.fn<
       (
@@ -48,11 +51,23 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
   });
-  return { ...actual, useHostClient: () => client };
+  return {
+    ...actual,
+    useHostClient: () => client,
+    useAuthService: () => host.signInRecordingService,
+  };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useAuthService: () => host.signInRecordingService,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -517,6 +532,7 @@ function renderAntigravityAddDialog(
   });
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -805,6 +821,7 @@ describe.each(MOUNT_MODES)(
       });
       const client = Object.assign({} as HostClient<HostRpcRegistry>, {
         getActiveHostId: () => "host-local",
+        onChange: () => () => undefined,
         request: host.request,
         requestWithSignal: host.request,
         requestWithOptions: host.requestWithOptions,

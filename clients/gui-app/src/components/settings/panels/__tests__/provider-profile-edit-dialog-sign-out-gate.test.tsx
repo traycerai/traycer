@@ -2,6 +2,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProfileRecordClient } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -26,13 +27,30 @@ const fixture = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   hostId: "mock-local",
   supportsSignOut: false,
+  offersSignIns: false,
+  bindingAnswer: "bound" as
+    | "bound"
+    | "own_settings"
+    | "pending"
+    | "failed"
+    | "cached-bound-error"
+    | "empty",
+  bindingRefetch: vi.fn(),
+  auth: {
+    signOutProfileRecord: vi.fn<ProfileRecordClient["signOutProfileRecord"]>(),
+    removeProfileRecord: vi.fn<ProfileRecordClient["removeProfileRecord"]>(),
+  },
   supportChecks: [] as Array<{ hostId: string | null; method: string }>,
   openChanges: [] as boolean[],
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => fixture.client };
+  return {
+    ...actual,
+    useHostClient: () => fixture.client,
+    useAuthService: () => fixture.auth,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -42,6 +60,46 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     fixture.supportChecks.push({ hostId, method });
     return fixture.supportsSignOut;
   },
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    method === "environment.host.read" ? true : fixture.supportsSignOut,
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => ({ major: 1, minor: 0 }),
+}));
+vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
+  useEnvironmentHostReadQuery: () => {
+    if (fixture.bindingAnswer === "own_settings")
+      return { kind: "own_settings" };
+    if (fixture.bindingAnswer === "pending") return { kind: "pending" };
+    if (fixture.bindingAnswer === "failed") {
+      return { kind: "failed", retry: vi.fn() };
+    }
+    if (fixture.bindingAnswer === "cached-bound-error") {
+      return {
+        kind: "binding",
+        query: {
+          data: { environment: { environmentId: "bound-environment" } },
+          isError: true,
+          refetch: fixture.bindingRefetch,
+        },
+      };
+    }
+    return {
+      kind: "binding",
+      query: {
+        data:
+          fixture.bindingAnswer === "bound"
+            ? { environment: { environmentId: "bound-environment" } }
+            : undefined,
+        refetch: fixture.bindingRefetch,
+      },
+    };
+  },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({
+    data: fixture.offersSignIns ? { offersSignIns: true } : undefined,
+  }),
 }));
 vi.mock(
   "@/components/settings/personal/personal-page-context",
@@ -227,6 +285,21 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.supportsSignOut = false;
     fixture.supportChecks = [];
     fixture.openChanges = [];
+    fixture.offersSignIns = false;
+    fixture.bindingAnswer = "bound";
+    fixture.bindingRefetch.mockReset();
+    fixture.auth.signOutProfileRecord.mockReset().mockResolvedValue({
+      kind: "ok",
+      profileId: "profile-work",
+      harnessId: "claude-code",
+      recordRevision: "record-rev-1",
+    });
+    fixture.auth.removeProfileRecord.mockReset().mockResolvedValue({
+      kind: "ok",
+      profileId: "profile-work",
+      harnessId: "claude-code",
+      recordRevision: "record-rev-1",
+    });
   });
 
   afterEach(() => {
@@ -344,6 +417,82 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       providerId: "claude-code",
       profileId: "profile-work",
     });
+  });
+
+  it("offers the record action without local credentials or legacy host support", async () => {
+    fixture.supportsSignOut = false;
+    fixture.offersSignIns = true;
+    const messenger = installSignOutClient();
+    const mirrorProfile = { ...profile(undefined, undefined), aliases: [] };
+    renderDialog(mirrorProfile);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(screen.getByTestId("confirm-action")).toBeTruthy();
+    expect(
+      screen.getByText("Sign out of Work account in this environment?"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Running work finishes first. The account stays in the list and needs a sign-in. This does not reach a computer that already left or has not updated, or a separate Terminal login.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Sign out on every host" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() =>
+      expect(fixture.auth.signOutProfileRecord).toHaveBeenCalledTimes(1),
+    );
+    expect(fixture.auth.signOutProfileRecord).toHaveBeenCalledWith(
+      "bound-environment",
+      "claude-code",
+      "profile-work",
+      null,
+    );
+    expect(messenger.calls).toEqual([]);
+    expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+    await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+  });
+
+  it.each(["own_settings", "pending", "failed", "empty"] as const)(
+    "fails closed with existing copy when the record binding is %s",
+    async (bindingAnswer) => {
+      fixture.offersSignIns = true;
+      fixture.bindingAnswer = bindingAnswer;
+      const messenger = installSignOutClient();
+      renderDialog({ ...profile(undefined, undefined), aliases: [] });
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+      fireEvent.click(screen.getByTestId("confirm-action"));
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain("Couldn't sign out."),
+      );
+      expect(fixture.auth.signOutProfileRecord).not.toHaveBeenCalled();
+      expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
+    },
+  );
+
+  it("fails closed when a cached binding is present but its query failed", async () => {
+    fixture.offersSignIns = true;
+    fixture.bindingAnswer = "cached-bound-error";
+    const messenger = installSignOutClient();
+    renderDialog({ ...profile(undefined, undefined), aliases: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() =>
+      expect(storedToastTitles()).toContain("Couldn't sign out."),
+    );
+    expect(fixture.auth.signOutProfileRecord).not.toHaveBeenCalled();
+    expect(fixture.auth.removeProfileRecord).not.toHaveBeenCalled();
+    expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+    expect(messenger.calls).toEqual([]);
+    expect(fixture.openChanges).toEqual([]);
   });
 
   it("tells the person to refresh when the connection changed, and leaves the retry to them", async () => {
