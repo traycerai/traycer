@@ -62,6 +62,9 @@ function createSubscribingClientHarness(): {
           handler("connecting", null, null, null);
         },
         getNegotiatedSchemaVersion: () => null,
+        hasSentOpenRequest(): boolean {
+          return false;
+        },
         requestReconnect() {},
         close() {
           closed.push(index);
