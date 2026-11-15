@@ -856,7 +856,14 @@ function observeNextAck(
       finish({ kind: "token-refused" }, true);
     });
     session.onStatusChange((status, reason, retryCause) => {
-      if (retryCause && localTeamAdmissionCliError(retryCause) !== null) {
+      // A retryable refusal that carries the door's reason (a claimed host
+      // that has not read its owner yet answers `not_admitted`) is retried
+      // quietly inside the bound, whatever code carries it.
+      if (
+        retryCause &&
+        retryCause.doorReason === undefined &&
+        localTeamAdmissionCliError(retryCause) !== null
+      ) {
         finish(
           {
             kind: "fatal",
