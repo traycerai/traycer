@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -55,6 +56,8 @@ export interface EpicUsageDialogProps {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** The by-chat table's titles for chats outside an open epic's tree (`UsageChatBreakdown`). */
+  readonly chatTitles: ReadonlyMap<string, string> | null;
 }
 
 type UsageSummaryQueryResult = UseQueryResult<
@@ -83,7 +86,7 @@ const COARSE_POINTER_TRIGGER =
  * surface (Settings' `UsageSummaryPanel`).
  */
 export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
-  const { epicId, client, open, onOpenChange } = props;
+  const { epicId, client, open, onOpenChange, chatTitles } = props;
   const [windowDays, setWindowDays] =
     useState<UsageSummaryWindowDays>(DEFAULT_WINDOW_DAYS);
   // Held here rather than in the body: Radix unmounts `DialogContent` - and
@@ -105,6 +108,11 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
     [epicId, windowDays],
   );
   const query = useUsageSummaryForClient(client, request, open, false);
+  const changeWindowDays = (next: UsageSummaryWindowDays): void => {
+    if (showHostUpdateNeededForGesture(client?.getActiveHostId() ?? null))
+      return;
+    setWindowDays(next);
+  };
   const { openSettings } = useSystemTabModalActions();
   // The capture region is found by data attribute under this dialog's own
   // content node at click time, not held as a threaded RefObject - the
@@ -149,7 +157,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
           headerControls={
             <UsageWindowPicker
               windowDays={windowDays}
-              onChange={setWindowDays}
+              onChange={changeWindowDays}
               triggerClassName={COARSE_POINTER_TRIGGER}
             />
           }
@@ -194,11 +202,13 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
           }
         >
           <EpicUsageDialogBody
+            hostId={client?.getActiveHostId() ?? null}
             query={query}
             windowDays={windowDays}
-            onWindowDaysChange={setWindowDays}
+            onWindowDaysChange={changeWindowDays}
             chartGroupBy={chartGroupBy}
             onChartGroupByChange={setChartGroupBy}
+            chatTitles={chatTitles}
           />
         </UsageDialogFrame>
       </DialogContent>
@@ -212,11 +222,13 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
  * constant around it.
  */
 function EpicUsageDialogBody(props: {
+  readonly hostId: string | null;
   readonly query: UsageSummaryQueryResult;
   readonly windowDays: UsageSummaryWindowDays;
   readonly onWindowDaysChange: (windowDays: UsageSummaryWindowDays) => void;
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
+  readonly chatTitles: ReadonlyMap<string, string> | null;
 }): ReactNode {
   const { query } = props;
 
@@ -226,6 +238,7 @@ function EpicUsageDialogBody(props: {
       <UsageDialogErrorState
         error={query.error}
         onRetry={() => {
+          if (showHostUpdateNeededForGesture(props.hostId)) return;
           void query.refetch();
         }}
       />
@@ -250,6 +263,7 @@ function EpicUsageDialogBody(props: {
       data={query.data}
       chartGroupBy={props.chartGroupBy}
       onChartGroupByChange={props.onChartGroupByChange}
+      chatTitles={props.chatTitles}
     />
   );
 }
@@ -308,6 +322,7 @@ function EpicUsageLoadedBody(props: {
   readonly data: UsageSummaryResponse;
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
+  readonly chatTitles: ReadonlyMap<string, string> | null;
 }): ReactNode {
   const { chartGroupBy } = props;
   const { summary, coverage, servedBy } = props.data;
@@ -426,7 +441,10 @@ function EpicUsageLoadedBody(props: {
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">
           By chat / agent
         </h3>
-        <UsageChatBreakdown rows={summary.chatBuckets} />
+        <UsageChatBreakdown
+          rows={summary.chatBuckets}
+          chatTitles={props.chatTitles}
+        />
       </div>
     </div>
   );

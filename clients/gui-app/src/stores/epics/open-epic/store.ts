@@ -48,12 +48,17 @@ import type {
   ChatRecordHeadStamp,
   ChatRecordRemovalReason,
   ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   EMPTY_CHAT_RECORD_HEADS,
   applyChatRecordHeadRows,
-  dropChatRecordHeadsForChat,
+  dropChatRecordEntriesForChat,
 } from "./chat-record-head";
+import {
+  EMPTY_CHAT_RECORD_STARTERS,
+  applyChatRecordStarterRows,
+} from "./chat-record-starters";
 import {
   EMPTY_EVICTED_CHAT_IDS,
   evictedChatIdsOfSnapshot,
@@ -385,6 +390,13 @@ export interface OpenEpicState {
    * it). Read through `useEpicChatRecordHead`.
    */
   readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  /**
+   * Who started each chat, by `chatRecordKey(ownerUserId, chatId)`, as the
+   * `@1.5` list answer and stream delta state it: see `./chat-record-starters`.
+   * Main-thread, like {@link OpenEpicState.chatRecordHeads}. Read through
+   * `useEpicChatStarter`.
+   */
+  readonly chatRecordStarters: Readonly<Record<string, string>>;
   /**
    * The chats whose records the serving host has dropped (cold eviction), by
    * `chatId`, as its last `epic.listChatRecords@1.4` snapshot listed them.
@@ -723,7 +735,8 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummaryV12[],
+    records: readonly (ChatRecordSummaryV12 &
+      Pick<ChatRecordSummaryV15, "starterUserId">)[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -2072,6 +2085,8 @@ export function createOpenEpicStore(
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
           chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
+          // Main-thread too, folded in beside the head.
+          chatRecordStarters: EMPTY_CHAT_RECORD_STARTERS,
           // List-only, like the head: restated by each snapshot.
           evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
           tuiAgentRecordListFailed: false,
@@ -2202,6 +2217,12 @@ export function createOpenEpicStore(
             );
             if (heads !== get().chatRecordHeads)
               set({ chatRecordHeads: heads });
+            const starters = applyChatRecordStarterRows(
+              get().chatRecordStarters,
+              records,
+            );
+            if (starters !== get().chatRecordStarters)
+              set({ chatRecordStarters: starters });
             runtime.command({
               kind: "apply-chat-records",
               payload: { records, issuedAtSeq },
@@ -2259,8 +2280,15 @@ export function createOpenEpicStore(
             const heads =
               delta.kind === "upsert"
                 ? applyChatRecordHeadRows(held, [delta.record])
-                : dropChatRecordHeadsForChat(held, delta.chatId);
+                : dropChatRecordEntriesForChat(held, delta.chatId);
             if (heads !== held) set({ chatRecordHeads: heads });
+            const heldStarters = get().chatRecordStarters;
+            const starters =
+              delta.kind === "upsert"
+                ? applyChatRecordStarterRows(heldStarters, [delta.record])
+                : dropChatRecordEntriesForChat(heldStarters, delta.chatId);
+            if (starters !== heldStarters)
+              set({ chatRecordStarters: starters });
             runtime.command({
               kind: "apply-chat-record-delta",
               payload: { delta },

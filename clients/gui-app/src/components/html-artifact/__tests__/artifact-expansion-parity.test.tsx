@@ -1,4 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useGuestFramePressRelay } from "@/hooks/ui/use-guest-frame-press-relay";
 import {
   act,
   cleanup,
@@ -16,15 +24,31 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type {
   EpicListHtmlArtifactVersionsResponse,
   HtmlArtifactVersion,
   HtmlArtifactVersionSelection,
 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   disposeBridges,
+  canvasElement,
+  pendingSaves,
   realBridge,
+  settleSave,
+  textSelection,
 } from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
 import { FrameCommentsUnavailable } from "@/components/comments/frame-comments";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
@@ -33,12 +57,29 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HtmlArtifactVersionState } from "@/hooks/epic/use-epic-html-artifact-version";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
-import { holdFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
+import {
+  holdFullscreenBlocker,
+  useFullscreenPinnedRowKeys,
+} from "@/lib/sandbox/overlay-owner";
 import {
   composerEditorAt,
+  createDeferred,
+  settle,
   typeIntoEditor,
 } from "@/components/comments/__tests__/comment-submit-test-support";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
+import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
+import type {
+  CanvasElement,
+  CanvasPageActivity,
+} from "@/lib/sandbox/canvas-bridge";
+import { CanvasCommentAction } from "@/components/canvas-artifact/canvas-comments";
+import { CanvasFrameRegistry } from "@/components/canvas-artifact/canvas-frame-registry";
+import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
+import { COMMENT_OPENER_ATTRIBUTE } from "@/lib/comments/comment-opener";
+import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { HtmlArtifactCommentSurface } from "../html-artifact-comment-surface";
 import { HtmlArtifactFrame } from "../html-artifact-frame";
 import { HtmlArtifactVersionPicker } from "../html-artifact-version-picker";
@@ -66,11 +107,46 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
     useEffect(() => {
       onBridge?.(frames.bridge);
     }, [onBridge]);
-    return <div data-testid="frame" />;
+    // A real iframe element, with the press relay the real frame attaches.
+    const own = useRef<HTMLIFrameElement | null>(null);
+    const { ref } = props;
+    const setRef = useCallback(
+      (node: HTMLIFrameElement | null): void => {
+        own.current = node;
+        if (typeof ref === "function") ref(node);
+      },
+      [ref],
+    );
+    useGuestFramePressRelay(own);
+    return <iframe ref={setRef} data-testid="frame" title="frame" />;
   },
 }));
+const host = vi.hoisted(() => ({
+  client: null as { readonly getActiveHostId: () => string } | null,
+  createThread: vi.fn<
+    (request: { readonly anchor: unknown }) => Promise<{
+      readonly threadId: string;
+    }>
+  >(),
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => null,
+  useTabHostClient: () => host.client,
+}));
+// The host lies outside the draft: its two writes, the id stamp that precedes
+// a first comment on an element and the thread itself, are answered by hand.
+vi.mock("@/components/canvas-artifact/use-artboard-edit", async () =>
+  (
+    await import("@/components/canvas-artifact/__tests__/canvas-edit-test-support")
+  ).artboardEditModule(),
+);
+vi.mock("@/hooks/comments/use-comment-thread-mutations", async (original) => ({
+  ...(await original<
+    typeof import("@/hooks/comments/use-comment-thread-mutations")
+  >()),
+  useCreateCommentThreadForClient: () => ({
+    isPending: false,
+    mutateAsync: host.createThread,
+  }),
 }));
 vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
   useFrameCommentsEnabled: () => true,
@@ -88,6 +164,9 @@ vi.mock("@/providers/use-open-epic-handle", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-selection", () => ({
   useSidebarChatOrder: () => [],
+}));
+vi.mock("@/components/comments/anchored-draft-send-to-chat", () => ({
+  AnchoredDraftSendToChatSlot: () => null,
 }));
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => false,
@@ -196,12 +275,19 @@ function commentTile(onDownload: () => void) {
         hostId="host-1"
         viewTabId="tab-1"
         source={sourceNamed("html-1")}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
         toolbarControls={<PickerControl initiallyOn={null} />}
         menuItems={
           <DropdownMenuItem onSelect={onDownload}>
             Download ZIP
           </DropdownMenuItem>
         }
+        raiseToComment={false}
+        commentable
       />
     </Providers>
   );
@@ -211,10 +297,14 @@ beforeEach(() => {
   frames.latest = null;
   frames.bridge = null;
   frames.mounts = 0;
+  host.client = null;
+  host.createThread.mockReset();
+  pendingSaves.length = 0;
 });
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   useAnchoredDraftStore.setState({ byEpicId: {} });
   disposeBridges();
   vi.restoreAllMocks();
@@ -552,6 +642,957 @@ describe("the comment draft of an expanded html artifact", () => {
       expect(composerEditorAt(0)).toBe(editor);
       expect(composerEditorAt(0).view.dom).toBe(root);
       expect(composerEditorAt(0).getText()).toBe("unsent words @");
+    });
+  });
+});
+
+describe("Escape in a pane that holds two cards", () => {
+  const SECOND_DRAFT_TILE = "00000000-0000-4000-8000-000000000002";
+
+  function card(artifactId: string, title: string): ReactNode {
+    return (
+      <HtmlArtifactCommentSurface
+        epicId="epic-1"
+        artifactId={artifactId}
+        artifactTitle={title}
+        hostId="host-1"
+        viewTabId="tab-1"
+        source={sourceNamed(artifactId)}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        toolbarControls={null}
+        menuItems={undefined}
+        raiseToComment
+        commentable
+      />
+    );
+  }
+
+  function pane(withSecond: boolean): ReactNode {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+          {withSecond ? card("html-b", "Second") : null}
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  /** First mounts with a real draft owner; the second pins its own. */
+  function mountBoth() {
+    const view = render(pane(false));
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(SECOND_DRAFT_TILE);
+    view.rerender(pane(true));
+    return view;
+  }
+
+  it("goes to a later raised card's dirty draft, asking to discard it, though an earlier card shares its pane", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mountBoth();
+    const [, secondExpand] = screen.getAllByRole("button", { name: "Expand" });
+    fireEvent.click(secondExpand);
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-b",
+        tileId: SECOND_DRAFT_TILE,
+        artifactId: "html-b",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      bubbles: true,
+    });
+
+    act(() => {
+      window.dispatchEvent(escape);
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes to a lone raised card's dirty draft, asking to discard it", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(SECOND_DRAFT_TILE);
+    render(pane(false));
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-a",
+        tileId: SECOND_DRAFT_TILE,
+        artifactId: "html-a",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          cancelable: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the comment draft of a card that comments only while raised", () => {
+  const onApprove = vi.fn<() => void>();
+
+  function PinnedRows() {
+    return (
+      <output data-testid="pinned">
+        {useFullscreenPinnedRowKeys().join()}
+      </output>
+    );
+  }
+
+  function transcriptCard() {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          <div data-message-id="m-1" data-row-key="row-1">
+            <HtmlArtifactCommentSurface
+              epicId="epic-1"
+              artifactId="html-1"
+              artifactTitle="Site"
+              hostId="host-1"
+              viewTabId="tab-1"
+              source={sourceNamed("html-1")}
+              caption={null}
+              height={null}
+              className="h-full w-full"
+              onSize={() => undefined}
+              onStatus={() => undefined}
+              toolbarControls={null}
+              menuItems={undefined}
+              raiseToComment
+              commentable
+            />
+          </div>
+          <button type="button" onClick={onApprove}>
+            Approve
+          </button>
+          <PinnedRows />
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  function draftHost(): HTMLElement {
+    const host = document.querySelector<HTMLElement>(
+      '[data-slot="artifact-comment-host"]',
+    );
+    if (host === null) throw new Error("no comment host");
+    return host;
+  }
+
+  it("stays mounted with its text, concealed and out of the way, when a blocker lowers the card, and returns when the card is raised again", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    onApprove.mockClear();
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(DRAFT_TILE);
+    render(transcriptCard());
+    fireEvent.click(within(expand()).getByRole("button", { name: "Comments" }));
+    openDraft();
+    const editor = composerEditorAt(0);
+    typeIntoEditor(editor, "unsent words");
+    const host = draftHost();
+
+    let release = (): void => undefined;
+    act(() => {
+      release = holdFullscreenBlocker();
+    });
+    onTestFinished(release);
+
+    expect(screen.queryByRole("dialog", { name: "Site" })).toBeNull();
+    expect(composerEditorAt(0)).toBe(editor);
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+    expect(host.closest("[inert]")).not.toBeNull();
+    expect(host.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByTestId("pinned").textContent).toBe("row-1");
+    const approve = screen.getByRole("button", { name: "Approve" });
+    fireEvent.pointerDown(approve);
+    fireEvent.click(approve);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onApprove).toHaveBeenCalledTimes(1);
+
+    act(() => release());
+    const raised = expand();
+
+    expect(
+      within(raised).getByRole("dialog", { name: "New comment" }),
+    ).toBeTruthy();
+    expect(host.closest("[inert]")).toBeNull();
+    expect(host.closest('[aria-hidden="true"]')).toBeNull();
+    expect(composerEditorAt(0)).toBe(editor);
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+  });
+});
+
+describe("a first comment whose stamp moves the artifact past the page on show", () => {
+  const STAMPED_TID = "t-stamped";
+
+  function raisedCard(commentable: boolean) {
+    return (
+      <Providers>
+        <HtmlArtifactCommentSurface
+          epicId="epic-1"
+          artifactId="html-1"
+          artifactTitle="Site"
+          hostId="host-1"
+          viewTabId="tab-1"
+          source={sourceNamed("html-1")}
+          caption={null}
+          height={null}
+          className="h-full w-full"
+          onSize={() => undefined}
+          onStatus={() => undefined}
+          toolbarControls={null}
+          menuItems={undefined}
+          raiseToComment
+          commentable={commentable}
+        />
+      </Providers>
+    );
+  }
+
+  it("keeps the draft and its text through a failed create, and posts on the stamped element when the reader retries", async () => {
+    host.client = { getActiveHostId: () => "host-1" };
+    recordNegotiatedHostManifest("host-1", {
+      "epic.createCommentThread": { major: 1, minor: 2 },
+    });
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(DRAFT_TILE);
+    const view = render(raisedCard(true));
+    fireEvent.click(within(expand()).getByRole("button", { name: "Comments" }));
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-1",
+        tileId: DRAFT_TILE,
+        artifactId: "html-1",
+        artifactType: "html",
+        anchor: {
+          kind: "element",
+          artboard: "index.html",
+          elementId: null,
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: {
+          ...textSelection(null, { tid: null, marker: 0 }),
+          artifactId: "html-1",
+          boardPath: "index.html",
+        },
+        retargeted: false,
+      }),
+    );
+    typeIntoEditor(composerEditorAt(0), "unsent words");
+    const created = createDeferred<{ readonly threadId: string }>();
+    host.createThread.mockReturnValueOnce(created.promise);
+
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await settleSave(0, {
+      ok: true,
+      tid: STAMPED_TID,
+      sha256After: "a".repeat(64),
+      splices: [],
+    });
+    await settle();
+    expect(host.createThread).toHaveBeenCalledTimes(1);
+
+    // The stamp moved the head past the page on show.
+    view.rerender(raisedCard(false));
+    await act(async () => {
+      created.reject(new Error("host unreachable"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("host unreachable");
+    expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId).toBe(
+      "draft-1",
+    );
+    expect(composerEditorAt(0).getText()).toBe("unsent words");
+
+    host.createThread.mockResolvedValueOnce({ threadId: "thread-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await settle();
+
+    expect(host.createThread).toHaveBeenCalledTimes(2);
+    expect(host.createThread.mock.calls[1][0].anchor).toMatchObject({
+      kind: "element",
+      elementId: STAMPED_TID,
+    });
+    expect(pendingSaves).toHaveLength(1);
+    expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toBeUndefined();
+  });
+});
+
+describe("a card whose draft a blocker has parked", () => {
+  const FIRST_TILE = "00000000-0000-4000-8000-0000000000a1";
+  const SECOND_TILE = "00000000-0000-4000-8000-0000000000b2";
+  const DISCARD_QUESTION =
+    "Discard this comment draft? Unsaved text will be lost.";
+
+  function card(artifactId: string, title: string): ReactNode {
+    return (
+      <HtmlArtifactCommentSurface
+        epicId="epic-1"
+        artifactId={artifactId}
+        artifactTitle={title}
+        hostId="host-1"
+        viewTabId="tab-1"
+        source={sourceNamed(artifactId)}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        toolbarControls={null}
+        menuItems={undefined}
+        raiseToComment
+        commentable
+      />
+    );
+  }
+
+  function pane(second: ReactNode): ReactNode {
+    return (
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+          {second}
+        </SurfacePresentationBoundary>
+      </Providers>
+    );
+  }
+
+  /** The first card raised with Comments on, beside `second`. */
+  function raiseFirstCard(second: ReactNode): void {
+    const randomUUID = vi.spyOn(crypto, "randomUUID");
+    randomUUID.mockReturnValue(FIRST_TILE);
+    const view = render(
+      <Providers>
+        <SurfacePresentationBoundary visible focused>
+          {card("html-a", "First")}
+        </SurfacePresentationBoundary>
+      </Providers>,
+    );
+    randomUUID.mockReturnValue(SECOND_TILE);
+    view.rerender(pane(second));
+    const [firstExpand] = screen.getAllByRole("button", { name: "Expand" });
+    fireEvent.click(firstExpand);
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "First" })).getByRole(
+        "button",
+        { name: "Comments" },
+      ),
+    );
+  }
+
+  /**
+   * The first card is raised, a draft opened on it and typed into, and a
+   * blocker lowers it: the draft is parked, answering no Escape or press.
+   */
+  function parkFirstCardsDraft(text: string | null, second: ReactNode): void {
+    raiseFirstCard(second);
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-a",
+        tileId: FIRST_TILE,
+        artifactId: "html-a",
+        artifactType: "html",
+        anchor: { kind: "artifact" },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: null,
+        retargeted: false,
+      }),
+    );
+    if (text !== null) typeIntoEditor(composerEditorAt(0), text);
+    let release = (): void => undefined;
+    act(() => {
+      release = holdFullscreenBlocker();
+    });
+    act(() => release());
+  }
+
+  function openDraftId(): string | undefined {
+    return useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId;
+  }
+
+  /** A pick of an element, through the opener a card's provider calls. */
+  async function pickElement(pick: {
+    readonly tileId: string;
+    readonly artifactId: string;
+    readonly tid: string;
+    readonly marker: number;
+  }): Promise<void> {
+    await act(async () => {
+      await openFrameCommentDraft({
+        epicId: "epic-1",
+        tileId: pick.tileId,
+        artifactType: "html",
+        selection: {
+          ...textSelection(null, { tid: pick.tid, marker: pick.marker }),
+          artifactId: pick.artifactId,
+          boardPath: "index.html",
+        },
+        bridge: realBridge(),
+        frame: document.createElement("iframe"),
+        source: null,
+        queryClient: new QueryClient(),
+        isCurrent: () => true,
+      });
+    });
+  }
+
+  /** The second card's pick. */
+  function startSecondCardsComment(): Promise<void> {
+    return pickElement({
+      tileId: SECOND_TILE,
+      artifactId: "html-b",
+      tid: "b-el",
+      marker: 1,
+    });
+  }
+
+  describe("a second card starting a comment while the first card's draft is parked", () => {
+    it("asks before dropping the parked draft's text, and keeps the draft and its text when the reader says no", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      parkFirstCardsDraft("unsent words", card("html-b", "Second"));
+      const editor = composerEditorAt(0);
+
+      await startSecondCardsComment();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-a");
+      expect(composerEditorAt(0)).toBe(editor);
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("opens the second card's draft in its place when the reader agrees to discard", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      parkFirstCardsDraft("unsent words", card("html-b", "Second"));
+
+      await startSecondCardsComment();
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "html-b",
+        },
+      );
+    });
+
+    it("replaces an empty parked draft without asking", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      parkFirstCardsDraft(null, card("html-b", "Second"));
+
+      await startSecondCardsComment();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "html-b",
+        },
+      );
+    });
+  });
+
+  function openFirstElementDraft(text: string | null, second: ReactNode): void {
+    raiseFirstCard(second);
+    act(() =>
+      useAnchoredDraftStore.getState().setDraft("epic-1", {
+        draftId: "draft-x",
+        tileId: FIRST_TILE,
+        artifactId: "html-a",
+        artifactType: "html",
+        anchor: {
+          kind: "element",
+          artboard: "index.html",
+          elementId: "x-el",
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 10, y: 10, width: 100, height: 20 },
+        selection: {
+          ...textSelection(null, { tid: "x-el", marker: 1 }),
+          artifactId: "html-a",
+          boardPath: "index.html",
+        },
+        retargeted: false,
+      }),
+    );
+    if (text !== null) typeIntoEditor(composerEditorAt(0), text);
+  }
+
+  describe("a press and a pick in a frame over a dirty draft", () => {
+    function guestPick(
+      listeners: ((activity: CanvasPageActivity) => void)[],
+    ): Promise<void> {
+      return act(async () => {
+        for (const listener of listeners)
+          listener({ kind: "pick", x: 5, y: 6 });
+        await settle();
+      });
+    }
+
+    function frameElement(): HTMLIFrameElement {
+      const frame = document.querySelector("iframe");
+      if (frame === null) throw new Error("no frame element");
+      return frame;
+    }
+
+    async function raiseWithDraft(
+      text: string | null,
+      hit: CanvasElement | null,
+    ) {
+      const bridge = realBridge();
+      frames.bridge = bridge;
+      const listeners: ((activity: CanvasPageActivity) => void)[] = [];
+      vi.spyOn(bridge, "onPageActivity").mockImplementation((listener) => {
+        listeners.push(listener);
+        return () => undefined;
+      });
+      vi.spyOn(bridge, "describeElement").mockResolvedValue(null);
+      vi.spyOn(bridge, "hitTest").mockResolvedValue(hit);
+      openFirstElementDraft(text, null);
+      markReady();
+      await settle();
+      return listeners;
+    }
+
+    /** The press as the relay delivers it: focus moved into the frame. */
+    function pressInFrame(): void {
+      const frame = frameElement();
+      act(() => {
+        frame.focus();
+        window.dispatchEvent(new Event("blur"));
+      });
+    }
+
+    it("marks the frame as a comment opener while comments are on, so its press asks nothing and its pick asks once, each pick again", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      const listeners = await raiseWithDraft(
+        "unsent words",
+        canvasElement({ tid: "y-el", marker: 2 }),
+      );
+      expect(frameElement().hasAttribute(COMMENT_OPENER_ATTRIBUTE)).toBe(true);
+
+      pressInFrame();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
+
+      await guestPick(listeners);
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+
+      // The frame still has focus: this pick reaches the parent as no press.
+      await guestPick(listeners);
+
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("leaves the draft and its text open when the press's pick resolves to nothing", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      const listeners = await raiseWithDraft("unsent words", null);
+
+      pressInFrame();
+      await guestPick(listeners);
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("leaves even an empty draft open when the press's pick resolves to nothing", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      const listeners = await raiseWithDraft(null, null);
+
+      pressInFrame();
+      await guestPick(listeners);
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
+    });
+
+    it("still asks about a press on the frame when only the guest's own document carries the mark", () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      vi.spyOn(crypto, "randomUUID").mockReturnValue(FIRST_TILE);
+      render(pane(null));
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      const frame = frameElement();
+      frame.contentDocument?.body.setAttribute(COMMENT_OPENER_ATTRIBUTE, "");
+      // Comments are off, so the frame element itself is not marked.
+      expect(frame.hasAttribute(COMMENT_OPENER_ATTRIBUTE)).toBe(false);
+      act(() =>
+        useAnchoredDraftStore.getState().setDraft("epic-1", {
+          draftId: "draft-x",
+          tileId: FIRST_TILE,
+          artifactId: "html-a",
+          artifactType: "html",
+          anchor: { kind: "artifact" },
+          quotedText: "",
+          rect: { x: 10, y: 10, width: 100, height: 20 },
+          selection: null,
+          retargeted: false,
+        }),
+      );
+      typeIntoEditor(composerEditorAt(0), "unsent words");
+
+      pressInFrame();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+    });
+  });
+
+  describe("the Comment action of another view over a dirty draft", () => {
+    function mountActionOverDirtyDraft(): Element {
+      const bridge = realBridge();
+      vi.spyOn(bridge, "describeElement").mockResolvedValue(null);
+      const registry = new CanvasFrameRegistry();
+      const servedSha256 = "a".repeat(64);
+      registry.update("index.html", {
+        bridge,
+        frame: document.createElement("iframe"),
+        sha256: servedSha256,
+        source: null,
+      });
+      const selection = {
+        ...textSelection(null, { tid: "y-el", marker: 2 }),
+        artifactId: "html-b",
+        boardPath: "index.html",
+        servedSha256,
+      };
+      useCanvasSelectionStore.getState().select(selection);
+      openFirstElementDraft(
+        "unsent words",
+        <CanvasCommentAction
+          scope={{
+            epicId: "epic-1",
+            artifactId: "html-b",
+            artifactTitle: "Second",
+            artifactType: "html",
+            hostId: "host-1",
+            viewTabId: "tab-1",
+          }}
+          tileId={SECOND_TILE}
+          selection={selection}
+          registry={registry}
+        />,
+      );
+      // The draft box has a Comment button of its own; the action is the toolbar's.
+      const action = document.querySelector("button[data-toolbar-action]");
+      if (action === null) throw new Error("no Comment action");
+      return action;
+    }
+
+    it("asks nothing at the press and once at the click that opens the comment", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      const action = mountActionOverDirtyDraft();
+
+      fireEvent.pointerDown(action, { button: 0 });
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
+
+      fireEvent.click(action);
+      await settle();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it.each([
+      ["Enter", "{Enter}"],
+      ["Space", " "],
+    ])(
+      "asks once when %s activates the focused action, and keeps the draft when the reader says no",
+      async (_name, keys) => {
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+        const user = userEvent.setup();
+        const action = mountActionOverDirtyDraft();
+        if (!(action instanceof HTMLElement))
+          throw new Error("the Comment action is not an element");
+
+        action.focus();
+        await user.keyboard(keys);
+        await settle();
+
+        expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+        expect(openDraftId()).toBe("draft-x");
+        expect(composerEditorAt(0).getText()).toBe("unsent words");
+      },
+    );
+  });
+
+  describe("a pick in a card whose own draft holds typed text", () => {
+    const otherElement = {
+      tileId: FIRST_TILE,
+      artifactId: "html-a",
+      tid: "y-el",
+      marker: 2,
+    };
+
+    it("asks before another element's pick replaces the draft, and keeps the draft and its text when the reader says no", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      openFirstElementDraft("unsent words", null);
+      const editor = composerEditorAt(0);
+
+      await pickElement(otherElement);
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0)).toBe(editor);
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("opens the other element's draft, with a new id, when the reader agrees to discard", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      openFirstElementDraft("unsent words", null);
+
+      await pickElement(otherElement);
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: FIRST_TILE,
+          anchor: { elementId: "y-el" },
+        },
+      );
+      expect(openDraftId()).not.toBe("draft-x");
+    });
+
+    it("keeps the draft, without asking, when the same element is picked again", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      openFirstElementDraft("unsent words", null);
+
+      await pickElement({ ...otherElement, tid: "x-el", marker: 1 });
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
+    });
+  });
+
+  describe("a canvas pane pin while a card's draft is parked", () => {
+    const pin: { events: CanvasFrameEvents | null } = { events: null };
+
+    function PinHost() {
+      const events = useContext(CanvasFrameEventsContext);
+      useEffect(() => {
+        pin.events = events;
+      }, [events]);
+      return events?.renderCommentDraft?.() ?? null;
+    }
+
+    function paneCommentHandler(): CanvasFrameEvents["onPaneComment"] {
+      return pin.events?.onPaneComment;
+    }
+
+    function canvasProvider(): ReactNode {
+      return (
+        <CanvasSelectionProvider
+          epicId="epic-1"
+          artifactId="canvas-1"
+          artifactTitle="Board"
+          artifactType="canvas"
+          hostId="host-1"
+          viewTabId="tab-1"
+        >
+          <PinHost />
+        </CanvasSelectionProvider>
+      );
+    }
+
+    function pinOnCanvas(): void {
+      const onPaneComment = paneCommentHandler();
+      if (onPaneComment === undefined)
+        throw new Error("no pane comment handler");
+      act(() =>
+        onPaneComment({
+          screen: { x: 300, y: 200 },
+          canvas: { x: 40, y: -12 },
+          page: "flow",
+        }),
+      );
+    }
+
+    function parkCardDraftAndPin(): void {
+      pin.events = null;
+      parkFirstCardsDraft("unsent words", canvasProvider());
+      pinOnCanvas();
+    }
+
+    it("keeps the parked card draft and its text, opening no pin, when the reader declines to discard it", () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      parkCardDraftAndPin();
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          draftId: "draft-a",
+          anchor: { kind: "artifact" },
+        },
+      );
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("pins the comment in its place when the reader agrees to discard the parked draft", () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+
+      parkCardDraftAndPin();
+
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: SECOND_TILE,
+          artifactId: "canvas-1",
+          anchor: { kind: "canvas-point", page: "flow", x: 40, y: -12 },
+        },
+      );
+    });
+
+    it("leaves another view's draft alone while it is posting, even when the reader would discard it", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      host.client = { getActiveHostId: () => "host-1" };
+      recordNegotiatedHostManifest("host-1", {
+        "epic.createCommentThread": { major: 1, minor: 3 },
+      });
+      const bridge = realBridge();
+      frames.bridge = bridge;
+      const stamped = createDeferred<boolean>();
+      const stampTid = vi
+        .spyOn(bridge, "stampTid")
+        .mockReturnValue(stamped.promise);
+      pin.events = null;
+      raiseFirstCard(canvasProvider());
+      markReady();
+      act(() =>
+        useAnchoredDraftStore.getState().setDraft("epic-1", {
+          draftId: "draft-a",
+          tileId: FIRST_TILE,
+          artifactId: "html-a",
+          artifactType: "html",
+          anchor: {
+            kind: "element",
+            artboard: "index.html",
+            elementId: null,
+            label: "p",
+          },
+          quotedText: "",
+          rect: { x: 10, y: 10, width: 100, height: 20 },
+          selection: {
+            ...textSelection(null, { tid: null, marker: 0 }),
+            artifactId: "html-a",
+            boardPath: "index.html",
+            servedSha256: "a".repeat(64),
+          },
+          retargeted: false,
+        }),
+      );
+      typeIntoEditor(composerEditorAt(0), "unsent words");
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+      await settleSave(0, {
+        ok: true,
+        tid: "t-stamped",
+        sha256After: "b".repeat(64),
+        splices: [],
+      });
+      await settle();
+      // The id is being adopted: no request is in flight, the draft is posting.
+      expect(stampTid).toHaveBeenCalledTimes(1);
+      expect(host.createThread).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: "draft-a", submitting: true },
+      );
+
+      pinOnCanvas();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: "draft-a", submitting: true },
+      );
+
+      host.createThread.mockResolvedValueOnce({ threadId: "thread-1" });
+      stamped.resolve(true);
+      await settle();
+
+      expect(host.createThread).toHaveBeenCalledTimes(1);
+      expect(
+        useAnchoredDraftStore.getState().byEpicId["epic-1"],
+      ).toBeUndefined();
+      pinOnCanvas();
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { artifactId: "canvas-1", anchor: { kind: "canvas-point" } },
+      );
+    });
+
+    it("opens nothing new when a view pins again while its own pin is posting", async () => {
+      host.client = { getActiveHostId: () => "host-1" };
+      recordNegotiatedHostManifest("host-1", {
+        "epic.createCommentThread": { major: 1, minor: 3 },
+      });
+      pin.events = null;
+      render(
+        <Providers>
+          <SurfacePresentationBoundary visible focused>
+            {canvasProvider()}
+          </SurfacePresentationBoundary>
+        </Providers>,
+      );
+      pinOnCanvas();
+      const first = useAnchoredDraftStore.getState().byEpicId["epic-1"];
+      if (first === undefined) throw new Error("the first pin opened no draft");
+      typeIntoEditor(composerEditorAt(0), "pinned words");
+      const created = createDeferred<{ readonly threadId: string }>();
+      host.createThread.mockReturnValueOnce(created.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+      await settle();
+      expect(host.createThread).toHaveBeenCalledTimes(1);
+
+      const pinAgain = paneCommentHandler();
+      if (pinAgain === undefined) throw new Error("no pane comment handler");
+      act(() => {
+        pinAgain({
+          screen: { x: 10, y: 20 },
+          canvas: { x: 5, y: 6 },
+          page: "other",
+        });
+      });
+
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        { draftId: first.draftId, anchor: { kind: "canvas-point", x: 40 } },
+      );
+      created.resolve({ threadId: "thread-1" });
+      await settle();
     });
   });
 });

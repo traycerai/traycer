@@ -242,9 +242,15 @@ function makeHarness(
         kind: "ok" as const,
         grant: { grant: "test-grant", expiresInSeconds: 300 },
       }),
-    bearer: () => lease,
+    hostToken: () => {
+      try {
+        return lease.getBearerToken();
+      } catch {
+        return null;
+      }
+    },
     auth: null,
-    sessionGrant: null,
+    door: null,
     clock: null,
     rpcRegistry: hostRpcRegistry,
     streamRegistry: emptyStreamRegistry,

@@ -26,6 +26,10 @@ import {
   NotificationRowBotAvatar,
 } from "@/components/notifications/notification-bots";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
+import { useOpenEpicChatStarter } from "@/hooks/chats/use-epic-chat-starter";
+import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
+import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
+import { chatStarterPerson, startedByText } from "@/lib/identity/started-by";
 import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { FeedbackDraftSendControl } from "@/components/notifications/feedback-draft-send-control";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
@@ -359,13 +363,77 @@ function notificationRowInlineControls(
   );
 }
 
-function NotificationRowMain(props: {
+interface NotificationRowMainProps {
   readonly row: MergedNotificationRow;
   readonly isRead: boolean;
   readonly isNavigable: boolean;
   readonly originUnavailability: HostUnavailability | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
-}): ReactNode {
+}
+
+/**
+ * A chat's row says "Started by <name>" in place of its body while its task
+ * is open (the task's chat records say who started the chat), unless the chat
+ * failed: a failure row's body is what went wrong.
+ */
+function NotificationRowMain(props: NotificationRowMainProps): ReactNode {
+  const chat = notificationRowStartedChat(props.row);
+  const starter = chatStarterPerson(
+    useOpenEpicChatStarter(chat?.epicId ?? null, chat?.chatId ?? null),
+  );
+  if (chat === null || starter === null) {
+    return <NotificationRowMainContent {...props} body={props.row.body} />;
+  }
+  const startedBy = (
+    <NotificationRowStartedBy {...props} starterUserId={starter} />
+  );
+  return chat.hostId === null ? (
+    startedBy
+  ) : (
+    <HostTeamPeopleProvider hostId={chat.hostId}>
+      {startedBy}
+    </HostTeamPeopleProvider>
+  );
+}
+
+function notificationRowStartedChat(row: MergedNotificationRow): {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string | null;
+} | null {
+  const payload = row.payload;
+  if (
+    payload === null ||
+    payload.kind !== "chat" ||
+    payload.chatId === undefined ||
+    row.agentSurface === "tui" ||
+    row.outcome === "errored"
+  ) {
+    return null;
+  }
+  return {
+    epicId: payload.epicId,
+    chatId: payload.chatId,
+    hostId: payload.hostId ?? row.originHostId,
+  };
+}
+
+function NotificationRowStartedBy(
+  props: NotificationRowMainProps & { readonly starterUserId: string },
+): ReactNode {
+  const { starterUserId, ...rest } = props;
+  const identity = usePersonIdentity(starterUserId);
+  return (
+    <NotificationRowMainContent
+      {...rest}
+      body={startedByText(starterUserId, identity?.displayName ?? null)}
+    />
+  );
+}
+
+function NotificationRowMainContent(
+  props: NotificationRowMainProps & { readonly body: string },
+): ReactNode {
   const title = useStandaloneBotName(
     notificationRowBotId(props.row),
     props.row.title,
@@ -373,7 +441,7 @@ function NotificationRowMain(props: {
   const body = (
     <NotificationRowBody
       title={title}
-      body={props.row.body}
+      body={props.body}
       isRead={props.isRead}
     />
   );

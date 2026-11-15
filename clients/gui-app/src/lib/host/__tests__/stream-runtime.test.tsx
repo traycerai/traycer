@@ -110,6 +110,27 @@ vi.mock(
   },
 );
 
+// The release floor is "0.0.0" (it admits every host), so a row can only fall
+// below it where a case raises it. A getter, not a constant, so every case
+// that does not raise it keeps the real floor.
+const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return {
+      ...actual,
+      get MINIMUM_HOST_VERSION(): string {
+        return minimumHostVersion.value;
+      },
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
   const actual =
     await importActual<
@@ -178,6 +199,8 @@ vi.mock(
 );
 
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,
@@ -808,6 +831,51 @@ describe("HostStreamProvider", () => {
     expect(result.current?.isClosed()).toBe(false);
   });
 
+  it("retries this app stream now and keeps its quick-close streak", async () => {
+    vi.useFakeTimers();
+    mountLocalHost();
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    act(() => {
+      first?.close("test-terminal-close");
+    });
+    const second = result.current;
+    expect(second).not.toBe(first);
+
+    act(() => {
+      second?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(OTHER_HOST_ID, inertHostTokenSource());
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(mockLocalHostEntry.hostId, inertHostTokenSource());
+    });
+    const third = result.current;
+    expect(third).toBeInstanceOf(WsStreamClient);
+    expect(third).not.toBe(second);
+
+    act(() => {
+      third?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+  });
+
   it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
     // A terminal-class close (incompatible protocol, revoked access) would
     // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
@@ -959,6 +1027,58 @@ describe("HostStreamProvider", () => {
     expect(sessionForKeyB.closeCalls).toBe(0);
   });
 
+  it("re-dials the SAME client once when its remote's owner changes, and not on an unchanged row or a rename", () => {
+    installRemoteTransport({ "pubkey-a": fakeRemoteSession() });
+    const reconnectSpy = vi.spyOn(RemoteStreamClient.prototype, "reconnectAll");
+    const personal: RemoteHostDirectoryEntry = {
+      ...remoteTarget("pubkey-a"),
+      owner: { kind: "user", id: "user-a" },
+    };
+    const team: RemoteHostDirectoryEntry = {
+      ...personal,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    const directory = new TestHostDirectory();
+    directory.publishUnannounced([personal]);
+    const client = buildClient(directory);
+    installDirectory(directory);
+    pointWindowAt(client, "remote-host-a");
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(RemoteStreamClient);
+    expect(reconnectSpy).not.toHaveBeenCalled();
+
+    // Only the owner moves: same host, user, key, relay and version. The
+    // client is kept, and its stream re-dials at once, so the host judges a
+    // fresh open against the computer's new owner.
+    act(() => {
+      directory.publish([team]);
+    });
+    expect(result.current).toBe(first);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    // The same owner again, then renamed: whose computer it is has not
+    // changed, so nothing re-dials.
+    act(() => {
+      directory.publish([{ ...team }]);
+    });
+    const renamed: RemoteHostDirectoryEntry = {
+      ...team,
+      owner: { kind: "team", id: "team-a", name: "Alpha renamed" },
+    };
+    act(() => {
+      directory.publish([renamed]);
+    });
+    expect(result.current).toBe(first);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {
     // The client is keyed on the resolved host identity, not on
     // default-host surface readiness. Pointing the window at ∅ drops the
@@ -1049,5 +1169,98 @@ describe("HostStreamProvider", () => {
       subscribeSpy.mockRestore();
       notifySpy.mockRestore();
     }
+  });
+
+  describe("a host whose row is below the minimum version", () => {
+    const AT_FLOOR: HostDirectoryEntry = {
+      ...mockLocalHostEntry,
+      version: "2.0.0",
+    };
+    const BELOW_FLOOR: HostDirectoryEntry = {
+      ...mockLocalHostEntry,
+      version: "1.5.4",
+    };
+
+    function mountHostAt(row: HostDirectoryEntry): TestHostDirectory {
+      minimumHostVersion.value = "2.0.0";
+      const directory = new TestHostDirectory();
+      directory.publishUnannounced([row]);
+      installDirectory(directory);
+      pointWindowAt(buildClient(directory), row.hostId);
+      return directory;
+    }
+
+    afterEach(() => {
+      minimumHostVersion.value = "0.0.0";
+    });
+
+    it("closes the live client when its row falls below the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      act(() => {
+        directory.publish([BELOW_FLOOR]);
+      });
+
+      expect(result.current).toBeNull();
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy.mock.contexts[0]).toBe(first);
+    });
+
+    it("keeps the live client when its row goes offline at the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      act(() => {
+        directory.publish([
+          {
+            ...AT_FLOOR,
+            websocketUrl: null,
+            transportDialability: "not-dialable",
+          },
+        ]);
+      });
+
+      expect(result.current).toBe(first);
+      expect(closeSpy).not.toHaveBeenCalled();
+    });
+
+    it("builds one client when the row rises back above the floor", () => {
+      const directory = mountHostAt(BELOW_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      expect(result.current).toBeNull();
+      const buildsBefore = streamFactorySpy.build.mock.calls.length;
+
+      act(() => {
+        directory.publish([AT_FLOOR]);
+      });
+
+      expect(result.current).toBeInstanceOf(WsStreamClient);
+      expect(streamFactorySpy.build.mock.calls.length - buildsBefore).toBe(1);
+    });
+
+    it("closes a client that a lease still holds when its row falls below the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useStreamRuntimeBinding(), {
+        wrapper,
+      });
+      const first = result.current?.wsStreamClient ?? null;
+      expect(first).toBeInstanceOf(WsStreamClient);
+      expect(result.current?.retain?.() ?? null).not.toBeNull();
+
+      act(() => {
+        directory.publish([BELOW_FLOOR]);
+      });
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy.mock.contexts[0]).toBe(first);
+    });
   });
 });

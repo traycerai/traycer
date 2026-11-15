@@ -1,8 +1,15 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "../internal/local-open-auth";
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+} from "../internal/host-door-words";
+import {
+  createCliHostTokens,
+  type CliHostTokenFailure,
+  type SignInRevalidator,
+} from "../internal/cli-host-tokens";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -173,19 +180,26 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     epicId,
   });
 
+  // The stored sign-in, spent at authn alone: the host receives this CLI's
+  // host-only token for it, never the sign-in.
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  // Reactive (on-UNAUTHORIZED) and proactive (pre-TTL) refreshes both route
-  // through the locked `rotate` (§7) so a monitor refresh and a concurrent
-  // desktop refresh can never double-spend the single-use refresh token. One
-  // store for the monitor's lifetime - its background continuation timer can
-  // land a `commit-failed` spend while the monitor keeps running - disposed in
-  // the `finally` below.
+  // Refreshes of the sign-in (when authn refuses it for a mint, and ahead of
+  // its TTL) route through the locked `rotate` (§7) so a monitor refresh and a
+  // concurrent desktop refresh can never double-spend the single-use refresh
+  // token. One store for the monitor's lifetime - its background continuation
+  // timer can land a `commit-failed` spend while the monitor keeps running -
+  // disposed in the `finally` below.
   const store = createCliCredentialsStore();
   // `signal: null`: the monitor's revalidator lives as long as the command
   // itself - there is no earlier deadline to cancel a rotation against.
-  const revalidator = createStoreBackedRevalidator({
+  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
     store,
     lease,
+    signal: null,
+  });
+  const hostTokens = createCliHostTokens({
+    lease,
+    refresh: () => revalidator.revalidateCurrentContext(),
     signal: null,
   });
 
@@ -230,7 +244,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   }, ENDPOINT_POLL_MS);
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
-    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     // The host this endpoint resolves to, or `null` while it has resolved none
     // yet - which simply declines the seed. Safe even where `endpoint` is
@@ -239,14 +252,27 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // one, and the latch closes it for good after that.
     hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
-    bearer: () => lease,
+    // The host-only token for the host the endpoint names; `null` (the
+    // transport's wait) until one is held.
+    bearer: () =>
+      endpoint === null ? null : hostTokens.streamBearer(endpoint.hostId)(),
     userId: lease.identity.userId,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
-    // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
-    // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /
+    // recovery: the monitor runs its OWN recovery loop in
+    // `runInboxSubscription` (a fresh token, then re-subscribe on `rotated` /
     // back off and re-subscribe on `network-error`), so wiring the client
-    // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
+    // handler too would double up. A refusal a fresh token cannot answer stays
+    // terminal there.
     auth: null,
+    // Each admitted open resets the host's recovery, so a refusal hours
+    // after a good reconnect earns its one fresh token again.
+    door: {
+      refused: () => undefined,
+      admitted: () => {
+        if (endpoint !== null)
+          hostTokens.streamRecovery(endpoint.hostId).admitted();
+      },
+    },
     clock: null,
     // Delegated host-credential provisioning. `monitor` is the CLI command that
     // most needs it: the host it watches should keep serving after this process
@@ -277,21 +303,25 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
-  // Proactively refresh the bearer shortly before its ~4h TTL so a long-running
-  // monitor never carries a dead token into a reconnect (or hands the host a
-  // stale credential it would 401 on). The reactive refresh-on-`UNAUTHORIZED`
-  // loop in `runInboxSubscription` stays as the safety net; this just rotates
-  // ahead of expiry. The scheduler shares the same single-flight `revalidator`,
-  // so a proactive and reactive refresh can't race into a double rotation.
+  // Proactively refresh the sign-in shortly before its ~4h TTL, and buy the
+  // host-only token with it at once, so a long-running monitor never carries a
+  // dead token into a reconnect. The reactive recovery in
+  // `runInboxSubscription` stays as the safety net. The scheduler shares the
+  // same single-flight `revalidator`, so a proactive and reactive refresh
+  // can't race into a double rotation.
   const refreshScheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
     getToken: () => readLeaseBearer(lease),
     revalidate: async () => {
-      const outcome = await revalidator.revalidateCurrentContext();
-      if (outcome === "rotated") {
-        // Push the fresh bearer onto the open inbox stream so the host updates
-        // its captured credential in place - no reconnect. The reactive
-        // UNAUTHORIZED path already re-dials with the fresh token, so it needs
-        // no push.
+      const outcome = await hostTokens.refreshSignIn();
+      if (
+        outcome === "rotated" &&
+        endpoint !== null &&
+        (await hostTokens.renewAfterSignInRefresh(endpoint.hostId))
+      ) {
+        // Push the fresh token onto the open inbox stream so the host updates
+        // its captured credential in place - no reconnect. The reactive path
+        // already re-dials with the fresh token, so it needs no push. A
+        // refused mint ends the monitor through `onMintRefused`.
         client.notifyBearerRotated();
       }
       return outcome;
@@ -314,7 +344,17 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   try {
     await runInboxSubscription(
       client,
-      revalidator,
+      (details) =>
+        endpoint === null
+          ? Promise.resolve<RevalidateOutcome>("network-error")
+          : hostTokens
+              .streamRecovery(endpoint.hostId)
+              .revalidateRefused(details),
+      () => hostTokens.signInRejected(),
+      (listener) =>
+        hostTokens.onMintRefused((hostId, failure) => {
+          if (endpoint?.hostId === hostId) listener(failure);
+        }),
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
@@ -338,9 +378,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
 
 type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
-type InboxRevalidator = {
-  revalidateCurrentContext(): Promise<RevalidateOutcome>;
-};
+/** A fresh host-only token after the host refused this one. */
+type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
+
+/** Mints for the watched host refused for good, until the returned stop. */
+type InboxMintRefusals = (
+  listener: (failure: CliHostTokenFailure) => void,
+) => () => void;
 
 /**
  * Drives the inbox subscription until a terminal failure or until stdout's
@@ -349,16 +393,26 @@ type InboxRevalidator = {
  * non-recoverable close so `traycer monitor` exits non-zero. A healthy stream
  * with a live reader runs forever.
  *
- * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
+ * Recovery on a host's credential refusal switches on the fresh token's
+ * OUTCOME:
  *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
  *   - `network-error` → transient; keep the bearer and re-subscribe after a
  *                       delay (don't kill a long-running monitor on a flaky link);
- *   - `rejected`      → terminal (the host re-spawns monitor after re-auth).
- * Any non-`UNAUTHORIZED` fatal (e.g. `INCOMPATIBLE`) is terminal.
+ *   - `rejected`      → terminal, with the door's line: sign-in advice only
+ *                       when `signInRejected()` says this machine is signed
+ *                       out in fact.
+ * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
+ * when it is a door refusal.
+ *
+ * A mint authn refuses for good, whether the stream was waiting for its first
+ * token or recovering, is terminal with the mint's line: no reconnect could
+ * be given a token. One that cannot reach authn is waited out.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
-  revalidator: InboxRevalidator,
+  recover: InboxRecovery,
+  signInRejected: () => boolean,
+  mintRefusals: InboxMintRefusals,
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
@@ -369,6 +423,7 @@ function runInboxSubscription(
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
+    let stopMintRefusals: () => void = () => undefined;
     const acknowledgements = new InboxAcknowledgementQueue(target, logger);
 
     const clearHealthTimer = (): void => {
@@ -400,6 +455,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       readerClosed.removeEventListener("abort", stopForClosedReader);
@@ -418,6 +474,7 @@ function runInboxSubscription(
       });
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       resolve();
@@ -485,28 +542,26 @@ function runInboxSubscription(
       ) {
         return;
       }
-      const terminalAdmissionError = localTeamAdmissionCliError(reason.details);
-      if (terminalAdmissionError !== null) {
-        fail(terminalAdmissionError);
-        return;
-      }
-      if (reason.details.code !== "UNAUTHORIZED") {
+      const details = reason.details;
+      const hostClosed = (): Error =>
+        new Error(`traycer monitor: host closed the stream: ${details.reason}`);
+      if (details.retryable === true || !isCredentialRefusal(details)) {
         logger.warn("Monitor stream closed with non-auth fatal error", {
           environment: config.environment,
-          code: reason.details.code,
+          code: details.code,
           agentId: target.agentId,
           epicId: target.epicId,
         });
         fail(
-          new Error(
-            `traycer monitor: host closed the stream: ${reason.details.reason}`,
-          ),
+          hostDoorRefusalCliError(details, false, hostClosed) ??
+            localTeamAdmissionCliError(details) ??
+            hostClosed(),
         );
         return;
       }
-      // The revalidator never throws (it maps failures to an outcome), so this
+      // The recovery never throws (it maps failures to an outcome), so this
       // await can't reject the swallowed handler promise into a hang.
-      const outcome = await revalidator.revalidateCurrentContext();
+      const outcome = await recover(details);
       if (settled) {
         return;
       }
@@ -556,7 +611,10 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      fail(new Error("traycer monitor: session expired — re-authenticate."));
+      fail(
+        hostDoorRefusalCliError(details, signInRejected(), hostClosed) ??
+          hostClosed(),
+      );
     };
 
     if (readerClosed.aborted) {
@@ -565,6 +623,15 @@ function runInboxSubscription(
     }
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
+    });
+    stopMintRefusals = mintRefusals((failure) => {
+      logger.warn("Monitor host-only token mint refused", {
+        environment: config.environment,
+        failure: failure.kind,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
+      fail(hostTokenFailureCliError(failure));
     });
     subscribe();
   });

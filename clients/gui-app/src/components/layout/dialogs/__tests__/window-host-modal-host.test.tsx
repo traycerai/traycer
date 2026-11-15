@@ -1,21 +1,65 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import { useRef } from "react";
+import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   MockRunnerHost,
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  FakeNativeWebSocket,
+  liveBearer,
+  newProvider,
+  sentFramesOfKind,
+  signIn,
+  USER_A,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  hasReadyRemoteSession,
+  retireAllRemoteSessions,
+} from "@traycer-clients/shared/host-transport/remote/index";
+import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
+import type {
+  IStreamWebSocketFactory,
+  StreamWebSocketLike,
+} from "@traycer-clients/shared/host-transport/ws-stream-factory";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -26,24 +70,91 @@ import {
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  clearHostDoorState,
+  hostDoorStateFor,
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { appLogger } from "@/lib/logger";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { installAuthValidationFetch } from "../../../../../__tests__/test-browser-apis";
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
 }));
 const narrationRound2Harness = vi.hoisted(() => ({
   teamMembershipRequired: false,
+  nextInstanceId: 0,
+  activeInstanceId: 0,
 }));
+const remoteSocketFactoryHarness = vi.hoisted(() => {
+  const harness: { delegate: IStreamWebSocketFactory | null } = {
+    delegate: null,
+  };
+  return harness;
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
+  async (load) => {
+    const actual =
+      await load<
+        typeof import("@traycer-clients/shared/host-transport/whatwg-stream-ws-factory")
+      >();
+    return {
+      ...actual,
+      createWhatwgStreamWebSocketFactory: () => {
+        const original = actual.createWhatwgStreamWebSocketFactory();
+        const factory: IStreamWebSocketFactory = {
+          create: (url, priority) => {
+            const delegate = remoteSocketFactoryHarness.delegate;
+            return delegate === null
+              ? original.create(url, priority)
+              : delegate.create(url, priority);
+          },
+        };
+        return factory;
+      },
+    };
+  },
+);
+
+vi.mock("sonner", async (load) => {
+  const actual = await load<typeof import("sonner")>();
+  const callableToast = vi.fn(actual.toast);
+  return { ...actual, toast: Object.assign(callableToast, actual.toast) };
+});
 
 vi.mock("@/lib/host/runtime", async (load) => {
   const actual = await load<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
-    useHostBinding: () => ({ auth: { signOut: signOutRound2Harness.signOut } }),
+    useHostBinding: () =>
+      actual.useHostBinding() ?? {
+        auth: { signOut: signOutRound2Harness.signOut },
+      },
     useAuthService: () => ({ signOut: signOutRound2Harness.signOut }),
+  };
+});
+
+const authErrorToastHarness = vi.hoisted(() => ({
+  show: vi.fn<(error: unknown, fallback: string) => void>(),
+}));
+vi.mock("@/lib/auth-error-toast", async (load) => {
+  const actual = await load<typeof import("@/lib/auth-error-toast")>();
+  return {
+    ...actual,
+    toastFromAuthError: (error: unknown, fallback: string) => {
+      authErrorToastHarness.show(error, fallback);
+      actual.toastFromAuthError(error, fallback);
+    },
   };
 });
 
@@ -53,14 +164,23 @@ vi.mock("@/hooks/host/use-window-narration", async (load) => {
   return {
     ...actual,
     useWindowNarration: () => {
-      const narration = actual.useWindowNarration();
+      const instanceId = useRef<number | null>(null);
+      if (instanceId.current === null) {
+        narrationRound2Harness.nextInstanceId += 1;
+        instanceId.current = narrationRound2Harness.nextInstanceId;
+      }
+      narrationRound2Harness.activeInstanceId = instanceId.current;
+      const reading = actual.useWindowNarration();
       return narrationRound2Harness.teamMembershipRequired
         ? {
-            kind: "narrating" as const,
-            cause: "no-usable-host" as const,
-            variant: { kind: "team-membership-required" as const },
+            ...reading,
+            narration: {
+              kind: "narrating" as const,
+              cause: "no-usable-host" as const,
+              variant: { kind: "team-membership-required" as const },
+            },
           }
-        : narration;
+        : reading;
     },
   };
 });
@@ -123,6 +243,17 @@ vi.mock("@/lib/app-version", () => ({
   getClientAppVersion: () => "1.5.0",
   getClientAppVersionLabel: () => "1.5.0",
 }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (load) => {
+    const actual =
+      await load<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 const LOCAL_HOST_ID = "local-host";
 const REMOTE_HOST_ID = "remote-host";
@@ -245,6 +376,12 @@ function renderHost(
   return renderHostWithGate(presentation, bypassed, traycerCli, GATE_OPEN);
 }
 
+function buttonsOf(surface: HTMLElement): readonly (string | null)[] {
+  return within(surface)
+    .getAllByRole("button")
+    .map((button) => button.textContent);
+}
+
 /**
  * `renderHost` with the gate state stated explicitly. Used by the cold-start
  * fixtures, which are describing a LAUNCH and therefore need the blocking gate
@@ -268,7 +405,7 @@ function renderHostWithGate(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
@@ -276,6 +413,168 @@ function renderHostWithGate(
         >
           <WindowHostModalHost bypassed={bypassed} />
         </HostReadinessControllerContext.Provider>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return { ...rendered, runnerHost };
+}
+
+interface ModalHostRuntimeFixture {
+  readonly auth: AuthService;
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  readonly directory: HostDirectoryService;
+  readonly rows: { current: readonly RemoteHostDirectoryEntry[] };
+  readonly runnerHost: MockRunnerHost;
+  readonly runtime: HostRuntime<HostRpcRegistry>;
+}
+
+type HostPolicyFetchMode = "normal" | "fail-update";
+
+const modalHostRuntimeFixtures: ModalHostRuntimeFixture[] = [];
+const runtimeFetchRestorers: Array<() => void> = [];
+let hostPolicyPatchCalls = 0;
+
+function remoteHostEntry(
+  appVersion: string,
+  updateState: "current" | "pending",
+): RemoteHostDirectoryEntry {
+  const entry = remoteEntry(REMOTE_HOST_ID, null);
+  return {
+    ...entry,
+    version: "9.9.9",
+    remoteStatus: {
+      ...entry.remoteStatus,
+      appVersion,
+      updateState,
+    },
+  };
+}
+
+function installRuntimeFetch(mode: HostPolicyFetchMode): void {
+  const restoreValidation = installAuthValidationFetch();
+  runtimeFetchRestorers.push(restoreValidation);
+  if (mode === "normal") return;
+
+  const validationFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      let url: string;
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.toString();
+      } else {
+        url = input.url;
+      }
+      if (
+        init?.method === "PATCH" &&
+        url.includes(`/api/v3/hosts/${REMOTE_HOST_ID}`)
+      ) {
+        hostPolicyPatchCalls += 1;
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      return validationFetch(input, init);
+    },
+  });
+}
+
+async function createModalHostRuntimeFixture(
+  entry: RemoteHostDirectoryEntry,
+  fetchMode: HostPolicyFetchMode,
+): Promise<ModalHostRuntimeFixture> {
+  installRuntimeFetch(fetchMode);
+  const rows: ModalHostRuntimeFixture["rows"] = { current: [entry] };
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: false,
+    traycerCli: undefined,
+  });
+  const auth = new AuthService({ runnerHost });
+  await runnerHost.tokenStore.signIn(
+    { token: "user-token", refreshToken: "user-token-refresh" },
+    { id: "user-1", email: "test@example.com", name: "Test User" },
+  );
+  await auth.start();
+
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () =>
+      Promise.resolve({ kind: "hosts", entries: rows.current }),
+    onRegistryPollTick: null,
+    authContextId: () => "user-1",
+    credentialGeneration: () => 0,
+    localHostIdSeeder: () => Promise.resolve(null),
+  });
+  await directory.start();
+  await directory.refresh();
+
+  let requestSeq = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    onHostTokenRenewal: () => undefined,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `modal-host-${++requestSeq}`,
+      handlers: {},
+    }),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+    ),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    connectionRegistry: null,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => null,
+  });
+  const fixture: ModalHostRuntimeFixture = {
+    auth,
+    binding: {
+      runtime,
+      hostClient: runtime.hostClient,
+      directory,
+      auth,
+      hostId: null,
+    },
+    directory,
+    rows,
+    runnerHost,
+    runtime,
+  };
+  modalHostRuntimeFixtures.push(fixture);
+  return fixture;
+}
+
+function renderHostWithRuntime(
+  fixture: ModalHostRuntimeFixture,
+  presentation: DefaultHostReadinessPresentation,
+  bypassed: boolean,
+  readiness: SurfaceReadiness,
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={fixture.runnerHost}>
+        <HostRuntimeContext.Provider value={fixture.binding}>
+          <HostReadinessControllerContext.Provider
+            value={controllerFor(presentation, readiness)}
+          >
+            <WindowHostModalHost bypassed={bypassed} />
+          </HostReadinessControllerContext.Provider>
+        </HostRuntimeContext.Provider>
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
@@ -295,8 +594,12 @@ const BOOTSTRAP_MARKERS = {
 };
 
 beforeEach(() => {
+  remoteSocketFactoryHarness.delegate = null;
+  vi.mocked(toast).mockClear();
   hostStatus.data = undefined;
   controllerStatus.data = undefined;
+  authErrorToastHarness.show.mockReset();
+  hostPolicyPatchCalls = 0;
   // `ReportIssueAction` gates on this store, defaulting to `false` - so every
   // fixture that checks Report issue's PRESENCE needs it true first, or the
   // absence would be satisfied by the store gate rather than by
@@ -307,6 +610,8 @@ beforeEach(() => {
   signOutRound2Harness.signOut.mockReset();
   signOutRound2Harness.signOut.mockResolvedValue(false);
   narrationRound2Harness.teamMembershipRequired = false;
+  narrationRound2Harness.nextInstanceId = 0;
+  narrationRound2Harness.activeInstanceId = 0;
   useSignOutConfirmStore.getState().setOpen(false);
   // SIGNED IN, because production is: this component is mounted only for a
   // signed-in user (`useWindowNarration`'s latch doc leans on exactly that -
@@ -322,10 +627,27 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  remoteSocketFactoryHarness.delegate = null;
+  retireAllRemoteSessions();
+  for (const socket of FakeNativeWebSocket.instances) {
+    socket.fireClose(1006, "test teardown");
+  }
+  FakeNativeWebSocket.instances.length = 0;
+  vi.unstubAllGlobals();
   cleanup();
+  for (const fixture of modalHostRuntimeFixtures.splice(0)) {
+    fixture.runtime.dispose();
+    fixture.directory.dispose();
+    fixture.auth.dispose();
+  }
+  for (const restoreFetch of runtimeFetchRestorers.splice(0)) {
+    restoreFetch();
+  }
   useSelectionAuthorityStore.getState().reset();
+  useHostDoorStateStore.setState({ byHost: new Map() });
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  vi.restoreAllMocks();
   useSignOutConfirmStore.getState().setOpen(false);
   setMobileApp(false);
 });
@@ -373,6 +695,525 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByText("This computer belongs to a team")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
+  });
+
+  it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
+    const hostId = "host-token-older-host-cover";
+    const hostToken = "host-only-token";
+    const signInToken = "sign-in-token";
+    let mintCalls = 0;
+    let signInRecoveryCalls = 0;
+    clearHostDoorState(hostId);
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+
+    const provider = newProvider();
+    signIn(provider, USER_A, signInToken);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: hostToken,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      hostTokens.era(USER_A),
+    );
+    const target = { ...mockLocalHostEntry, hostId, version: null };
+    const client = buildHostStreamClient({
+      target,
+      endpoint: () =>
+        target.websocketUrl === null
+          ? null
+          : { hostId, websocketUrl: target.websocketUrl },
+      bearer: liveBearer(provider),
+      cloudAuthorized: () => true,
+      authnBaseUrl: "https://authn.test",
+      auth: {
+        revalidateForReconnect: () => {
+          signInRecoveryCalls += 1;
+          return Promise.resolve("rejected");
+        },
+      },
+      hostTokens,
+      userId: USER_A,
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (client === null) throw new Error("local stream client did not build");
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+
+    try {
+      applySnapshot({ targetHostId: hostId });
+      renderHost(EMPTY_PRESENTATION, false, undefined);
+      await waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(1),
+      );
+      const socket = FakeNativeWebSocket.instances.at(0);
+      if (socket === undefined) throw new Error("host socket missing");
+      socket.fireOpen();
+      await waitFor(() =>
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+      );
+      const open = sentFramesOfKind(socket, "open").at(0);
+      if (open === undefined) throw new Error("host open frame missing");
+      expect(open.token).toBe(hostToken);
+      expect(JSON.stringify(open)).not.toContain(signInToken);
+
+      act(() => {
+        socket.fireMessage(
+          JSON.stringify({
+            kind: "fatalError",
+            details: {
+              code: "UNAUTHORIZED",
+              reason: "refused at the host door",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
+          }),
+        );
+      });
+
+      await waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("older-host"),
+      );
+      expect(
+        (await screen.findByTestId("window-host-modal-title")).textContent,
+      ).toBe("Host update needed");
+      expect(
+        screen.getByTestId("window-host-modal-update-host").textContent,
+      ).toBe("Update now");
+      expect(
+        screen.getByTestId("window-host-modal-incompatible-detail").textContent,
+      ).not.toContain("Host version:");
+      expect(signInRecoveryCalls).toBe(0);
+      expect(mintCalls).toBe(0);
+      expect(hostTokens.current(USER_A, hostId)?.token).toBe(hostToken);
+    } finally {
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    }
+  });
+
+  it("a served remote window follows its live directory row below the floor without replacing the window", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [lease({ hostId: REMOTE_HOST_ID, status: "ready", dead: null })],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    expect(screen.queryByTestId("window-host-modal")).toBeNull();
+    const narrationInstanceId = narrationRound2Harness.activeInstanceId;
+    expect(narrationInstanceId).not.toBe(0);
+    const atFloor = fixture.directory.findById(REMOTE_HOST_ID);
+    if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+      throw new Error("the selected remote directory row was missing");
+    }
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      REMOTE_HOST_ID,
+    );
+    expect(atFloor.version).toBe("9.9.9");
+    expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+    await act(async () => {
+      fixture.rows.current = [remoteHostEntry("1.5.4", "current")];
+      await fixture.directory.refresh();
+    });
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(narrationRound2Harness.activeInstanceId).toBe(narrationInstanceId);
+    const belowFloor = fixture.directory.findById(REMOTE_HOST_ID);
+    if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+      throw new Error("the downgraded remote directory row was missing");
+    }
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      REMOTE_HOST_ID,
+    );
+    expect(belowFloor.version).toBe(atFloor.version);
+    expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+  });
+
+  it("keeps the real older-host cover unchanged when a warm remote session's linger redial fails", async () => {
+    const peer = new RemoteMuxTestPeer();
+    const relayAttachUrl = "wss://relay.test/attach";
+    const hostId = REMOTE_HOST_ID;
+    const floorEntry: RemoteHostDirectoryEntry = {
+      ...remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+      publicKey: peer.hostPublicKey,
+      websocketUrl: relayAttachUrl,
+    };
+    const fixture = await createModalHostRuntimeFixture(floorEntry, "normal");
+    applySnapshot({
+      attached: true,
+      effectiveHostId: hostId,
+      targetHostId: hostId,
+      leases: [lease({ hostId, status: "ready", dead: null })],
+    });
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+    expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      "user-1",
+      hostId,
+      {
+        token: "host-only-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      hostTokens.era("user-1"),
+    );
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            grant: "relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "relay-session-grant",
+            session_grant_expires_in: 300,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sockets: StreamWebSocketLike[] = [];
+    let dialAttempts = 0;
+    const failedRedial = Promise.withResolvers<void>();
+    const webSocketFactory: IStreamWebSocketFactory = {
+      create: (url, priority) => {
+        dialAttempts += 1;
+        if (dialAttempts === 1) {
+          const socket = peer.factory.create(url, priority);
+          sockets.push(socket);
+          return socket;
+        }
+
+        const failedSocket: StreamWebSocketLike = {
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: () => undefined,
+          close: () => undefined,
+        };
+        sockets.push(failedSocket);
+        queueMicrotask(() => {
+          const onerror = failedSocket.onerror;
+          if (onerror === null) {
+            failedRedial.reject(
+              new Error("failed redial socket had no error handler"),
+            );
+            return;
+          }
+          onerror({ message: "relay network unavailable" });
+          failedRedial.resolve();
+        });
+        return failedSocket;
+      },
+    };
+    remoteSocketFactoryHarness.delegate = webSocketFactory;
+    const provider = newProvider();
+    signIn(provider, "user-1", "user-token");
+    const bearer = liveBearer(provider);
+    const auth: StreamAuthRevalidator = {
+      revalidateForReconnect: () => Promise.resolve("rotated"),
+    };
+    const client = buildHostStreamClient({
+      target: floorEntry,
+      endpoint: () => null,
+      bearer,
+      cloudAuthorized: () => true,
+      authnBaseUrl: "http://localhost:5005",
+      auth,
+      hostTokens,
+      userId: "user-1",
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (client === null) throw new Error("remote stream client did not build");
+    const sharedClient = buildHostStreamClient({
+      target: floorEntry,
+      endpoint: () => null,
+      bearer,
+      cloudAuthorized: () => true,
+      authnBaseUrl: "http://localhost:5005",
+      auth,
+      hostTokens,
+      userId: "user-1",
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (sharedClient === null)
+      throw new Error("shared remote stream client did not build");
+    const stream = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const sharedStream = sharedClient.subscribe("epic.subscribe", {
+      epicId: "epic-b",
+    });
+
+    const toastError = vi.spyOn(toast, "error");
+    let usingFakeTimers = false;
+    try {
+      await waitFor(() => expect(peer.openCount).toBe(1));
+      await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
+      expect(dialAttempts).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(peer.errors).toEqual([]);
+      const atFloor = fixture.directory.findById(hostId);
+      if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+        throw new Error("the connected remote directory row was missing");
+      }
+      expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+      await act(async () => {
+        fixture.rows.current = [
+          {
+            ...remoteHostEntry("1.5.4", "current"),
+            publicKey: peer.hostPublicKey,
+            websocketUrl: relayAttachUrl,
+          },
+        ];
+        await fixture.directory.refresh();
+      });
+
+      const surface = await screen.findByTestId("window-host-modal");
+      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+      expect(surface.getAttribute("data-variant")).toBe("update-host");
+      expect(
+        within(surface).getByTestId("window-host-modal-title").textContent,
+      ).toBe("Host update needed");
+      expect(
+        within(surface).getByTestId("window-host-modal-description")
+          .textContent,
+      ).toBe(
+        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+      );
+      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+        hostId,
+      );
+
+      vi.useFakeTimers();
+      usingFakeTimers = true;
+      stream.close();
+      sharedStream.close();
+      client.close("release into shared-session linger");
+      sharedClient.close("release into shared-session linger");
+      expect(hasReadyRemoteSession(hostId)).toBe(true);
+      expect(client.isClosed()).toBe(false);
+
+      const firstSocket = sockets.at(0);
+      if (firstSocket === undefined || firstSocket.onclose === null) {
+        throw new Error("established relay socket had no close handler");
+      }
+      // A ready session's first recovery redial uses the immediate rung.
+      await act(async () => {
+        firstSocket.onclose?.({
+          code: 1006,
+          reason: "relay connection interrupted",
+          wasClean: false,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await failedRedial.promise;
+      });
+      expect(dialAttempts).toBe(2);
+      expect(hasReadyRemoteSession(hostId)).toBe(false);
+      expect(client.isClosed()).toBe(false);
+      const belowFloor = fixture.directory.findById(hostId);
+      if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+        throw new Error("the downgraded remote directory row was missing");
+      }
+      expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+        hostId,
+      );
+      expect(screen.getByTestId("window-host-modal")).toBe(surface);
+      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+      expect(surface.getAttribute("data-variant")).toBe("update-host");
+      expect(
+        within(surface).getByTestId("window-host-modal-title").textContent,
+      ).toBe("Host update needed");
+      expect(
+        within(surface).getByTestId("window-host-modal-description")
+          .textContent,
+      ).toBe(
+        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+      );
+      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+      expect(toast).not.toHaveBeenCalled();
+      expect(toastError).not.toHaveBeenCalled();
+      expect(authErrorToastHarness.show).not.toHaveBeenCalled();
+    } finally {
+      stream.close();
+      sharedStream.close();
+      client.close("test complete");
+      sharedClient.close("test complete");
+      toastError.mockRestore();
+      remoteSocketFactoryHarness.delegate = null;
+      clearHostDoorState(hostId);
+      if (usingFakeTimers) {
+        retireAllRemoteSessions();
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it("the real older-host cover offers Update now and Open settings before a remote update is pending", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
+  it("the real older-host cover replaces Update now with the directory's pending lines", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "pending"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+    expect(within(surface).getByText("Update pending")).toBeTruthy();
+    expect(
+      within(surface).getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
+  it("the real older-host cover restores its actions after a failed update and keeps the auth toast", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "fail-update",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    fireEvent.click(
+      within(surface).getByTestId("window-host-modal-update-host"),
+    );
+
+    await waitFor(() => {
+      expect(hostPolicyPatchCalls).toBe(1);
+      expect(authErrorToastHarness.show).toHaveBeenCalledTimes(1);
+    });
+    const toastCall = authErrorToastHarness.show.mock.calls.at(0);
+    if (toastCall === undefined)
+      throw new Error("update failure toast missing");
+    expect(toastCall[1]).toBe("Couldn't update this host.");
+    await waitFor(() => {
+      const updateButton = within(surface).getByTestId(
+        "window-host-modal-update-host",
+      );
+      if (!(updateButton instanceof HTMLButtonElement)) {
+        throw new Error("Update now control is not a button");
+      }
+      expect(updateButton.disabled).toBe(false);
+    });
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
   });
 
   it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {
@@ -435,6 +1276,12 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+    expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Show details",
+      "Retry",
+      "Open settings",
+      "Report issue",
+    ]);
   });
 
   // `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
@@ -753,6 +1600,48 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings.textContent).toContain("Open settings");
   });
 
+  it("cold-start older host keeps the update title and exact remote description without Report issue", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [
+        lease({
+          hostId: REMOTE_HOST_ID,
+          status: "connecting",
+          dead: null,
+        }),
+      ],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_BLOCKING,
+    );
+
+    const card = await screen.findByTestId("window-host-startup-card");
+    expect(card.getAttribute("data-cause")).toBe("cold-start");
+    expect(card.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(card).getByTestId("window-host-startup-card-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(card).getByTestId("window-host-startup-card-description")
+        .textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(
+      within(card).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
   it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
     // The row most likely to get this wrong later: Retry and Report issue sit
     // adjacent in the same row and share the same underlying state, so it is
@@ -828,16 +1717,19 @@ describe("<WindowHostModalHost />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
-    expect(
-      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
-    ).toBe("cold-start");
+    const card = screen.getByTestId("window-host-startup-card");
+    expect(card.getAttribute("data-cause")).toBe("cold-start");
+    expect(card.getAttribute("data-variant")).toBe("offline");
     const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
     // A SETTLED failure gets its heading back - a crash report under no title
     // reads as debris. This is the one cold-start face that is titled.
     expect(
       screen.getByTestId("window-host-startup-card-title").textContent,
-    ).toContain("Traycer Host didn't start");
+    ).toBe("Traycer Host didn't start");
+    expect(
+      screen.queryByTestId("window-host-startup-card-description"),
+    ).toBeNull();
 
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
@@ -1012,7 +1904,7 @@ describe("<WindowHostModalHost />", () => {
     ).toContain("Restarting Traycer Host…");
   });
 
-  it("update-host: offers Update host when the HOST is the outdated leg", async () => {
+  it("update-host: offers Update now and Open settings, and no Report issue, when the HOST is the outdated leg", async () => {
     applySnapshot({
       attached: true,
       effectiveHostId: null,
@@ -1047,17 +1939,18 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-variant"),
     ).toBe("update-host");
-    expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
+    expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Update now",
+      "Open settings",
+    ]);
   });
 
-  it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
+  it("arm 2: a non-target incompatible host is named and can be updated directly", async () => {
     // `deriveNoHostVariant` arm 2 - "some OTHER lease is dead because it is
     // incompatible", reached when the target is dead for an unrelated reason.
     // Arm 1 (target IS the incompatible host) is what the two tests around this
-    // one cover, and on that arm the named host and the acted-on host are the
-    // same machine, which is why `canManageHost` reads as a sufficient guard.
-    // It is not: it asks "is the TARGET this machine", while the card names
-    // whichever host is incompatible. Here those differ.
+    // one cover. This arm proves the named remote host's update action stays
+    // available even though local provisioning belongs to the other target.
     const forceProvisioning = vi.fn();
     applySnapshot({
       attached: true,
@@ -1084,10 +1977,8 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       {
         ...EMPTY_PRESENTATION,
-        // `canManageHost` is TRUE here, and legitimately so: the target is this
-        // machine. That is exactly what makes the guard insufficient - it is
-        // satisfied by a fact about the target while the card is about a
-        // different host.
+        // Local provisioning applies to the target; the modal's update action
+        // applies to the separately named remote host.
         targetKind: "local",
         localBootIntent: true,
         canManageHost: true,
@@ -1111,14 +2002,14 @@ describe("<WindowHostModalHost />", () => {
       "0.9.0",
     );
 
-    // Fixed: no button, because this machine's provisioning cannot fix that
-    // machine's host. Asserted alongside a POSITIVE consequence - the card
-    // still names the incompatible host and now explains the absence - so this
-    // cannot pass on a build where the whole modal failed to render.
-    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
     expect(
       screen.getByTestId("window-host-modal-description").textContent,
-    ).toContain("can't be updated from here");
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
     expect(forceProvisioning).not.toHaveBeenCalled();
   });
 
@@ -1333,6 +2224,530 @@ describe("<WindowHostModalHost />", () => {
         panel.compareDocumentPosition(toggle) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeGreaterThan(0);
+    });
+  });
+
+  it("a computer that does not admit this account draws board C1's 'No reason known' state and nothing else, on every shell", async () => {
+    // A lane running on this machine, so the cover's silence about it is a
+    // decision rather than an absence of progress.
+    controllerStatus.data = {
+      mutation: {
+        kind: "respawn",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const shells = [
+      {
+        name: "desktop",
+        mobile: false,
+        gate: GATE_OPEN,
+        testId: "window-host-modal",
+      },
+      {
+        name: "phone",
+        mobile: true,
+        gate: GATE_OPEN,
+        testId: "window-host-startup-card",
+      },
+      {
+        name: "launch",
+        mobile: false,
+        gate: GATE_BLOCKING,
+        testId: "window-host-startup-card",
+      },
+    ] as const;
+    for (const shell of shells) {
+      setMobileApp(shell.mobile);
+      noteHostDoorState({
+        hostId: LOCAL_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [],
+      });
+      renderHostWithGate(
+        { ...EMPTY_PRESENTATION, targetKind: "local", canManageHost: true },
+        false,
+        new MockTraycerCli(),
+        shell.gate,
+      );
+
+      const surface = await screen.findByTestId(shell.testId);
+      expect(surface.getAttribute("data-variant"), shell.name).toBe(
+        "not-admitted",
+      );
+      const title = within(surface).getByRole("heading");
+      expect(title.textContent, shell.name).toBe(
+        "This account cannot access this computer",
+      );
+      expect(
+        within(surface).getByText("Switch accounts to use it."),
+      ).toBeTruthy();
+      expect(
+        within(surface)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+        shell.name,
+      ).toEqual(["Open settings"]);
+      expect(
+        within(surface)
+          .getByTestId("window-host-modal-open-settings")
+          .getAttribute("data-emphasis"),
+        shell.name,
+      ).toBe("link");
+      expect(
+        within(surface).queryByTestId("window-host-modal-progress"),
+        shell.name,
+      ).toBeNull();
+
+      cleanup();
+      useSelectionAuthorityStore.getState().reset();
+      useHostDoorStateStore.setState({ byHost: new Map() });
+    }
+  });
+
+  /**
+   * Draws the desktop dialog for one door state on the window's host and
+   * returns it. The presentation has failed and can manage the host, so every
+   * generic recovery (Retry, Report issue, diagnostics) would be offered if the
+   * door cover did not choose its own actions.
+   */
+  async function renderDoorCover(state: HostDoorState): Promise<{
+    readonly surface: HTMLElement;
+    readonly runnerHost: MockRunnerHost;
+  }> {
+    noteHostDoorState(state);
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [],
+    });
+    const { runnerHost } = renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        canManageHost: true,
+        provisioningError: new Error("install failed"),
+      },
+      false,
+      new MockTraycerCli(),
+      GATE_OPEN,
+    );
+    return {
+      surface: await screen.findByTestId("window-host-modal"),
+      runnerHost,
+    };
+  }
+
+  it("message 1, a token that cannot be had: its words and Open settings only", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-unavailable",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "We can't confirm access to this computer right now",
+    );
+    expect(
+      within(surface).getByText("We'll try again. Your draft is saved."),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 3, keys never fetched: its words, Retry and Open settings; Retry reconnects to that computer", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "keys-unavailable",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer needs to connect once before it can verify access",
+    );
+    expect(
+      within(surface).getByText("Check its connection, then retry."),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(LOCAL_HOST_ID, rebuildNow);
+    fireEvent.click(within(surface).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(rebuildNow).toHaveBeenCalledTimes(1));
+    stopHearing();
+  });
+
+  it("message 4, a wrong clock: its words, Retry and Open settings", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "clock-skew",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer's date or time appears incorrect",
+    );
+    expect(
+      within(surface).getByText(
+        "Enable automatic date and time on that computer, then retry.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+  });
+
+  it("message 5, an expired token: its words, Retry and Open settings", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-expired",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "Access needs to be renewed before you can reconnect",
+    );
+    expect(
+      within(surface).getByText(
+        "Connect to the internet and retry. Work already started remains on this computer.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+  });
+
+  it("message 5's Retry still reconnects when the new token cannot be had, and owns the failure", async () => {
+    useAuthStore.setState({
+      contextMetadata: { userId: "retry-user", username: "retry-user" },
+    });
+    const { surface, runnerHost } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-expired",
+      detail: null,
+    });
+    vi.spyOn(runnerHost.hostTokens, "obtain").mockRejectedValue(
+      new Error("token storage is unavailable"),
+    );
+    const warn = vi.spyOn(appLogger, "warn");
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(LOCAL_HOST_ID, rebuildNow);
+
+    fireEvent.click(within(surface).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "[host-door] retry token refresh failed",
+        { hostId: LOCAL_HOST_ID },
+      ),
+    );
+    expect(rebuildNow).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("window-host-modal")).toBe(surface);
+    stopHearing();
+  });
+
+  it("message 6, a broken enrolment: its words and Open settings only", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "enrolment-broken",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer's connection to the team needs repair",
+    );
+    expect(
+      within(surface).getByText(
+        "Ask a team administrator to restore it. Work is still stored here.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 7, a removed membership: its words and Open settings only", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "membership-removed",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "You no longer have access to this team's computer",
+    );
+    expect(
+      within(surface).getByText(
+        "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 8, not a member: Switch account and Open settings only", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "not-a-member",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer belongs to a team",
+    );
+    expect(
+      within(surface).getByText(
+        "This account is not a member. Switch accounts to use Traycer here.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Switch account", "Open settings"]);
+  });
+
+  it("unknown refusal keeps the offline cover and adds only its reason line", async () => {
+    const { surface } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "unrecognised-refusal",
+      detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "No host is available",
+    );
+    expect(
+      within(surface).getByText(
+        "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(surface).getByTestId("window-host-modal-refusal-detail")
+        .textContent,
+    ).toBe("Reason: UNAUTHORIZED");
+    expect(buttonsOf(surface)).toEqual([
+      "Retry",
+      "Open settings",
+      "Report issue",
+    ]);
+  });
+
+  async function renderDoorCoverCard(
+    state: HostDoorState,
+    shell: "phone" | "launch",
+  ): Promise<HTMLElement> {
+    setMobileApp(shell === "phone");
+    noteHostDoorState(state);
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [],
+    });
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        canManageHost: true,
+        provisioningError: new Error("install failed"),
+      },
+      false,
+      new MockTraycerCli(),
+      shell === "launch" ? GATE_BLOCKING : GATE_OPEN,
+    );
+    return screen.findByTestId("window-host-startup-card");
+  }
+
+  async function expectCardMessage(
+    shell: "phone" | "launch",
+    state: HostDoorState,
+    copy: {
+      readonly title: string;
+      readonly description: string;
+      readonly actions: readonly string[];
+    },
+  ): Promise<void> {
+    const surface = await renderDoorCoverCard(state, shell);
+    expect(
+      within(surface).getByTestId("window-host-startup-card-title").textContent,
+    ).toBe(copy.title);
+    expect(
+      within(surface).getByTestId("window-host-startup-card-description")
+        .textContent,
+    ).toBe(copy.description);
+    expect(buttonsOf(surface)).toEqual(copy.actions);
+    expect(
+      within(surface).queryByTestId("window-host-modal-progress"),
+    ).toBeNull();
+  }
+
+  describe("board C1 covers on the phone and launch cards", () => {
+    it("message 1 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "token-unavailable", detail: null },
+        {
+          title: "We can't confirm access to this computer right now",
+          description: "We'll try again. Your draft is saved.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 3 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "keys-unavailable", detail: null },
+        {
+          title:
+            "This computer needs to connect once before it can verify access",
+          description: "Check its connection, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 4 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "clock-skew", detail: null },
+        {
+          title: "This computer's date or time appears incorrect",
+          description:
+            "Enable automatic date and time on that computer, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 5 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "token-expired", detail: null },
+        {
+          title: "Access needs to be renewed before you can reconnect",
+          description:
+            "Connect to the internet and retry. Work already started remains on this computer.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 6 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "enrolment-broken", detail: null },
+        {
+          title: "This computer's connection to the team needs repair",
+          description:
+            "Ask a team administrator to restore it. Work is still stored here.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 7 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
+        {
+          title: "You no longer have access to this team's computer",
+          description:
+            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 8 on the phone card keeps its words, Switch account and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "not-a-member", detail: null },
+        {
+          title: "This computer belongs to a team",
+          description:
+            "This account is not a member. Switch accounts to use Traycer here.",
+          actions: ["Switch account", "Open settings"],
+        },
+      );
+    });
+
+    it("message 1 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "token-unavailable", detail: null },
+        {
+          title: "We can't confirm access to this computer right now",
+          description: "We'll try again. Your draft is saved.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 3 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "keys-unavailable", detail: null },
+        {
+          title:
+            "This computer needs to connect once before it can verify access",
+          description: "Check its connection, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 4 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "clock-skew", detail: null },
+        {
+          title: "This computer's date or time appears incorrect",
+          description:
+            "Enable automatic date and time on that computer, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 5 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "token-expired", detail: null },
+        {
+          title: "Access needs to be renewed before you can reconnect",
+          description:
+            "Connect to the internet and retry. Work already started remains on this computer.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 6 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "enrolment-broken", detail: null },
+        {
+          title: "This computer's connection to the team needs repair",
+          description:
+            "Ask a team administrator to restore it. Work is still stored here.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 7 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
+        {
+          title: "You no longer have access to this team's computer",
+          description:
+            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 8 on the launch card keeps its words, Switch account and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "not-a-member", detail: null },
+        {
+          title: "This computer belongs to a team",
+          description:
+            "This account is not a member. Switch accounts to use Traycer here.",
+          actions: ["Switch account", "Open settings"],
+        },
+      );
     });
   });
 

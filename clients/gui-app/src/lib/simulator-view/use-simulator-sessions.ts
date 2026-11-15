@@ -9,6 +9,10 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -56,9 +60,14 @@ export function useSimulatorSessionsForHost(args: {
     hostId === null || identityKey === null
       ? null
       : simulatorSessionsCoordinatorKey({ hostId, epicId, identityKey });
+  // A held coordinator outlives a null transport key while its stream
+  // re-dials, but not a row below the version floor: an older host cannot own
+  // the stream.
   const coordinatorKey =
     ownerKey !== null &&
     methodSupport !== false &&
+    (hostEntry === null ||
+      !hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)) &&
     (transportReady || hasSimulatorSessionsCoordinator(ownerKey))
       ? ownerKey
       : null;

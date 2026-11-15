@@ -90,6 +90,9 @@ vi.mock("@/lib/host", () => ({
     }
     return globalClientRef.value;
   },
+  // `HostTeamPeopleProvider` (around every landing tile) reads the runtime's
+  // client without requiring one; this world has the one client above.
+  useOptionalHostClient: () => globalClientRef.value,
 }));
 
 const stableOpenTransport = vi.hoisted(() => {

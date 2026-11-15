@@ -33,6 +33,7 @@ import {
   type SandboxVerbFetchResult,
   type SandboxWakeBudget,
 } from "../sandbox-control";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -1853,4 +1854,36 @@ describe("the IAP proxy credential", () => {
       Accept: "application/json",
     });
   });
+});
+
+describe("a redirect answered to a sandbox control call", () => {
+  it.each([
+    {
+      name: "a 302 with a Location",
+      answer: () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://elsewhere.test/sandboxes" },
+        }),
+      status: 302,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: createOpaqueRedirectResponse,
+      status: 0,
+    },
+  ])(
+    "reads $name as a network error and follows nothing",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer());
+
+      await expect(listSandboxesViaHttp(BASE, BEARER, null)).resolves.toEqual({
+        kind: "network-error",
+        detail: `the control plane answered HTTP ${status} without a typed refusal`,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+    },
+  );
 });

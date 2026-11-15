@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -98,7 +111,7 @@ function makeClient(hostId: string): HostClient<HostRpcRegistry> {
     label: hostId,
     kind: "remote",
     websocketUrl: "wss://mock-remote.invalid/rpc",
-    version: "1.1.11",
+    version: "2.0.0",
     transportDialability: "dialable",
   };
   const client = new HostClient<HostRpcRegistry>({
@@ -162,6 +175,35 @@ afterEach(() => {
 });
 
 describe("usePersonalHostScope", () => {
+  it("does not expose a client for an older remote host even when the host row still has a newer version field", () => {
+    const remoteBase = remoteEntry(WINDOW_HOST_ID, null);
+    const olderRemote: RemoteHostDirectoryEntry = {
+      ...remoteBase,
+      version: "9.9.9",
+      remoteStatus: {
+        ...remoteBase.remoteStatus,
+        appVersion: "1.5.4",
+      },
+    };
+    harness.hosts = [
+      hostScopeOptionFixture({
+        hostId: WINDOW_HOST_ID,
+        isLocalMachine: false,
+        isActive: true,
+        entry: olderRemote,
+      }),
+    ];
+    harness.activeHostId = WINDOW_HOST_ID;
+    harness.ambientClient = makeClient(WINDOW_HOST_ID);
+    harness.overrideClient = makeClient(WINDOW_HOST_ID);
+
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
+
+    expect(result.current.status).toBe("unreachable");
+    expect(harness.overrideClient).not.toBeNull();
+    expect(result.current.client).toBeNull();
+  });
+
   it("reads the window's own host while the Host group is pointed at another host", () => {
     installTwoHosts();
     const { result } = renderBothScopes(PICKED_HOST_ID);

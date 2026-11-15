@@ -26,7 +26,7 @@ import {
  */
 
 const FATAL_DETAILS = {
-  code: "FORBIDDEN",
+  code: "UNAUTHORIZED",
   reason: "refused at the door",
   incompatibleMethods: null,
   upgradeGuidance: null,
@@ -35,7 +35,7 @@ const FATAL_DETAILS = {
 const KNOWN_REASON = "not_admitted";
 
 const RESPONSE_ERROR = {
-  code: "FORBIDDEN",
+  code: "UNAUTHORIZED",
   message: "refused at the door",
 };
 
