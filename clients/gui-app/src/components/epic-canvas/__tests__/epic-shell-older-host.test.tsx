@@ -626,7 +626,23 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       await waitFor(() => {
         expect(document.body.textContent).toContain("Host update needed");
       });
-      const cover = await screen.findByTestId(testCase.cover);
+      const selection = useSelectionAuthorityStore.getState();
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId(testCase.cover),
+          JSON.stringify({
+            door: [...useHostDoorStateStore.getState().byHost.values()],
+            attached: selection.attached,
+            effective: selection.effectiveHostId,
+            target: selection.targetHostId,
+            leases: selection.leases,
+            testIds: [...document.querySelectorAll("[data-testid]")].map(
+              (element) => element.getAttribute("data-testid"),
+            ),
+          }),
+        ).not.toBeNull();
+      });
+      const cover = screen.getByTestId(testCase.cover);
       expect(within(cover).getByText("Host update needed")).toBeTruthy();
       await waitFor(() => {
         expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
