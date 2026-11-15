@@ -45,7 +45,6 @@ import {
   windowHostBoundary,
   resetTeamPageHarness,
   windowHostScopeMock,
-  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({

@@ -998,7 +998,7 @@ describe("a removed secret the list has moved to removed", () => {
       requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     let signInA = true;
     let heldRead = false;
-    let releaseRead = () => {
+    let releaseRead: () => void = () => {
       throw new Error("Retry did not start its versions read");
     };
     setTeamEnvironmentCloudOverride({
