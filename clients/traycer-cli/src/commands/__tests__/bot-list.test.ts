@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { StreamFrameEnvelope } from "@traycer/protocol/host-transport/stream-session";
 import {
   BOT_HOST_UPDATE_MESSAGE,
   BOT_SNAPSHOT_DEADLINE_MS,
 } from "../../internal/bot-host";
+import { hostTokenFailureCliError } from "../../internal/host-door-words";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandResult } from "../../runner/runner";
 import {
@@ -27,6 +29,7 @@ import {
   unsupportedRpcError,
 } from "./bot-test-support";
 import { buildBotListCommand, groupByEnvironment } from "../bot-list";
+import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -46,7 +49,58 @@ const hoisted = vi.hoisted(() => ({
   callHostRpc: vi.fn(),
   resolveEndpoint: vi.fn(),
   openLocalStreamClient: vi.fn(),
+  resolveHostAuth: vi.fn(),
+  validateIdentity: vi.fn(),
+  readHostOwnership: vi.fn(),
+  createCredentialsStore: vi.fn(),
+  createStoreBackedRevalidator: vi.fn(),
+  revalidateCurrentContext: vi.fn(),
+  refreshOutcome: "rotated" as "rotated" | "rejected" | "network-error",
+  refreshedToken: "refreshed-bearer",
 }));
+
+vi.mock("../../internal/host-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-auth")>();
+  return { ...actual, resolveHostAuth: hoisted.resolveHostAuth };
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >();
+    return {
+      ...actual,
+      readHostOwnershipViaHttp: (
+        ...callArgs: Parameters<typeof actual.readHostOwnershipViaHttp>
+      ) => hoisted.readHostOwnership(...callArgs),
+    };
+  },
+);
+
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    validateAuthTokenIdentityAccessOnly: hoisted.validateIdentity,
+  };
+});
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createCliCredentialsStore: hoisted.createCredentialsStore,
+    createStoreBackedRevalidator: hoisted.createStoreBackedRevalidator,
+  };
+});
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -71,15 +125,90 @@ const ENDPOINT = {
   websocketUrl: "ws://127.0.0.1:9999/rpc",
 };
 
-/** Wires the two list RPCs and the stream client a run of `bot list` sees. */
+function signInUser(input: {
+  readonly personalEnvironmentId: string | null;
+  readonly teams: readonly {
+    readonly teamId: string;
+    readonly environmentId: string;
+    readonly slug: string | null;
+  }[];
+}): AuthenticatedUser {
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    user: { ...base.user, id: "user-1" },
+    environments: {
+      personal: input.personalEnvironmentId,
+      teams: input.teams.map(({ teamId, environmentId }) => ({
+        teamId,
+        environmentId,
+      })),
+    },
+    teamSubscriptions: input.teams
+      .filter((team) => team.slug !== null)
+      .map(
+        ({ teamId, slug }) =>
+          ({
+            team: { id: teamId, slug },
+          }) as AuthenticatedUser["teamSubscriptions"][number],
+      ),
+  };
+}
+
+function signInUserFromDescriptors(
+  environments: readonly EnvironmentDescriptor[],
+): AuthenticatedUser {
+  const personal = environments.find(
+    (environment) => environment.label === "Personal",
+  );
+  return signInUser({
+    personalEnvironmentId: personal?.environmentId ?? null,
+    teams: environments
+      .filter((environment) => environment !== personal)
+      .map((environment) => ({
+        teamId: environment.ownerId,
+        environmentId: environment.environmentId,
+        slug: environment.label,
+      })),
+  });
+}
+
+/** Wires the sign-in identity, host RPC boundary, and stream client for `bot list`. */
 function stage(input: {
+  /** Environments carried by the sign-in identity response. */
   readonly environments: readonly EnvironmentDescriptor[];
+  /** Host-side answer, deliberately independent from the sign-in record. */
+  readonly hostEnvironments?: readonly EnvironmentDescriptor[];
+  readonly user?: AuthenticatedUser;
   readonly bots: readonly BotRecord[];
   readonly client: FakeStreamClient;
 }): void {
+  hoisted.resolveHostAuth.mockResolvedValue({
+    token: "sign-in-bearer",
+    authnBaseUrl: "https://authn.test",
+    userId: "user-1",
+  });
+  hoisted.validateIdentity.mockResolvedValue({
+    kind: "valid",
+    user: input.user ?? signInUserFromDescriptors(input.environments),
+  });
+  hoisted.createCredentialsStore.mockReturnValue({ dispose: vi.fn() });
+  hoisted.createStoreBackedRevalidator.mockImplementation(
+    (args: { readonly lease: { rotate(token: string): void } }) => {
+      hoisted.revalidateCurrentContext.mockImplementation(async () => {
+        if (hoisted.refreshOutcome === "rotated") {
+          args.lease.rotate(hoisted.refreshedToken);
+        }
+        return hoisted.refreshOutcome;
+      });
+      return { revalidateCurrentContext: hoisted.revalidateCurrentContext };
+    },
+  );
   hoisted.callHostRpc.mockImplementation(
     routeRpc({
-      "environment.list": () => ({ environments: input.environments }),
+      "environment.list": () => ({
+        environments: input.hostEnvironments ?? input.environments,
+      }),
       "bot.list": () => ({ bots: input.bots, mainBotIds: null }),
     }),
   );
@@ -108,7 +237,20 @@ async function runList(): Promise<CommandResult> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  hoisted.refreshOutcome = "rotated";
+  hoisted.refreshedToken = "refreshed-bearer";
   hoisted.resolveEndpoint.mockResolvedValue(ENDPOINT);
+  hoisted.resolveHostAuth.mockResolvedValue({
+    token: "sign-in-bearer",
+    authnBaseUrl: "https://authn.test",
+    userId: "user-1",
+  });
+  hoisted.validateIdentity.mockResolvedValue({
+    kind: "valid",
+    user: signInUser({ personalEnvironmentId: null, teams: [] }),
+  });
+  // No row for this computer: the sign-in's list is shown unchanged.
+  hoisted.readHostOwnership.mockResolvedValue({ kind: "not-found" });
 });
 
 afterEach(() => {
@@ -144,7 +286,7 @@ function botIdOf(session: FakeStreamSession): string {
 }
 
 describe("bot list", () => {
-  it("groups bots under their environment, in environment.list order, and marks this host's bots", async () => {
+  it("groups bots under the sign-in's environments, not environment.list, and marks this host's bots", async () => {
     const scout = botRecord({
       botId: BOT_ID_B,
       title: "Scout",
@@ -162,8 +304,9 @@ describe("bot list", () => {
         environmentDescriptor("env-personal", "Personal"),
         environmentDescriptor("env-team", "Acme"),
       ],
+      hostEnvironments: [environmentDescriptor("env-host-only", "Host only")],
       // The bot.list order is the reverse of the environment order, so the
-      // output order can only come from environment.list.
+      // output order comes from the sign-in's own identity response.
       bots: [tracy, scout],
       client: botSubscribeClient(
         snapshotAnswers([
@@ -217,6 +360,113 @@ describe("bot list", () => {
       ],
     });
     expect(result.exitCode).toBe(0);
+    expect(hoisted.validateIdentity).toHaveBeenCalledTimes(1);
+    expect(hoisted.validateIdentity.mock.calls[0]?.[1]).toBe("sign-in-bearer");
+    expect(hoisted.callHostRpc.mock.calls.map(([method]) => method)).toEqual([
+      "bot.list",
+    ]);
+  });
+
+  it("puts Personal first, sorts teams by slug then team id, and omits teams without a slug", async () => {
+    const user = signInUser({
+      personalEnvironmentId: "env-personal",
+      teams: [
+        { teamId: "team-z", environmentId: "env-z", slug: "acme" },
+        { teamId: "team-b", environmentId: "env-b", slug: "acme" },
+        { teamId: "team-a", environmentId: "env-a", slug: "beta" },
+        { teamId: "team-no-slug", environmentId: "env-no-slug", slug: null },
+      ],
+    });
+    stage({ environments: [], user, bots: [], client: botSubscribeClient({}) });
+
+    const result = await runList();
+
+    expect(result.data).toMatchObject({
+      environments: [
+        { environmentId: "env-personal", label: "Personal" },
+        { environmentId: "env-b", label: "acme" },
+        { environmentId: "env-z", label: "acme" },
+        { environmentId: "env-a", label: "beta" },
+      ],
+    });
+  });
+
+  it("returns environments after one sign-in refresh when the refreshed bearer is valid", async () => {
+    const user = signInUserFromDescriptors([
+      environmentDescriptor("env-sign-in", "Personal"),
+    ]);
+    stage({ environments: [], user, bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity
+      .mockResolvedValueOnce({ kind: "rejected" })
+      .mockResolvedValueOnce({ kind: "valid", user });
+
+    const result = await runList();
+
+    expect(result.human).toBe("Personal\n  no bots");
+    expect(
+      hoisted.validateIdentity.mock.calls.map(([, token]) => token),
+    ).toEqual(["sign-in-bearer", "refreshed-bearer"]);
+    expect(hoisted.createStoreBackedRevalidator).toHaveBeenCalledTimes(1);
+    expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a rejected sign-in refresh with the existing re-authentication line", async () => {
+    stage({ environments: [], bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity.mockResolvedValueOnce({ kind: "rejected" });
+    hoisted.refreshOutcome = "rejected";
+
+    await expect(runList()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message:
+        "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+      exitCode: 1,
+    });
+    expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+    expect(hoisted.validateIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a second sign-in refusal after one successful refresh with the existing re-authentication line", async () => {
+    stage({ environments: [], bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity
+      .mockResolvedValueOnce({ kind: "rejected" })
+      .mockResolvedValueOnce({ kind: "rejected" });
+
+    await expect(runList()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message:
+        "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+      exitCode: 1,
+    });
+    expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+    expect(
+      hoisted.validateIdentity.mock.calls.map(([, token]) => token),
+    ).toEqual(["sign-in-bearer", "refreshed-bearer"]);
+  });
+
+  it("reports authn unreachable with whoami's line when the sign-in read cannot reach authn", async () => {
+    stage({ environments: [], bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity.mockResolvedValue({ kind: "network-error" });
+
+    await expect(runList()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: "Could not reach the authn service; check your network.",
+      exitCode: 1,
+    });
+    expect(hoisted.revalidateCurrentContext).not.toHaveBeenCalled();
+  });
+
+  it("reports authn unreachable with whoami's line when the one sign-in refresh cannot reach authn", async () => {
+    stage({ environments: [], bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity.mockResolvedValueOnce({ kind: "rejected" });
+    hoisted.refreshOutcome = "network-error";
+
+    await expect(runList()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: "Could not reach the authn service; check your network.",
+      exitCode: 1,
+    });
+    expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+    expect(hoisted.validateIdentity).toHaveBeenCalledTimes(1);
   });
 
   it("prints '  no bots' under an environment that has none", async () => {
@@ -352,7 +602,7 @@ describe("bot list", () => {
     expect(result.human).not.toContain("env-gone");
   });
 
-  it("lists a bot naming an environment absent from environment.list under that environment's id", async () => {
+  it("lists a bot naming an environment absent from the sign-in record under that environment's id", async () => {
     const known = botRecord({
       botId: BOT_ID_A,
       title: "Known",
@@ -416,6 +666,155 @@ describe("bot list", () => {
     expect(result.human).toBe("You belong to no environments yet.");
     expect(result.data).toEqual({ environments: [] });
     expect(result.exitCode).toBe(0);
+  });
+
+  describe("on the computer authn's directory says whose it is", () => {
+    const PERSONAL = environmentDescriptor("env-personal", "Personal");
+    const ALPHA = environmentDescriptor("env-alpha", "alpha");
+    const BETA = environmentDescriptor("env-beta", "beta");
+    // `signInUserFromDescriptors` makes each team's id the descriptor's owner id.
+    const BETA_TEAM_ID = BETA.ownerId;
+
+    function stageThreeEnvironments(): void {
+      stage({
+        environments: [PERSONAL, ALPHA, BETA],
+        bots: [],
+        client: botSubscribeClient({}),
+      });
+    }
+
+    function ownedBy(
+      owner:
+        | { readonly kind: "team"; readonly id: string; readonly name: string }
+        | { readonly kind: "user"; readonly id: string },
+    ): void {
+      hoisted.readHostOwnership.mockResolvedValue({
+        kind: "ok",
+        host: {
+          hostId: THIS_HOST_ID,
+          owner,
+          kind: "machine",
+          remoteAccess: true,
+        },
+      });
+    }
+
+    it("lists only the owning team's environment on a team's computer", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "team", id: BETA_TEAM_ID, name: "beta" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [{ environmentId: "env-beta", label: "beta", bots: [] }],
+      });
+      expect(result.human).toBe("beta\n  no bots");
+      expect(result.exitCode).toBe(0);
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+      expect(hoisted.readHostOwnership).toHaveBeenCalledWith(
+        "https://authn.test",
+        "sign-in-bearer",
+        THIS_HOST_ID,
+      );
+    });
+
+    it("lists the sign-in's whole list, unchanged, on a personal computer", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "user", id: "user-1" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [
+          { environmentId: "env-personal", label: "Personal", bots: [] },
+          { environmentId: "env-alpha", label: "alpha", bots: [] },
+          { environmentId: "env-beta", label: "beta", bots: [] },
+        ],
+      });
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists the sign-in's whole list, unchanged, on a computer the directory has no row for", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "not-found" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [
+          { environmentId: "env-personal", label: "Personal", bots: [] },
+          { environmentId: "env-alpha", label: "alpha", bots: [] },
+          { environmentId: "env-beta", label: "beta", bots: [] },
+        ],
+      });
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports the stored credential rejected when authn refuses the directory read", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "unauthorized" });
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message:
+          "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+        exitCode: 1,
+      });
+    });
+
+    it("reports the ownership as unconfirmed when the directory cannot be reached", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "network-error" });
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: "This computer's ownership could not be confirmed. Try again.",
+        exitCode: 1,
+      });
+    });
+
+    it("reports the signed-out line when no sign-in is held at the directory read", async () => {
+      stageThreeEnvironments();
+      // The sign-in read before it succeeds; the directory read finds no sign-in.
+      hoisted.resolveHostAuth
+        .mockResolvedValueOnce({
+          token: "sign-in-bearer",
+          authnBaseUrl: "https://authn.test",
+          userId: "user-1",
+        })
+        .mockResolvedValue(null);
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+        message:
+          "traycer: not signed in - run `traycer login` to authenticate.",
+        exitCode: 1,
+      });
+      expect(hoisted.readHostOwnership).not.toHaveBeenCalled();
+    });
+
+    it("prints the door's own refusal, not the no-environments line, on a team's computer whose team the sign-in does not list", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "team", id: "team-not-listed", name: "outsiders" });
+      // The local open's mint answers `not-a-member`; `callHostRpc` then throws
+      // the CLI's own non-member line, which no `bot.list` answer replaces.
+      hoisted.callHostRpc.mockRejectedValue(
+        hostTokenFailureCliError({ kind: "not-a-member" }),
+      );
+
+      const failure = await runList().then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toMatchObject({
+        code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+        message:
+          "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
+        exitCode: 1,
+      });
+      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    });
   });
 
   it("opens one bot.subscribe per bot, closes each session, and closes the client afterwards", async () => {
@@ -684,30 +1083,21 @@ describe("bot list on a host without bots", () => {
     expect(error.exitCode).toBe(1);
   }
 
-  it.each(["bot.list", "environment.list"] as const)(
-    "rejects with the update message when %s is unsupported",
-    async (missing) => {
-      hoisted.callHostRpc.mockImplementation(
-        routeRpc({
-          "environment.list": () => {
-            if (missing === "environment.list") {
-              throw unsupportedRpcError("environment.list");
-            }
-            return { environments: [] };
-          },
-          "bot.list": () => {
-            if (missing === "bot.list") throw unsupportedRpcError("bot.list");
-            return { bots: [], mainBotIds: null };
-          },
-        }),
-      );
+  it("rejects with the update message when bot.list is unsupported", async () => {
+    hoisted.callHostRpc.mockImplementation(
+      routeRpc({
+        "environment.list": () => ({ environments: [] }),
+        "bot.list": () => {
+          throw unsupportedRpcError("bot.list");
+        },
+      }),
+    );
 
-      await expectUpdateMessage(runList());
+    await expectUpdateMessage(runList());
 
-      // The RPCs failed first: no stream client was ever opened.
-      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
-    },
-  );
+    // The bot RPC failed first: no stream client was ever opened.
+    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+  });
 
   it("rejects with the update message when bot.subscribe closes as incompatible for that method", async () => {
     const bot = botRecord({ botId: BOT_ID_A });
