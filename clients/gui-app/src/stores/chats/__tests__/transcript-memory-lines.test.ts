@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BotExchange } from "@/lib/bots/bot-exchanges";
 import type { BotMemoryChange } from "@traycer/protocol/host/bot/schemas";
 import { makeMessageAt } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
@@ -6,11 +7,13 @@ import {
   layout,
   windowedRows,
 } from "@/stores/chats/__tests__/transcript-line-test-support";
-import { createBotMemoryLineCollator } from "@/stores/chats/transcript-memory-lines";
+import { createBotLineCollator } from "@/stores/chats/transcript-bot-lines";
 import {
   transcriptListRows,
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
+
+const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 
 function changeAt(
   at: number,
@@ -36,7 +39,7 @@ function lineOf(row: TranscriptListRow) {
   return { row, segment };
 }
 
-describe("createBotMemoryLineCollator", () => {
+describe("memory lines from createBotLineCollator", () => {
   it("draws a run of changes with no row between them as one line placed among the rows", () => {
     const rows = channelRows(100, 400);
     const changes = [
@@ -45,7 +48,7 @@ describe("createBotMemoryLineCollator", () => {
       changeAt(300, { memory: "shared", action: "remove", entryId: "s2" }),
     ];
 
-    const merged = createBotMemoryLineCollator()(rows, changes);
+    const merged = createBotLineCollator()(rows, NO_EXCHANGES, changes);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -87,7 +90,7 @@ describe("createBotMemoryLineCollator", () => {
     const rows = channelRows(100, 300, 500);
     const changes = [changeAt(200, {}), changeAt(400, {}), changeAt(450, {})];
 
-    const merged = createBotMemoryLineCollator()(rows, changes);
+    const merged = createBotLineCollator()(rows, NO_EXCHANGES, changes);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -105,9 +108,9 @@ describe("createBotMemoryLineCollator", () => {
     const before = [changeAt(200, {}), changeAt(210, { action: "update" })];
     const after = [...before, changeAt(220, { action: "remove" })];
 
-    const collate = createBotMemoryLineCollator();
-    const first = collate(rows, before);
-    const second = collate(rows, after);
+    const collate = createBotLineCollator();
+    const first = collate(rows, NO_EXCHANGES, before);
+    const second = collate(rows, NO_EXCHANGES, after);
 
     expect(layout(first)).toEqual(["message-0", "bot-memory:change-200"]);
     expect(second[1].key).toBe(first[1].key);
@@ -125,24 +128,24 @@ describe("createBotMemoryLineCollator", () => {
     const rows = channelRows(300);
 
     expect(
-      layout(createBotMemoryLineCollator()(rows, [changeAt(100, {})])),
+      layout(createBotLineCollator()(rows, NO_EXCHANGES, [changeAt(100, {})])),
     ).toEqual(["bot-memory:change-100", "message-0"]);
   });
 
   it("returns the same rows when there is no change", () => {
     const rows = channelRows(100, 200);
 
-    expect(createBotMemoryLineCollator()(rows, [])).toBe(rows);
+    expect(createBotLineCollator()(rows, NO_EXCHANGES, [])).toBe(rows);
   });
 
   it("keeps the model of a line whose run is unchanged when a later run grows", () => {
     const rows = channelRows(100, 300, 500);
     const before = [changeAt(200, {}), changeAt(400, {})];
     const after = [...before, changeAt(450, {})];
-    const collate = createBotMemoryLineCollator();
-    const first = collate(rows, before);
+    const collate = createBotLineCollator();
+    const first = collate(rows, NO_EXCHANGES, before);
 
-    const second = collate(rows, after);
+    const second = collate(rows, NO_EXCHANGES, after);
 
     expect(layout(second)).toEqual(layout(first));
     expect(second[1]).toBe(first[1]);
@@ -156,10 +159,10 @@ describe("createBotMemoryLineCollator", () => {
       changeAt(200, {}),
       changeAt(210, { action: "update" }),
     ];
-    const collate = createBotMemoryLineCollator();
-    const first = collate(channelRows(100), changes);
+    const collate = createBotLineCollator();
+    const first = collate(channelRows(100), NO_EXCHANGES, changes);
 
-    const second = collate(channelRows(100, 300), changes);
+    const second = collate(channelRows(100, 300), NO_EXCHANGES, changes);
 
     expect(layout(first)).toEqual([
       "bot-memory:change-50",
@@ -178,12 +181,10 @@ describe("createBotMemoryLineCollator", () => {
 
   it("places the lines again when the rows move with their count unchanged", () => {
     const changes = [changeAt(300, {})];
-    const collate = createBotMemoryLineCollator();
-    expect(layout(collate(channelRows(100, 400), changes))).toEqual([
-      "message-0",
-      "bot-memory:change-300",
-      "message-1",
-    ]);
+    const collate = createBotLineCollator();
+    expect(
+      layout(collate(channelRows(100, 400), NO_EXCHANGES, changes)),
+    ).toEqual(["message-0", "bot-memory:change-300", "message-1"]);
 
     const slid = transcriptListRows({
       window: null,
@@ -191,7 +192,7 @@ describe("createBotMemoryLineCollator", () => {
       splitLongTurns: false,
     });
 
-    expect(layout(collate(slid, changes))).toEqual([
+    expect(layout(collate(slid, NO_EXCHANGES, changes))).toEqual([
       "bot-memory:change-300",
       "message-1",
       "message-2",
@@ -199,7 +200,7 @@ describe("createBotMemoryLineCollator", () => {
   });
 });
 
-describe("createBotMemoryLineCollator over a windowed transcript", () => {
+describe("memory lines from createBotLineCollator over a windowed transcript", () => {
   it("withholds changes whose place is hidden by a placeholder, until the rows around them hydrate", () => {
     const changes = [
       changeAt(50, {}),
@@ -208,12 +209,14 @@ describe("createBotMemoryLineCollator over a windowed transcript", () => {
       changeAt(600, {}),
     ];
 
-    const withheld = createBotMemoryLineCollator()(
+    const withheld = createBotLineCollator()(
       windowedRows([0, 2]),
+      NO_EXCHANGES,
       changes,
     );
-    const hydrated = createBotMemoryLineCollator()(
+    const hydrated = createBotLineCollator()(
       windowedRows([0, 1, 2]),
+      NO_EXCHANGES,
       changes,
     );
 
@@ -239,7 +242,7 @@ describe("createBotMemoryLineCollator over a windowed transcript", () => {
     const rows = windowedRows([0]);
 
     expect(
-      layout(createBotMemoryLineCollator()(rows, [changeAt(700, {})])),
+      layout(createBotLineCollator()(rows, NO_EXCHANGES, [changeAt(700, {})])),
     ).toEqual(layout(rows));
   });
 });

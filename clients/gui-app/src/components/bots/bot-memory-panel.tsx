@@ -220,6 +220,13 @@ type ListProps = BotMemoryPanelProps & {
 function MemoryList(props: ListProps): ReactNode {
   const { memory, botId, botTitle, focus } = props;
   const [query, setQuery] = useState("");
+  // A line opening the pane on its entries clears a search that could hide
+  // them. Only a new focus does: a search typed after it stays.
+  const [queryFocus, setQueryFocus] = useState(focus);
+  if (queryFocus !== focus) {
+    setQueryFocus(focus);
+    if (focus !== null) setQuery("");
+  }
   const marks = useMemoryMarks(memory.entries);
   const { own, shared } = memorySections(memory, botId, query);
   const searching = query.trim().length > 0;

@@ -84,10 +84,9 @@ import {
 } from "@/components/chat/chat-turn-minimap-logic";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
-import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
+import { createBotLineCollator } from "@/stores/chats/transcript-bot-lines";
 import type { BotExchange } from "@/lib/bots/bot-exchanges";
 import { BotMemoryLinesContext } from "@/components/chat/bot-memory-lines-context";
-import { createBotMemoryLineCollator } from "@/stores/chats/transcript-memory-lines";
 import type { BotMemoryChange } from "@traycer/protocol/host/bot/schemas";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -2225,31 +2224,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const splitLongTurns = !botChannel;
 
   // A bot's channel or thread draws its bot's messages with other bots
-  // (Tracy Bots, decision 174), then its changes to its memory (T373), as
-  // lines between its rows. Memory lines are laid among the exchange lines
-  // too, so the two never fold into one.
-  // Each collator remembers its last placement, so a streamed token re-reads
+  // (Tracy Bots, decision 174) and its changes to its memory (T373) as lines
+  // between its rows, both kinds in one pass so each closes the other's runs.
+  // The collator remembers its last placement, so a streamed token re-reads
   // nothing and rebuilds no line.
   const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
   const memoryChanges = use(BotMemoryLinesContext)?.changes ?? NO_CHANGES;
-  const [collateExchangeLines] = useState(createBotExchangeLineCollator);
-  const [collateMemoryLines] = useState(createBotMemoryLineCollator);
+  const [collateBotLines] = useState(createBotLineCollator);
   const listRows = useMemo(
     () =>
-      collateMemoryLines(
-        collateExchangeLines(
-          transcriptListRows({
-            window: transcriptWindow,
-            rendered: messages,
-            splitLongTurns,
-          }),
-          exchanges,
-        ),
+      collateBotLines(
+        transcriptListRows({
+          window: transcriptWindow,
+          rendered: messages,
+          splitLongTurns,
+        }),
+        exchanges,
         memoryChanges,
       ),
     [
-      collateExchangeLines,
-      collateMemoryLines,
+      collateBotLines,
       exchanges,
       memoryChanges,
       splitLongTurns,

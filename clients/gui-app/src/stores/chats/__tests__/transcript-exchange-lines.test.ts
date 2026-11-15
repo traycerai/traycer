@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BotMemoryChange } from "@traycer/protocol/host/bot/schemas";
 import { botExchangesOf, type BotExchange } from "@/lib/bots/bot-exchanges";
 import {
   BOT_ID,
@@ -14,11 +15,13 @@ import {
   layout,
   windowedRows,
 } from "@/stores/chats/__tests__/transcript-line-test-support";
-import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
+import { createBotLineCollator } from "@/stores/chats/transcript-bot-lines";
 import {
   transcriptListRows,
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
+
+const NO_CHANGES: ReadonlyArray<BotMemoryChange> = [];
 
 /** The bot's exchanges with `peer` at each time, classified from real feed rows. */
 function exchangesWith(
@@ -52,7 +55,7 @@ function lineOf(row: TranscriptListRow) {
   return { row, segment };
 }
 
-describe("createBotExchangeLineCollator", () => {
+describe("exchange lines from createBotLineCollator", () => {
   it("draws a run of exchanges with no row between them as one line placed among the rows", () => {
     const rows = channelRows(100, 400);
     const exchanges = exchangesWith(
@@ -61,7 +64,7 @@ describe("createBotExchangeLineCollator", () => {
       [RELEASE_BOT_ID, 300],
     );
 
-    const merged = createBotExchangeLineCollator()(rows, exchanges);
+    const merged = createBotLineCollator()(rows, exchanges, NO_CHANGES);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -83,7 +86,7 @@ describe("createBotExchangeLineCollator", () => {
       [DOCS_BOT_ID, 450],
     );
 
-    const merged = createBotExchangeLineCollator()(rows, exchanges);
+    const merged = createBotLineCollator()(rows, exchanges, NO_CHANGES);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -110,9 +113,9 @@ describe("createBotExchangeLineCollator", () => {
       [RELEASE_BOT_ID, 220],
     );
 
-    const collate = createBotExchangeLineCollator();
-    const first = collate(rows, before);
-    const second = collate(rows, after);
+    const collate = createBotLineCollator();
+    const first = collate(rows, before, NO_CHANGES);
+    const second = collate(rows, after, NO_CHANGES);
 
     expect(layout(first)).toEqual([
       "message-0",
@@ -136,16 +139,15 @@ describe("createBotExchangeLineCollator", () => {
     const rows = channelRows(300);
     const exchanges = exchangesWith([DOCS_BOT_ID, 100]);
 
-    expect(layout(createBotExchangeLineCollator()(rows, exchanges))).toEqual([
-      `bot-exchanges:${exchanges[0].key}`,
-      "message-0",
-    ]);
+    expect(
+      layout(createBotLineCollator()(rows, exchanges, NO_CHANGES)),
+    ).toEqual([`bot-exchanges:${exchanges[0].key}`, "message-0"]);
   });
 
   it("returns the same rows when the feed has no exchange", () => {
     const rows = channelRows(100, 200);
 
-    expect(createBotExchangeLineCollator()(rows, [])).toBe(rows);
+    expect(createBotLineCollator()(rows, [], NO_CHANGES)).toBe(rows);
   });
 });
 
@@ -184,20 +186,21 @@ function withContent(
   );
 }
 
-describe("createBotExchangeLineCollator across updates", () => {
+describe("exchange lines from createBotLineCollator across updates", () => {
   it("lays the lines it has among rows whose body alone changed, reading no message", () => {
     const rows = channelRows(100, 400);
     const counted = countingReads(
       exchangesWith([RELEASE_BOT_ID, 200], [DOCS_BOT_ID, 250]),
     );
-    const collate = createBotExchangeLineCollator();
-    const first = collate(rows, counted.exchanges);
+    const collate = createBotLineCollator();
+    const first = collate(rows, counted.exchanges, NO_CHANGES);
     expect(counted.reads()).toBeGreaterThan(0);
     counted.reset();
 
     const streamed = collate(
       withContent(rows, 1, "a longer body"),
       counted.exchanges,
+      NO_CHANGES,
     );
 
     expect(counted.reads()).toBe(0);
@@ -208,13 +211,11 @@ describe("createBotExchangeLineCollator across updates", () => {
 
   it("places the lines again when the rows move with their count unchanged, as a window sliding by one does", () => {
     const exchanges = exchangesWith([RELEASE_BOT_ID, 300]);
-    const collate = createBotExchangeLineCollator();
+    const collate = createBotLineCollator();
     const line = `bot-exchanges:${exchanges[0].key}`;
-    expect(layout(collate(channelRows(100, 400), exchanges))).toEqual([
-      "message-0",
-      line,
-      "message-1",
-    ]);
+    expect(
+      layout(collate(channelRows(100, 400), exchanges, NO_CHANGES)),
+    ).toEqual(["message-0", line, "message-1"]);
 
     const slid = transcriptListRows({
       window: null,
@@ -222,7 +223,7 @@ describe("createBotExchangeLineCollator across updates", () => {
       splitLongTurns: false,
     });
 
-    expect(layout(collate(slid, exchanges))).toEqual([
+    expect(layout(collate(slid, exchanges, NO_CHANGES))).toEqual([
       line,
       "message-1",
       "message-2",
@@ -237,10 +238,10 @@ describe("createBotExchangeLineCollator across updates", () => {
       [RELEASE_BOT_ID, 400],
       [RELEASE_BOT_ID, 450],
     );
-    const collate = createBotExchangeLineCollator();
-    const first = collate(rows, before);
+    const collate = createBotLineCollator();
+    const first = collate(rows, before, NO_CHANGES);
 
-    const second = collate(rows, after);
+    const second = collate(rows, after, NO_CHANGES);
 
     expect(layout(second)).toEqual(layout(first));
     expect(second[1]).toBe(first[1]);
@@ -259,10 +260,10 @@ describe("createBotExchangeLineCollator across updates", () => {
       [RELEASE_BOT_ID, 200],
       [RELEASE_BOT_ID, 210],
     );
-    const collate = createBotExchangeLineCollator();
-    const first = collate(channelRows(100), exchanges);
+    const collate = createBotLineCollator();
+    const first = collate(channelRows(100), exchanges, NO_CHANGES);
 
-    const second = collate(channelRows(100, 300), exchanges);
+    const second = collate(channelRows(100, 300), exchanges, NO_CHANGES);
 
     expect(layout(first)).toEqual([
       `bot-exchanges:${exchanges[0].key}`,
@@ -280,7 +281,7 @@ describe("createBotExchangeLineCollator across updates", () => {
   });
 });
 
-describe("createBotExchangeLineCollator over a windowed transcript", () => {
+describe("exchange lines from createBotLineCollator over a windowed transcript", () => {
   it("withholds exchanges whose place is hidden by a placeholder, until the rows around them hydrate", () => {
     // Rows at 100 and 500 are served; the row between them, at 300, is not.
     const exchanges = exchangesWith(
@@ -290,13 +291,15 @@ describe("createBotExchangeLineCollator over a windowed transcript", () => {
       [DOCS_BOT_ID, 600],
     );
 
-    const withheld = createBotExchangeLineCollator()(
+    const withheld = createBotLineCollator()(
       windowedRows([0, 2]),
       exchanges,
+      NO_CHANGES,
     );
-    const hydrated = createBotExchangeLineCollator()(
+    const hydrated = createBotLineCollator()(
       windowedRows([0, 1, 2]),
       exchanges,
+      NO_CHANGES,
     );
 
     expect(layout(withheld)).toEqual([
@@ -321,8 +324,8 @@ describe("createBotExchangeLineCollator over a windowed transcript", () => {
     const rows = windowedRows([0]);
     const exchanges = exchangesWith([RELEASE_BOT_ID, 700]);
 
-    expect(layout(createBotExchangeLineCollator()(rows, exchanges))).toEqual(
-      layout(rows),
-    );
+    expect(
+      layout(createBotLineCollator()(rows, exchanges, NO_CHANGES)),
+    ).toEqual(layout(rows));
   });
 });

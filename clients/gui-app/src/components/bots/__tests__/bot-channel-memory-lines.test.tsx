@@ -11,7 +11,13 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
@@ -145,10 +151,8 @@ vi.mock("@/components/chat/chat-messages", async () => {
     await import("@/components/chat/bot-exchange-lines-context");
   const { BotMemoryLinesContext } =
     await import("@/components/chat/bot-memory-lines-context");
-  const { createBotExchangeLineCollator } =
-    await import("@/stores/chats/transcript-exchange-lines");
-  const { createBotMemoryLineCollator } =
-    await import("@/stores/chats/transcript-memory-lines");
+  const { createBotLineCollator } =
+    await import("@/stores/chats/transcript-bot-lines");
   const { transcriptListRows } =
     await import("@/stores/chats/transcript-list-rows");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
@@ -157,17 +161,14 @@ vi.mock("@/components/chat/chat-messages", async () => {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
     }) => {
-      const [collateExchangeLines] = useState(createBotExchangeLineCollator);
-      const [collateMemoryLines] = useState(createBotMemoryLineCollator);
-      const rows = collateMemoryLines(
-        collateExchangeLines(
-          transcriptListRows({
-            window: null,
-            rendered: props.messages,
-            splitLongTurns: false,
-          }),
-          use(BotExchangeLinesContext)?.exchanges ?? [],
-        ),
+      const [collate] = useState(createBotLineCollator);
+      const rows = collate(
+        transcriptListRows({
+          window: null,
+          rendered: props.messages,
+          splitLongTurns: false,
+        }),
+        use(BotExchangeLinesContext)?.exchanges ?? [],
         use(BotMemoryLinesContext)?.changes ?? [],
       );
       return (
@@ -410,5 +411,32 @@ describe("opening a memory line", () => {
       kind: "memory",
       back: { anchorMessageId: THREAD_OPEN.anchorMessageId },
     });
+  });
+});
+
+describe("opening a memory line over a pane search", () => {
+  it("clears a filter that hides the entry the line names, and marks the entry", async () => {
+    holdReady([CHANNEL_CHANGE]);
+    render(<MountedKnowingChannel />);
+    const line = await within(list(CHANNEL_LIST)).findByTestId(
+      "bot-memory-line-segment",
+    );
+    fireEvent.click(line);
+    const pane = await screen.findByTestId("bot-memory-panel");
+    const find = within(pane).getByTestId("bot-memory-find");
+    if (!(find instanceof HTMLInputElement)) throw new Error("not an input");
+    fireEvent.change(find, { target: { value: "Codex CLI" } });
+    expect(
+      within(pane)
+        .getAllByTestId("bot-memory-entry")
+        .map((row) => row.getAttribute("data-entry-id")),
+    ).toEqual([UNCHANGED_ENTRY_ID]);
+
+    fireEvent.click(
+      await within(list(CHANNEL_LIST)).findByTestId("bot-memory-line-segment"),
+    );
+
+    expect(find.value).toBe("");
+    expect(focusOf(pane)[SHARED_ENTRY_ID]).toBe("true");
   });
 });

@@ -3,7 +3,13 @@
  * are marked in either section, the focused section is scrolled into view,
  * and the entries gone since are said so.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotMemory,
@@ -203,5 +209,60 @@ describe("BotMemoryPanel focus", () => {
     expect(document.querySelector("[data-focused]")).toBeNull();
     expect(screen.queryByTestId("bot-memory-focus-gone")).toBeNull();
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+describe("BotMemoryPanel focus over an existing search", () => {
+  function panelProps(focus: BotMemoryFocus | null): BotMemoryPanelProps {
+    return {
+      botId: BOT_ID,
+      hostId: "host-1",
+      environmentId: "env-1",
+      botTitle: "Tracy",
+      channelId: "channel-1",
+      trunkChatId: "trunk-1",
+      threads: [],
+      botNameOf: () => null,
+      back: null,
+      onBack: null,
+      onClose: vi.fn(),
+      navigation: { openThread: vi.fn(), showInChannel: vi.fn() },
+      focus,
+    };
+  }
+
+  function findInput(): HTMLInputElement {
+    const input = screen.getByTestId("bot-memory-find");
+    if (!(input instanceof HTMLInputElement)) throw new Error("not an input");
+    return input;
+  }
+
+  it("clears the search when a different focus arrives, so the focused entries show", () => {
+    const view = render(<BotMemoryPanel {...panelProps(null)} />);
+    fireEvent.change(findInput(), { target: { value: "no-verify" } });
+    expect(screen.queryAllByText(OWN_A.text)).toHaveLength(0);
+
+    view.rerender(
+      <BotMemoryPanel
+        {...panelProps({ memory: "own", entryIds: [OWN_A.id] })}
+      />,
+    );
+
+    expect(findInput().value).toBe("");
+    expect(
+      entryRow("bot-memory-own", OWN_A.text).getAttribute("data-focused"),
+    ).toBe("true");
+    expect(screen.getByTestId("bot-memory-shared")).toBeTruthy();
+  });
+
+  it("keeps a search typed after the focus arrived through new snapshots of the same focus", () => {
+    const focus: BotMemoryFocus = { memory: "own", entryIds: [OWN_A.id] };
+    const view = render(<BotMemoryPanel {...panelProps(focus)} />);
+    fireEvent.change(findInput(), { target: { value: "flakes" } });
+
+    mocks.memory = { ...MEMORY, entries: [...MEMORY.entries] };
+    view.rerender(<BotMemoryPanel {...panelProps(focus)} />);
+
+    expect(findInput().value).toBe("flakes");
   });
 });

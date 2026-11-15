@@ -10,9 +10,11 @@ export type TimedLineCollator<T> = (
   items: ReadonlyArray<T>,
 ) => readonly TranscriptListRow[];
 
-/** What a kind of line needs from its items. */
+/** What the lines need from their items. */
 export interface TimedLineSpec<T> {
   readonly timeOf: (item: T) => number;
+  /** The kind of line an item is drawn in: an item of another kind closes a run. */
+  readonly kindOf: (item: T) => string;
   /** A line's key, kept while its run grows: derive it from the run's first item. */
   readonly keyOf: (run: ReadonlyArray<T>) => string;
   /** Whether two runs draw the same line, so the earlier model can be kept. */
@@ -38,10 +40,11 @@ interface DrawnLine<T> {
 /**
  * Things that happened between a surface's rows, drawn as lines among them,
  * as Slack draws members joining a channel (Tracy Bots, decision 174): a run
- * of items with no row of the list between them is ONE line, placed by time
- * among the rows. A row closes the run, and the next item opens a fresh line;
- * while a line is the last row, each new item folds into it, because nothing
- * has closed its run.
+ * of items of one kind with no row of the list between them is ONE line,
+ * placed by time among the rows. A row, or an item of another kind, closes
+ * the run, and the next item opens a fresh line; while a line is the last
+ * row, each new item of its kind folds into it, because nothing has closed
+ * its run.
  *
  * `items` are oldest first. A row is placed by `createdAt`, and an item goes
  * before the first row that came after it. The lines own no ordinal, so
@@ -77,7 +80,7 @@ export function createTimedLineCollator<T>(
     }
     if (items !== lastItems || !sameBoundaries(lastRows, rows)) {
       const next = new Map<string, DrawnLine<T>>();
-      placed = placeRuns(rows, items, spec.timeOf).map(({ before, run }) => {
+      placed = placeRuns(rows, items, spec).map(({ before, run }) => {
         const line = lineFor(spec, run, drawn);
         next.set(line.key, { run, line });
         return { before, line };
@@ -148,18 +151,24 @@ function sameBoundaries(
 function placeRuns<T>(
   rows: readonly TranscriptListRow[],
   items: ReadonlyArray<T>,
-  timeOf: (item: T) => number,
+  spec: TimedLineSpec<T>,
 ): Array<{ readonly before: number; readonly run: T[] }> {
   const runs: Array<{ readonly before: number; readonly run: T[] }> = [];
   let next = 0;
   let unplaceable = false;
-  const takeRunBefore = (time: number): T[] => {
-    const run: T[] = [];
-    while (next < items.length && timeOf(items[next]) < time) {
-      run.push(items[next]);
-      next += 1;
+  const isBefore = (time: number): boolean =>
+    next < items.length && spec.timeOf(items[next]) < time;
+  /** The items before `time` go before row `before`, one run per kind change. */
+  const placeRunsBefore = (before: number, time: number): void => {
+    while (isBefore(time)) {
+      const kind = spec.kindOf(items[next]);
+      const run: T[] = [];
+      while (isBefore(time) && spec.kindOf(items[next]) === kind) {
+        run.push(items[next]);
+        next += 1;
+      }
+      if (!unplaceable) runs.push({ before, run });
     }
-    return run;
   };
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
@@ -167,14 +176,10 @@ function placeRuns<T>(
       unplaceable = true;
       continue;
     }
-    const run = takeRunBefore(row.model.createdAt);
-    if (run.length > 0 && !unplaceable) runs.push({ before: index, run });
+    placeRunsBefore(index, row.model.createdAt);
     unplaceable = false;
   }
-  const trailing = takeRunBefore(Number.POSITIVE_INFINITY);
-  if (trailing.length > 0 && !unplaceable) {
-    runs.push({ before: rows.length, run: trailing });
-  }
+  placeRunsBefore(rows.length, Number.POSITIVE_INFINITY);
   return runs;
 }
 

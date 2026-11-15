@@ -126,23 +126,29 @@ function added(input: {
 
 const BETWEEN = added({ id: "change-1", at: 2_000, entryId: "entry-1" });
 
-const [EXCHANGE] = botExchangesOf(
-  [
-    feedEvent({
-      id: 1_800,
-      kind: "a2a_message",
-      timestamp: 1_800,
-      sender: TRUNK_CHAT_ID,
-      receiver: `trunk-of-${RELEASE_BOT_ID}`,
-      text: "to Release Bot",
-      responseId: "r-1800",
-      inReplyTo: null,
-      peerEpicId: RELEASE_BOT_ID,
-      origin: SENT_MIRROR,
-    }),
-  ],
-  BOT_ID,
-);
+function exchangesAt(
+  ...times: ReadonlyArray<number>
+): ReadonlyArray<BotExchange> {
+  return botExchangesOf(
+    times.map((timestamp) =>
+      feedEvent({
+        id: timestamp,
+        kind: "a2a_message",
+        timestamp,
+        sender: TRUNK_CHAT_ID,
+        receiver: `trunk-of-${RELEASE_BOT_ID}`,
+        text: "to Release Bot",
+        responseId: `r-${timestamp}`,
+        inReplyTo: null,
+        peerEpicId: RELEASE_BOT_ID,
+        origin: SENT_MIRROR,
+      }),
+    ),
+    BOT_ID,
+  );
+}
+
+const [EXCHANGE] = exchangesAt(1_800);
 
 function exchangeLines(
   exchanges: ReadonlyArray<BotExchange>,
@@ -275,6 +281,75 @@ describe("a bot's memory changes in the real ChatMessages", () => {
       within(exchange).queryByTestId("bot-memory-line-segment"),
     ).toBeNull();
     expect(within(memory).queryByTestId("bot-exchange-pair")).toBeNull();
+  });
+
+  it("draws exchange, memory, exchange between two messages in the order they happened, each line at its own time", async () => {
+    await mount({
+      exchanges: exchangeLines(exchangesAt(1_500, 2_500)),
+      memory: memoryLines([BETWEEN], () => undefined),
+    });
+
+    const lines = screen
+      .getAllByTestId(/^bot-(exchange|memory)-line$/)
+      .map((line) => line.getAttribute("data-testid"));
+    expect(lines).toEqual([
+      "bot-exchange-line",
+      "bot-memory-line",
+      "bot-exchange-line",
+    ]);
+    const [first, memory, last] = screen.getAllByTestId(
+      /^bot-(exchange|memory)-line$/,
+    );
+    const post = screen.getByText("Can we get the release notes drafted?");
+    const reply = screen.getByText("Release Bot has the notes drafted.");
+    expect(post.compareDocumentPosition(first)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(first.compareDocumentPosition(memory)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(memory.compareDocumentPosition(last)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(last.compareDocumentPosition(reply)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(within(first).getByTestId("bot-exchange-pair")).toBeTruthy();
+    expect(within(last).getByTestId("bot-exchange-pair")).toBeTruthy();
+    expect(
+      [first, memory, last].map((line) =>
+        within(line)
+          .getByTestId("chat-message-timestamp")
+          .getAttribute("datetime"),
+      ),
+    ).toEqual(
+      [1_500, 2_000, 2_500].map((time) => new Date(time).toISOString()),
+    );
+  });
+
+  it("draws a later exchange after a trailing memory line as a new exchange line", async () => {
+    const trailing = added({ id: "change-trailing", at: 3_500, entryId: "e9" });
+    const memory = memoryLines([trailing], () => undefined);
+    const view = render(
+      <Channel exchanges={exchangeLines(exchangesAt(3_400))} memory={memory} />,
+    );
+    await settleLegendList();
+    view.rerender(
+      <Channel
+        exchanges={exchangeLines(exchangesAt(3_400, 3_600))}
+        memory={memory}
+      />,
+    );
+    await settleLegendList();
+
+    const lines = screen
+      .getAllByTestId(/^bot-(exchange|memory)-line$/)
+      .map((line) => line.getAttribute("data-testid"));
+    expect(lines).toEqual([
+      "bot-exchange-line",
+      "bot-memory-line",
+      "bot-exchange-line",
+    ]);
   });
 
   it("draws no memory line without the memory context", async () => {

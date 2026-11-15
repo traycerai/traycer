@@ -572,7 +572,7 @@ export type MessageSegment =
       /**
        * A run of a bot's messages with other bots, drawn as one line between
        * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
-       * `createBotExchangeLineCollator` from the bot's Communication Graph feed, never
+       * `createBotLineCollator` from the bot's Communication Graph feed, never
        * persisted: one entry per other bot, in the order the run first
        * reached it, with how many messages of the run it took part in.
        */
@@ -589,7 +589,7 @@ export type MessageSegment =
       /**
        * A run of a bot's changes to the memory it reads, drawn as one line
        * between the rows of the conversation that made them (Tracy Bots
-       * T373). Synthesized by `createBotMemoryLineCollator` from the bot's
+       * T373). Synthesized by `createBotLineCollator` from the bot's
        * memory reading, never persisted: one group per memory, in the order
        * the run first touched it.
        */
