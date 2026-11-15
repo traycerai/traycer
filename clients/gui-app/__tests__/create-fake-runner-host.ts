@@ -28,11 +28,25 @@ import {
  * the fixture directory and send authn requests through the supplied fake
  * transport.
  */
-export function createFakeEnvironmentCloudAuth(options: {
+export interface FakeEnvironmentCloudAuthOptions {
   readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
   readonly transport: EnvironmentTransport;
-}): AuthService {
+}
+
+export interface FakeEnvironmentCloudServicesOptions extends FakeEnvironmentCloudAuthOptions {
+  readonly runnerHostOverrides: Partial<IRunnerHost>;
+}
+
+export interface FakeEnvironmentCloudServices {
+  readonly auth: AuthService;
+  readonly runnerHost: IRunnerHost;
+}
+
+export function createFakeEnvironmentCloudServices(
+  options: FakeEnvironmentCloudServicesOptions,
+): FakeEnvironmentCloudServices {
   const runnerHost = createFakeRunnerHost({
+    ...options.runnerHostOverrides,
     listEnvironments: () => options.listEnvironments(),
     environmentTransport: options.transport,
   });
@@ -42,12 +56,21 @@ export function createFakeEnvironmentCloudAuth(options: {
     authnBaseUrl: runnerHost.authnBaseUrl,
     bearer: {
       kind: "cloud",
-      getBearerToken: () => Promise.resolve("test-bearer"),
+      getBearerToken: () => "test-bearer",
     },
     transport: runnerHost.environmentTransport,
     onOriginSignIn: () => true,
   });
-  return auth;
+  return { auth, runnerHost };
+}
+
+export function createFakeEnvironmentCloudAuth(
+  options: FakeEnvironmentCloudAuthOptions,
+): AuthService {
+  return createFakeEnvironmentCloudServices({
+    ...options,
+    runnerHostOverrides: {},
+  }).auth;
 }
 
 /** Shared authn transport fake for the list join and settings reads. */
