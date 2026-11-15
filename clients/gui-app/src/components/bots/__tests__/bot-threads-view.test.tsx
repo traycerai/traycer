@@ -83,6 +83,7 @@ import {
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import {
   botReply,
+  memberPost,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -111,6 +112,7 @@ const mocks = vi.hoisted(() => ({
   unsupported: new Set<string>(),
   /** Each bot channel's posts by message id. */
   posts: {} as Record<string, Record<string, string>>,
+  /** Each bot channel's session, where a case scripts its rows in full. */
   channels: {} as Record<string, ChatSessionStoreHandle>,
   /** Each thread's reply texts by thread id, in order; its session holds them. */
   replies: {} as Record<string, string[]>,
@@ -218,8 +220,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
       );
       return mocks.threadSessions[chatId];
     }
-    if (!Object.hasOwn(mocks.posts, botId)) return null;
     if (!Object.hasOwn(mocks.channels, botId)) {
+      if (!Object.hasOwn(mocks.posts, botId)) return null;
       mocks.channels[botId] = chatSessionWithPosts(mocks.posts[botId]);
     }
     return mocks.channels[botId];
@@ -798,6 +800,26 @@ describe("<BotThreadsView />", () => {
     expect(tracy.queryByTestId("bot-thread-row-new-replies")).toBeNull();
     expect(tracy.queryByTestId("bot-thread-row-unread-count")).toBeNull();
     expect(card("team-new").getAttribute("data-full")).toBe("false");
+  });
+
+  it("names a card by the first paragraph of a post that has several", async () => {
+    mocks.channels[TEAM] = chatSessionWithThreadRows([
+      memberPost({
+        messageId: conversationRequestMessageId("req-team-new"),
+        requestId: "req-team-new",
+        lines: ["First paragraph.", "Second paragraph."],
+        timestamp: 1_000,
+        resolvedBy: null,
+      }),
+    ]);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    expect(
+      within(
+        within(card("team-new")).getByTestId("bot-thread-card-summary"),
+      ).getByText("First paragraph."),
+    ).toBeTruthy();
   });
 
   it("keeps a thread whose post is gone as a summary with no visible reply count, only the screen-reader one", async () => {
