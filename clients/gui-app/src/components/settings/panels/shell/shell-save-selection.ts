@@ -23,15 +23,6 @@ function argsOf(path: string, entries: readonly ConfigShellEntry[]): string[] {
   return [...(remembered ?? defaultShellArgs(path))];
 }
 
-/** What the computer has selected now. */
-function currentSelection(
-  config: ConfigShellGetResponseV11,
-): ConfigShellSelection {
-  return config.synthesised
-    ? { kind: "system_default" }
-    : { kind: "shell", path: config.path, args: [...config.args] };
-}
-
 /**
  * A switch to `path`, or new arguments for the current shell (`path: null`).
  * A switch that names no arguments takes the remembered ones. New arguments
@@ -63,7 +54,10 @@ export function shellAddSelection(path: string): ConfigShellSelection {
   return { kind: "shell", path, args: [...defaultShellArgs(path)] };
 }
 
-/** Removing the current shell leaves the system default; any other, no change. */
+/**
+ * Removing the current shell leaves the system default. Removing any other
+ * is saved on this computer and proposes nothing.
+ */
 export function shellRemoveSelection(
   path: string,
   config: ConfigShellGetResponseV11 | undefined,
@@ -71,10 +65,13 @@ export function shellRemoveSelection(
   if (config === undefined) return NOT_STATED;
   return !config.synthesised && config.path === path
     ? { kind: "system_default" }
-    : currentSelection(config);
+    : NOT_STATED;
 }
 
-/** Reverting the current shell's arguments leaves its default; any other, no change. */
+/**
+ * Reverting the current shell's arguments leaves its default. Reverting any
+ * other's is saved on this computer and proposes nothing.
+ */
 export function shellRevertSelection(
   path: string,
   config: ConfigShellGetResponseV11 | undefined,
@@ -82,5 +79,5 @@ export function shellRevertSelection(
   if (config === undefined) return NOT_STATED;
   return !config.synthesised && config.path === path
     ? { kind: "shell", path, args: [...defaultShellArgs(path)] }
-    : currentSelection(config);
+    : NOT_STATED;
 }
