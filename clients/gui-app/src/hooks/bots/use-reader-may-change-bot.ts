@@ -2,7 +2,10 @@ import { createContext, use } from "react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 
 /**
@@ -21,7 +24,10 @@ export function readerMayChangeBot(
   const environment = environments.environments.find(
     (entry) => entry.environmentId === environmentId,
   );
-  return environment !== undefined && configurationRoleOf(environment) !== null;
+  return (
+    environment !== undefined &&
+    mayChangeConfiguration(configurationRoleOf(environment))
+  );
 }
 
 /**
