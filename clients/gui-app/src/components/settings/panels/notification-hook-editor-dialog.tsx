@@ -42,6 +42,12 @@ interface HookEditorProps {
   readonly onSave: (hook: NotificationHookConfig) => void;
 }
 
+const HEADERS_EXAMPLES = {
+  computer: "authorization: Bearer $MY_TOKEN",
+  account: undefined,
+  team: TEAM_NOTIFICATION_HOOKS_COPY.headersExample,
+};
+
 export function NotificationHookEditorDialog(
   props: HookEditorProps & { readonly serverProblem?: string | null },
 ) {
@@ -76,11 +82,6 @@ function HookEditor(
   },
 ) {
   const [draft, setDraft] = useState(props.initialDraft);
-  let headersExample: string | undefined;
-  if (props.scope === "computer")
-    headersExample = "authorization: Bearer $MY_TOKEN";
-  else if (props.scope === "team")
-    headersExample = TEAM_NOTIFICATION_HOOKS_COPY.headersExample;
   const variable =
     props.scope === "computer"
       ? null
@@ -172,7 +173,7 @@ function HookEditor(
                   id="hook-headers"
                   value={draft.headersText}
                   rows={3}
-                  placeholder={headersExample}
+                  placeholder={HEADERS_EXAMPLES[props.scope]}
                   onChange={(event) => {
                     const headersText = event.target.value;
                     setDraft((previous) => ({ ...previous, headersText }));

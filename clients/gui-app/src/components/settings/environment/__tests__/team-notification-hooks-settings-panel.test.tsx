@@ -169,7 +169,7 @@ describe("team Notification hooks page", () => {
     fixtures.hooks = [buildHook];
     renderPage("admin");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Add hook" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Add hook" })[0]);
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Release alerts" },
@@ -207,7 +207,7 @@ describe("team Notification hooks page", () => {
 
     const manager = screen.getByTestId("cloud-notification-hooks-manager");
     fireEvent.click(
-      within(manager).getAllByRole("button", { name: "Edit" })[0]!,
+      within(manager).getAllByRole("button", { name: "Edit" })[0],
     );
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {

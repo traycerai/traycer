@@ -32,6 +32,37 @@ interface HookEditorState {
   readonly draft: HookDraft;
 }
 
+interface HookEditorProblem {
+  readonly hookId: string | null;
+  readonly message: string;
+}
+
+function editorProblemForHook(
+  editor: HookEditorState | null,
+  problem: HookEditorProblem | null,
+): string | null {
+  if (editor === null || problem === null) return null;
+  if (problem.hookId !== null && problem.hookId !== editor.draft.id)
+    return null;
+  return problem.message;
+}
+
+function CloudNotificationHooksEmptyState(props: {
+  readonly scope: "account" | "team";
+}) {
+  if (props.scope === "account") return CLOUD_NOTIFICATION_LIST_COPY.emptyState;
+  return (
+    <div className="space-y-1 px-4 py-6 text-center">
+      <p className="text-ui-sm font-medium">
+        {TEAM_NOTIFICATION_HOOKS_COPY.emptyTitle}
+      </p>
+      <p className="text-ui-sm text-muted-foreground">
+        {TEAM_NOTIFICATION_HOOKS_COPY.emptyDescription}
+      </p>
+    </div>
+  );
+}
+
 /** A cloud list's editor always saves against the snapshot the gesture opened. */
 export function CloudNotificationHooksSection(props: {
   readonly scope: "account" | "team";
@@ -40,10 +71,7 @@ export function CloudNotificationHooksSection(props: {
   readonly saving: boolean;
   readonly error: string | null;
   readonly refusedHookId: string | null;
-  readonly editorProblem: {
-    readonly hookId: string | null;
-    readonly message: string;
-  } | null;
+  readonly editorProblem: HookEditorProblem | null;
   readonly canEdit: boolean;
   readonly onSave: (
     hooks: readonly CloudNotificationHook[],
@@ -86,13 +114,7 @@ export function CloudNotificationHooksSection(props: {
       },
     );
   };
-  const editorProblem =
-    props.editorProblem !== null &&
-    editor !== null &&
-    (props.editorProblem.hookId === null ||
-      props.editorProblem.hookId === editor.draft.id)
-      ? props.editorProblem.message
-      : null;
+  const editorProblem = editorProblemForHook(editor, props.editorProblem);
   return (
     <SettingsGroup
       group={HOST_NOTIFICATIONS.definitions.notificationHooks}
@@ -125,18 +147,7 @@ export function CloudNotificationHooksSection(props: {
         </p>
       )}
       {props.snapshot.hooks.length === 0 ? (
-        props.scope === "team" ? (
-          <div className="space-y-1 px-4 py-6 text-center">
-            <p className="text-ui-sm font-medium">
-              {TEAM_NOTIFICATION_HOOKS_COPY.emptyTitle}
-            </p>
-            <p className="text-ui-sm text-muted-foreground">
-              {TEAM_NOTIFICATION_HOOKS_COPY.emptyDescription}
-            </p>
-          </div>
-        ) : (
-          CLOUD_NOTIFICATION_LIST_COPY.emptyState
-        )
+        <CloudNotificationHooksEmptyState scope={props.scope} />
       ) : (
         <div className="divide-y divide-border/40">
           {props.snapshot.hooks.map((hook) => (

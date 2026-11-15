@@ -40,11 +40,9 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
       accountCloud.requests.push(request);
       if (request.method === "PUT" && accountCloud.deferPut) {
         accountCloud.deferPut = false;
-        return await new Promise<{ status: number; text: string }>(
-          (resolve) => {
-            accountCloud.pendingPutResolve = resolve;
-          },
-        );
+        return new Promise<{ status: number; text: string }>((resolve) => {
+          accountCloud.pendingPutResolve = resolve;
+        });
       }
       if (request.method === "PUT" && accountCloud.putFailureStatus !== null) {
         return {
@@ -248,7 +246,7 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
 async function convertCommandHookToHttp(): Promise<void> {
   const manager = await screen.findByTestId("notification-hooks-manager");
   await screen.findByTestId("notification-hook-row-convert-this-hook");
-  fireEvent.click(within(manager).getAllByRole("button", { name: "Edit" })[0]!);
+  fireEvent.click(within(manager).getAllByRole("button", { name: "Edit" })[0]);
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
   fireEvent.click(await screen.findByRole("option", { name: "POST to a URL" }));
