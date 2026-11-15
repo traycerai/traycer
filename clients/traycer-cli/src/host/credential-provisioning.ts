@@ -523,6 +523,12 @@ export async function provisionInstalledHostCredential(
       if (mintWithheld || sawSilentOpen) {
         return { kind: "unsupported" };
       }
+      // The door answered every dial with a retryable refusal up to the bound
+      // (a claimed host that has not read its owner yet): the host answered
+      // and did not take the credential in time.
+      if (doorRetried) {
+        return { kind: "not-adopted" };
+      }
       // The host spoke to us but never got as far as reporting a credential
       // state - the shape of an expired stored bearer whose refresh could
       // not complete (authn unreachable), where the host answers
@@ -532,12 +538,6 @@ export async function provisionInstalledHostCredential(
       // answered every single dial; what actually failed is the handoff, and
       // that is `mint-unavailable`'s line - a later client with a live token
       // mints for it normally.
-      // The door answered every dial with a retryable refusal up to the bound
-      // (a claimed host that has not read its owner yet): the host answered
-      // and did not take the credential in time.
-      if (doorRetried) {
-        return { kind: "not-adopted" };
-      }
       if (hostAnswered) {
         return { kind: "mint-unavailable" };
       }
