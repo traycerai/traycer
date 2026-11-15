@@ -170,3 +170,22 @@ export function hostOptionsFixture(
     ...overrides,
   };
 }
+
+/**
+ * The `use-host-scope` module as a suite mocks it when the window's own host
+ * scope has no hosts: every hook answers one scope with no host, and the window
+ * selection is unscoped.
+ */
+export function noHostsScopeModule() {
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+  };
+}
