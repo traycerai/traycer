@@ -27,7 +27,7 @@ export const AGENT_MEMORIES = defineSettingsSection("agent-memories", {
     search: { contributesTo: "page" },
     label: "Agents use environment memory",
     description:
-      "Agents receive environment memory in context and can keep it up to date. Turning this off keeps saved memories.",
+      "Agents can use and update this memory. Turning this off keeps saved memories.",
     availableWhen: alwaysAvailable,
     keywords: ["memory", "memories", "environment", "shared", "remember"],
   },

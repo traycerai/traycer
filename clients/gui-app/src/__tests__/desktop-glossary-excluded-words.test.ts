@@ -109,6 +109,30 @@ const ALLOWED: readonly Allowed[] = [
     closedBy:
       "the owner approved the sandbox presence row on canvas Profile row · presence states (2026-11-10, task732222ed)",
   },
+  {
+    file: "gui-app/src/components/bots/bot-memory-panel.tsx",
+    text: "environment memory is common to every bot and agent in this environment.",
+    closedBy:
+      "the owner named this memory Environment memory in request 457f542a (2026-11-15)",
+  },
+  {
+    file: "gui-app/src/components/bots/bot-memory-panel.tsx",
+    text: "Environment memory",
+    closedBy:
+      "the owner named this memory Environment memory in request 457f542a (2026-11-15)",
+  },
+  {
+    file: "gui-app/src/components/chat/queued-message-surface.tsx",
+    text: "Environment memory is over its limit; the bot is asked to tidy it on its next turn.",
+    closedBy:
+      "the owner named this memory Environment memory in request 457f542a (2026-11-15)",
+  },
+  {
+    file: "gui-app/src/components/settings/panels/agent-memories.definitions.ts",
+    text: "Agents use environment memory",
+    closedBy:
+      "the owner named this memory Environment memory in request 457f542a (2026-11-15)",
+  },
 ];
 
 interface Hit {
