@@ -545,7 +545,8 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       kind: "local",
       websocketUrl: null,
       version: "test-version",
-      status: "available",
+      transportDialability: "dialable",
+      owner: null,
     };
     hookState.localHostId = "host-test";
     hookState.browserView = null;
