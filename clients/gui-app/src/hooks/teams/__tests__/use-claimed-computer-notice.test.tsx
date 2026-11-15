@@ -11,7 +11,12 @@ import type {
   ClaimedComputer,
   ClaimedComputersResult,
 } from "@traycer-clients/shared/auth/claimed-computers";
+import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { keyedSeen } from "@/lib/persist/keyed-seen-store";
 import { authQueryKeys } from "@/lib/query-keys/auth-query-keys";
 
@@ -59,6 +64,7 @@ vi.mock("@/hooks/host/use-host-lease", () => ({
   useHostLeases: () => [],
 }));
 
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useClaimedComputerNotice } from "@/hooks/teams/use-claimed-computer-notice";
 import {
   useClaimNoticesToldStore,
@@ -480,5 +486,85 @@ describe("useClaimedComputerNotice", () => {
       await Promise.resolve();
     });
     expect(mocks.toastInfo).not.toHaveBeenCalled();
+  });
+});
+
+/** The entry a read of the filters or key `argument` names, if it is one. */
+function keyOf(argument: unknown): readonly unknown[] | null {
+  const key: unknown =
+    typeof argument === "object" &&
+    argument !== null &&
+    !Array.isArray(argument)
+      ? Reflect.get(argument, "queryKey")
+      : argument;
+  return Array.isArray(key) ? key.map((part: unknown) => part) : null;
+}
+
+describe("useClaimedComputerNotice beside a claimed computer's cover", () => {
+  afterEach(() => {
+    useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("tells the claim once and lets the cover name the claimant, neither touching the other's read", async () => {
+    mocks.read.mockImplementation(() =>
+      answer({ kind: "ok", claims: [CLAIM] }),
+    );
+    const queryClient = newQueryClient();
+    // Every way a reader could cancel, drop or overwrite an entry it shares.
+    const writers = [
+      vi.spyOn(queryClient, "setQueryData"),
+      vi.spyOn(queryClient, "resetQueries"),
+      vi.spyOn(queryClient, "removeQueries"),
+      vi.spyOn(queryClient, "cancelQueries"),
+      vi.spyOn(queryClient, "invalidateQueries"),
+    ];
+    const state: HostDoorState = {
+      hostId: "host-1",
+      kind: "host-claimed",
+      detail: null,
+    };
+    noteHostDoorState(state);
+
+    const view = renderHook(
+      () => {
+        useClaimedComputerNotice();
+        return useHostClaim("host-1", state);
+      },
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+
+    await waitFor(() =>
+      expect(view.result.current).toEqual({
+        claimantName: "Ada",
+        teamName: "Acme",
+      }),
+    );
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
+        id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
+      }),
+    );
+    // Each asked for its own read, after the other's.
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(claimedEntryKey())).toEqual({
+      kind: "ok",
+      claims: [CLAIM],
+    });
+    const entry = claimedEntryKey();
+    const touched = writers.flatMap((spy) =>
+      spy.mock.calls.filter((call) => {
+        const key = keyOf(call[0]);
+        return (
+          key !== null && entry.every((part, i) => Object.is(part, key[i]))
+        );
+      }),
+    );
+    expect(touched).toEqual([]);
   });
 });
