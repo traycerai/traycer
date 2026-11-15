@@ -76,6 +76,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 const listTeamComputers =
   vi.fn<(environmentId: string) => Promise<TeamComputersResult>>();
 const listEnvironments = vi.fn<() => Promise<EnvironmentDirectoryResult>>();
+const environmentCloud = vi.fn<AuthService["environmentCloud"]>();
 const releaseTeamComputer =
   vi.fn<
     (
@@ -87,9 +88,13 @@ const auth = {
   listTeamComputers,
   releaseTeamComputer,
   listEnvironments,
+  environmentCloud,
 } satisfies Pick<
   AuthService,
-  "listTeamComputers" | "releaseTeamComputer" | "listEnvironments"
+  | "listTeamComputers"
+  | "releaseTeamComputer"
+  | "listEnvironments"
+  | "environmentCloud"
 >;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
@@ -170,6 +175,7 @@ function mountSection(
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
   listEnvironments.mockImplementation(() => harness.auth.listEnvironments());
+  environmentCloud.mockImplementation(() => harness.auth.environmentCloud());
   const runnerHost = dashboardRunnerHost();
   const view = render(
     sectionTree(harness, environmentId, effectiveRole, runnerHost),
@@ -196,6 +202,7 @@ beforeEach(() => {
   askedHostIds.length = 0;
   listTeamComputers.mockReset();
   listEnvironments.mockReset();
+  environmentCloud.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
   directory.refresh.mockClear();
