@@ -41,32 +41,12 @@ const hostState = vi.hoisted((): { id: string | null; attached: boolean } => ({
 const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
-const navigateMock = vi.hoisted(() => vi.fn());
-/**
- * The router `useRouter()` answers: idle unless a test starts a load, and
- * `resolve()` emits `onResolved` the way the Transitioner does (still pending)
- * before it writes idle.
- */
-const scriptedRouter = vi.hoisted(() => {
-  const listeners = new Set<() => void>();
-  const state: { status: "pending" | "idle" } = { status: "idle" };
-  return {
-    state,
-    listeners,
-    router: {
-      state,
-      subscribe: (_eventType: "onResolved", fn: () => void) => {
-        listeners.add(fn);
-        return () => {
-          listeners.delete(fn);
-        };
-      },
-    },
-    resolve: () => {
-      for (const listener of listeners) listener();
-      state.status = "idle";
-    },
-  };
+const navigateMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+// The router `useRouter()` answers under this suite's fixed mock.
+const scriptedRouter = await vi.hoisted(async () => {
+  const { createScriptedRouterForTests } =
+    await import("@/lib/registries/test-support/scripted-router");
+  return createScriptedRouterForTests();
 });
 // Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
 // below - every other test in this file relies on the default `null` (no
@@ -513,6 +493,7 @@ import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-owners
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { openEpicKey } from "@/lib/persist";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLeavingTasksStore } from "@/stores/epics/leaving-tasks-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
@@ -926,8 +907,7 @@ describe("<TestEpicSessionTab />", () => {
     sessionHostClients.byHostId.clear();
     resetHostConnectionRegistryForTest();
     navigateMock.mockClear();
-    scriptedRouter.state.status = "idle";
-    scriptedRouter.listeners.clear();
+    scriptedRouter.reset();
     resetCanvasStore();
     __getOpenEpicRegistryForTests().disposeAll();
     resetFakeDurableStreamTransports();
@@ -3325,9 +3305,18 @@ describe("<TestEpicSessionTab />", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/epics", replace: true });
   });
 
-  it.each([{ unmountFirst: false }, { unmountFirst: true }])(
-    "leaves a tab another window owns only once a router load in flight settles, and not at all from an unmounted surface (unmounted first: $unmountFirst)",
-    async ({ unmountFirst }) => {
+  it.each([
+    { surface: "still mounted", unmount: false, movedOn: false, leaves: true },
+    {
+      surface: "unmounted by the discard",
+      unmount: true,
+      movedOn: false,
+      leaves: true,
+    },
+    { surface: "still mounted", unmount: false, movedOn: true, leaves: false },
+  ])(
+    "leaves a tab another window owns only once a router load in flight settles ($surface, moved on: $movedOn)",
+    async ({ unmount, movedOn, leaves }) => {
       const calls = {
         claims: [] as string[],
         releases: [] as string[],
@@ -3343,8 +3332,11 @@ describe("<TestEpicSessionTab />", () => {
       const conflictTabId = useEpicCanvasStore
         .getState()
         .openEpicTab("epic-conflict", "Conflict");
-      // The window's first load is still in flight.
+      // The window's first load onto the tab is still in flight.
       scriptedRouter.state.status = "pending";
+      scriptedRouter.state.location = {
+        pathname: `/epics/epic-conflict/${conflictTabId}`,
+      };
 
       const view = render(
         <TestEpicSessionTab epicId="epic-conflict" tabId={conflictTabId}>
@@ -3354,24 +3346,33 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(calls.focusRequests).toEqual(["window-owner"]);
       });
-      // The controller has discarded the tab already; only leaving waits.
+      // The controller has discarded the tab already; only leaving waits, and
+      // the tab's route draws nothing meanwhile.
       expect(__getOpenEpicRegistryForTests().size()).toBe(0);
       expect(navigateMock).not.toHaveBeenCalled();
+      expect(useLeavingTasksStore.getState().epicIds.has("epic-conflict")).toBe(
+        true,
+      );
 
-      if (unmountFirst) view.unmount();
+      if (unmount) view.unmount();
+      if (movedOn) scriptedRouter.state.location = { pathname: "/epics" };
       act(() => {
         scriptedRouter.resolve();
       });
       await act(() => Promise.resolve());
 
-      if (unmountFirst) {
-        expect(navigateMock).not.toHaveBeenCalled();
-      } else {
+      if (leaves) {
         expect(navigateMock).toHaveBeenCalledWith({
           to: "/epics",
           replace: true,
         });
+      } else {
+        expect(navigateMock).not.toHaveBeenCalled();
       }
+      await act(() => Promise.resolve());
+      expect(useLeavingTasksStore.getState().epicIds.has("epic-conflict")).toBe(
+        false,
+      );
     },
   );
 

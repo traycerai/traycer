@@ -12,6 +12,7 @@ import { RECENCY_HOME_ANSWER_WAIT_MS } from "@/routes/epic-tab-route-components"
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { markLeavingTask } from "@/stores/epics/leaving-tasks-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -303,6 +304,30 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useOnboardingStore.setState({ completedAt: null });
+  });
+
+  it("draws nothing and records no visit for a task the window is leaving after a refusal, and records it once the mark is gone", async () => {
+    seedSignedInAuth();
+    // The refusal closed the task's tab and queued the window's way out,
+    // which waits for this load.
+    useEpicCanvasStore.setState({ openTabOrder: [] });
+    const unmark = markLeavingTask(EPIC_ID);
+
+    const router = await act(() => Promise.resolve(renderRoute()));
+    await act(() => Promise.resolve());
+
+    // Past the match's commit, still on the task's route.
+    expect(router.state.location.pathname).toBe(`/epics/${EPIC_ID}/${TAB_ID}`);
+    expect(router.state.status).toBe("idle");
+    expect(document.querySelector('[data-testid="epic-shell"]')).toBeNull();
+    expect(recordViewed).not.toHaveBeenCalled();
+
+    // The same route without the mark records the visit: the mark is what
+    // withheld it.
+    act(() => {
+      unmark();
+    });
+    expect(recordViewed).toHaveBeenCalledTimes(1);
   });
 
   it("fires once with isLocalHome:true when a local-homed session appears before the bound", async () => {

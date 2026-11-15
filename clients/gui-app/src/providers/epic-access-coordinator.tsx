@@ -26,6 +26,7 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
 import { runWhenRouterSettled } from "@/lib/router-settled";
+import { markLeavingTask } from "@/stores/epics/leaving-tasks-store";
 import {
   collectOpenEpicIds,
   epicTabName,
@@ -107,14 +108,28 @@ export function EpicAccessCoordinator() {
     // Navigations away from a lost task, waiting for a load in flight; a
     // coordinator torn down first makes none of them.
     const pendingNavigations = new Set<{ cancel: () => void }>();
-    const leaveForLanding = (): void => {
+    const leaveForLanding = (epicId: string): void => {
+      // Its route draws nothing and records no visit until the window has
+      // left it.
+      const unmark = markLeavingTask(epicId);
       // Held before it is queued: on an idle router the task runs at once.
       const pending = { cancel: (): void => undefined };
       pendingNavigations.add(pending);
-      pending.cancel = runWhenRouterSettled(router, () => {
+      const cancelNavigation = runWhenRouterSettled(router, () => {
         pendingNavigations.delete(pending);
-        void navigate({ ...LANDING_ROUTE, replace: true });
+        // A person who has moved on by then is not taken anywhere.
+        if (
+          readActiveEpicIdFromPath(router.state.location.pathname) !== epicId
+        ) {
+          unmark();
+          return;
+        }
+        void navigate({ ...LANDING_ROUTE, replace: true }).finally(unmark);
       });
+      pending.cancel = () => {
+        cancelNavigation();
+        unmark();
+      };
     };
     // Attempts already spent (and the pending timer, if any) of the
     // created-this-session `unavailable` grace. Attempts are deliberately
@@ -263,7 +278,7 @@ export function EpicAccessCoordinator() {
         // side effect; clear it so the route-driven strip highlight and the
         // canvas store agree once we leave the epic for landing.
         useEpicCanvasStore.setState({ activeTabId: null });
-        leaveForLanding();
+        leaveForLanding(epicId);
       }
     };
 
@@ -303,12 +318,12 @@ export function EpicAccessCoordinator() {
       // did not delete it stays open (`epicIdsLostInWindow`).
       const lostIds = epicIdsLostInWindow(scopes, activeHostIdOrNull());
       const openEpicIds = new Set(collectOpenEpicIds());
-      let anyWasActive = false;
+      let leftEpicId: string | null = null;
       for (const epicId of lostIds) {
         if (!openEpicIds.has(epicId) && activeEpicIdRef.current !== epicId) {
           continue;
         }
-        if (activeEpicIdRef.current === epicId) anyWasActive = true;
+        if (activeEpicIdRef.current === epicId) leftEpicId = epicId;
         announceEpicLoss(epicId, {
           kind: "deleted",
           attribution: null,
@@ -322,9 +337,9 @@ export function EpicAccessCoordinator() {
       // (and a separate persistence flush) per epic for what is semantically
       // one event.
       tabCommandCoordinator.handleEpicAccessLoss(lostIds, notification.userId);
-      if (anyWasActive) {
+      if (leftEpicId !== null) {
         useEpicCanvasStore.setState({ activeTabId: null });
-        leaveForLanding();
+        leaveForLanding(leftEpicId);
       }
     };
 

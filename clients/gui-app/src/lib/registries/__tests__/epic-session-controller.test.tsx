@@ -108,10 +108,17 @@ const authServiceStub = vi.hoisted(() => ({
     Promise.resolve({ kind: "valid" as const }),
   ),
 }));
-const navigateMock = vi.hoisted(() => vi.fn());
+const navigateMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
+// The router `useRouter()` answers under this suite's fixed mock.
+const scriptedRouter = await vi.hoisted(async () => {
+  const { createScriptedRouterForTests } =
+    await import("@/lib/registries/test-support/scripted-router");
+  return createScriptedRouterForTests();
+});
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
+  useRouter: () => scriptedRouter.router,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({

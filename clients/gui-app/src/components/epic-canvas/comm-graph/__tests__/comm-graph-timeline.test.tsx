@@ -11,8 +11,15 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: useHostNotificationIndicatorsMock,
 }));
 
+// The router `useRouter()` answers under this suite's fixed mock.
+const scriptedRouter = await vi.hoisted(async () => {
+  const { createScriptedRouterForTests } =
+    await import("@/lib/registries/test-support/scripted-router");
+  return createScriptedRouterForTests();
+});
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
+  useRouter: () => scriptedRouter.router,
 }));
 
 const hostDirectoryMock = vi.hoisted(() => ({

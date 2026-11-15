@@ -25,7 +25,7 @@ const hostState = vi.hoisted((): { id: string | null; attached: boolean } => ({
 const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
-const navigateMock = vi.hoisted(() => vi.fn());
+const navigateMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const hostBindingRef = vi.hoisted(
   (): {
     value: { readonly hostClient: unknown } | null;
@@ -113,8 +113,15 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authServiceStub,
 }));
 
+// The router `useRouter()` answers under this suite's fixed mock.
+const scriptedRouter = await vi.hoisted(async () => {
+  const { createScriptedRouterForTests } =
+    await import("@/lib/registries/test-support/scripted-router");
+  return createScriptedRouterForTests();
+});
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
+  useRouter: () => scriptedRouter.router,
 }));
 
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";

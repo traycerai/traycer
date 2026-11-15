@@ -50,6 +50,7 @@ import {
   useTaskLossRegister,
 } from "@/stores/epics/task-loss-register-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLeavingTasksStore } from "@/stores/epics/leaving-tasks-store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -1464,12 +1465,20 @@ describe("EpicAccessCoordinator during the window's first load", () => {
       expect(router.state.status).toBe("pending");
       expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
       expect(document.querySelector('[data-testid="epic"]')).toBeNull();
+      // The task's route draws nothing and records no visit until the
+      // window has left it (`markLeavingTask`).
+      expect(useLeavingTasksStore.getState().epicIds.has("epic-1")).toBe(true);
 
       act(() => {
         firstLoad.finish();
       });
       await waitFor(() => expect(router.state.location.pathname).toBe("/"));
       expect(crashes).toEqual([]);
+      await waitFor(() =>
+        expect(useLeavingTasksStore.getState().epicIds.has("epic-1")).toBe(
+          false,
+        ),
+      );
     },
   );
 

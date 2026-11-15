@@ -26,10 +26,17 @@ const sonner = vi.hoisted(() => ({
   warning: vi.fn(),
 }));
 
-const navigateMock = vi.hoisted(() => vi.fn());
+const navigateMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
+// The router `useRouter()` answers under this suite's fixed mock.
+const scriptedRouter = await vi.hoisted(async () => {
+  const { createScriptedRouterForTests } =
+    await import("@/lib/registries/test-support/scripted-router");
+  return createScriptedRouterForTests();
+});
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
+  useRouter: () => scriptedRouter.router,
   useRouterState: () => routerState.isActiveTab,
 }));
 

@@ -20,6 +20,7 @@ import {
   tabNavigationResolutionFailed,
 } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLeavingTasksStore } from "@/stores/epics/leaving-tasks-store";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -76,6 +77,9 @@ function EpicRouteTabSync(props: {
   const routeTabIsOpen = useEpicCanvasStore((s) =>
     s.openTabOrder.includes(tabId),
   );
+  // Refused, or owned by another window, and the navigation away waits for a
+  // load in flight: draw nothing of it and record no visit.
+  const leaving = useLeavingTasksStore((s) => s.epicIds.has(epicId));
   const locationState = useRouterState({ select: (s) => s.location.state });
   const resolutionFailed = useSyncExternalStore(
     subscribeTabNavigationResolutionFailure,
@@ -173,6 +177,7 @@ function EpicRouteTabSync(props: {
     // carried at BOTH layers for the same reason it is on the pin: a gate here
     // that the mutation does not honour is a write that fires and throws.
     // `isLocalHome` travels in the variables so the two read one fact, not two.
+    if (leaving) return;
     if (recencyDecidedForEpicId.current === epicId) return;
 
     const decideRecency = (isLocalHome: boolean): void => {
@@ -243,8 +248,9 @@ function EpicRouteTabSync(props: {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [cloudAuthorized, epicId, homeReading, recordViewed]);
+  }, [cloudAuthorized, epicId, homeReading, leaving, recordViewed]);
 
+  if (leaving) return null;
   if (resolutionFailed) return <RootLandingPage />;
 
   // Until the tab record exists the host has no pane to show; render a themed

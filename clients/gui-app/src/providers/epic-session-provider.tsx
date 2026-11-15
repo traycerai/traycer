@@ -7,6 +7,7 @@ import {
 } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { runWhenRouterSettled } from "@/lib/router-settled";
+import { markLeavingTask } from "@/stores/epics/leaving-tasks-store";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
@@ -78,25 +79,28 @@ export function EpicSessionProvider(
   );
 
   // Another window owns this TAB, so the controller has discarded it here.
-  // Leaving the route is the one part of that only a mounted surface can do;
-  // it waits for a router load in flight (`runWhenRouterSettled`), and a
-  // surface that unmounts first does not leave at all.
-  useEffect(() => {
-    let cancelLeave: (() => void) | null = null;
-    const unsubscribe = controller.subscribeOwnershipDenied(
-      (deniedEpicId, deniedTabId) => {
+  // Leaving the route is the one part of that only a mounted surface can do.
+  // It waits for a router load in flight (`runWhenRouterSettled`) and outlives
+  // this surface, which the discard itself unmounts; it leaves only if the
+  // window is where it was when the denial came. Until it has left, the tab's
+  // route draws nothing and records no visit (`markLeavingTask`).
+  useEffect(
+    () =>
+      controller.subscribeOwnershipDenied((deniedEpicId, deniedTabId) => {
         if (deniedEpicId !== epicId || deniedTabId !== tabId) return;
-        cancelLeave?.();
-        cancelLeave = runWhenRouterSettled(router, () => {
-          void navigate({ to: "/epics", replace: true });
+        const unmark = markLeavingTask(epicId);
+        const deniedAt = router.state.location.pathname;
+        runWhenRouterSettled(router, () => {
+          // A person who has moved on by then is not taken anywhere.
+          if (router.state.location.pathname !== deniedAt) {
+            unmark();
+            return;
+          }
+          void navigate({ to: "/epics", replace: true }).finally(unmark);
         });
-      },
-    );
-    return () => {
-      unsubscribe();
-      cancelLeave?.();
-    };
-  }, [controller, epicId, navigate, router, tabId]);
+      }),
+    [controller, epicId, navigate, router, tabId],
+  );
 
   const retry = useCallback(() => {
     controller.retry(epicId);
