@@ -241,8 +241,7 @@ function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
     members.isPending || members.isError
       ? []
       : members.members.flatMap((member) =>
-          (member.effectiveRole === "admin" ||
-            member.effectiveRole === "editor") &&
+          mayChangeConfiguration(member.effectiveRole) &&
           member.inviteState !== "pending" &&
           member.displayName !== null
             ? [member.displayName]
