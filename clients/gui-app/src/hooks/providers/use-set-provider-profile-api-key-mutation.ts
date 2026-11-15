@@ -1,16 +1,22 @@
-import type { UseMutationResult } from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
-import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   PROFILE_API_KEY_MUTATION_SCOPE,
   PROVIDER_INVALIDATIONS,
 } from "@/hooks/providers/invalidations";
-import { providersMutationKeys } from "@/lib/query-keys";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Store an API key against ONE profile.
@@ -41,24 +47,63 @@ import { providersMutationKeys } from "@/lib/query-keys";
  * key), and an exported wrapper with no call site is dead code.
  */
 export function useSetProviderProfileApiKey(
-  // Mutation-level for the reason spelled out on the clear hook: the form
-  // unmounts behind the reauth panel, and a per-`mutate` callback would be
-  // dropped exactly when the draft most needs clearing.
+  readApiKey: () => string,
+  clearApiKeyInput: () => void,
   onSuccess: (() => void) | undefined,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
+  Omit<
+    RequestOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
+    "apiKey"
+  >,
   { readonly hostId: string | null }
 > {
-  return useHostScopedMutation({
+  const client = useHostClient();
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.setProfileApiKey",
+    { readonly hostId: string | null },
+    Omit<
+      RequestOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
+      "apiKey"
+    >
+  >({
+    client,
     method: "providers.setProfileApiKey",
-    mutationKey: providersMutationKeys.setProfileApiKey(),
-    errorMessage: "Couldn't save the API key.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
-    // Serializes this pair against each other - see the scope's own note for
-    // why `fifo` in the policy table cannot.
-    scope: PROFILE_API_KEY_MUTATION_SCOPE,
-    onSuccess: onSuccess === undefined ? undefined : () => onSuccess(),
+    mapVariables: (target) => ({ ...target, apiKey: readApiKey() }),
+    options: {
+      mutationKey: providersMutationKeys.setProfileApiKey(),
+      scope: PROFILE_API_KEY_MUTATION_SCOPE,
+      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onSuccess: () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ProviderConfigurationChanged,
+          { operation: "api_key" },
+        );
+        onSuccess?.();
+      },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't save the API key."),
+      onSettled: (_data, _error, _target, context) => {
+        clearApiKeyInput();
+        const hostId = context?.hostId ?? null;
+        if (hostId === null) return;
+        for (const method of PROVIDER_INVALIDATIONS) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              hostRpcServingTierHostId(
+                method,
+                hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
+              method,
+            ),
+          });
+        }
+      },
+    },
   });
 }

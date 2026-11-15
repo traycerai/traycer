@@ -60,6 +60,16 @@ function wrapper({ children }: { readonly children: ReactNode }) {
   );
 }
 
+function useSetProfileApiKeyWithoutDispatch(
+  onSuccess: (() => void) | undefined,
+) {
+  return useSetProviderProfileApiKey(
+    () => "unused test input",
+    () => undefined,
+    onSuccess,
+  );
+}
+
 function captureLastMutation(): CapturedMutation {
   const call = mocks.useHostMutation.mock.calls.at(-1);
   if (call === undefined) throw new Error("useHostMutation was never called");
@@ -92,7 +102,7 @@ describe("per-profile API-key mutations", () => {
     // FALSIFICATION: remove the `setProfileApiKey` entry from
     // `PROVIDER_MUTATION_OPERATIONS` and this reddens; route the hook back
     // through a bare `useHostMutation` and it reddens too.
-    renderAndSucceed(() => useSetProviderProfileApiKey(undefined));
+    renderAndSucceed(() => useSetProfileApiKeyWithoutDispatch(undefined));
 
     expect(mocks.track).toHaveBeenCalledWith(
       AnalyticsEvent.ProviderConfigurationChanged,
@@ -144,7 +154,9 @@ describe("per-profile API-key mutations", () => {
     // `useHostScopedMutation`'s options passthrough, which is where it now
     // travels - and the ids stop matching.
     mocks.useHostMutation.mockClear();
-    renderHook(() => useSetProviderProfileApiKey(undefined), { wrapper });
+    renderHook(() => useSetProfileApiKeyWithoutDispatch(undefined), {
+      wrapper,
+    });
     const set = captureLastMutation();
 
     mocks.useHostMutation.mockClear();
@@ -172,7 +184,7 @@ describe("per-profile API-key mutations", () => {
   // the clear back to `mutate(vars, { onSuccess })` in the dialog, and the
   // spy stops firing.
   it.each([
-    ["set", useSetProviderProfileApiKey],
+    ["set", useSetProfileApiKeyWithoutDispatch],
     ["clear", useClearProviderProfileApiKey],
   ] as const)(
     "runs the %s caller's onSuccess from the mutation options after unmount",
