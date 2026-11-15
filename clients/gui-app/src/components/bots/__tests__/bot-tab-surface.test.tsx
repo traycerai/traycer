@@ -83,7 +83,6 @@ import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
   BotOpenMemory,
   BotOpenThread,
-  BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -276,7 +275,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -308,18 +306,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         type="button"
         data-testid="stub-channel-open-turn"
         onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
-        }
       />
       {props.setupHistory}
       <MentionsProbe />
@@ -2179,7 +2165,7 @@ describe("<BotTabSurface /> under the compact app header", () => {
     const user = userEvent.setup();
     render(surfaceUnderHeader(BOT_ID));
 
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
     expect(screen.getByTestId("stub-session")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
 

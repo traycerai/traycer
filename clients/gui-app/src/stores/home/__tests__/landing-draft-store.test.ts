@@ -789,6 +789,40 @@ describe("useLandingDraftStore", () => {
     ]);
   });
 
+  it("reads the host a projected draft was opened for", () => {
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-a",
+            content: desktopTextContent(""),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+            namedHostId: "host-a",
+          },
+          {
+            id: "draft-b",
+            content: desktopTextContent(""),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+          },
+        ],
+        activeLandingDraftId: "draft-a",
+      }),
+    );
+    expect(
+      useLandingDraftStore.getState().drafts.map((draft) => draft.namedHostId),
+    ).toEqual(["host-a", null]);
+  });
+
   it("drops invalid projected draft workspace data", () => {
     const snapshot = emptyWindowSnapshot({
       landingDrafts: [
