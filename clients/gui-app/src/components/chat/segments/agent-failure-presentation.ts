@@ -120,6 +120,9 @@ const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   ["TEAM_MEMBER_REMOVED", "Member left the team"],
   ["TEAM_HOST_RECONNECTING", "Waiting for the team's host"],
   ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
+  // The session of the account selected before this one is still exiting;
+  // the account is unchanged and sending again works.
+  ["PROFILE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
   // The provider refused the turn because its command-line tool is too old;
   // the host's message names the provider and, where this host cannot update
   // it, who or what does.
