@@ -28,7 +28,6 @@ import type {
   HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import { setMobileApp } from "@/lib/mobile-app";
-import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import {
   noteHostDoorState,
   useHostDoorStateStore,
@@ -383,12 +382,6 @@ const READY_CONTROLLER: HostReadinessController = {
   hasBeenDefaultHostReady: true,
 };
 
-let lastNarration: unknown = null;
-function NarrationProbe(): null {
-  lastNarration = useWindowNarration();
-  return null;
-}
-
 /** The tab on the window's own computer, with the window's cover mounted. */
 function renderTabOnTheWindowsComputer(): void {
   seams.effectiveHostId = TAB_HOST_ID;
@@ -416,7 +409,6 @@ function renderTabOnTheWindowsComputer(): void {
             <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
           </TestEpicSessionTab>
           <WindowHostModalHost bypassed={false} />
-          <NarrationProbe />
         </HostReadinessControllerContext.Provider>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -632,27 +624,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       });
       publishTabRow("1.5.4");
 
-      await waitFor(() => {
-        expect(document.body.textContent).toContain("Host update needed");
-      });
-      const selection = useSelectionAuthorityStore.getState();
-      await waitFor(() => {
-        expect(
-          screen.queryByTestId(testCase.cover),
-          JSON.stringify({
-            door: [...useHostDoorStateStore.getState().byHost.values()],
-            attached: selection.attached,
-            effective: selection.effectiveHostId,
-            target: selection.targetHostId,
-            leases: selection.leases,
-            narration: lastNarration,
-            testIds: [...document.querySelectorAll("[data-testid]")].map(
-              (element) => element.getAttribute("data-testid"),
-            ),
-          }),
-        ).not.toBeNull();
-      });
-      const cover = screen.getByTestId(testCase.cover);
+      const cover = await screen.findByTestId(testCase.cover);
       expect(within(cover).getByText("Host update needed")).toBeTruthy();
       await waitFor(() => {
         expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
