@@ -141,14 +141,38 @@ function attachmentFailure(kind: AttachmentFailureKind): HostRpcError {
   });
 }
 
-/** Its sign-in ended before it was sent: not sent, and nothing is said. */
-function assertOriginSignIn(operation: EnvironmentCloud): void {
+/**
+ * Whether the sign-in a press was made on is still the current one: the
+ * press's own operation when the app has a session service (a token rotation
+ * keeps it; a sign-out, another account or the same account signing in again
+ * ends it), else the same account. Every step an attachment's caller takes
+ * after one of its waits asks this, so nothing continues, and nothing is said,
+ * on a sign-in the person did not press on.
+ */
+export function pressedSignInCurrent(
+  operation: EnvironmentCloud | null,
+  pressedBy: string | null,
+): boolean {
+  if (operation !== null) return operation.onOriginSignIn();
+  return (useAuthStore.getState().profile?.userId ?? null) === pressedBy;
+}
+
+/**
+ * Its sign-in ended: nothing more is sent, and nothing is said.
+ * `mayHaveDispatched` is whether the cloud attachment had gone out.
+ */
+function assertOriginSignIn(
+  operation: EnvironmentCloud,
+  mayHaveDispatched: boolean,
+): void {
   if (operation.onOriginSignIn()) return;
   throw new HostRequestAbortedError({
-    message: "The account changed before the attachment was sent",
+    message: mayHaveDispatched
+      ? "The account changed while the attachment was out"
+      : "The account changed before the attachment was sent",
     requestId: crypto.randomUUID(),
     method: METHOD,
-    mayHaveDispatched: false,
+    mayHaveDispatched,
   });
 }
 
@@ -156,15 +180,18 @@ function assertOriginSignIn(operation: EnvironmentCloud): void {
  * The cloud half, once the host has prepared the task: the team's
  * environment from the person's own list (as the host found it), then the
  * attachment, each sent only while the sign-in the person pressed on is
- * current, and checked before the bearer is read.
+ * current, and checked before the bearer is read. Each answer is checked
+ * again after its wait, so neither a refusal nor a success reaches a sign-in
+ * that has ended.
  */
 async function attachOnSignIn(
   binding: HostRuntimeBinding<HostRpcRegistry>,
   attachment: EpicAttachment,
   operation: EnvironmentCloud,
 ): Promise<void> {
-  assertOriginSignIn(operation);
+  assertOriginSignIn(operation, false);
   const directory = await binding.auth.listEnvironments();
+  assertOriginSignIn(operation, false);
   if (directory.kind !== "ok") {
     throw attachmentFailure(
       directory.kind === "unauthorized" ? "unauthorized" : "refused",
@@ -176,11 +203,11 @@ async function attachOnSignIn(
       candidate.ownerId === attachment.teamId,
   );
   if (environment === undefined) throw attachmentFailure("refused");
-  assertOriginSignIn(operation);
   const result = await binding.auth.attachTaskEnvironment({
     taskId: attachment.epicId,
     environmentId: environment.environmentId,
   });
+  assertOriginSignIn(operation, true);
   if (result.kind === "ok") return;
   throw attachmentFailure(
     result.kind === "no_response" ? "refused" : result.kind,
@@ -217,16 +244,12 @@ export function useEpicAttachEnvironment(
       // The team's arms for this task, refused while it was not attached,
       // answer now.
       onSuccess: (_response, variables, context) => {
-        if (
-          context.userId !== (useAuthStore.getState().profile?.userId ?? null)
-        ) {
-          return;
-        }
+        if (!pressedSignInCurrent(variables.operation, context.userId)) return;
         reopenEnvironmentArms(variables.teamId, variables.epicId);
       },
-      onError: (error, _variables, context) => {
+      onError: (error, variables, context) => {
         if (
-          context?.userId !== (useAuthStore.getState().profile?.userId ?? null)
+          !pressedSignInCurrent(variables.operation, context?.userId ?? null)
         ) {
           return;
         }
@@ -249,14 +272,16 @@ export function useEpicAttachEnvironment(
     }),
     mutationFn: (attachment) =>
       withHostMutationErrorBoundary(METHOD, async () => {
-        if (client === null) throw hostClientUnavailableError(METHOD);
+        const operation = attachment.operation;
+        if (client === null || binding === null || operation === null) {
+          throw hostClientUnavailableError(METHOD);
+        }
+        // A caller may have waited on a create since the press.
+        assertOriginSignIn(operation, false);
         const prepared = await client.request(METHOD, {
           epicId: attachment.epicId,
         });
-        if (binding === null || attachment.operation === null) {
-          throw hostClientUnavailableError(METHOD);
-        }
-        await attachOnSignIn(binding, attachment, attachment.operation);
+        await attachOnSignIn(binding, attachment, operation);
         return prepared;
       }),
   });

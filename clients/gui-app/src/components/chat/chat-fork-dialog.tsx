@@ -51,6 +51,7 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachEnvironment,
@@ -939,9 +940,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 current: true,
                 owns: true,
                 epicConfirmed: true,
-                accountActive:
-                  (useAuthStore.getState().profile?.userId ?? null) ===
-                  ownerUserId,
+                accountActive: pressedSignInCurrent(operation, ownerUserId),
                 stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
               },
             );
@@ -1077,8 +1076,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           current: true,
           owns: true,
           epicConfirmed: true,
-          accountActive:
-            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          accountActive: pressedSignInCurrent(operation, submittedBy),
           stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
         },
       );
@@ -1100,10 +1098,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         },
         {
           onSuccess: (result) => {
-            if (
-              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
-            )
-              return;
+            if (!pressedSignInCurrent(operation, submittedBy)) return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,

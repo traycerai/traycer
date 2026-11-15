@@ -34,6 +34,7 @@ import {
   ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
   isAttachEnvironmentUnsupported,
   isAttachPromotionPending,
+  pressedSignInCurrent,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
@@ -1751,8 +1752,9 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
+      // The sign-in sent on, not only its account: a sign-in again ends it.
       const sameAccount = (): boolean =>
-        (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
+        pressedSignInCurrent(operation, dispatchUserId);
       // A create or attachment refusal returns the only message copy. An
       // attachment refused because the task is still reaching the cloud then
       // deletes it, unless an agent was started in it meanwhile: the next Send

@@ -103,6 +103,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachmentClient,
@@ -2725,8 +2726,7 @@ function useStagedTaskAttachment(input: {
             current: generation.stillCurrent(),
             owns: true,
             epicConfirmed: true,
-            accountActive:
-              (useAuthStore.getState().profile?.userId ?? null) === userId,
+            accountActive: pressedSignInCurrent(operation, userId),
             stageCurrent: readStagedSandbox(surfaceKey) === staged,
           },
         ).effects.includes("handoff");
