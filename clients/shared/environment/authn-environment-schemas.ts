@@ -305,7 +305,7 @@ export const authnUndoConflictSchema = lazySchema(() =>
 
 /**
  * A role on authn's members answer (a member's row and the reader's own). A
- * seat stored on the retired Viewer role answers `null`; it reads as
+ * seat stored on the Viewer role answers `null`; it reads as
  * `viewer`, as the host's forwarder reads it.
  */
 export const authnMemberRoleSchema = lazySchema(() =>
