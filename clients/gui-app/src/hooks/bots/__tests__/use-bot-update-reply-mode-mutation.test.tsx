@@ -54,10 +54,10 @@ describe("useBotUpdateReplyModeMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        updateBotReplyMode: async (request) => {
+        updateBotReplyMode: (request) => {
           sent.push(request);
-          return {
-            kind: "ok",
+          return Promise.resolve({
+            kind: "ok" as const,
             bot: {
               botId: request.botId,
               harness: "claude",
@@ -66,7 +66,7 @@ describe("useBotUpdateReplyModeMutation", () => {
               profile: null,
               replyMode: request.replyMode,
             },
-          };
+          });
         },
       },
     };
@@ -98,11 +98,12 @@ describe("useBotUpdateReplyModeMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        updateBotReplyMode: async () => ({
-          kind: "refused",
-          status: 422,
-          message: "Replies must stay in threads",
-        }),
+        updateBotReplyMode: () =>
+          Promise.resolve({
+            kind: "refused" as const,
+            status: 422,
+            message: "Replies must stay in threads",
+          }),
       },
     };
     const local = listKey("host-local");
@@ -123,6 +124,58 @@ describe("useBotUpdateReplyModeMutation", () => {
       } satisfies Partial<EnvironmentCloudError>);
     });
     expect(queryClient.getQueryState(local)?.isInvalidated).toBe(false);
+  });
+
+  it("does not dispatch reply mode after the pressed sign-in ends", async () => {
+    const queryClient = new QueryClient();
+    const generation = { value: 1 };
+    const sent: BotUpdateReplyModeRequest[] = [];
+    binding.current = {
+      auth: {
+        getIdentityGeneration: () => generation.value,
+        isIdentityCurrent: (pressedAt) => pressedAt === generation.value,
+        updateBotReplyMode: (request) => {
+          sent.push(request);
+          return Promise.resolve({
+            kind: "ok" as const,
+            bot: {
+              botId: request.botId,
+              harness: "claude",
+              model: "model-a",
+              effort: null,
+              profile: null,
+              replyMode: request.replyMode,
+            },
+          });
+        },
+      },
+    };
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBotUpdateReplyModeMutation(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync(REQUEST)).resolves.toMatchObject({
+        botId: BOT_ID,
+        replyMode: "direct",
+      });
+    });
+    expect(sent).toEqual([REQUEST]);
+
+    let abandoned: Promise<unknown> | undefined;
+    act(() => {
+      abandoned = result.current.mutateAsync(REQUEST);
+      generation.value += 1;
+    });
+    await act(async () => {
+      await expect(abandoned).resolves.toBeNull();
+    });
+    expect(sent).toEqual([REQUEST]);
   });
 
   it("answers without a binding and sends no write", async () => {

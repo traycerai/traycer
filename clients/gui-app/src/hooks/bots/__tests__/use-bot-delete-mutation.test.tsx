@@ -52,9 +52,9 @@ describe("useBotDeleteMutation", () => {
         auth: {
           getIdentityGeneration: () => 1,
           isIdentityCurrent: (generation) => generation === 1,
-          deleteBot: async (request) => {
+          deleteBot: (request) => {
             sent.push(request);
-            return { kind: "ok", deleted };
+            return Promise.resolve({ kind: "ok" as const, deleted });
           },
         },
       };
@@ -87,11 +87,12 @@ describe("useBotDeleteMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        deleteBot: async () => ({
-          kind: "refused",
-          status: 404,
-          message: "Not found",
-        }),
+        deleteBot: () =>
+          Promise.resolve({
+            kind: "refused" as const,
+            status: 404,
+            message: "Not found",
+          }),
       },
     };
     const local = listKey("host-local");
@@ -109,6 +110,45 @@ describe("useBotDeleteMutation", () => {
       );
     });
     expect(queryClient.getQueryState(local)?.isInvalidated).toBe(false);
+  });
+
+  it("captures delete origin at press before TanStack continues", async () => {
+    const queryClient = new QueryClient();
+    const generation = { value: 1 };
+    const sent: BotDeleteRequest[] = [];
+    binding.current = {
+      auth: {
+        getIdentityGeneration: () => generation.value,
+        isIdentityCurrent: (pressedAt) => pressedAt === generation.value,
+        deleteBot: (request) => {
+          sent.push(request);
+          return Promise.resolve({ kind: "ok" as const, deleted: true });
+        },
+      },
+    };
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBotDeleteMutation(), { wrapper });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync(REQUEST)).resolves.toEqual({
+        deleted: true,
+      });
+    });
+    expect(sent).toEqual([REQUEST]);
+
+    let abandoned: Promise<unknown> | undefined;
+    act(() => {
+      abandoned = result.current.mutateAsync(REQUEST);
+      generation.value += 1;
+    });
+    await act(async () => {
+      await expect(abandoned).resolves.toBeNull();
+    });
+    expect(sent).toEqual([REQUEST]);
   });
 
   it("answers without a binding and sends no delete", async () => {
