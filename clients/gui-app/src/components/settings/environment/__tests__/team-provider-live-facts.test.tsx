@@ -50,7 +50,7 @@ vi.mock("@/components/settings/environment/team-viewing-host-binding", () => ({
   }) => (reads.bound ? props.children : props.unavailable),
 }));
 vi.mock("@/components/settings/environment/team-viewing-host-picker", () => ({
-  TeamViewingHostPicker: () => null,
+  TeamViewingHostPicker: () => <div data-testid="team-viewing-host-picker" />,
 }));
 vi.mock("@/components/settings/environment/team-pick-label", () => ({
   usePickedTeamLabel: () => "Acme",
@@ -203,16 +203,31 @@ describe("TeamProviderLiveFacts", () => {
     expect(reads.cards.some((card) => card.profileId === null)).toBe(false);
   });
 
-  it("never shows a host's ambient login as the team's limits when the team has no linked plan", () => {
+  it("keeps the rate limits card and viewing controls for a team without a linked plan", () => {
     reads.providers = [
-      claude([profile("ambient", "ambient", "authenticated")], "authenticated"),
+      {
+        ...claude(
+          [profile("ambient", "ambient", "authenticated")],
+          "authenticated",
+        ),
+        nextRunBinary: {
+          kind: "path",
+          path: "/usr/local/bin/claude",
+          version: "1.2.3",
+        },
+      },
     ];
     renderFacts();
 
     expect(reads.cards).toEqual([]);
-    expect(screen.getByRole("status").textContent).toBe(
-      "Link a plan to Acme to see its rate limits.",
-    );
+    expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
+    expect(screen.getByTestId("team-viewing-host-picker")).toBeTruthy();
+    expect(
+      within(rateCard()).getByText(
+        "Studio uses: /usr/local/bin/claude · 1.2.3.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/link/i)).toBeNull();
   });
 
   it("draws nothing for a linked plan with no profile of the same id on the host", () => {
