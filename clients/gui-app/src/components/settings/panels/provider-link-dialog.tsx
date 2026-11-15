@@ -1,11 +1,5 @@
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -19,13 +13,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useHostClient } from "@/lib/host/runtime";
 import {
   useConfigurationEnvironmentId,
   useConfigurationIsPersonal,
 } from "@/components/settings/environment/configuration-source";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   useTeamPlanLinkCompleteMutation,
   useTeamPlanLinkPollQuery,
@@ -53,24 +45,6 @@ import {
   type ProviderLinkTarget,
 } from "@/stores/providers/provider-link-dialog-store";
 
-/**
- * The Link dialog: links a profile that is on
- * this host only, or a new one, to the person's plan. Opened from the
- * Providers page's "On <host> only, link to use everywhere" line through
- * `provider-link-dialog-store`, and mounted once inside the page's host
- * scope, so its calls go to the host the page shows.
- *
- * Claude: sign in on claude.ai and paste the code. Codex: the provider's
- * device code, polled. The local handoff: "Linking…", polled. Each answer
- * moves the dialog to its state; the lines are `provider-link-copy.ts`'s.
- *
- * The Personal calls are direct requests, as the Secrets page's Add a secret
- * makes them: the pasted code is a one-time credential and reaches no query
- * or mutation cache, and closing the dialog drops it. A team's link goes
- * through `use-plan-link-mutations.ts`, which reads the code at dispatch for
- * the same reason.
- */
-
 const DEVICE_POLL_MS = 5_000;
 const LINKING_POLL_MS = 2_000;
 
@@ -96,7 +70,7 @@ export function ProviderLinkDialog(): ReactNode {
         onClose={close}
       />
     );
-  return <ProviderLinkDialogFor key={key} target={target} onClose={close} />;
+  return null;
 }
 
 /** The poll a state asks for: a device code and a local handoff settle late. */
@@ -186,105 +160,6 @@ function TeamProviderLinkDialogFor(props: {
       onCodeChange={changeCode}
       onStart={start}
       onSubmitCode={submitCode}
-      onClose={props.onClose}
-    />
-  );
-}
-
-function ProviderLinkDialogFor(props: {
-  readonly target: ProviderLinkTarget;
-  readonly onClose: () => void;
-}): ReactNode {
-  const client = useHostClient();
-  // Personal by its own id: a host that has not moved its settings has no
-  // environment of its own to link into.
-  const { environmentId, resolved } = useAddressedEnvironment();
-  const complete = useCallback(
-    (linkId: string, code: string | null) =>
-      client.request("providers.linkComplete", {
-        linkId,
-        code,
-        environmentId,
-      }),
-    [client, environmentId],
-  );
-  const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
-  const [state, setState] = useState<LinkDialogState>(INTRO);
-  const [code, setCode] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  // Bumped after every poll answer, so a pending answer (which keeps the
-  // same state) still arms the next poll.
-  const [pollTick, setPollTick] = useState(0);
-
-  const start = async (linkTarget: ProviderLinkTarget): Promise<void> => {
-    setTarget(linkTarget);
-    setState(STARTING);
-    setCode("");
-    const providerId = providerIdSchema.safeParse(linkTarget.providerId);
-    if (!providerId.success) {
-      setState({ kind: "not_offered" });
-      return;
-    }
-    try {
-      const response = await client.request("providers.link", {
-        providerId: providerId.data,
-        profileId: linkTarget.profileId,
-        environmentId,
-      });
-      setState(stateOfLinkStart(response));
-    } catch (error) {
-      setState(stateOfLinkError(error));
-    }
-  };
-
-  const submitCode = async (current: SignInState): Promise<void> => {
-    setSubmitting(true);
-    try {
-      const response = await complete(current.linkId, code.trim());
-      setCode("");
-      setState((latest) => stateOfLinkComplete(latest, response));
-    } catch (error) {
-      setState(stateOfLinkError(error));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const { linkId: pollLinkId, intervalMs: pollMs } = pollOf(state);
-  useEffect(() => {
-    if (pollLinkId === null) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void complete(pollLinkId, null)
-        .then((response) => {
-          if (cancelled) return;
-          setState((latest) => stateOfLinkComplete(latest, response));
-          setPollTick((tick) => tick + 1);
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) setState(stateOfLinkError(error));
-        });
-    }, pollMs);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [complete, pollLinkId, pollMs, pollTick]);
-
-  return (
-    <LinkDialogFrame
-      title="Link to your plan"
-      intro={LINK_INTRO}
-      state={state}
-      target={target}
-      code={code}
-      submitting={submitting}
-      // Continue waits for Personal's id, so a link never names the host's
-      // own environment in its place.
-      startable={resolved}
-      onCodeChange={setCode}
-      onStart={(linkTarget) => void start(linkTarget)}
-      onSubmitCode={(current) => void submitCode(current)}
       onClose={props.onClose}
     />
   );

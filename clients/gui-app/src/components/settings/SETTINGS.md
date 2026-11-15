@@ -1208,9 +1208,7 @@ environment (`hooks/environment/use-addressed-environment.ts`): a team's id on
 its pages, Personal's own id on the Personal pick (from `environment.list`,
 `ownerKind: "user"`, the resolver Details shares), and the host's own only on a
 Local pick, so a host that has not moved its settings still reads Personal's. A
-read waits for Personal's id. A provider's sign-in (`providers.link`,
-`providers.linkComplete`) names the same environment, and its Continue waits for
-Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
+read waits for Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
 by you 24 Oct" ("replaced by you" after a replacement, from the current version)
 with **Replace**, **Remove** and **Details**; Details holds **Verify**
 (`environment.secrets.verify` by id), the rotation, **Versions** (Undo, Restore

@@ -8,7 +8,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostMethods,
@@ -16,6 +16,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { ProviderOnHostOnlyLine } from "@/components/settings/panels/provider-on-host-only-line";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 
 const HOST_ID = "host-a";
 const LINE_TESTID = "profile-on-host-only";
@@ -39,14 +40,12 @@ function renderLines(options: {
   readonly onHostOnly: readonly OnHostOnlyEntry[] | null;
   readonly methods: readonly string[] | null;
   readonly lines: readonly OnHostOnlyEntry[];
-}): { readonly listCalls: () => number; readonly linkCalls: () => number } {
-  let listCalls = 0;
+}): { readonly queryClient: QueryClient; readonly linkCalls: () => number } {
   let linkCalls = 0;
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "providers.list": () => {
-        listCalls += 1;
         return options.onHostOnly === null
           ? { providers: [], native: null }
           : {
@@ -91,13 +90,17 @@ function renderLines(options: {
       ))}
     </QueryClientProvider>,
   );
-  return { listCalls: () => listCalls, linkCalls: () => linkCalls };
+  return {
+    queryClient,
+    linkCalls: () => linkCalls,
+  };
 }
 
-/** Lets an answered `providers.list` reach the page. */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
+async function waitForProvidersList(queryClient: QueryClient): Promise<void> {
+  await vi.waitFor(() => {
+    expect(
+      queryClient.getQueryState(providersListQueryKey(HOST_ID))?.status,
+    ).toBe("success");
   });
 }
 
@@ -137,7 +140,6 @@ describe("<ProviderOnHostOnlyLine />", () => {
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toBe("Available on this computer");
-    expect(line.querySelector("button")).toBeNull();
     expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(linkCalls()).toBe(0);
   });
@@ -165,29 +167,22 @@ describe("<ProviderOnHostOnlyLine />", () => {
   });
 
   it("says nothing when the list names no profile as on this host only", async () => {
-    const { listCalls } = renderLines({
+    const { queryClient } = renderLines({
       onHostOnly: [],
       methods: ["providers.list", "providers.link"],
       lines: [P1],
     });
-    await vi.waitFor(() => {
-      expect(listCalls()).toBeGreaterThan(0);
-    });
-    await settle();
+    await waitForProvidersList(queryClient);
     expect(lineIn(P1)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
   });
 
   it("says nothing on a host whose list carries no onHostOnly (a 10.0 host)", async () => {
-    const { listCalls } = renderLines({
+    const { queryClient } = renderLines({
       onHostOnly: null,
       methods: ["providers.list", "providers.link"],
       lines: [P1],
     });
-    await vi.waitFor(() => {
-      expect(listCalls()).toBeGreaterThan(0);
-    });
-    await settle();
+    await waitForProvidersList(queryClient);
     expect(lineIn(P1)).toBeNull();
   });
 });
