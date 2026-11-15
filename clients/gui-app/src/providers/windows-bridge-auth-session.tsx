@@ -66,6 +66,9 @@ export function WindowsBridgeAuthSessionBridge(
     // is in flight. One restore per held session.
     let heldLocally: string | null = null;
     let restoringLocally: string | null = null;
+    // Numbers each local restore the fallback starts, and moves on a release,
+    // so an earlier restore's answer never settles a later one's state.
+    let localRestoreAttempt = 0;
     let localHoldResendTimer: number | null = null;
     // The held session main has since judged bad: told once and, for the
     // verdicts authn can settle, asked about once - not once per tick.
@@ -74,6 +77,7 @@ export function WindowsBridgeAuthSessionBridge(
     const releaseLocalHold = (): void => {
       heldLocally = null;
       restoringLocally = null;
+      localRestoreAttempt += 1;
       judgedHeld = null;
       if (localHoldResendTimer !== null) {
         window.clearInterval(localHoldResendTimer);
@@ -184,8 +188,10 @@ export function WindowsBridgeAuthSessionBridge(
             if (heldLocally === serialized || restoringLocally === serialized)
               return;
             restoringLocally = serialized;
+            localRestoreAttempt += 1;
+            const attempt = localRestoreAttempt;
             restoreLocal(snapshot, (restored) => {
-              if (restoringLocally !== serialized) return;
+              if (attempt !== localRestoreAttempt) return;
               restoringLocally = null;
               if (!restored) return;
               heldLocally = serialized;
