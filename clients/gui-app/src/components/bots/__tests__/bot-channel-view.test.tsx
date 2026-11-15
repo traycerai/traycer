@@ -2340,6 +2340,36 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     expect(threadLanding()).toBe("reply-a9");
   });
 
+  it("lands a second notification's thread after the first's has landed, when both the thread and the landing change at once", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    mountLanding = {
+      messageId: "reply-b3",
+      sendPostId: null,
+      threadId: "thread-b",
+      visit: 2,
+    };
+    view.reopen({
+      anchorMessageId: "post-b",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(threadLanding()).toBe("reply-b3");
+  });
+
   it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
     mountLanding = {
       messageId: "reply-a9",

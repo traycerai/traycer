@@ -236,13 +236,17 @@ function useThreadPanelLanding(
       ? { landing: landOn, handed: false }
       : null,
   );
+  const spend = useCallback(() => setHeld(null), []);
   // A landing asked of a channel that is already shown arrives as a new prop,
-  // not a mount: it is held as the mount's would be.
+  // not a mount: it is held as the mount's would be. The render that adopts
+  // it ends there, so the landing it replaces is never spent against it: that
+  // spend would be queued after the adoption and clear the new landing.
   const [asked, setAsked] = useState(landOn);
   if (landOn !== asked) {
     setAsked(landOn);
     if (landOn !== null && landOn.threadId !== null) {
       setHeld({ landing: landOn, handed: false });
+      return { landing: null, spend };
     }
   }
   const showing = held !== null && drawnThreadId === held.landing.threadId;
@@ -255,7 +259,6 @@ function useThreadPanelLanding(
   ) {
     setHeld(null);
   }
-  const spend = useCallback(() => setHeld(null), []);
   return { landing: showing ? held.landing : null, spend };
 }
 
