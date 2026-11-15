@@ -624,7 +624,7 @@ describe("TeamPlans' unlink sheet when authn answers the host list again", () =>
         keepsWorking: [],
       }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
     const card = await screen.findByRole("region", { name: "Plans" });

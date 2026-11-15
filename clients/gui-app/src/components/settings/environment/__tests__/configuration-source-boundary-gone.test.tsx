@@ -368,7 +368,7 @@ function mountOwnershipConsumers(
     <>
       <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <ConfigurationPermissionProbe testId="personal-ownership-probe" />
-        <TeamPlans providerId="claude-code" adminNames={[]} />
+        <TeamPlans providerId="claude-code" />
       </ConfigurationSourceBoundary>
       <ConfigurationSourceBoundary
         target={{ kind: "team", environmentId: "env-a" }}

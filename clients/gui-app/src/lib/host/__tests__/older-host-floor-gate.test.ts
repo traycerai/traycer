@@ -94,7 +94,6 @@ import {
   createMemoryHostTokenPersistence,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
-import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { buildRawHostMessengerForTarget } from "@/lib/host/host-messenger";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
@@ -137,7 +136,6 @@ function messengerFor(target: HostDirectoryEntry) {
     hostTokens: hostTokens(),
     registry: hostRpcRegistry,
     bearer: () => null,
-    hostTokens: inertHostTokenSource(),
     cloudAuthorized: () => false,
     auth: null,
     authnBaseUrl: "https://authn.example.invalid",
@@ -152,7 +150,6 @@ function streamFor(target: HostDirectoryEntry) {
     hostTokens: hostTokens(),
     endpoint: () => null,
     bearer: () => null,
-    hostTokens: inertHostTokenSource(),
     cloudAuthorized: () => false,
     authnBaseUrl: "https://authn.example.invalid",
     auth: null,
