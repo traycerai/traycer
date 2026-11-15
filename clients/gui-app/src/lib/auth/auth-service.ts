@@ -12,6 +12,12 @@ import {
   type ProfileRecordNameChange,
 } from "@traycer-clients/shared/host-client/profile-record-actions";
 import {
+  setProfileRecordEnabledViaHttp,
+  type ProfileRecordEnablementClient,
+  type ProfileRecordEnabledChange,
+  type ProfileRecordEnablementResult,
+} from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
@@ -640,7 +646,7 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService implements ProfileRecordClient {
+export class AuthService implements ProfileRecordClient, ProfileRecordEnablementClient {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -3665,6 +3671,25 @@ export class AuthService implements ProfileRecordClient {
       providerId,
       change.profileId,
       change.name,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordEnabled(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordEnabledChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordEnabledViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change.profileId,
+      change.enabled,
       callerSignal,
     );
   }
