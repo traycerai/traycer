@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { Button } from "@/components/ui/button";
 import { useHostBinding } from "@/lib/host";
 import { doorCoverCopy } from "@/lib/host/door-cover-copy";
@@ -17,7 +18,9 @@ import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
  * Board C1's column (b): the tile's body is the state's title and line, with
  * Retry where the board draws it and Switch account for a non-member. Drawn
  * over the body, which stays mounted, so a draft in it is kept. Marked drawn
- * while mounted, so the toast stays quiet about that computer's refusal.
+ * while the tile's body is on screen, so the toast stays quiet about that
+ * computer's refusal only while the person can see the cover; a hidden tab
+ * or pane keeps its cover mounted but marks nothing.
  */
 export function TileDoorCoverLayer(props: {
   /** The tile's computer, whose state the cover draws. */
@@ -25,7 +28,8 @@ export function TileDoorCoverLayer(props: {
   readonly cover: DoorStateCoverVariant;
 }): ReactNode {
   const copy = doorCoverCopy(props.cover);
-  useMarkDrawnDoorCover(props.hostId);
+  const onScreen = useTileBodyVisible();
+  useMarkDrawnDoorCover(onScreen ? props.hostId : null);
   return (
     <div
       data-testid="tile-door-cover"
