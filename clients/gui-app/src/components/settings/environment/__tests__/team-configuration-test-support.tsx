@@ -666,6 +666,21 @@ export function mountTeamPage(
   });
 }
 
+export function mountVerifiedTeamProvidersPage(
+  source: ConfigurationSource,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): TeamPageHarness {
+  return buildVerifiedTeamProvidersPage({
+    source,
+    handlers,
+    negotiated: null,
+    withPool: false,
+    boundarySection: null,
+    boundaryTarget: null,
+    pinBoundaryWindowHost: false,
+  });
+}
+
 type TeamPageBoundaryTarget =
   | { readonly kind: "team"; readonly environmentId: string }
   | { readonly kind: "personal" };
@@ -677,7 +692,7 @@ export function mountTeamPageThroughBoundary(
   section: SettingsSectionId,
 ): TeamBoundaryPageHarness {
   const environmentListState = { currentRole: role };
-  const harness = buildTeamPage({
+  const harness = buildVerifiedTeamProvidersPage({
     source: poolSource(role),
     handlers: {
       ...handlers,
@@ -751,7 +766,7 @@ export function mountPersonalProvidersThroughBoundary(
       },
     ],
   };
-  return buildTeamPage({
+  return buildVerifiedTeamProvidersPage({
     source: personalPoolSource(),
     handlers: { ...handlers, "environment.list": () => list },
     negotiated: null,
@@ -873,6 +888,39 @@ interface TeamPageBuildOptions {
 }
 
 function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
+  const queryClient = createTeamPageQueryClient();
+  useAuthStore.setState({ status: "signed-in" });
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  const authHarness = buildTeamAuthRuntime(queryClient);
+  return assembleTeamPage(options, queryClient, authHarness);
+}
+
+function buildVerifiedTeamProvidersPage(
+  options: TeamPageBuildOptions,
+): TeamPageHarness {
+  installTeamFetch();
+  const queryClient = createTeamPageQueryClient();
+  useAuthStore.setState({ status: "signed-out" });
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  const authHarness = buildTeamAuthRuntime(queryClient);
+  void startVerifiedTeamAuth(authHarness);
+  return assembleTeamPage(options, queryClient, authHarness);
+}
+
+function createTeamPageQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function assembleTeamPage(
+  options: TeamPageBuildOptions,
+  queryClient: QueryClient,
+  authHarness: TeamAuthRuntime,
+): TeamPageHarness {
   const {
     source,
     handlers,
@@ -882,13 +930,6 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
     boundaryTarget,
     pinBoundaryWindowHost,
   } = options;
-  installTeamFetch();
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
-  });
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -926,10 +967,6 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
-  useAuthStore.setState({ status: "signed-out" });
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
-  const authHarness = buildTeamAuthRuntime(queryClient);
-  void startVerifiedTeamAuth(authHarness);
   const binding = pinBoundaryWindowHost
     ? {
         ...authHarness.binding,

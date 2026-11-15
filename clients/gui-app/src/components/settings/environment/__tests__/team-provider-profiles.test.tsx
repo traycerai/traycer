@@ -18,6 +18,7 @@ import {
   mountTeamPage,
   mountTeamPageThroughBoundary,
   mountPersonalProvidersThroughBoundary,
+  mountVerifiedTeamProvidersPage,
   poolSource,
   configurationItem,
   teamProfileRecord,
@@ -587,7 +588,7 @@ describe("TeamProviders profiles", () => {
         ],
       },
     };
-    const harness = mountTeamPage(
+    const harness = mountVerifiedTeamProvidersPage(
       poolSource("editor"),
       handlers(() => []),
     );
@@ -627,7 +628,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("does not label an editor profile control Use", async () => {
-    const harness = mountTeamPage(
+    const harness = mountVerifiedTeamProvidersPage(
       poolSource("editor"),
       handlers(() => [profile(true, 4)]),
     );
@@ -670,7 +671,7 @@ describe("TeamProviders profiles", () => {
       value: homeValue,
       revision: 9,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work, home]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -746,7 +747,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: null,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         current = teamProfile({
@@ -808,7 +809,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("gives a viewer On/Off for a profile with no switch, plus the member-only verbs withheld", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.secrets.list": () => ({
         secrets: [
@@ -841,7 +842,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("lets a reader select a disabled profile and keeps On or Off with no Manage", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [
         teamProfile({
           key: "claude:work",
@@ -909,7 +910,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -974,7 +975,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: "Home label",
       color: sharedColor,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work, home]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1029,7 +1030,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.delete": () => ({
         outcome: "saved",
@@ -1081,7 +1082,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: "Work label",
     });
     const limit = "a".repeat(64);
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1142,7 +1143,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "conflict",
@@ -1214,7 +1215,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: stored.accountIdentity,
       color: stored.color,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         if (current.revision === 4) {
@@ -1301,7 +1302,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: stored.accountIdentity,
       color: stored.color,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         if (current.revision === 4) {
