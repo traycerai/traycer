@@ -41,6 +41,7 @@ import type {
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { settingValueDigest } from "@traycer-clients/shared/environment/environment-review";
 import * as environmentReview from "@traycer-clients/shared/environment/environment-review";
+import * as settingsSaveMapping from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
@@ -124,6 +125,7 @@ const OTHER_HOST_ID = "host-b";
 const SHARING_GENERATION = 4;
 const PROVIDER_ID = "codex";
 const ITEM_KEY = `${PROVIDER_ID}:CODEX_API_KEY`;
+const ROW_ORDER_KEY = "SAVE_ORDERING_CASE";
 type SetEnvOverrideResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.setEnvOverride"
@@ -264,7 +266,10 @@ function renderManagedProfileDialog(
 
 interface MutableAuthnState {
   rows: readonly AuthnItemRow[];
-  readonly rowsByKind: Readonly<Record<string, readonly AuthnItemRow[]>>;
+  rowsByKind: Readonly<Record<string, readonly AuthnItemRow[]>>;
+  rowsByKindAfterApply: Readonly<
+    Record<string, readonly AuthnItemRow[]>
+  > | null;
   hostListed: boolean;
   failHosts: boolean;
   failItems: boolean;
@@ -323,6 +328,7 @@ function makeSaveHarness(overrides: {
   const state: MutableAuthnState = {
     rows: overrides.rows ?? [row("macos", "old-value", 3)],
     rowsByKind: overrides.rowsByKind ?? {},
+    rowsByKindAfterApply: null,
     hostListed: overrides.hostListed ?? true,
     failHosts: overrides.failHosts ?? false,
     failItems: overrides.failItems ?? false,
@@ -366,12 +372,16 @@ function makeSaveHarness(overrides: {
       Object.values(useSettingsSaveMemoryStore.getState().records)[0] ?? null,
     );
   };
+  const cloudViewerId = useAuthStore.getState().contextMetadata?.userId ?? null;
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.test/",
     bearer: { getBearerToken: () => "test-token" },
     onOriginSignIn: () => {
       state.originSignInChecks += 1;
-      return true;
+      return (
+        cloudViewerId !== null &&
+        useAuthStore.getState().contextMetadata?.userId === cloudViewerId
+      );
     },
     transport: async (request) => {
       authnRequests.push(request);
@@ -417,6 +427,10 @@ function makeSaveHarness(overrides: {
       if (request.method === "POST" && request.url.includes("/review/")) {
         if (state.reviewPostGate !== null) {
           return state.reviewPostGate.promise;
+        }
+        if (state.rowsByKindAfterApply !== null) {
+          state.rowsByKind = state.rowsByKindAfterApply;
+          state.rowsByKindAfterApply = null;
         }
         if (
           state.revisionAfterApply !== null &&
@@ -498,6 +512,16 @@ function makeSaveHarness(overrides: {
         hostRequests.push("config.env.list");
         return { entries: [] } as never;
       },
+      "config.env.set": (request) => {
+        captureSave("config.env.set", request);
+        hostEvents.push("answer:config.env.set");
+        return { key: request.key, value: request.value };
+      },
+      "config.env.delete": (request) => {
+        captureSave("config.env.delete", request);
+        hostEvents.push("answer:config.env.delete");
+        return { key: request.key, deleted: true };
+      },
       "config.shell.set": (request) => {
         captureSave("config.shell.set", request);
         return {} as never;
@@ -541,6 +565,8 @@ function makeSaveHarness(overrides: {
     "config.shell.get": { major: 1, minor: 1 },
     "config.shell.listDetected": { major: 1, minor: 0 },
     "config.env.list": { major: 1, minor: 0 },
+    "config.env.set": { major: 1, minor: 1 },
+    "config.env.delete": { major: 1, minor: 0 },
     "config.shell.set": { major: 1, minor: 2 },
     "config.shell.add": { major: 1, minor: 2 },
     "config.shell.remove": { major: 1, minor: 2 },
@@ -762,6 +788,92 @@ function setupReviewAnswerForEdit(
       },
     }),
   };
+}
+
+function variableProposalForEdit(
+  proposalId: string,
+  operation: "put" | "delete",
+): EnvironmentProposalsResponse {
+  return {
+    proposals: [
+      {
+        proposal: {
+          proposalId,
+          environmentId: ENVIRONMENT_ID,
+          hostId: HOST_ID,
+          sharingGeneration: SHARING_GENERATION,
+          kind: "variable",
+          key: ROW_ORDER_KEY,
+          os: "macos",
+          operation,
+          state: "proposed",
+        },
+        localOverride: false,
+        deliveredRevision: 9,
+      },
+    ],
+  };
+}
+
+function variableReviewAnswerForEdit(
+  heldId: string,
+  operation: "put" | "delete",
+  heldValue: string,
+  liveRevision: number | null,
+  liveValue: string | null,
+): EnvironmentTransportAnswer {
+  const live =
+    liveRevision === null
+      ? null
+      : { revision: liveRevision, value: { value: liveValue } };
+  return {
+    status: 200,
+    text: JSON.stringify({
+      review: {
+        hosts: [],
+        needsYou: [
+          {
+            type: "held",
+            heldId,
+            revision: 9,
+            kind: "variable",
+            key: ROW_ORDER_KEY,
+            os: "macos",
+            hostId: HOST_ID,
+            sharingGeneration: SHARING_GENERATION,
+            hostName: "Local host",
+            heldAt: 2,
+            live,
+            op: operation,
+            value: operation === "put" ? { value: heldValue } : null,
+          },
+        ],
+      },
+    }),
+  };
+}
+
+type ShellSaveCallbacks = {
+  readonly onSuccess: () => void;
+  readonly onError: (error: unknown) => void;
+};
+
+async function invokeShellSave(
+  invoke: (callbacks: ShellSaveCallbacks) => void,
+): Promise<void> {
+  const finished = deferred<void>();
+  let saveError: unknown;
+  await act(async () => {
+    invoke({
+      onSuccess: () => finished.resolve(undefined),
+      onError: (error) => {
+        saveError = error;
+        finished.resolve(undefined);
+      },
+    });
+    await finished.promise;
+  });
+  if (saveError !== undefined) throw saveError;
 }
 
 function reviewApplyRequests(
@@ -1087,53 +1199,57 @@ describe("settings-save callers", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("does not send a delete whose items read finishes after an account switch", async () => {
-    const itemsGate = deferred<EnvironmentTransportAnswer>();
-    const harness = makeSaveHarness({
-      rows: [row("macos", "old-value", 3)],
-      itemsGate,
-    });
+  it("abandons a delete when the editor's account changed before preparation", async () => {
+    const harness = makeSaveHarness({});
+    const toastError = vi.spyOn(toast, "error");
     const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
       wrapper: harness.wrapper,
     });
-    await harness.state.itemsStarted.promise;
+    await waitForPreparedReads(harness, "env_override");
+
     let deleting!: Promise<DeleteEnvOverrideResponse>;
     act(() => {
+      setAccount(ACCOUNT_B);
       deleting = result.current.mutateAsync({
         providerId: PROVIDER_ID,
         key: "CODEX_API_KEY",
       });
     });
-
-    act(() => setAccount(ACCOUNT_B));
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await deleting;
+      } catch (error) {
+        caught = error;
+      }
+    });
+    expect(caught).toBeInstanceOf(HostRequestAbortedError);
     await waitFor(() =>
       expect(useSettingsSaveMemoryStore.persist.getOptions().name).toBe(
         settingsSaveMemoryKey(ACCOUNT_B),
       ),
     );
-    await act(async () => {
-      itemsGate.resolve({
-        status: 200,
-        text: JSON.stringify({ items: [row("macos", "old-value", 3)] }),
-      });
-      await deleting;
-    });
 
     expect(harness.saveRequests).toEqual([]);
     expect(records()).toEqual([]);
     expect(storedRows(ACCOUNT_A)).toEqual([]);
+    expect(storedRows(ACCOUNT_B)).toEqual([]);
+    expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("does not send a save when an items read fails after an account switch", async () => {
+  it("abandons a delete when its items read finishes after the editor account switches", async () => {
     const itemsGate = deferred<EnvironmentTransportAnswer>();
     const harness = makeSaveHarness({
       rows: [row("macos", "old-value", 3)],
       itemsGate,
     });
+    const addressSpy = vi.spyOn(settingsSaveMapping, "settingsSaveBaseAddress");
+    const toastError = vi.spyOn(toast, "error");
     const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
       wrapper: harness.wrapper,
     });
     await harness.state.itemsStarted.promise;
+
     let deleting!: Promise<DeleteEnvOverrideResponse>;
     act(() => {
       deleting = result.current.mutateAsync({
@@ -1141,6 +1257,7 @@ describe("settings-save callers", () => {
         key: "CODEX_API_KEY",
       });
     });
+    await waitFor(() => expect(addressSpy).toHaveBeenCalled());
 
     act(() => setAccount(ACCOUNT_B));
     await waitFor(() =>
@@ -1148,14 +1265,78 @@ describe("settings-save callers", () => {
         settingsSaveMemoryKey(ACCOUNT_B),
       ),
     );
+    let caught: unknown;
     await act(async () => {
       itemsGate.resolve({ status: 503, text: "" });
-      await deleting;
+      try {
+        await deleting;
+      } catch (error) {
+        caught = error;
+      }
     });
 
+    expect(caught).toBeInstanceOf(HostRequestAbortedError);
     expect(harness.saveRequests).toEqual([]);
     expect(records()).toEqual([]);
     expect(storedRows(ACCOUNT_A)).toEqual([]);
+    expect(storedRows(ACCOUNT_B)).toEqual([]);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not read A's applied row after the account switches to B", async () => {
+    const harness = makeSaveHarness({
+      rows: [row("macos", "old-value", 1)],
+      localHostId: HOST_ID,
+    });
+    const applyAnswer = deferred<EnvironmentTransportAnswer>();
+    harness.state.reviewPostGate = applyAnswer;
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000053",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-account-a-save",
+      "new-value",
+      1,
+      "old-value",
+    );
+    const { result } = renderHook(() => useProvidersSetEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=env_override"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+
+    let saving!: Promise<SetEnvOverrideResponse>;
+    act(() => {
+      saving = result.current.mutateAsync(setRequest("new-value"));
+    });
+    await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(1));
+    const checksBeforeApplyAnswer = harness.state.originSignInChecks;
+
+    act(() => setAccount(ACCOUNT_B));
+    await waitFor(() =>
+      expect(useSettingsSaveMemoryStore.persist.getOptions().name).toBe(
+        settingsSaveMemoryKey(ACCOUNT_B),
+      ),
+    );
+    harness.state.rows = [row("macos", "new-value", 2)];
+    await act(async () => {
+      applyAnswer.resolve({ status: 200, text: "" });
+      await saving;
+    });
+    await waitFor(() =>
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeApplyAnswer,
+      ),
+    );
+
+    expect(itemReadCount()).toBe(readsAtOpen);
+    expect(records()).toEqual([]);
+    expect(storedRows(ACCOUNT_A)).toHaveLength(1);
+    expect(storedRows(ACCOUNT_B)).toEqual([]);
   });
 
   it("remembers and sends the save in the same account when no switch occurs", async () => {
@@ -1830,8 +2011,8 @@ describe("settings-save callers", () => {
     await runSetupConflict(true);
   });
 
-  it("uses the refreshed base for a second edit in the same editor", async () => {
-    const harness = makeSaveHarness({ localHostId: HOST_ID });
+  it("moves the editor base only when a later reconcile applies its own hold", async () => {
+    const harness = makeSaveHarness({ localHostId: null });
     const { result } = renderHook(() => useProvidersSetEnvOverride(), {
       wrapper: harness.wrapper,
     });
@@ -1856,14 +2037,40 @@ describe("settings-save callers", () => {
     await act(async () => {
       await result.current.mutateAsync(setRequest("first-value"));
     });
-    await waitFor(() => {
-      expect(reviewApplyRequests(harness)).toHaveLength(1);
-      expect(records()).toEqual([]);
-      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
-    });
+    await waitFor(() => expect(records()).toHaveLength(1));
+    expect(harness.hostRequests).not.toContain("environment.proposals");
+    expect(reviewApplyRequests(harness)).toHaveLength(0);
+    expect(itemReadCount()).toBe(readsAtOpen);
 
     harness.state.proposals = proposalForEdit(
       "00000000-0000-4000-8000-000000000012",
+    );
+    harness.state.reviewAnswer = reviewAnswerForEdit(
+      "held-first-edit-after-connect",
+      "first-value",
+      3,
+      "old-value",
+    );
+    const ownRowRead = deferred<EnvironmentTransportAnswer>();
+    harness.state.itemReadGates.push(ownRowRead);
+    act(() => harness.setLocalHostId(HOST_ID));
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+    const checksBeforeOwnRowAnswer = harness.state.originSignInChecks;
+    ownRowRead.resolve({
+      status: 200,
+      text: JSON.stringify({ items: [row("macos", "first-value", 4)] }),
+    });
+    await waitFor(() =>
+      expect(harness.state.originSignInChecks).toBeGreaterThan(
+        checksBeforeOwnRowAnswer,
+      ),
+    );
+
+    harness.state.proposals = proposalForEdit(
+      "00000000-0000-4000-8000-000000000013",
     );
     harness.state.reviewAnswer = reviewAnswerForEdit(
       "held-second-edit",
@@ -1970,6 +2177,156 @@ describe("settings-save callers", () => {
       { expectedLiveRevision: 1 },
       { expectedLiveRevision: 1 },
     ]);
+  });
+
+  async function runRowOrderingCase(
+    firstOperation: "put" | "delete",
+    secondOperation: "put" | "delete",
+    finalExpectedRevision: number | null,
+  ): Promise<void> {
+    const harness = makeSaveHarness({
+      rowsByKind: {
+        variable: [
+          itemRow("variable", ROW_ORDER_KEY, "macos", { value: "original" }, 1),
+        ],
+      },
+      localHostId: HOST_ID,
+    });
+    const { result } = renderHook(
+      () =>
+        useRpcShellConfigController({ enabled: true, pickProgramFile: null }),
+      { wrapper: harness.wrapper },
+    );
+    await waitForPreparedReads(harness, "variable");
+    await waitFor(() =>
+      expect(harness.hostRequests).toContain("config.env.list"),
+    );
+    const itemReadCount = (): number =>
+      harness.authnRequests.filter((request) =>
+        request.url.includes("/items?kind=variable"),
+      ).length;
+    const readsAtOpen = itemReadCount();
+    const firstOwnRowRead = deferred<EnvironmentTransportAnswer>();
+    const secondOwnRowRead = deferred<EnvironmentTransportAnswer>();
+    harness.state.itemReadGates.push(firstOwnRowRead, secondOwnRowRead);
+
+    const firstValue = "first-write";
+    const secondValue = "second-write";
+    const firstRowsAfterApply =
+      firstOperation === "put"
+        ? [
+            itemRow(
+              "variable",
+              ROW_ORDER_KEY,
+              "macos",
+              { value: firstValue },
+              2,
+            ),
+          ]
+        : [];
+    harness.state.proposals = variableProposalForEdit(
+      "00000000-0000-4000-8000-000000000071",
+      firstOperation,
+    );
+    harness.state.reviewAnswer = variableReviewAnswerForEdit(
+      "held-first-row-order-write",
+      firstOperation,
+      firstValue,
+      1,
+      "original",
+    );
+    harness.state.rowsByKindAfterApply = { variable: firstRowsAfterApply };
+    await invokeShellSave((callbacks) => {
+      if (firstOperation === "put") {
+        result.current.setEnv(
+          { key: ROW_ORDER_KEY, value: firstValue },
+          callbacks,
+        );
+      } else {
+        result.current.deleteEnv(ROW_ORDER_KEY, callbacks);
+      }
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(1);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
+    });
+
+    const secondRowsAfterApply =
+      secondOperation === "put"
+        ? [
+            itemRow(
+              "variable",
+              ROW_ORDER_KEY,
+              "macos",
+              { value: secondValue },
+              3,
+            ),
+          ]
+        : [];
+    harness.state.proposals = variableProposalForEdit(
+      "00000000-0000-4000-8000-000000000072",
+      secondOperation,
+    );
+    harness.state.reviewAnswer = variableReviewAnswerForEdit(
+      "held-second-row-order-write",
+      secondOperation,
+      secondValue,
+      firstOperation === "put" ? 2 : null,
+      firstOperation === "put" ? firstValue : null,
+    );
+    harness.state.rowsByKindAfterApply = { variable: secondRowsAfterApply };
+    await invokeShellSave((callbacks) => {
+      if (secondOperation === "put") {
+        result.current.setEnv(
+          { key: ROW_ORDER_KEY, value: secondValue },
+          callbacks,
+        );
+      } else {
+        result.current.deleteEnv(ROW_ORDER_KEY, callbacks);
+      }
+    });
+    await waitFor(() => {
+      expect(reviewApplyRequests(harness)).toHaveLength(2);
+      expect(itemReadCount()).toBeGreaterThan(readsAtOpen + 1);
+    });
+
+    let signInChecks = harness.state.originSignInChecks;
+    secondOwnRowRead.resolve({
+      status: 200,
+      text: JSON.stringify({ items: secondRowsAfterApply }),
+    });
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(signInChecks);
+    });
+
+    signInChecks = harness.state.originSignInChecks;
+    firstOwnRowRead.resolve({
+      status: 200,
+      text: JSON.stringify({ items: firstRowsAfterApply }),
+    });
+    await waitFor(() => {
+      expect(harness.state.originSignInChecks).toBeGreaterThan(signInChecks);
+    });
+
+    harness.state.proposals = { proposals: [] };
+    await act(async () => {
+      await result.current.setEnvAsync({
+        key: ROW_ORDER_KEY,
+        value: "third-write",
+      });
+    });
+    await waitFor(() => expect(harness.saveRequests).toHaveLength(3));
+    expect(harness.recordsAtSend[2]?.expectedLiveRevision).toBe(
+      finalExpectedRevision,
+    );
+  }
+
+  it("keeps a later put's base when an earlier delete read answers last", async () => {
+    await runRowOrderingCase("delete", "put", 3);
+  });
+
+  it("keeps a later delete's base when an earlier put read answers last", async () => {
+    await runRowOrderingCase("put", "delete", null);
   });
 
   it("does not let an older own-row read move the editor base back", async () => {

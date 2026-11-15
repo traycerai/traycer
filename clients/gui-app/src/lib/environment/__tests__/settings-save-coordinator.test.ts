@@ -155,7 +155,11 @@ async function beginTicket(
   coordinator: SettingsSaveCoordinator,
   value: Value,
 ): Promise<SettingsSaveTicket> {
-  const beginning = await coordinator.begin(mapping(value), context);
+  const beginning = await coordinator.begin(
+    mapping(value),
+    context,
+    () => undefined,
+  );
   if (beginning.kind !== "remembered") {
     throw new Error(`Expected a remembered save, got ${beginning.kind}`);
   }
@@ -367,6 +371,7 @@ describe("settings save edit fence", () => {
     const otherBeginning = await coordinator.begin(
       mappingAtKey({ enabled: true }, otherKey),
       context,
+      () => undefined,
     );
     expect(otherBeginning.kind).toBe("remembered");
 
