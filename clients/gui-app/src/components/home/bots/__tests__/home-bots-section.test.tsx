@@ -31,6 +31,12 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
+import {
+  PLAIN_BOT_ID,
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
 
 /** What a scripted `bot.onboarding.read` answers for one environment. */
 type OnboardingScript = { setup: BotOnboardingSetup | null } | "fails";
@@ -379,6 +385,17 @@ describe("HomeBotsSection capability gate", () => {
       mocks.hostClient,
       false,
     );
+  });
+
+  it("draws the notice's picture as the plain bot's 24px mascot, not the robot glyph", () => {
+    mocks.state.support = false;
+    mountSection();
+
+    const notice = screen.getByTestId("home-bots-unavailable");
+    expect(renderedMascotPaths(notice)).toEqual(
+      mascotPathsAt(PLAIN_BOT_ID, false, 24),
+    );
+    expect(drawsRobotGlyph(notice)).toBe(false);
   });
 
   it("shows the update notice on a host without bot.list and holds both reads off", () => {

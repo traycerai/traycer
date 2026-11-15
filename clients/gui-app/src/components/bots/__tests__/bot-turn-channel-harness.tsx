@@ -68,9 +68,6 @@ function Channel(): ReactNode {
       onOpenTurn={(ref, sendPostId) => {
         openedSessions.push(sessionTargetOfTurn(ref, sendPostId));
       }}
-      onOpenSession={(target) => {
-        openedSessions.push(target);
-      }}
       landOn={null}
       openMemory={openMemory}
       onOpenMemory={(open) =>

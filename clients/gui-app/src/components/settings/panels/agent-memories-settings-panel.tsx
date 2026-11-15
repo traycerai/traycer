@@ -158,7 +158,7 @@ function hostRowStatus(input: {
   readonly progress: AgentMemoryWriteProgress;
 }): string {
   if (input.readFailed)
-    return "Couldn't read this host's memories setting. Check the host connection and reopen Settings.";
+    return "Couldn't read this host's common memory setting. Check the host connection and reopen Settings.";
   switch (input.progress.kind) {
     case "queued":
       return "Waiting to reach your configuration. This computer will send the change when it is online.";
@@ -204,7 +204,7 @@ function AgentMemoriesRow(): ReactNode {
       proposes: (answer) => answer.state !== "local_only",
     },
     mutationKey: configMutationKeys.agentMemoriesSet(),
-    errorMessage: "Couldn't update memories",
+    errorMessage: "Couldn't change the common memory setting",
     // The observer owns sequential confirmation reads. Mark this exact entry
     // stale without launching a parallel fetch; reopening before confirmation
     // must re-read even inside the normal cache freshness window.

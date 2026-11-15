@@ -155,7 +155,7 @@ describe("the Memory act: what Continue writes", () => {
   it("does not write Traycer when the host already has it on, and locks its switch", async () => {
     world.memoriesOn = true;
     await openMemoryAct();
-    await screen.findByText(/Traycer memories stay on/);
+    await screen.findByText(/Agents keep using common memory/);
     expect(screen.getByTestId("onboarding-memory-use").textContent).toBe(
       "Set up provider memories",
     );
@@ -470,7 +470,7 @@ describe("the Memory act: what a retry trusts after the host moves", () => {
     await chooseTraycer();
     await clickAdvance();
     const report = await screen.findByTestId("onboarding-memory-save-report");
-    expect(report.textContent).toContain("Traycer memories are on.");
+    expect(report.textContent).toContain("Agents now use common memory.");
 
     world.environmentId = "env-rebound";
     world.memoriesOn = false;
@@ -515,7 +515,7 @@ describe("the Memory act: a write the host has not read back, and one overturned
 
     const report = await screen.findByTestId("onboarding-memory-save-report");
     expect(report.textContent).toContain(
-      "Traycer memories are saved to your configuration but haven't reached this computer yet.",
+      "Common memory for agents is saved to your configuration but hasn't reached this computer yet.",
     );
     expect(report.textContent).toContain(
       "Your providers' memories weren't changed.",
@@ -558,7 +558,7 @@ describe("the Memory act: a write the host has not read back, and one overturned
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(
       screen.queryByTestId("onboarding-memory-save-report")?.textContent,
-    ).toContain("Couldn't turn on Traycer memories.");
+    ).toContain("Couldn't turn on common memory for agents.");
     expect(paramsOf("providers.setNativeMemory")).toHaveLength(providerWrites);
     expect(switchOf("onboarding-memory-traycer").hasAttribute("disabled")).toBe(
       false,

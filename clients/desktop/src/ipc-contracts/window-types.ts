@@ -101,6 +101,11 @@ export interface PerWindowLandingDraft {
    * renderer parses. Present only while the draft has one.
    */
   readonly returnedSandbox?: JsonValue;
+  /**
+   * The host the draft was opened for (a draft that names its machine).
+   * Present only while the draft has one.
+   */
+  readonly namedHostId?: string;
 }
 
 export interface PerWindowSnapshot {

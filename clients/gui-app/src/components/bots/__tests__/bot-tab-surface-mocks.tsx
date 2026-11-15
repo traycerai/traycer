@@ -198,6 +198,8 @@ export const hostSupportsMethodMock = {
 // the titles of the stream's tasks, and Home's task list.
 const taskContextsRead = () => ({
   tasksById: mocks.taskContexts,
+  resolutionsById: new Map(),
+  pendingTaskIds: new Set<string>(),
   isPending: mocks.taskReads.contextsPending,
   error: null,
 });

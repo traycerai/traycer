@@ -45,6 +45,7 @@ import {
   useEnvironmentMembers,
 } from "@/hooks/bots/use-environment-members-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { isCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { botMemberAvatarUrl, botMemberName } from "@/lib/bots/bot-member-names";
 import {
   botSearchHitKey,
@@ -201,6 +202,13 @@ export function BotSearchPanel(props: {
       step(event.key === "ArrowDown" ? 1 : -1);
     } else if (event.key === "Enter") {
       event.preventDefault();
+      // A software keyboard covers the results, and its Enter is how a person
+      // puts it away to read them: submit the search and open nothing.
+      if (isCoarsePointer()) {
+        rememberThis();
+        event.currentTarget.blur();
+        return;
+      }
       const chosen =
         hits.find((hit) => botSearchHitKey(hit) === selectedKey) ?? hits.at(0);
       if (chosen === undefined) rememberThis();
@@ -240,6 +248,7 @@ export function BotSearchPanel(props: {
           <Input
             ref={inputRef}
             type="text"
+            enterKeyHint="search"
             variant="bare"
             size="sm"
             aria-label="Search"

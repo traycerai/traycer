@@ -44,6 +44,7 @@ import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
@@ -247,8 +248,12 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
   host.client = spine.createRequester(mockLocalHostEntry);
   return (children) => (
     <harness.Wrapper>
-      <StandaloneBotsBridge />
-      {children}
+      <ResolvedThemeContext.Provider
+        value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+      >
+        <StandaloneBotsBridge />
+        {children}
+      </ResolvedThemeContext.Provider>
     </harness.Wrapper>
   );
 }

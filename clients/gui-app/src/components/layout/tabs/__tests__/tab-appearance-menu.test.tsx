@@ -115,6 +115,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     }
     return {
       tasksById,
+      resolutionsById: new Map(),
+      pendingTaskIds: new Set<string>(),
       localHomedTaskIds: new Set(query.data?.localHomedTaskIds ?? []),
       isFetching: query.isFetching,
       isPending: query.isPending,
