@@ -297,31 +297,14 @@ export function keptUndoFailedText(hostName: string): string {
 
 // ── Needs you ────────────────────────────────────────────────────────────────
 
-const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
-  executable_entry: "runs a command",
-  needs_grant: "was changed without your confirmation",
-};
-
 /**
- * "DATABASE_URL is waiting for you: was changed without your confirmation.";
- * a held command reads `heldCommandText`.
+ * A hold's row: "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on
+ * hold until you choose", or without a command "env-e2e-memory (MCP server)
+ * is on hold until you choose"; every other kind by its own line
+ * (`heldCommandLine`). authn's holds carry no reason, so every hold reads
+ * this way, whatever its kind.
  */
 export function reviewText(entry: ReviewHeldEntry): string {
-  if (entry.reason === "executable_entry") return heldCommandText(entry);
-  const reason = REVIEW_REASONS[entry.reason];
-  return reason === undefined
-    ? `${itemLabel(entry)} is waiting for you.`
-    : `${itemLabel(entry)} is waiting for you: ${reason}.`;
-}
-
-/**
- * "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on hold until
- * you choose", "notify (hook) runs notify.sh on stop and is on hold until you
- * choose", or without a command "env-e2e-memory (MCP server) is on hold until
- * you choose"; every other kind by its own line (`heldCommandLine`). Its
- * row's `Review` opens the retrospective sheet.
- */
-function heldCommandText(entry: ReviewHeldEntry): string {
   const line = heldCommandLine(entry);
   return `${line.name} ${line.clause}${line.acts ? " and" : ""} is on hold until you choose`;
 }

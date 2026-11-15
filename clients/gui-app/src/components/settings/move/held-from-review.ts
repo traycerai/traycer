@@ -21,17 +21,10 @@ const OS_LABELS: Readonly<Record<EnvironmentOs, string | null>> = {
   windows: "Windows",
 };
 
-/** Executable entries held for the person; grant-needed writes stay on the page notices. */
-export function heldReviewEntries(
-  entries: readonly ReviewHeldEntry[],
-): readonly ReviewHeldEntry[] {
-  return entries.filter((entry) => entry.reason === "executable_entry");
-}
-
 export function heldRowsFromReview(
   entries: readonly ReviewHeldEntry[],
 ): readonly HeldRow[] {
-  return heldReviewEntries(entries).map((entry) => {
+  return entries.map((entry) => {
     const line = heldCommandLine(entry);
     return {
       heldId: entry.entryId,
@@ -193,7 +186,7 @@ export function heldItemsGroupedByHost(
 ): readonly HeldItemsGroup[] {
   const order: string[] = [];
   const groups = new Map<string, ReviewHeldEntry[]>();
-  for (const entry of heldReviewEntries(entries)) {
+  for (const entry of entries) {
     const key = entry.hostId ?? "";
     const existing = groups.get(key);
     if (existing === undefined) {
