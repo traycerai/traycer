@@ -609,7 +609,9 @@ export type ConfigAgentMemoriesSetRequest = z.infer<
  *   to the configuration: it is not saved anywhere yet and in force nowhere.
  * - `local_only` - this host serves no configuration: the change is saved on
  *   this computer and in force here, nothing has been proposed, and there is
- *   no receipt to wait for.
+ *   no receipt to wait for. When this computer is next bound to a
+ *   configuration, the host proposes the saved value to it; a proposal that
+ *   cannot be made leaves the value saved here only.
  *
  * `applied` is a claim about what this host READS, not a receipt for the
  * write, and it is made only of the revision the configuration saved THIS
