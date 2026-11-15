@@ -13,8 +13,10 @@ import {
   within,
 } from "@testing-library/react";
 import { useRef } from "react";
+import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -41,6 +43,15 @@ import {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  hasReadyRemoteSession,
+  retireAllRemoteSessions,
+} from "@traycer-clients/shared/host-transport/remote/index";
+import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
+import type {
+  IStreamWebSocketFactory,
+  StreamWebSocketLike,
+} from "@traycer-clients/shared/host-transport/ws-stream-factory";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
@@ -82,6 +93,43 @@ const narrationRound2Harness = vi.hoisted(() => ({
   nextInstanceId: 0,
   activeInstanceId: 0,
 }));
+const remoteSocketFactoryHarness = vi.hoisted(() => {
+  const harness: { delegate: IStreamWebSocketFactory | null } = {
+    delegate: null,
+  };
+  return harness;
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
+  async (load) => {
+    const actual =
+      await load<
+        typeof import("@traycer-clients/shared/host-transport/whatwg-stream-ws-factory")
+      >();
+    return {
+      ...actual,
+      createWhatwgStreamWebSocketFactory: () => {
+        const original = actual.createWhatwgStreamWebSocketFactory();
+        const factory: IStreamWebSocketFactory = {
+          create: (url, priority) => {
+            const delegate = remoteSocketFactoryHarness.delegate;
+            return delegate === null
+              ? original.create(url, priority)
+              : delegate.create(url, priority);
+          },
+        };
+        return factory;
+      },
+    };
+  },
+);
+
+vi.mock("sonner", async (load) => {
+  const actual = await load<typeof import("sonner")>();
+  const callableToast = vi.fn(actual.toast);
+  return { ...actual, toast: Object.assign(callableToast, actual.toast) };
+});
 
 vi.mock("@/lib/host/runtime", async (load) => {
   const actual = await load<typeof import("@/lib/host/runtime")>();
@@ -544,6 +592,8 @@ const BOOTSTRAP_MARKERS = {
 };
 
 beforeEach(() => {
+  remoteSocketFactoryHarness.delegate = null;
+  vi.mocked(toast).mockClear();
   hostStatus.data = undefined;
   controllerStatus.data = undefined;
   authErrorToastHarness.show.mockReset();
@@ -575,6 +625,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  remoteSocketFactoryHarness.delegate = null;
+  retireAllRemoteSessions();
   for (const socket of FakeNativeWebSocket.instances) {
     socket.fireClose(1006, "test teardown");
   }
@@ -807,6 +859,241 @@ describe("<WindowHostModalHost />", () => {
     ).toBe(
       "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
     );
+  });
+
+  it("keeps the real older-host cover unchanged when a warm remote session's linger redial fails", async () => {
+    const peer = new RemoteMuxTestPeer();
+    const relayAttachUrl = "wss://relay.test/attach";
+    const hostId = REMOTE_HOST_ID;
+    const floorEntry: RemoteHostDirectoryEntry = {
+      ...remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+      publicKey: peer.hostPublicKey,
+      websocketUrl: relayAttachUrl,
+    };
+    const fixture = await createModalHostRuntimeFixture(floorEntry, "normal");
+    applySnapshot({
+      attached: true,
+      effectiveHostId: hostId,
+      targetHostId: hostId,
+      leases: [lease({ hostId, status: "ready", dead: null })],
+    });
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+    expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      "user-1",
+      hostId,
+      {
+        token: "host-only-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      hostTokens.era("user-1"),
+    );
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            grant: "relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "relay-session-grant",
+            session_grant_expires_in: 300,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sockets: StreamWebSocketLike[] = [];
+    let dialAttempts = 0;
+    let failedRedialDelivered = false;
+    const webSocketFactory: IStreamWebSocketFactory = {
+      create: (url, priority) => {
+        dialAttempts += 1;
+        if (dialAttempts === 1) {
+          const socket = peer.factory.create(url, priority);
+          sockets.push(socket);
+          return socket;
+        }
+
+        const failedSocket: StreamWebSocketLike = {
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: () => undefined,
+          close: () => undefined,
+        };
+        sockets.push(failedSocket);
+        queueMicrotask(() => {
+          failedSocket.onerror?.({ message: "relay network unavailable" });
+          const close = failedSocket.onclose;
+          if (close === null) return;
+          close({
+            code: 1006,
+            reason: "relay network unavailable",
+            wasClean: false,
+          });
+          failedRedialDelivered = true;
+        });
+        return failedSocket;
+      },
+    };
+    remoteSocketFactoryHarness.delegate = webSocketFactory;
+    const provider = newProvider();
+    signIn(provider, "user-1", "user-token");
+    const bearer = liveBearer(provider);
+    const auth: StreamAuthRevalidator = {
+      revalidateForReconnect: () => Promise.resolve("rotated"),
+    };
+    const client = buildHostStreamClient({
+      target: floorEntry,
+      endpoint: () => null,
+      bearer,
+      cloudAuthorized: () => true,
+      authnBaseUrl: "http://localhost:5005",
+      auth,
+      hostTokens,
+      userId: "user-1",
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (client === null) throw new Error("remote stream client did not build");
+    const sharedClient = buildHostStreamClient({
+      target: floorEntry,
+      endpoint: () => null,
+      bearer,
+      cloudAuthorized: () => true,
+      authnBaseUrl: "http://localhost:5005",
+      auth,
+      hostTokens,
+      userId: "user-1",
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (sharedClient === null)
+      throw new Error("shared remote stream client did not build");
+    const stream = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const sharedStream = sharedClient.subscribe("epic.subscribe", {
+      epicId: "epic-b",
+    });
+
+    const toastError = vi.spyOn(toast, "error");
+    let usingFakeTimers = false;
+    try {
+      await waitFor(() => expect(peer.openCount).toBe(1));
+      await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
+      expect(dialAttempts).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(peer.errors).toEqual([]);
+      const atFloor = fixture.directory.findById(hostId);
+      if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+        throw new Error("the connected remote directory row was missing");
+      }
+      expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+      await act(async () => {
+        fixture.rows.current = [
+          {
+            ...remoteHostEntry("1.5.4", "current"),
+            publicKey: peer.hostPublicKey,
+            websocketUrl: relayAttachUrl,
+          },
+        ];
+        await fixture.directory.refresh();
+      });
+
+      const surface = await screen.findByTestId("window-host-modal");
+      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+      expect(surface.getAttribute("data-variant")).toBe("update-host");
+      expect(
+        within(surface).getByTestId("window-host-modal-title").textContent,
+      ).toBe("Host update needed");
+      expect(
+        within(surface).getByTestId("window-host-modal-description")
+          .textContent,
+      ).toBe(
+        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+      );
+      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+        hostId,
+      );
+
+      vi.useFakeTimers();
+      usingFakeTimers = true;
+      stream.close();
+      sharedStream.close();
+      client.close("release into shared-session linger");
+      sharedClient.close("release into shared-session linger");
+      expect(hasReadyRemoteSession(hostId)).toBe(true);
+      expect(client.isClosed()).toBe(false);
+
+      const firstSocket = sockets[0];
+      if (firstSocket === undefined || firstSocket.onclose === null) {
+        throw new Error("established relay socket had no close handler");
+      }
+      // A ready session's first recovery redial uses the immediate rung.
+      await act(async () => {
+        firstSocket.onclose?.({
+          code: 1006,
+          reason: "relay connection interrupted",
+          wasClean: false,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(dialAttempts).toBe(2);
+      expect(failedRedialDelivered).toBe(true);
+      expect(hasReadyRemoteSession(hostId)).toBe(false);
+      expect(client.isClosed()).toBe(false);
+      const belowFloor = fixture.directory.findById(hostId);
+      if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+        throw new Error("the downgraded remote directory row was missing");
+      }
+      expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+        hostId,
+      );
+      expect(screen.getByTestId("window-host-modal")).toBe(surface);
+      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+      expect(surface.getAttribute("data-variant")).toBe("update-host");
+      expect(
+        within(surface).getByTestId("window-host-modal-title").textContent,
+      ).toBe("Host update needed");
+      expect(
+        within(surface).getByTestId("window-host-modal-description")
+          .textContent,
+      ).toBe(
+        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+      );
+      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+      expect(toast).not.toHaveBeenCalled();
+      expect(toastError).not.toHaveBeenCalled();
+      expect(authErrorToastHarness.show).not.toHaveBeenCalled();
+    } finally {
+      stream.close();
+      sharedStream.close();
+      client.close("test complete");
+      sharedClient.close("test complete");
+      toastError.mockRestore();
+      remoteSocketFactoryHarness.delegate = null;
+      clearHostDoorState(hostId);
+      if (usingFakeTimers) {
+        retireAllRemoteSessions();
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("the real older-host cover offers Update now and Open settings before a remote update is pending", async () => {
