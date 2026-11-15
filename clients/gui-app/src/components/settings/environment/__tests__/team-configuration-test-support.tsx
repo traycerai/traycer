@@ -337,6 +337,7 @@ function buildTeamPage(
       environments: () => currentRows,
       onRequest: cloudHandlers.onRequest,
     }),
+    runnerHostOverrides: {},
   });
   let requestCounter = 0;
   const messengerOptions = {

@@ -131,7 +131,8 @@ function environment(
   return {
     environmentId,
     ownerKind: "organization",
-    ownerId: `team-${environmentId}`,
+    ownerId:
+      environmentId === ENVIRONMENT_ID ? "team-a" : `team-${environmentId}`,
     roomId: `room-${environmentId}`,
     label: "Acme",
     effectiveRole: "editor",
