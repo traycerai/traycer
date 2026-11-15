@@ -14,7 +14,9 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -284,11 +286,30 @@ describe("a Personal host on a build with a server pool", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: LOCAL_HOST_ID, hostName: "This Mac" },
     });
+    // The page's host options read the runner host, so the real provider
+    // wraps it inside the harness.
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
     render(
       <PersonalPageFrame section="secrets">
         <FocusReaders />
       </PersonalPageFrame>,
-      { wrapper: harness.Wrapper },
+      {
+        wrapper: ({ children }) => (
+          <harness.Wrapper>
+            <RunnerHostProvider runnerHost={runnerHost}>
+              {children}
+            </RunnerHostProvider>
+          </harness.Wrapper>
+        ),
+      },
     );
 
     await waitFor(() => {
