@@ -4,6 +4,13 @@
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
+const servedEnvironmentPermission = vi.hoisted(
+  (): ServedEnvironmentPermissionFixture => ({
+    hostRead: null,
+    environmentList: null,
+    served: { environmentId: "env_me", name: "Personal", team: false },
+  }),
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -24,11 +31,20 @@ const hostMock = vi.hoisted(
 vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
   useSkillEnvironmentRoute: () => ({
     hostRunsEnvironments: true,
-    served: { environmentId: "env_me", name: "Personal", team: false },
+    served: servedEnvironmentPermission.served,
     hostClient: null,
     writing: false,
     write: () => Promise.resolve(null),
   }),
+}));
+
+// Only the two sources of the served-environment role are faked; the shipped
+// useMayChangeServedEnvironment and role decoder stay in this test.
+vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
+  useEnvironmentHostReadQuery: () => servedEnvironmentPermission.hostRead,
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => servedEnvironmentPermission.environmentList,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -139,7 +155,11 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   }),
 }));
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -157,15 +177,26 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderMcpCapabilities,
   ProviderMcpServer,
   ProviderSkill,
 } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderNativeMutateErrorCodeV15 } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  EnvironmentDescriptorV11,
+  EnvironmentHostBinding,
+  EnvironmentListResponseV11,
+  EnvironmentOwnerKind,
+} from "@traycer/protocol/host/environment/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -177,6 +208,37 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+
+type PermissionQueryFixture<Data> = Pick<
+  UseQueryResult<Data, HostRpcError>,
+  "data" | "isPending" | "isFetching" | "isError"
+>;
+
+interface ServedEnvironmentPermissionFixture {
+  hostRead:
+    | { readonly kind: "pending" }
+    | {
+        readonly kind: "binding";
+        readonly query: PermissionQueryFixture<
+          Pick<
+            EnvironmentHostBinding,
+            | "hostId"
+            | "environment"
+            | "explicit"
+            | "enrolledByUserId"
+            | "canUnbind"
+          >
+        >;
+      }
+    | null;
+  environmentList:
+    | (PermissionQueryFixture<EnvironmentListResponseV11> & {
+        readonly error: null;
+        readonly refetch: () => Promise<undefined>;
+      })
+    | null;
+  served: { environmentId: string; name: string; team: boolean };
+}
 
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
@@ -193,6 +255,11 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  servedEnvironmentPermission.served = {
+    environmentId: "env_me",
+    name: "Personal",
+    team: false,
+  };
   hostMock.client = null;
   hostMock.binding = null;
   scopeMock.scope = "global";
@@ -295,8 +362,24 @@ interface HostOptions {
   } | null;
   /** Items the host has already applied, before the page opens. */
   readonly applied: readonly EnvironmentItemStatus[];
+  readonly servedEnvironment?: {
+    readonly ownerKind: EnvironmentOwnerKind;
+    readonly environmentId: string;
+    readonly ownerId: string;
+    readonly roomId: string;
+    readonly label: string;
+    readonly effectiveRole: "owner" | "admin" | "editor" | "viewer";
+  };
+  readonly servedEnvironmentPending?: "host-read" | "environment-list";
+  readonly servedEnvironmentMissing?: boolean;
+  readonly hostReadSupported?: boolean;
   /** How the host answers an Add to Personal: it takes it, refuses it in words, or cannot be reached. */
-  readonly promote: "ok" | "unreachable" | { readonly refusal: string };
+  readonly promote:
+    | "ok"
+    | "unreachable"
+    | "applied-reply-lost"
+    | { readonly refusal: string }
+    | { readonly code: ProviderNativeMutateErrorCodeV15 };
 }
 
 interface Rig {
@@ -305,6 +388,10 @@ interface Rig {
   /** What the host has applied as the person's items, as `environment.status` says. */
   readonly applied: EnvironmentItemStatus[];
   readonly mintedFor: string[];
+  readonly appliedAtRead: {
+    readonly status: number[];
+    readonly providers: number[];
+  };
 }
 
 const READY_HOST: HostOptions = {
@@ -312,6 +399,19 @@ const READY_HOST: HostOptions = {
   applied: [],
   promote: "ok",
 };
+
+function teamEnvironment(
+  effectiveRole: "admin" | "editor" | "viewer",
+): NonNullable<HostOptions["servedEnvironment"]> {
+  return {
+    ownerKind: "organization",
+    environmentId: "env_acme",
+    ownerId: "team-a",
+    roomId: "room-acme",
+    label: "Acme",
+    effectiveRole,
+  };
+}
 
 /**
  * Renders `page` inside a real Personal frame over a fake host. The host
@@ -326,15 +426,99 @@ function renderPage(
   page: ReactNode,
   options: HostOptions,
 ): Rig {
-  const rig: Rig = { sent: [], applied: [...options.applied], mintedFor: [] };
+  const served = options.servedEnvironment ?? {
+    ownerKind: "user" as const,
+    environmentId: "env_me",
+    ownerId: "user-me",
+    roomId: "room-me",
+    label: "Personal",
+    effectiveRole: "owner" as const,
+  };
+  const descriptor = (row: typeof served): EnvironmentDescriptorV11 => ({
+    ...row,
+    kind: row.ownerKind === "user" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: row.ownerKind === "user" ? null : "acme",
+  });
+  servedEnvironmentPermission.served = {
+    environmentId: served.environmentId,
+    name: served.ownerKind === "organization" ? served.label : "Personal",
+    team: served.ownerKind === "organization",
+  };
+  servedEnvironmentPermission.hostRead = {
+    ...(options.servedEnvironmentPending === "host-read"
+      ? { kind: "pending" }
+      : {
+          kind: "binding",
+          query: {
+            data: {
+              hostId: HOST_ID,
+              environment: served,
+              explicit: true,
+              enrolledByUserId: "user-me",
+              canUnbind: false,
+            },
+            isPending: false,
+            isFetching: false,
+            isError: false,
+          },
+        }),
+  };
+  servedEnvironmentPermission.environmentList = {
+    data: {
+      environments: [
+        ...(served.ownerKind === "organization"
+          ? [
+              descriptor({
+                ownerKind: "user",
+                environmentId: "env_me",
+                ownerId: "user-me",
+                roomId: "room-me",
+                label: "Personal",
+                effectiveRole: "owner",
+              }),
+            ]
+          : []),
+        ...(options.servedEnvironmentMissing ? [] : [descriptor(served)]),
+      ],
+    },
+    isPending: options.servedEnvironmentPending === "environment-list",
+    isFetching: false,
+    isError: false,
+    // `usePersonalEnvironment` reads `error` and destructures `refetch`.
+    error: null,
+    refetch: () => Promise.resolve(undefined),
+  };
+  const rig: Rig = {
+    sent: [],
+    applied: [...options.applied],
+    mintedFor: [],
+    appliedAtRead: { status: [], providers: [] },
+  };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
-    "environment.status": () =>
-      environmentStatusFixture({ items: [...rig.applied] }),
+    "environment.status": () => {
+      rig.appliedAtRead.status.push(rig.applied.length);
+      return environmentStatusFixture({
+        items: [...rig.applied],
+        principal:
+          served.ownerKind === "organization"
+            ? { kind: "team", teamName: served.label }
+            : { kind: "personal" },
+      });
+    },
     "environment.localOverrides": () => ({ overrides: [] }),
     "providers.nativeMutate": (request) => {
       rig.sent.push(request);
       if (options.promote === "unreachable")
         return Promise.reject(new Error("host unavailable"));
+      if (typeof options.promote === "object" && "code" in options.promote)
+        return Promise.resolve({
+          result: {
+            ok: false,
+            code: options.promote.code,
+            detail: null,
+          },
+        });
       if (typeof options.promote === "object")
         return Promise.resolve({
           result: {
@@ -355,15 +539,28 @@ function renderPage(
           }),
         );
       }
+      if (options.promote === "applied-reply-lost")
+        return Promise.reject(new Error("upload reply lost"));
       return Promise.resolve({
         result: { ok: true, kind: "mcp", servers: [] },
       });
     },
+    ...(options.promote === "applied-reply-lost"
+      ? {
+          "providers.list": () => {
+            rig.appliedAtRead.providers.push(rig.applied.length);
+            return { providers: [], native: null };
+          },
+        }
+      : {}),
   };
   const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
   const manifest: Record<string, { major: number; minor: number }> = {
     "environment.status": { major: 1, minor: 1 },
     "environment.localOverrides": { major: 1, minor: 0 },
+    ...(options.hostReadSupported === false
+      ? {}
+      : { "environment.host.read": { major: 1, minor: 1 } }),
   };
   if (options.nativeMutate !== null) {
     manifest["providers.nativeMutate"] = options.nativeMutate;
@@ -404,6 +601,11 @@ function renderPage(
   return rig;
 }
 
+function HostProvidersRead(): null {
+  useProvidersList({ enabled: true, subscribed: true });
+  return null;
+}
+
 function mcpPage(): ReactNode {
   return (
     <ProviderMcpTab
@@ -419,8 +621,22 @@ function skillsPage(): ReactNode {
   return <ProviderSkillsTab state={skillsState()} />;
 }
 
+/**
+ * A team's computer makes the page read-only: once the frame's status read
+ * answers, it wraps the page in an inert region, which remounts the page. A row
+ * found before that is detached, so on a team the rows are found only after the
+ * region is there. A personal host's page never remounts.
+ */
+async function pageSettled(): Promise<void> {
+  if (!servedEnvironmentPermission.served.team) return;
+  await waitFor(() => {
+    expect(document.querySelector("[inert]")).not.toBeNull();
+  });
+}
+
 /** The MCP row for `name`: the list item around its expand button, once the page has mounted. */
 async function mcpRow(name: string): Promise<HTMLElement> {
+  await pageSettled();
   const row = (
     await screen.findByRole("button", { name: `Expand ${name}` })
   ).closest("li");
@@ -430,6 +646,7 @@ async function mcpRow(name: string): Promise<HTMLElement> {
 
 /** The skill row for `name`: the list item around its open button. */
 async function skillRow(name: string): Promise<HTMLElement> {
+  await pageSettled();
   const row = (
     await screen.findByRole("button", { name: new RegExp(`^Open ${name} `) })
   ).closest("li");
@@ -497,6 +714,153 @@ describe("A `claude mcp add` entry on a provider's MCP tab", () => {
     await settle();
     expect(rig.sent).toHaveLength(1);
   });
+
+  it("rereads the host and shows Personal when upload applied but its reply was lost", async () => {
+    listMock.servers = [mcpServer("github")];
+    const rig = renderPage(
+      "providers",
+      <>
+        <HostProvidersRead />
+        {mcpPage()}
+      </>,
+      { ...READY_HOST, promote: "applied-reply-lost" },
+    );
+    const row = await mcpRow("github");
+    const mark = await within(row).findByTestId(MARK);
+    await waitFor(() => expect(rig.appliedAtRead.providers).toContain(0));
+
+    fireEvent.click(
+      within(mark).getByRole("button", { name: "Add to Personal" }),
+    );
+
+    await within(row).findByTestId(PERSONAL);
+    await waitFor(() => expect(rig.appliedAtRead.providers).toContain(1));
+    expect(rig.appliedAtRead.status).toContain(1);
+    expect(rig.sent).toHaveLength(1);
+    expect(within(row).queryByTestId(MARK)).toBeNull();
+    expect(toast.error).toHaveBeenCalled();
+  });
+
+  it.each(["admin", "editor"] as const)(
+    "shows Add to the served team for an MCP mark when the role is %s",
+    async (role) => {
+      listMock.servers = [mcpServer("github")];
+      renderPage("providers", mcpPage(), {
+        ...READY_HOST,
+        servedEnvironment: teamEnvironment(role),
+      });
+
+      const row = await mcpRow("github");
+      const mark = await within(row).findByTestId(MARK);
+      expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+      expect(
+        within(mark).getByRole("button", { name: "Add to Acme" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["admin", "editor"] as const)(
+    "shows Add to the served team for a shared skill when the role is %s",
+    async (role) => {
+      listMock.skills = [skill("deploy")];
+      renderPage("providers", skillsPage(), {
+        ...READY_HOST,
+        servedEnvironment: teamEnvironment(role),
+      });
+
+      const row = await skillRow("deploy");
+      expect(
+        await within(row).findByRole("button", { name: "Add to Acme" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["mcp", "skills"] as const)(
+    "keeps the %s row's host-only mark but hides Add for a served-team Viewer even when Personal is owned",
+    async (entryKind) => {
+      if (entryKind === "mcp") listMock.servers = [mcpServer("github")];
+      else listMock.skills = [skill("deploy")];
+      const rowOptions = {
+        ...READY_HOST,
+        servedEnvironment: teamEnvironment("viewer"),
+      };
+      const page = entryKind === "mcp" ? mcpPage() : skillsPage();
+      renderPage("providers", page, rowOptions);
+
+      const row =
+        entryKind === "mcp" ? await mcpRow("github") : await skillRow("deploy");
+      const mark = await within(row).findByTestId(MARK);
+      expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+      expect(
+        within(mark).queryByRole("button", { name: "Add to Acme" }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    [
+      "mcp",
+      "host binding is pending",
+      { servedEnvironmentPending: "host-read" },
+    ],
+    [
+      "mcp",
+      "environment list is pending",
+      { servedEnvironmentPending: "environment-list" },
+    ],
+    [
+      "mcp",
+      "served team is missing from the environment list",
+      { servedEnvironmentMissing: true },
+    ],
+    [
+      "mcp",
+      "host does not support environment.host.read",
+      { hostReadSupported: false },
+    ],
+    [
+      "skills",
+      "host binding is pending",
+      { servedEnvironmentPending: "host-read" },
+    ],
+    [
+      "skills",
+      "environment list is pending",
+      { servedEnvironmentPending: "environment-list" },
+    ],
+    [
+      "skills",
+      "served team is missing from the environment list",
+      { servedEnvironmentMissing: true },
+    ],
+    [
+      "skills",
+      "host does not support environment.host.read",
+      { hostReadSupported: false },
+    ],
+  ] as const)(
+    "hides Add but keeps the %s row's host-only mark when %s",
+    async (entryKind, _reason, role) => {
+      if (entryKind === "mcp") listMock.servers = [mcpServer("github")];
+      else listMock.skills = [skill("deploy")];
+      const page = entryKind === "mcp" ? mcpPage() : skillsPage();
+      const rig = renderPage("providers", page, {
+        ...READY_HOST,
+        servedEnvironment: teamEnvironment("admin"),
+        ...role,
+      });
+
+      const row =
+        entryKind === "mcp" ? await mcpRow("github") : await skillRow("deploy");
+      const mark = await within(row).findByTestId(MARK);
+      expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
+      expect(
+        within(mark).queryByRole("button", { name: "Add to Acme" }),
+      ).toBeNull();
+      await settle();
+      expect(rig.sent).toEqual([]);
+    },
+  );
 
   it("control: an MCP server row on the same ready host keeps its Add to Personal button", async () => {
     listMock.servers = [mcpServer("github")];
@@ -666,6 +1030,40 @@ describe("A `claude mcp add` entry on a provider's MCP tab", () => {
 });
 
 describe("A skill on a provider's Skills tab", () => {
+  it.each([
+    ["needs_connection", "Connect to add this to Acme."],
+    ["upload_refused", "Couldn't add it to Acme."],
+    ["needs_grant", "Adding this to Acme needs your approval."],
+    ["environment_not_served", "Add to Acme is not available on this host."],
+    [
+      "not_global_scope",
+      "Only entries in your global settings can be added to Acme.",
+    ],
+    [
+      "bound_to_this_computer",
+      "This server's settings only work on this computer.",
+    ],
+    ["invalid_entry", "This entry cannot be added to Acme."],
+  ] as const)(
+    "renders the production copy for promote refusal %s",
+    async (code, sentence) => {
+      listMock.skills = [skill("deploy")];
+      renderPage("providers", skillsPage(), {
+        ...READY_HOST,
+        nativeMutate: { major: 1, minor: 5 },
+        servedEnvironment: teamEnvironment("admin"),
+        promote: { code },
+      });
+
+      const row = await skillRow("deploy");
+      fireEvent.click(
+        await within(row).findByRole("button", { name: "Add to Acme" }),
+      );
+
+      expect(await within(row).findByText(sentence)).toBeTruthy();
+    },
+  );
+
   it("says where the skill is, and becomes Personal only on the Add to Personal click", async () => {
     listMock.skills = [skill("deploy")];
     const rig = renderPage("providers", skillsPage(), READY_HOST);
