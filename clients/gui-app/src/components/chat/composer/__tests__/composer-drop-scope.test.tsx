@@ -155,6 +155,60 @@ function FreshHandlersBox() {
   );
 }
 
+const sinkA: ImageAttachmentAttrs[] = [];
+const sinkB: ImageAttachmentAttrs[] = [];
+
+function editorHandleInto(
+  sink: ImageAttachmentAttrs[],
+): ComposerPasteEditorHandle {
+  return {
+    isReady: () => true,
+    insertImageAttachments: (attrs) => {
+      sink.push(...attrs);
+    },
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
+    beginPathInsertion: () => null,
+    focus: () => undefined,
+    getJSON: () => ({ type: "doc", content: [] }),
+    getEditorIncarnation: () => null,
+    draftGeneration: () => 0,
+  };
+}
+
+// Two editors behind two real paste hooks, and the box hands the scope the
+// handlers of whichever one is chosen, the way a box's handlers follow its props.
+function ChoosingBox(props: { readonly chosen: "a" | "b" }) {
+  const refA = useRef<ComposerPasteEditorHandle | null>(
+    editorHandleInto(sinkA),
+  );
+  const refB = useRef<ComposerPasteEditorHandle | null>(
+    editorHandleInto(sinkB),
+  );
+  const pasteA = useComposerHashPaste(refA, PASTE_OPTIONS);
+  const pasteB = useComposerHashPaste(refB, PASTE_OPTIONS);
+  const paste = props.chosen === "a" ? pasteA : pasteB;
+  useComposerDropScopeTarget({
+    onDragEnter: paste.onDragEnter,
+    onDragLeave: paste.onDragLeave,
+    onDragOver: paste.onDragOver,
+    onDrop: paste.onDrop,
+    overlayVariant: paste.dragOverlayVariant,
+  });
+  return null;
+}
+
+function ChoosingPane(props: { readonly chosen: "a" | "b" }) {
+  const scope = useComposerDropScope();
+  return (
+    <div data-testid="pane" className="relative" {...scope.zoneProps}>
+      <div data-testid="transcript" />
+      {scope.provide(<ChoosingBox chosen={props.chosen} />)}
+      {scope.overlay}
+    </div>
+  );
+}
+
 function FreshHandlersPane() {
   const scope = useComposerDropScope();
   return (
@@ -202,6 +256,8 @@ beforeEach(() => {
   inserted.length = 0;
   outerInserted.length = 0;
   freshBoxRenders.count = 0;
+  sinkA.length = 0;
+  sinkB.length = 0;
 });
 
 afterEach(() => {
@@ -314,14 +370,15 @@ describe("a pane with no box, and the end of a drag", () => {
       false,
     );
     expect(fileOver.dropEffect).toBe("none");
-    expect(fireEvent.drop(transcript, { dataTransfer: imageTransfer() })).toBe(
-      false,
-    );
-    expect(
-      fireEvent.drop(transcript, {
-        dataTransfer: uriOnlyTransfer("file:///tmp/a.txt"),
-      }),
-    ).toBe(false);
+    const fileDrop = { ...imageTransfer(), dropEffect: "copy" };
+    expect(fireEvent.drop(transcript, { dataTransfer: fileDrop })).toBe(false);
+    expect(fileDrop.dropEffect).toBe("none");
+    const pathDrop = {
+      ...uriOnlyTransfer("file:///tmp/a.txt"),
+      dropEffect: "copy",
+    };
+    expect(fireEvent.drop(transcript, { dataTransfer: pathDrop })).toBe(false);
+    expect(pathDrop.dropEffect).toBe("none");
   });
 
   it("holds a dragged link for its drop to decide and lets the drop through", () => {
@@ -340,11 +397,12 @@ describe("a pane with no box, and the end of a drag", () => {
       false,
     );
     expect(linkOver.dropEffect).toBe("move");
-    expect(
-      fireEvent.drop(transcript, {
-        dataTransfer: uriOnlyTransfer("https://example.com"),
-      }),
-    ).toBe(true);
+    const linkDrop = {
+      ...uriOnlyTransfer("https://example.com"),
+      dropEffect: "copy",
+    };
+    expect(fireEvent.drop(transcript, { dataTransfer: linkDrop })).toBe(true);
+    expect(linkDrop.dropEffect).toBe("copy");
     expect(fireEvent.drop(transcript, { dataTransfer: textTransfer() })).toBe(
       true,
     );
@@ -473,6 +531,18 @@ describe("a box whose handlers are new on every render", () => {
     await waitFor(() => expect(inserted).toHaveLength(1));
     expect(screen.queryByText(OVERLAY_TITLE)).toBeNull();
     expect(freshBoxRenders.count).toBeLessThan(10);
+  });
+});
+
+describe("a box whose handlers change without a drag in progress", () => {
+  it("has the latest handlers take the drop", async () => {
+    const { rerender } = render(<ChoosingPane chosen="a" />);
+    rerender(<ChoosingPane chosen="b" />);
+
+    perform("drop", screen.getByTestId("transcript"), imageTransfer());
+
+    await waitFor(() => expect(sinkB).toHaveLength(1));
+    expect(sinkA).toEqual([]);
   });
 });
 

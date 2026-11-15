@@ -72,6 +72,7 @@ function refuseFileDrop(event: DragEvent<HTMLElement>): void {
   if (!hasClaimableFileTransfer(event.dataTransfer)) return;
   event.preventDefault();
   event.stopPropagation();
+  event.dataTransfer.dropEffect = "none";
 }
 
 /**
