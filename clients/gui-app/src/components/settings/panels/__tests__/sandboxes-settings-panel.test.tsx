@@ -164,10 +164,13 @@ vi.mock("@/lib/host", async (importOriginal) => ({
     return {
       ...authnBinding,
       ...(sandboxBinding ?? {}),
-      auth: {
-        ...(sandboxBinding?.auth ?? {}),
-        ...authnBinding.auth,
-      },
+      // The panel caches its list under its `auth`'s identity, which the cases
+      // read back from the sandbox binding: the authn members go onto that
+      // object rather than into a new one on every call.
+      auth:
+        sandboxBinding === null
+          ? { ...authnBinding.auth }
+          : Object.assign(sandboxBinding.auth, authnBinding.auth),
     };
   },
 }));
