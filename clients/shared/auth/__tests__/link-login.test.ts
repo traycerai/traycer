@@ -12,9 +12,11 @@ import {
   claimLinkLoginCodeViaHttp,
   linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
+  mintLinkLoginCodeViaHttp,
   normalizeLinkLoginCodeInput,
   parseLinkLoginInput,
 } from "../link-login";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 // Display form as the desktop mints it; Crockford, no I/L/O/U.
 const CODE = "ABCDE-FGHJK";
@@ -508,4 +510,89 @@ describe("claimant device label", () => {
     // Ordinary non-ASCII is a name.
     expect(claimantDeviceName("Téléphone de Léa")).toBe("Téléphone de Léa");
   });
+});
+
+describe("a redirect answered to a link-login request", () => {
+  const AUTHN_BASE_URL = "https://authn.example.test";
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(redirects)(
+    "reads $name on the mint as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ code: CODE, expiresInSeconds: 60 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await mintLinkLoginCodeViaHttp(AUTHN_BASE_URL, "bearer-word", null),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer bearer-word",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the claim as a network error, with the code sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ status: "claimed", secret: "S".repeat(43), interval: 5 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await claimLinkLoginCodeViaHttp(AUTHN_BASE_URL, NORMALIZED, "iPhone"),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        code: NORMALIZED,
+      });
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the token poll as a network error, with the secret sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ token: "token-word", refreshToken: "refresh-word" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await linkLoginTokenViaHttp(AUTHN_BASE_URL, "secret-word"),
+      ).toEqual({
+        kind: "network-error",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toEqual({ secret: "secret-word" });
+    },
+  );
 });

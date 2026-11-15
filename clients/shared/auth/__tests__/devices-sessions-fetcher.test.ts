@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
@@ -483,4 +484,68 @@ describe("devices/sessions authn fetcher on a fetch that ignores its signal", ()
     expect(settled).toBe(true);
     expect(await pending).toEqual({ kind: "network-error" });
   });
+});
+
+describe("a redirect answered to a devices and sessions request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the session list as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer(sessionListBody()),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await listUserSessionsViaHttp(AUTHN, "jwt-abc", null);
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the step-up verify as a network error, and never as an answer to the code",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer({ access_token: "step-up" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await verifyStepUpChallengeViaHttp(
+        AUTHN,
+        "jwt-abc",
+        "123456",
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toEqual({ code: "123456" });
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
 });
