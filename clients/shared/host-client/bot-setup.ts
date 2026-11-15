@@ -130,7 +130,12 @@ async function post(
     return {
       kind: "refused",
       status: answer.status,
-      message: refusalMessageWithout(parsed, [bearerToken]),
+      // Both credentials the request carried are withheld from the server's
+      // text, which reaches the person's error and the app's log.
+      message: refusalMessageWithout(
+        parsed,
+        proxyToken === null ? [bearerToken] : [bearerToken, proxyToken],
+      ),
     };
   }
   if (answer.status < 200 || answer.status >= 300) {
