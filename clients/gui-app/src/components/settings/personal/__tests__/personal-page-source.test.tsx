@@ -13,7 +13,10 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 const windowHost = vi.hoisted(
   (): {
     client: HostClient<HostRpcRegistry> | null;
-    auth: { environmentCloud: () => EnvironmentCloud } | null;
+    auth: {
+      environmentCloud: () => EnvironmentCloud;
+      listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+    } | null;
     fakeAuthn: FakeEnvironmentAuthn | null;
   } => ({ client: null, auth: null, fakeAuthn: null }),
 );
@@ -54,6 +57,7 @@ import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import {
   MockHostMessenger,
   type MockHandlerMap,
@@ -216,7 +220,32 @@ function mountSection(options: {
   );
   const client = spine.createRequester(entry);
   windowHost.client = client;
-  windowHost.auth = { environmentCloud: () => fakeAuthn.cloud };
+  // The app's own read of the environment list: the sign-in's directory.
+  const listed: unknown[] = [];
+  // The viewing host's inventory read (`GET …/hosts?include=…`): the fake
+  // authn has no route for it, so this one is answered and recorded here.
+  const hostLists: unknown[] = [];
+  windowHost.auth = {
+    environmentCloud: () => ({
+      ...fakeAuthn.cloud,
+      transport: (request) => {
+        const url = new URL(request.url);
+        const route = /\/environments\/([^/]+)\/hosts$/u.exec(url.pathname);
+        if (route === null || !url.searchParams.has("include")) {
+          return fakeAuthn.cloud.transport(request);
+        }
+        hostLists.push({ environmentId: decodeURIComponent(route[1]) });
+        return Promise.resolve({
+          status: 200,
+          text: JSON.stringify({ hosts: [] }),
+        });
+      },
+    }),
+    listEnvironments: () => {
+      listed.push({});
+      return Promise.resolve({ kind: "ok" as const, list: environments });
+    },
+  };
   windowHost.fakeAuthn = fakeAuthn;
   if (options.methods !== null) {
     recordNegotiatedHostManifest(
@@ -261,6 +290,8 @@ function mountSection(options: {
   return {
     messenger,
     sent: (method) => [
+      ...(method === "environment.list" ? listed : []),
+      ...(method === "environment.host.list" ? hostLists : []),
       ...fakeAuthn.paramsOf(method),
       ...messenger.calls
         .filter((call) => call.method === method)
