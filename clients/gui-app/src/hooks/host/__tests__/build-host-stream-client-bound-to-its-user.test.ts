@@ -13,13 +13,13 @@ import {
   newProvider,
   openAckFrame,
   sentFramesOfKind,
-  sentTokens,
   settle,
   signIn,
   signInUnverified,
   USER_A,
   USER_B,
   verdictUpdatesSent,
+  sentTokens,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
