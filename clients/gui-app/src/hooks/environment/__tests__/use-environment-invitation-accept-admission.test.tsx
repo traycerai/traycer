@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { authQueryKeys } from "@/lib/query-keys";
@@ -45,15 +46,19 @@ const mocks = vi.hoisted(() => ({
   localHostId: null as string | null,
   currentContext: null as object | null,
   currentUserId: null as string | null,
+  identityGeneration: 0,
   switchAfterContextRead: null as {
     readonly context: object;
     readonly userId: string;
+    readonly identityGeneration: number;
   } | null,
   binding: null as {
     readonly auth: {
       getRequestContextProvider: () => { current: () => object | null };
+      chosenSignIn: () => ChosenSignIn;
       acceptEnvironmentInvitation: (
         environmentId: string,
+        chosenBy: ChosenSignIn,
       ) => Promise<EnvironmentInvitationsAcceptResponse>;
     };
     readonly directory: {
@@ -100,9 +105,22 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+function invitationPress(): {
+  readonly request: { readonly environmentId: string };
+  readonly chosenBy: ChosenSignIn;
+} {
+  const binding = mocks.binding;
+  if (binding === null) throw new Error("invitation auth was not installed");
+  return {
+    request: { environmentId: "team-1" },
+    chosenBy: binding.auth.chosenSignIn(),
+  };
+}
+
 function installAuth(
   acceptEnvironmentInvitation: (
     environmentId: string,
+    chosenBy: ChosenSignIn,
   ) => Promise<EnvironmentInvitationsAcceptResponse>,
   context: RequestContext,
   directoryRefresh: () => Promise<readonly HostDirectoryEntry[]> = () =>
@@ -111,12 +129,17 @@ function installAuth(
 ): void {
   mocks.currentContext = context;
   mocks.currentUserId = context.identity.userId;
+  mocks.identityGeneration = 0;
   mocks.switchAfterContextRead =
     switchAfterContextRead === null
       ? null
       : {
           context: switchAfterContextRead,
           userId: switchAfterContextRead.identity.userId,
+          identityGeneration:
+            switchAfterContextRead.identity.userId === context.identity.userId
+              ? 0
+              : 1,
         };
   mocks.directoryRefresh = directoryRefresh;
   const auth = {
@@ -129,12 +152,24 @@ function installAuth(
           queueMicrotask(() => {
             mocks.currentContext = next.context;
             mocks.currentUserId = next.userId;
+            mocks.identityGeneration = next.identityGeneration;
           });
         }
         return current;
       },
     }),
-    acceptEnvironmentInvitation,
+    chosenSignIn: () => ({
+      identityGeneration: mocks.identityGeneration,
+      userId: mocks.currentUserId,
+    }),
+    acceptEnvironmentInvitation: async (environmentId, chosenBy) => {
+      if (
+        chosenBy.identityGeneration !== mocks.identityGeneration ||
+        chosenBy.userId !== mocks.currentUserId
+      )
+        throw new Error("The signed-in account changed.");
+      return acceptEnvironmentInvitation(environmentId, chosenBy);
+    },
   };
   mocks.binding = { auth, directory: { refresh: directoryRefresh } };
 }
@@ -174,6 +209,7 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.localHostId = localHostId;
     mocks.currentContext = null;
     mocks.currentUserId = null;
+    mocks.identityGeneration = 0;
     mocks.switchAfterContextRead = null;
     mocks.binding = null;
     mocks.directoryRefresh = null;
@@ -189,6 +225,7 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.directoryRefresh = null;
     mocks.currentContext = null;
     mocks.currentUserId = null;
+    mocks.identityGeneration = 0;
     mocks.switchAfterContextRead = null;
   });
 
@@ -204,12 +241,13 @@ describe("invitation acceptance clears the local host door state", () => {
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
+    const press = invitationPress();
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
+      await result.current.mutateAsync(press);
     });
 
-    expect(accept).toHaveBeenCalledWith("team-1");
+    expect(accept).toHaveBeenCalledWith("team-1", press.chosenBy);
     expectLocalDoorCleared();
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: authQueryKeys.registeredHostsAll(),
@@ -231,9 +269,12 @@ describe("invitation acceptance clears the local host door state", () => {
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
+    const press = invitationPress();
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-a" });
+      await expect(result.current.mutateAsync(press)).rejects.toThrow(
+        "The signed-in account changed.",
+      );
     });
 
     expect(accept).not.toHaveBeenCalled();
@@ -254,12 +295,13 @@ describe("invitation acceptance clears the local host door state", () => {
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
+    const press = invitationPress();
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-a" });
+      await result.current.mutateAsync(press);
     });
 
-    expect(accept).toHaveBeenCalledExactlyOnceWith("team-a");
+    expect(accept).toHaveBeenCalledExactlyOnceWith("team-1", press.chosenBy);
     expect(sentAs).toEqual(["user-a"]);
   });
 
@@ -276,9 +318,10 @@ describe("invitation acceptance clears the local host door state", () => {
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
+    const press = invitationPress();
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
+      await result.current.mutateAsync(press);
     });
 
     expectDoorStatesKept();
@@ -303,7 +346,7 @@ describe("invitation acceptance clears the local host door state", () => {
 
     await act(async () => {
       await expect(
-        failed.result.current.mutateAsync({ environmentId: "team-1" }),
+        failed.result.current.mutateAsync(invitationPress()),
       ).rejects.toThrow("request failed");
     });
     expectDoorStatesKept();
@@ -332,13 +375,12 @@ describe("invitation acceptance clears the local host door state", () => {
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
+    const switchedPress = invitationPress();
     const mutation: {
       value: Promise<EnvironmentInvitationsAcceptResponse> | null;
     } = { value: null };
     await act(async () => {
-      mutation.value = switched.result.current.mutateAsync({
-        environmentId: "team-1",
-      });
+      mutation.value = switched.result.current.mutateAsync(switchedPress);
       await acceptStarted.promise;
     });
     mocks.currentContext = createContext("after-switch");

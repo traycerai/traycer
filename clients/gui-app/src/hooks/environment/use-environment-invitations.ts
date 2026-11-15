@@ -23,6 +23,10 @@ import {
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
+import {
+  SupersededAuthEraError,
+  type ChosenSignIn,
+} from "@/lib/auth/auth-service";
 
 /**
  * The signed-in person's pending invitations, read from authn: an identity
@@ -142,9 +146,26 @@ export function useEnvironmentInvitationAcceptMutation() {
   };
   return useMutation({
     mutationKey: environmentMutationKeys.invitationsAccept(),
-    mutationFn: (request: EnvironmentInvitationsAcceptRequest) => {
-      if (auth === null) throw new Error("Sign in to accept this invitation.");
-      return auth.acceptEnvironmentInvitation(request.environmentId);
+    // `chosenBy` is read at the press: Query awaits before this runs, and the
+    // accept refuses there if that sign-in has ended.
+    mutationFn: async (press: {
+      readonly request: EnvironmentInvitationsAcceptRequest;
+      readonly chosenBy: ChosenSignIn | null;
+    }) => {
+      if (auth === null || press.chosenBy === null)
+        throw new Error("Sign in to accept this invitation.");
+      try {
+        return await auth.acceptEnvironmentInvitation(
+          press.request.environmentId,
+          press.chosenBy,
+        );
+      } catch (error) {
+        if (error instanceof SupersededAuthEraError)
+          throw new Error(
+            "The signed-in account changed. Nothing was accepted.",
+          );
+        throw error;
+      }
     },
     onMutate: () => ({
       auth,
@@ -152,7 +173,7 @@ export function useEnvironmentInvitationAcceptMutation() {
       context: auth?.getRequestContextProvider().current() ?? null,
       localHostId: readLocalHostIdSnapshot(),
     }),
-    onSuccess: async (answer, _request, captured) => {
+    onSuccess: async (answer, _press, captured) => {
       if (answer.outcome === "accepted") afterAccepted(captured);
       await Promise.all([
         queryClient.invalidateQueries({

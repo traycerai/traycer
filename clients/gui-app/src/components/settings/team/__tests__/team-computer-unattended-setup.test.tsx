@@ -13,6 +13,7 @@ import { TeamComputerUnattendedSetup } from "../team-computer-unattended-setup";
 import { TeamHostInstallTokenLifecycleBridge } from "@/providers/team-host-install-token-lifecycle-bridge";
 import { teamComputerMutationKeys } from "@/lib/query-keys/team-computer-mutation-keys";
 import { teamHostMutationKeys } from "@/lib/query-keys/team-host-mutation-keys";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 type MintResult =
@@ -34,7 +35,18 @@ type MintResult =
 interface AuthFacade {
   readonly mintTeamComputerInstallToken: (
     environmentId: string,
+    chosenBy: ChosenSignIn,
   ) => Promise<MintResult>;
+  readonly chosenSignIn: () => ChosenSignIn;
+}
+
+/** The sign-in every press here is made under. */
+const PRESSED_AS: ChosenSignIn = { identityGeneration: 0, userId: "user-a" };
+
+function authWith(
+  mint: AuthFacade["mintTeamComputerInstallToken"],
+): AuthFacade {
+  return { mintTeamComputerInstallToken: mint, chosenSignIn: () => PRESSED_AS };
 }
 
 const hostBindingMock = vi.hoisted(() => ({
@@ -118,7 +130,7 @@ describe("TeamComputerUnattendedSetup", () => {
   it("renders no form signed out and does not mint when the setup surface opens", () => {
     const mint = vi.fn(() => Promise.resolve(tokenResult()));
     hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
+      auth: authWith(mint),
     };
     mountSetup();
 
@@ -149,7 +161,7 @@ describe("TeamComputerUnattendedSetup", () => {
       .fn<AuthFacade["mintTeamComputerInstallToken"]>()
       .mockResolvedValueOnce(firstToken)
       .mockReturnValueOnce(pendingMint.promise);
-    hostBindingMock.current = { auth: { mintTeamComputerInstallToken: mint } };
+    hostBindingMock.current = { auth: authWith(mint) };
     mountSetup();
 
     fireEvent.click(
@@ -177,7 +189,10 @@ describe("TeamComputerUnattendedSetup", () => {
 
     expect(await screen.findByText(nextToken.token)).not.toBeNull();
     expect(screen.queryByText(INSTALL_TOKEN)).toBeNull();
-    expect(mint.mock.calls).toEqual([[ENVIRONMENT_ID], [ENVIRONMENT_ID]]);
+    expect(mint.mock.calls).toEqual([
+      [ENVIRONMENT_ID, PRESSED_AS],
+      [ENVIRONMENT_ID, PRESSED_AS],
+    ]);
     expect(
       screen
         .getByRole("button", { name: "Create a new token" })
@@ -188,11 +203,7 @@ describe("TeamComputerUnattendedSetup", () => {
   it("prints the unattended install command with the team's provider handle", async () => {
     signIn(ACCOUNT_A);
     hostBindingMock.current = {
-      auth: {
-        mintTeamComputerInstallToken: vi.fn(() =>
-          Promise.resolve(tokenResult()),
-        ),
-      },
+      auth: authWith(vi.fn(() => Promise.resolve(tokenResult()))),
     };
     mountSetup();
 
@@ -217,7 +228,7 @@ describe("TeamComputerUnattendedSetup", () => {
       }),
     );
     hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
+      auth: authWith(mint),
     };
     mountSetup();
 
@@ -229,7 +240,7 @@ describe("TeamComputerUnattendedSetup", () => {
       "Couldn't create the install token. Try again.",
     );
     expect(mint).toHaveBeenCalledTimes(1);
-    expect(mint).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(mint).toHaveBeenCalledWith(ENVIRONMENT_ID, PRESSED_AS);
   });
 
   it.each(["environment_action_forbidden", "seat_without_write"] as const)(
@@ -240,7 +251,7 @@ describe("TeamComputerUnattendedSetup", () => {
         Promise.resolve<MintResult>({ kind: "refused", status: 403, code }),
       );
       hostBindingMock.current = {
-        auth: { mintTeamComputerInstallToken: mint },
+        auth: authWith(mint),
       };
       mountSetup();
 
@@ -263,7 +274,7 @@ describe("TeamComputerUnattendedSetup", () => {
       ),
     );
     hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
+      auth: authWith(mint),
     };
     mountSetup();
 
@@ -300,7 +311,7 @@ describe("TeamComputerUnattendedSetup", () => {
     signIn(ACCOUNT_A);
     const mint = vi.fn(() => Promise.resolve(tokenResult()));
     hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
+      auth: authWith(mint),
     };
     mountSetup();
 
@@ -332,7 +343,7 @@ describe("TeamComputerUnattendedSetup", () => {
     const pendingMint = Promise.withResolvers<MintResult>();
     const mint = vi.fn((_environmentId: string) => pendingMint.promise);
     hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
+      auth: authWith(mint),
     };
     mountSetup();
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ChosenSignIn } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTeamComputerInstallTokenMutation } from "../use-team-computer-install-token-mutation";
 
@@ -73,8 +73,16 @@ describe("team-computer install-token mutation account identity", () => {
     const enteredOnMutate = deferred<void>();
     const continueMutation = deferred<void>();
     const currentUserWhenMinted: string[] = [];
+    const chosenBy: ChosenSignIn = {
+      identityGeneration: 0,
+      userId: "user-a",
+    };
     const mint = vi.fn<AuthService["mintTeamComputerInstallToken"]>(
-      async () => {
+      async (_environmentId, pressedBy) => {
+        const currentUserId =
+          useAuthStore.getState().contextMetadata?.userId ?? null;
+        if (pressedBy.userId !== currentUserId)
+          throw new Error("The signed-in account changed.");
         currentUserWhenMinted.push(
           useAuthStore.getState().contextMetadata?.userId ?? "none",
         );
@@ -93,14 +101,14 @@ describe("team-computer install-token mutation account identity", () => {
     );
 
     await act(async () => {
-      const operation = result.current.mutateAsync();
+      const operation = result.current.mutateAsync(chosenBy);
       await enteredOnMutate.promise;
       signedInAs("user-b");
       continueMutation.resolve();
       await expect(operation).rejects.toThrow();
     });
 
-    expect(mint).not.toHaveBeenCalled();
+    expect(mint).toHaveBeenCalledExactlyOnceWith("team-a", chosenBy);
     expect(currentUserWhenMinted).toEqual([]);
     queryClient.clear();
   });
@@ -109,8 +117,16 @@ describe("team-computer install-token mutation account identity", () => {
     const enteredOnMutate = deferred<void>();
     const continueMutation = deferred<void>();
     const currentUserWhenMinted: string[] = [];
+    const chosenBy: ChosenSignIn = {
+      identityGeneration: 0,
+      userId: "user-a",
+    };
     const mint = vi.fn<AuthService["mintTeamComputerInstallToken"]>(
-      async () => {
+      async (_environmentId, pressedBy) => {
+        const currentUserId =
+          useAuthStore.getState().contextMetadata?.userId ?? null;
+        if (pressedBy.userId !== currentUserId)
+          throw new Error("The signed-in account changed.");
         currentUserWhenMinted.push(
           useAuthStore.getState().contextMetadata?.userId ?? "none",
         );
@@ -133,14 +149,14 @@ describe("team-computer install-token mutation account identity", () => {
       readonly expiresAt: number;
     } | null = null;
     await act(async () => {
-      const operation = result.current.mutateAsync();
+      const operation = result.current.mutateAsync(chosenBy);
       await enteredOnMutate.promise;
       signedInAs("user-a");
       continueMutation.resolve();
       token = await operation;
     });
 
-    expect(mint).toHaveBeenCalledExactlyOnceWith("team-a");
+    expect(mint).toHaveBeenCalledExactlyOnceWith("team-a", chosenBy);
     expect(currentUserWhenMinted).toEqual(["user-a"]);
     expect(token).toEqual({ installToken: "install-token", expiresAt: 2000 });
     queryClient.clear();
