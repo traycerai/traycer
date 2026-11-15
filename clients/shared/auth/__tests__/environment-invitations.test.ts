@@ -245,6 +245,7 @@ describe("a redirect answered to an environment invitation request", () => {
       name: "a 307 with a Location",
       answer: (body: unknown) =>
         new Response(JSON.stringify(body), {
+          status: 307,
           headers: { location: "https://elsewhere.test/collect" },
         }),
     },
