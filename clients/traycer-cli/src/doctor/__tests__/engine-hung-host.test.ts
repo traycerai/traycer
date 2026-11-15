@@ -9,6 +9,8 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DoctorResult } from "..";
+import type { HostNotYetErrors } from "./host-not-yet-errors";
 
 // traycer#1563 D3c: a host whose event loop is wedged still owns its port.
 // The kernel completes the TCP accept, the WebSocket upgrade never answers,
@@ -79,10 +81,23 @@ afterEach(async () => {
 type ProbeFailure = "transport" | "envelope";
 
 /**
+ * What the host answers `host.status` on each attempt, given the attempt's
+ * index. The errors are built inside the staged module registry, so the
+ * classes are the ones the engine tests against.
+ */
+type HostStatusScript = (
+  attempt: number,
+  errors: HostNotYetErrors,
+) => Promise<unknown>;
+
+/**
  * `transport`: nothing answered (the wedged host). `envelope`: the host
  * answered the RPC with an error, so it is serving.
  */
-function stageWedgedHost(websocketUrl: string, failure: ProbeFailure): void {
+function stageWedgedHost(
+  websocketUrl: string,
+  failure: ProbeFailure | HostStatusScript,
+): void {
   vi.doMock("../../manifest/host-install", () => ({
     readHostInstallRecord: () => ({
       version: "1.0.0",
@@ -152,9 +167,14 @@ function stageWedgedHost(websocketUrl: string, failure: ProbeFailure): void {
       await import("../../../../shared/host-transport/host-messenger");
     const FailureError =
       failure === "transport" ? HostTransportFailureError : HostRpcError;
+    let attempt = 0;
     return {
       ...actual,
       callHostRpcAtEndpoint: async () => {
+        if (typeof failure === "function") {
+          const { hostNotYetErrors } = await import("./host-not-yet-errors");
+          return failure(attempt++, hostNotYetErrors);
+        }
         throw new FailureError({
           code: "RPC_ERROR",
           message: "frame timeout",
@@ -285,5 +305,159 @@ describe("runDoctor against a wedged host (traycer#1563 D3c)", () => {
     expect(generic?.code).toBe("PORT_UNREACHABLE");
     expect(generic?.terminalCommand).toBe("traycer host restart");
     expect(generic?.message).not.toContain("--force");
+  });
+});
+
+const FORCE_RESTART_COMMAND = "traycer host restart --force";
+
+/**
+ * Runs doctor on a clock the test drives: the retry wait is a faked timer, and
+ * everything else doctor reads (files, the listening socket) answers on real
+ * macrotask turns between the steps.
+ */
+async function runDoctorOnFakeClock(): Promise<DoctorResult> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const { runDoctor } = await import("../engine");
+  let settled = false;
+  const pending = runDoctor({
+    environment: "production",
+    portConflictDeps: { platform: "darwin", runCommand: async () => null },
+  }).finally(() => {
+    settled = true;
+  });
+  for (let step = 0; step < 400 && !settled; step += 1) {
+    await vi.advanceTimersByTimeAsync(50);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+  return pending;
+}
+
+function probeIssueCodes(
+  issues: readonly { readonly code: string }[],
+): readonly string[] {
+  return issues
+    .map((issue) => issue.code)
+    .filter((code) =>
+      [
+        "HOST_RPC_UNRESPONSIVE",
+        "HOST_RPC_UNAUTHORIZED",
+        "PORT_UNREACHABLE",
+      ].includes(code),
+    );
+}
+
+describe("runDoctor against a host that answers not yet", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { form: "a retryable error on a request", pick: "notYetOnRequest" },
+    { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
+  ] as const)(
+    "asks again every half second while the host answers $form, and reports nothing of the probe once it is ready",
+    async ({ pick }) => {
+      const attempts: number[] = [];
+      stageWedgedHost(`ws://127.0.0.1:${port}/rpc`, async (attempt, errors) => {
+        attempts.push(Date.now());
+        if (attempt < 2) throw errors[pick]("host.status");
+        return { crossHostMessaging: null };
+      });
+
+      const result = await runDoctorOnFakeClock();
+
+      expect(attempts).toHaveLength(3);
+      expect(attempts[1] - attempts[0]).toBe(500);
+      expect(attempts[2] - attempts[1]).toBe(500);
+      expect(probeIssueCodes(result.issues)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { form: "a retryable error on a request", pick: "notYetOnRequest" },
+    { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
+    { form: "a post-open request timeout", pick: "requestTimeout" },
+  ] as const)(
+    "stops asking five seconds after the first attempt when the host still answers $form, and raises no issue for the probe",
+    async ({ pick }) => {
+      const attempts: number[] = [];
+      stageWedgedHost(
+        `ws://127.0.0.1:${port}/rpc`,
+        async (_attempt, errors) => {
+          attempts.push(Date.now());
+          throw errors[pick]("host.status");
+        },
+      );
+
+      const result = await runDoctorOnFakeClock();
+
+      // Ten asks, half a second apart; none starts at or after the bound.
+      expect(attempts).toHaveLength(10);
+      expect(attempts[9] - attempts[0]).toBe(4_500);
+      expect(probeIssueCodes(result.issues)).toEqual([]);
+      expect(JSON.stringify(result.issues)).not.toContain(
+        FORCE_RESTART_COMMAND,
+      );
+    },
+  );
+
+  it("measures the bound from the first attempt, so a first attempt that takes 4.8 s is the last", async () => {
+    const attempts: number[] = [];
+    stageWedgedHost(`ws://127.0.0.1:${port}/rpc`, async (_attempt, errors) => {
+      attempts.push(Date.now());
+      vi.setSystemTime(Date.now() + 4_800);
+      throw errors.notYetOnRequest("host.status");
+    });
+
+    const result = await runDoctorOnFakeClock();
+
+    expect(attempts).toHaveLength(1);
+    expect(probeIssueCodes(result.issues)).toEqual([]);
+  });
+
+  it.each([
+    { name: "did not answer", pick: "silent" },
+    {
+      name: "timed out after the open as a host through 1.1.9 says it",
+      pick: "legacyRequestTimeout",
+    },
+  ] as const)(
+    "still reports a host that $name as unresponsive, after one attempt and no wait",
+    async ({ pick }) => {
+      const attempts: number[] = [];
+      stageWedgedHost(
+        `ws://127.0.0.1:${port}/rpc`,
+        async (_attempt, errors) => {
+          attempts.push(Date.now());
+          throw errors[pick]("host.status");
+        },
+      );
+
+      const result = await runDoctorOnFakeClock();
+
+      expect(attempts).toHaveLength(1);
+      const hung = result.issues.find(
+        (issue) => issue.code === "HOST_RPC_UNRESPONSIVE",
+      );
+      expect(hung?.message).toContain(`pid=${process.pid}`);
+      expect(hung?.message).toContain("is not responding");
+      expect(hung?.terminalCommand).toBe(FORCE_RESTART_COMMAND);
+      expect(hung?.fixAction).toBe("host-restart");
+    },
+  );
+
+  it("reports a final refusal as the host rejecting the credentials, after one attempt and no wait", async () => {
+    const attempts: number[] = [];
+    stageWedgedHost(`ws://127.0.0.1:${port}/rpc`, async (_attempt, errors) => {
+      attempts.push(Date.now());
+      throw errors.unauthorized("host.status");
+    });
+
+    const result = await runDoctorOnFakeClock();
+
+    expect(attempts).toHaveLength(1);
+    expect(probeIssueCodes(result.issues)).toEqual(["HOST_RPC_UNAUTHORIZED"]);
   });
 });

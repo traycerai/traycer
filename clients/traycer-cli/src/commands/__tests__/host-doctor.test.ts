@@ -6,6 +6,7 @@ import {
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -15,7 +16,7 @@ import {
 } from "vitest";
 import { HostTransportFailureError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
-import type { CommandContext } from "../../runner/runner";
+import type { CommandContext, CommandResult } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
 import type { DoctorIssueCode, DoctorResult } from "../../doctor";
@@ -23,6 +24,10 @@ import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance";
 import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
 import { config } from "../../config";
 import { hostDoctorLeasePath, hostHomeDir } from "../../store/paths";
+import {
+  hostNotYetErrors,
+  type HostNotYetErrors,
+} from "../../doctor/__tests__/host-not-yet-errors";
 
 // `hostDoctorCommand` (`../host-doctor.ts`) is a thin wrapper: it calls
 // `runDoctor` and renders `DoctorResult` (issues + the lifecycle facts) as
@@ -593,4 +598,157 @@ describe("hostDoctorCommand lease", () => {
     expect(existsSync(leasePath())).toBe(false);
     await expect(leaseIsFree()).resolves.toBe(true);
   });
+});
+
+describe("hostDoctorCommand asks a host that answers not yet", () => {
+  const FORCE_RESTART_SENTENCE = "Force restart it";
+  let attempts: number[];
+
+  beforeEach(() => {
+    attempts = [];
+    mocks.readHostPidMetadataMock.mockResolvedValue(hostMetadata(otherHostPid));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Scripts what the host answers `host.doctor` on each attempt. */
+  function scriptHost(
+    answer: (attempt: number, errors: HostNotYetErrors) => unknown,
+  ): void {
+    mocks.callHostRpcMock.mockImplementation(async () => {
+      attempts.push(Date.now());
+      return answer(attempts.length - 1, hostNotYetErrors);
+    });
+  }
+
+  /** Runs the command on the test's clock, with real turns for files between steps. */
+  async function runCommand(): Promise<CommandResult> {
+    let settled = false;
+    const pending = hostDoctorCommand(makeCtx()).finally(() => {
+      settled = true;
+    });
+    for (let step = 0; step < 400 && !settled; step += 1) {
+      await vi.advanceTimersByTimeAsync(50);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    return pending;
+  }
+
+  it.each([
+    { form: "a retryable error on a request", pick: "notYetOnRequest" },
+    { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
+  ] as const)(
+    "asks again every half second while the host answers $form, and prints the host's own verdict once it is ready",
+    async ({ pick }) => {
+      const credentialIssue = hostIssue("HOST_CREDENTIAL_SAVE_FAILED", "error");
+      scriptHost((attempt, errors) => {
+        if (attempt < 2) throw errors[pick]("host.doctor");
+        return hostOk([credentialIssue]);
+      });
+
+      const result = await runCommand();
+
+      expect(attempts).toHaveLength(3);
+      expect(attempts[1] - attempts[0]).toBe(500);
+      expect(attempts[2] - attempts[1]).toBe(500);
+      expect(result.data).toMatchObject({ issues: [credentialIssue] });
+      expect(result.human).toContain("HOST_CREDENTIAL_SAVE_FAILED");
+      expect(result.human).not.toContain(LOCAL_ONLY_NOTICE);
+      expect(result.exitCode).toBe(1);
+    },
+  );
+
+  it.each([
+    { form: "a retryable error on a request", pick: "notYetOnRequest" },
+    { form: "a retryable refusal at the open", pick: "notYetAtOpen" },
+    { form: "a post-open request timeout", pick: "requestTimeout" },
+  ] as const)(
+    "prints the local verdict and the local-only notice when the host still answers $form after five seconds",
+    async ({ pick }) => {
+      scriptHost((_attempt, errors) => {
+        throw errors[pick]("host.doctor");
+      });
+
+      const result = await runCommand();
+
+      // Ten asks, half a second apart; none starts at or after the bound.
+      expect(attempts).toHaveLength(10);
+      expect(attempts[9] - attempts[0]).toBe(4_500);
+      expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+      expect(result.human).toContain("Doctor: no issues detected.");
+      expect(result.human).not.toContain(FORCE_RESTART_SENTENCE);
+      expect(result.human).not.toContain("HOST_RPC_UNRESPONSIVE");
+      expect(result.exitCode).toBe(0);
+    },
+  );
+
+  it("takes the exit code from the local verdict when the host still answers not yet after five seconds", async () => {
+    mocks.runDoctorMock.mockResolvedValue(
+      doctorResult({ issues: [issue("HOST_NOT_INSTALLED", "error")] }),
+    );
+    scriptHost((_attempt, errors) => {
+      throw errors.notYetOnRequest("host.doctor");
+    });
+
+    const result = await runCommand();
+
+    expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+    expect(result.human).toContain("HOST_NOT_INSTALLED");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("holds the report to the local issues in the data, past the bound", async () => {
+    const local = [issue("CLI_SHADOWED_ON_PATH", "warning")];
+    mocks.runDoctorMock.mockResolvedValue(doctorResult({ issues: local }));
+    scriptHost((_attempt, errors) => {
+      throw errors.notYetOnRequest("host.doctor");
+    });
+
+    const result = await runCommand();
+
+    expect(result.data).toEqual({
+      issues: local,
+      lifecycle: quietLifecycleSnapshot,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("measures the bound from the first attempt, so a first attempt that takes 4.8 s is the last", async () => {
+    scriptHost((_attempt, errors) => {
+      vi.setSystemTime(Date.now() + 4_800);
+      throw errors.notYetOnRequest("host.doctor");
+    });
+
+    const result = await runCommand();
+
+    expect(attempts).toHaveLength(1);
+    expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+  });
+
+  it.each([
+    { name: "does not answer", pick: "silent" },
+    { name: "refuses for good", pick: "unauthorized" },
+    {
+      name: "times out after the open as a host through 1.1.9 says it",
+      pick: "legacyRequestTimeout",
+    },
+  ] as const)(
+    "asks once, with no wait, a host that $name, and falls back to the local verdict",
+    async ({ pick }) => {
+      scriptHost((_attempt, errors) => {
+        throw errors[pick]("host.doctor");
+      });
+
+      const result = await runCommand();
+
+      expect(attempts).toHaveLength(1);
+      expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+      expect(result.exitCode).toBe(0);
+    },
+  );
 });
