@@ -653,6 +653,36 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
   ) : null;
 }
 
+/**
+ * `?layout=chat-row` lays the surface out as a task chat's artifact card: a
+ * height of its own, in a transcript row that contains its layout and paint
+ * (`ChatTimelineRow`), in a list that scrolls, raising itself to comment.
+ */
+const CHAT_ROW =
+  new URLSearchParams(window.location.search).get("layout") === "chat-row";
+const CARD_HEIGHT_PX = 260;
+
+function Placement(props: { readonly children: ReactNode }): ReactNode {
+  if (!CHAT_ROW)
+    return <div style={{ height: "100%", minHeight: 0 }}>{props.children}</div>;
+  return (
+    <div
+      data-fixture-transcript
+      style={{ height: "100%", minHeight: 0, overflowY: "auto" }}
+    >
+      <div style={{ height: 120 }} />
+      <div
+        data-message-id="card-turn"
+        data-row-key="card-turn"
+        className="mx-auto w-full px-6 pb-2 [contain:layout_paint_style]"
+      >
+        {props.children}
+      </div>
+      <div style={{ height: 1600 }} />
+    </div>
+  );
+}
+
 export function CommentModeFixture(): ReactNode {
   const [manifest, setManifest] = useState(currentManifest);
   useEffect(() => {
@@ -680,7 +710,7 @@ export function CommentModeFixture(): ReactNode {
               <EpicViewTabContext.Provider value={VIEW_TAB_ID}>
                 <TabHostContext.Provider value={HOST_ID}>
                   <TooltipProvider>
-                    <div style={{ height: "100%", minHeight: 0 }}>
+                    <Placement>
                       <HtmlArtifactCommentSurface
                         epicId={EPIC_ID}
                         artifactId={ARTIFACT_ID}
@@ -696,10 +726,17 @@ export function CommentModeFixture(): ReactNode {
                           readSpan,
                           resolveOutsideReference: NO_OUTSIDE_REFERENCE,
                         }}
+                        caption={null}
+                        height={CHAT_ROW ? CARD_HEIGHT_PX : null}
+                        className={CHAT_ROW ? "w-full" : "h-full w-full"}
+                        onSize={() => undefined}
+                        onStatus={() => undefined}
                         toolbarControls={null}
                         menuItems={null}
+                        raiseToComment={CHAT_ROW}
+                        commentable
                       />
-                    </div>
+                    </Placement>
                   </TooltipProvider>
                 </TabHostContext.Provider>
               </EpicViewTabContext.Provider>

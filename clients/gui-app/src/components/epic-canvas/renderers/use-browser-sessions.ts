@@ -9,6 +9,10 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -116,8 +120,13 @@ export function useBrowserSessions(
   );
   const ownerCoordinatorKey =
     owner === null ? null : browserSessionsCoordinatorKey(scope, owner);
+  // A held coordinator outlives a null transport key while its stream
+  // re-dials, but not a row below the version floor: an older host cannot own
+  // the stream.
   const coordinatorKey =
     ownerCoordinatorKey !== null &&
+    (hostEntry === null ||
+      !hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)) &&
     (transportReady || hasBrowserSessionsCoordinator(ownerCoordinatorKey))
       ? ownerCoordinatorKey
       : null;

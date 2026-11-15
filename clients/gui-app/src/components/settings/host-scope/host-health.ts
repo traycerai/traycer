@@ -9,6 +9,9 @@ import {
   formatLastSeen,
 } from "@/components/settings/panels/my-hosts-model";
 
+export const HOST_UPDATE_REQUIRED_DETAIL =
+  "This host is running an older version than this app supports.";
+
 /**
  * ONE health vocabulary for every host, everywhere.
  *
@@ -260,7 +263,7 @@ const DEAD_HEALTH: Record<
     // line on a row; the structured skew (host version, minimum supported,
     // reason code) belongs with the action that acts on it, which reads it
     // from the lease directly — see `host-update-required-action.tsx`.
-    detail: "This host is running an older version than this app supports.",
+    detail: HOST_UPDATE_REQUIRED_DETAIL,
     tone: HOST_HEALTH_TONE["update-required"],
     live: false,
   }),

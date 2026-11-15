@@ -53,8 +53,20 @@ vi.mock("@/lib/tab-navigation", () => ({
 
 import {
   HomeBotRow,
+  HomeSetupBotRow,
   type HomeBotHostReach,
 } from "@/components/home/bots/home-bot-row";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
@@ -209,6 +221,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
 describe("<HomeBotRow /> state", () => {
@@ -526,5 +539,57 @@ describe("<HomeBotRow /> tasks", () => {
     expect(screen.getByTestId("home-bot-row").textContent).not.toContain(
       "check-in",
     );
+  });
+});
+
+describe("<HomeBotRow /> picture", () => {
+  it("draws the bot's own mascot at 24px, not the robot glyph an agent wears", () => {
+    mountRow(OWN_AND_DIALABLE);
+
+    const row = screen.getByTestId("home-bot-row");
+    expect(renderedMascotPaths(row)).toEqual(mascotPathsAt(BOT_ID, false, 24));
+    expect(drawsRobotGlyph(row)).toBe(false);
+  });
+
+  it("draws the environment's main bot as its plain mascot", () => {
+    useStandaloneBotsStore.setState({
+      directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      settled: true,
+    });
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      bot: { ...BOT, botId: TEAM_MAIN_BOT_ID },
+      isMain: true,
+    });
+
+    expect(renderedMascotPaths(screen.getByTestId("home-bot-row"))).toEqual(
+      mascotPathsAt(TEAM_MAIN_BOT_ID, true, 24),
+    );
+  });
+});
+
+describe("<HomeSetupBotRow /> picture", () => {
+  it("draws the team's main bot as its mascot at 24px, not the robot glyph", () => {
+    useStandaloneBotsStore.setState({
+      directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      settled: true,
+    });
+    render(
+      <HomeSetupBotRow
+        setup={{
+          environmentId: "env-team",
+          teamName: "traycerai",
+          botId: TEAM_MAIN_BOT_ID,
+          title: "Tracy",
+        }}
+        hostReach={reach(OWN_AND_DIALABLE)}
+      />,
+    );
+
+    const row = screen.getByTestId("home-bot-setup-row");
+    expect(renderedMascotPaths(row)).toEqual(
+      mascotPathsAt(TEAM_MAIN_BOT_ID, true, 24),
+    );
+    expect(drawsRobotGlyph(row)).toBe(false);
   });
 });

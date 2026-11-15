@@ -5,6 +5,7 @@ import {
   doorCoverHostOf,
   findLease,
   isServingLease,
+  olderHostUpdateVariant,
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -13,7 +14,14 @@ import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
 
 export interface WindowNarrationReading {
   readonly narration: WindowNarrationState;
@@ -46,6 +54,9 @@ export function useWindowNarration(): WindowNarrationReading {
     (state) => state.targetHostId,
   );
   const leases = useHostLeases();
+  const updateCandidate = useHostDirectoryEntry(
+    effectiveHostId ?? targetHostId,
+  );
   // The NULL-TOLERANT read, deliberately: this hook mounts at the app root,
   // and the throwing `useRunnerHost` is exactly the RunnerHostProvider
   // coupling that once cost two root-route suites their whole tree (see
@@ -63,6 +74,7 @@ export function useWindowNarration(): WindowNarrationReading {
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
   const doorState = useHostDoorState(effectiveHostId ?? targetHostId);
+  const hostClaim = useHostClaim(effectiveHostId ?? targetHostId, doorState);
   // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
@@ -88,7 +100,28 @@ export function useWindowNarration(): WindowNarrationReading {
     setHasBeenServed(true);
   }
 
-  return useMemo(() => {
+  return useMemo<WindowNarrationReading>(() => {
+    if (
+      attached &&
+      updateCandidate !== null &&
+      hostDirectoryEntryNeedsUpdate(updateCandidate, MINIMUM_HOST_VERSION)
+    ) {
+      return {
+        narration: {
+          kind: "narrating",
+          cause:
+            hasBeenServed || effectiveHostId === null
+              ? "no-usable-host"
+              : "cold-start",
+          variant: olderHostUpdateVariant(
+            updateCandidate.hostId,
+            updateCandidate.hostId === targetHostId,
+            hostAppVersionFromDirectoryEntry(updateCandidate),
+          ),
+        },
+        doorCoverHostId: updateCandidate.hostId,
+      };
+    }
     const input = {
       attached,
       effectiveHostId,
@@ -99,6 +132,7 @@ export function useWindowNarration(): WindowNarrationReading {
       discoveryConcluded,
       localHostId,
       doorState,
+      hostClaim,
     };
     return {
       narration: deriveWindowNarration(input),
@@ -113,6 +147,8 @@ export function useWindowNarration(): WindowNarrationReading {
     localHostExpected,
     localHostId,
     doorState,
+    hostClaim,
     targetHostId,
+    updateCandidate,
   ]);
 }

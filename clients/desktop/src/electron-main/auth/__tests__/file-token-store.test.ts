@@ -456,7 +456,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       });
       stores.push(desktopStore);
       await desktopStore.get();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
       armMetadataWriteFault(credentialsPath());
       expect(
@@ -482,6 +481,10 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       if (deliverWatchEvent === undefined) {
         throw new Error("desktop watcher was not installed");
       }
+      // Only the watcher's debounce needs the fake clock. The saves above
+      // wait on the credentials lock with real timers, so a lock held for a
+      // moment is waited out instead of parking on a clock nobody advances.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       deliverWatchEvent("change", basename(credentialsPath()));
       await vi.advanceTimersByTimeAsync(100);
       await vi.waitFor(() => {

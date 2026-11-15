@@ -53,7 +53,6 @@ function modalProps(
     bootBody: null,
     onRetry: null,
     retryPending: false,
-    onUpdateHost: null,
     onOpenSettings: () => undefined,
     showReportIssue: false,
     settingsEmphasis: "button",
@@ -94,12 +93,12 @@ describe("door state narration", () => {
       }),
     ).toEqual({
       kind: "narrating",
-      cause: "no-usable-host",
+      cause: "door-state",
       variant: { kind: "team-membership-required" },
     });
   });
 
-  it("draws the offline cover for another blocking state only while nothing serves", () => {
+  it("draws a retried state's own cover only while nothing serves", () => {
     const waiting = narrationInput({});
     expect(
       deriveWindowNarration({
@@ -108,8 +107,8 @@ describe("door state narration", () => {
       }),
     ).toEqual({
       kind: "narrating",
-      cause: "no-usable-host",
-      variant: { kind: "offline" },
+      cause: "door-state",
+      variant: { kind: "token-unavailable", hostId: "local-host" },
     });
     expect(deriveWindowNarration(waiting)).toEqual({
       kind: "narrating",
@@ -126,9 +125,28 @@ describe("door state narration", () => {
     expect(
       deriveWindowNarration({
         ...served,
-        doorState: door("older-host", "local-host"),
+        doorState: door("token-unavailable", "local-host"),
       }),
     ).toEqual(deriveWindowNarration(served));
+  });
+
+  it("draws membership-removed's cover even while a host is serving", () => {
+    const served = narrationInput({
+      effectiveHostId: "remote-host",
+      targetHostId: "remote-host",
+      hasBeenServed: true,
+      leases: [servingLease("remote-host")],
+    });
+    expect(
+      deriveWindowNarration({
+        ...served,
+        doorState: door("membership-removed", "remote-host"),
+      }),
+    ).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "membership-removed", hostId: "remote-host" },
+    });
   });
 
   it("draws nothing for a non-blocking door state", () => {

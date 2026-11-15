@@ -96,6 +96,7 @@ export function Tab(): ReactElement {
           <BotThreadsView
             level2={null}
             hostId={HOST_ID}
+            channelId={null}
             channelTitle="Tracy"
             onBack={() => setThreadsShown(false)}
           />
