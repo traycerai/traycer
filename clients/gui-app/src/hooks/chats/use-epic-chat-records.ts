@@ -13,11 +13,15 @@ import {
   useRecordListStreamStamp,
 } from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { hostSupportsPublicationRedirectRevision } from "@/hooks/chats/use-chat-publication-targets";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
+import {
+  GUI_PROJECTS_EPIC_DOC_REPLICA,
+  isChatVisibleToUser,
+} from "@/stores/epics/open-epic/projection-helpers";
 
 /**
  * What the cache holds for one `epic.listChatRecords` answer: the rows, plus
@@ -28,6 +32,9 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface ChatRecordListAnswer {
+  readonly publicationRedirectRevision: string | null;
+  readonly publicationRedirectRevisionSupported: boolean;
+  readonly answerSequence: number;
   /**
    * The `@1.4` row, NOT the base one and not an older minor's. A narrower row
    * is assignable to this in the wrong direction, so typing it down is a
@@ -287,9 +294,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
         snapshotIncompleteSeq: state.chatSnapshotIncompleteSeq,
       };
     },
-    mapResponse: ({ response, requestContext }) => {
+    mapResponse: ({ response, requestContext, queryClient, queryKey }) => {
       const context = requestContext ?? null;
       return {
+        publicationRedirectRevision: response.publicationRedirectRevision,
+        publicationRedirectRevisionSupported:
+          hostSupportsPublicationRedirectRevision(hostId),
+        answerSequence:
+          (queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0) + 1,
         // `unchanged` maps to `null`, never to `[]`. An empty array is not the
         // neutral value here: the store merges omissions against the dispatch
         // fence, so an empty answer RETRACTS every row that landed before it.
@@ -327,10 +339,38 @@ export function useEpicSyncChatRecords(epicId: string): void {
     if (recordListFailed || recordListAuthoritative) {
       store?.getState().setChatRecordListFailed(recordListFailed);
     }
-  }, [recordListFailed, recordListAuthoritative, store]);
+    if (recordListFailed && store !== null) {
+      const state = store.getState();
+      state.recordChatPublicationRedirectRevision(
+        state.chatPublicationRedirectRevision,
+        hostSupportsPublicationRedirectRevision(hostId),
+        state.chatRecordListAnswerSequence,
+        null,
+      );
+    }
+  }, [recordListFailed, recordListAuthoritative, hostId, store]);
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {
+      store
+        .getState()
+        .recordChatPublicationRedirectRevision(
+          answer.publicationRedirectRevision,
+          answer.publicationRedirectRevisionSupported,
+          answer.answerSequence,
+          answer.chats === null
+            ? null
+            : answer.chats
+                .filter((row) =>
+                  isChatVisibleToUser(
+                    row.origin,
+                    row.ownerUserId,
+                    viewerUserId,
+                    viewerUserId,
+                  ),
+                )
+                .map((row) => row.chatId),
+        );
       if (answer.chats !== null) {
         // The fence is used as captured. It was read from THIS store, because
         // the generation is in the cache key - see `ChatRecordListAnswer`.
@@ -362,7 +402,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
       stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
     store.getState().markChatRecordListAuthoritative();
-  }, [answer, recordListAuthoritative, stamp, store]);
+  }, [answer, recordListAuthoritative, stamp, store, viewerUserId]);
 }
 
 /**

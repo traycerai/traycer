@@ -109,7 +109,10 @@ const activeEpicProjectionMock = vi.hoisted<{
         Partial<
           Pick<
             OpenEpicState,
-            "chatRecordListAuthoritative" | "chatRecordListFailed"
+            | "chatRecordListAuthoritative"
+            | "chatRecordListFailed"
+            | "chatPublicationRedirectRevision"
+            | "chatPublicationRedirectRevisionSupported"
           >
         >)
     | null;
@@ -390,9 +393,11 @@ vi.mock(
       ...actual,
       useChatPublicationTargets: (args: {
         readonly chatIds: readonly string[];
-        readonly cloudChats: readonly CloudChatSummary[];
         readonly chatIdsAuthoritative: boolean;
         readonly chatRecordListFailed: boolean;
+        readonly publicationRedirectRevision: string | null;
+        readonly publicationRedirectRevisionSupported: boolean;
+        readonly recordListStore: unknown;
       }) => {
         spies.publicationTargetArgs(args);
         return { data: undefined };
@@ -430,6 +435,7 @@ function cloudChat(args: {
 }
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => activeEpicProjectionMock.current,
+  useActiveEpicHandle: () => null,
   // The host serving the active epic's projection - what the opener stamps
   // into tiles and reads the epic's own records from (PR #1243). The
   // suite's "active host" knob drives it, so every arm below reads as before.
@@ -829,7 +835,7 @@ afterEach(() => {
 });
 
 describe("Agents opener sub-page", () => {
-  it("forwards projection readiness and cloud rows to publication targets", () => {
+  it("forwards projection revision and readiness to publication targets", () => {
     activeEpicProjectionMock.current = {
       ...FAKE_PROJECTION,
       chatRecordListAuthoritative: false,
@@ -851,7 +857,9 @@ describe("Agents opener sub-page", () => {
       client: { mockHostId: "default-host" },
       epicId: "epic-1",
       chatIds: FAKE_PROJECTION.chats.allIds,
-      cloudChats: cloudChatsMock.current,
+      publicationRedirectRevision: null,
+      publicationRedirectRevisionSupported: false,
+      recordListStore: null,
       chatIdsAuthoritative: false,
       chatRecordListFailed: true,
       enabled: true,

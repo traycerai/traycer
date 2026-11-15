@@ -112,16 +112,12 @@ export interface UseHostQueryWithResponseMapOptions<
    * forever and the gating would never fire. A stamp frozen into the key at
    * mount would be stale by the second tick.
    *
-   * Publication targets also send their current local chat-id set here. The
-   * initial read waits for the full record list (or refreshes once on recovery
-   * from a failed list). Later new chats use the fold's own-id fallback. The
-   * map refreshes when the unexplained own-row set differs from the last
-   * answer's set. Until a clone is listed, the other host's row can stay folded
-   * under the local id; listing the clone triggers a refresh, and one re-check
-   * about 60 s later, once per mount. Failed or reverted re-checks wait another
-   * 60 s, capped at three failures per row per mount. Fork edges on the
-   * addressable host can refresh it sooner. Local membership does not require
-   * a new key.
+   * Publication targets on a revision-supporting host send the current full
+   * local chat-id set here while sharing one task cache slot. The first read
+   * waits for the full record list, or refreshes once after a partial failure.
+   * Each answer records its dispatch revision; the session host's record-list
+   * poll refreshes the map while its observed redirect revision differs. Fork
+   * edges can also invalidate it. Older hosts retain the full chat-id-set key.
    *
    * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
    * `captureRequestContext` - so the ordering fence stays the last thing read

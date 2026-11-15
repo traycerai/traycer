@@ -522,7 +522,7 @@ function createDirtyEpicHandle(
 ): OpenEpicStoreHandle {
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
-  const store = create<OpenEpicState>()((set) => ({
+  const store = create<OpenEpicState>()((set, get) => ({
     epicId,
     doc,
     awareness,
@@ -540,6 +540,10 @@ function createDirtyEpicHandle(
     evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
     chatRecordListFailed: false,
+    chatPublicationRedirectRevision: null,
+    chatPublicationRedirectRevisionSupported: false,
+    chatPublicationTargetCoverage: [],
+    chatRecordListAnswerSequence: 0,
     tuiAgentRecordListAuthoritative: true,
     tuiAgentRecordListFailed: false,
     chatRetractions: {},
@@ -618,6 +622,26 @@ function createDirtyEpicHandle(
     markChatRecordListAuthoritative: () => undefined,
     setChatRecordListFailed: (failed) => {
       set({ chatRecordListFailed: failed });
+    },
+    recordChatPublicationRedirectRevision: (
+      revision,
+      supported,
+      answerSequence,
+      snapshotChatIds,
+    ) => {
+      const current = get();
+      set({
+        chatPublicationRedirectRevision: revision,
+        chatPublicationRedirectRevisionSupported: supported,
+        chatRecordListAnswerSequence: answerSequence,
+        ...(snapshotChatIds === null
+          ? {}
+          : {
+              chatPublicationTargetCoverage: [
+                ...new Set([...current.chats.allIds, ...snapshotChatIds]),
+              ],
+            }),
+      });
     },
     markTuiAgentRecordListAuthoritative: () => undefined,
     markTuiAgentRecordListFailed: () => undefined,

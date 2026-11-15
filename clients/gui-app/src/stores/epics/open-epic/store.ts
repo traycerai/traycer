@@ -402,6 +402,13 @@ export interface OpenEpicState {
   readonly chatRecordListAuthoritative: boolean;
   /** The chat list exhausted its retries; cleared by its next settled answer. */
   readonly chatRecordListFailed: boolean;
+  /** Opaque revision observed on this session host's latest record-list answer. */
+  readonly chatPublicationRedirectRevision: string | null;
+  readonly chatPublicationRedirectRevisionSupported: boolean;
+  /** Snapshot coverage includes rows whose worker projection is still in flight. */
+  readonly chatPublicationTargetCoverage: readonly string[];
+  /** Success sequence; only targets readers behind the host subscribe to it. */
+  readonly chatRecordListAnswerSequence: number;
   /**
    * Whether `epic.listTuiAgents` has produced an answer this session: the
    * terminal twin of {@link OpenEpicState.chatRecordListAuthoritative}, with
@@ -760,6 +767,12 @@ export interface OpenEpicState {
   /** Marks the record list authoritative after success or unsupported. */
   markChatRecordListAuthoritative: () => void;
   setChatRecordListFailed: (failed: boolean) => void;
+  recordChatPublicationRedirectRevision: (
+    revision: string | null,
+    supported: boolean,
+    answerSequence: number,
+    snapshotChatIds: readonly string[] | null,
+  ) => void;
   /** The terminal twin of {@link OpenEpicState.markChatRecordListAuthoritative}. */
   markTuiAgentRecordListAuthoritative: () => void;
   markTuiAgentRecordListFailed: () => void;
@@ -2078,6 +2091,10 @@ export function createOpenEpicStore(
           // List-only, like the head: restated by each snapshot.
           evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
           chatRecordListFailed: false,
+          chatPublicationRedirectRevision: null,
+          chatPublicationRedirectRevisionSupported: false,
+          chatPublicationTargetCoverage: [],
+          chatRecordListAnswerSequence: 0,
           tuiAgentRecordListFailed: false,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
@@ -2235,6 +2252,37 @@ export function createOpenEpicStore(
           setChatRecordListFailed: (failed) => {
             if (get().chatRecordListFailed === failed) return;
             set({ chatRecordListFailed: failed });
+          },
+          recordChatPublicationRedirectRevision: (
+            revision,
+            supported,
+            answerSequence,
+            snapshotChatIds,
+          ) => {
+            const current = get();
+            if (
+              current.chatPublicationRedirectRevision === revision &&
+              current.chatPublicationRedirectRevisionSupported === supported &&
+              current.chatRecordListAnswerSequence === answerSequence &&
+              snapshotChatIds === null
+            )
+              return;
+            set({
+              ...(current.chatPublicationRedirectRevision === revision
+                ? {}
+                : { chatPublicationRedirectRevision: revision }),
+              ...(current.chatPublicationRedirectRevisionSupported === supported
+                ? {}
+                : { chatPublicationRedirectRevisionSupported: supported }),
+              chatRecordListAnswerSequence: answerSequence,
+              ...(snapshotChatIds === null
+                ? {}
+                : {
+                    chatPublicationTargetCoverage: [
+                      ...new Set([...current.chats.allIds, ...snapshotChatIds]),
+                    ],
+                  }),
+            });
           },
           markTuiAgentRecordListAuthoritative: () => {
             runtime.command({
@@ -2718,6 +2766,10 @@ export function createOpenEpicStore(
     });
     store.setState({
       chatRecordListFailed: false,
+      chatPublicationRedirectRevision: null,
+      chatPublicationRedirectRevisionSupported: false,
+      chatPublicationTargetCoverage: [],
+      chatRecordListAnswerSequence: 0,
       tuiAgentRecordListFailed: false,
     });
     // Re-derive the record slices from the RETAINED raw rows, then re-project.

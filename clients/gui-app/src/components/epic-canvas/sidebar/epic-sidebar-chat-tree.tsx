@@ -178,6 +178,8 @@ import {
   type AgentActivityTier,
   useEpicChatIds,
   useEpicChatRecordListAuthoritative,
+  useEpicChatPublicationRedirectRevision,
+  useEpicChatPublicationRedirectRevisionSupported,
   useEpicChatRecordListFailed,
   useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
@@ -835,6 +837,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
+  const recordListStore = useOpenEpicHandle().store;
+  const publicationRedirectRevision = useEpicChatPublicationRedirectRevision();
+  const publicationRedirectRevisionSupported =
+    useEpicChatPublicationRedirectRevisionSupported();
   const chatIdsAuthoritative = useEpicChatRecordListAuthoritative();
   const chatRecordListFailed = useEpicChatRecordListFailed();
   // The task's chats on hosts this device cannot reach, folded against the
@@ -856,7 +862,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     client: sessionHostClient,
     epicId,
     chatIds: localChatIds,
-    cloudChats: cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
+    publicationRedirectRevision,
+    publicationRedirectRevisionSupported,
+    recordListStore,
     chatIdsAuthoritative,
     chatRecordListFailed,
     enabled: epicId.length > 0,
