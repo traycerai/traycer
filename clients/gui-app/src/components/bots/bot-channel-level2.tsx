@@ -187,7 +187,9 @@ function BotChannelPicker(props: {
           data-testid="bot-channel-picker-trigger"
           className="min-w-0 max-w-full shrink justify-start"
         >
-          <span className="min-w-0 truncate">{name}</span>
+          <span className="min-w-0 truncate">
+            {threadsView?.shown ? title : name}
+          </span>
           <ChevronDown aria-hidden="true" />
         </Button>
       </DrawerTrigger>

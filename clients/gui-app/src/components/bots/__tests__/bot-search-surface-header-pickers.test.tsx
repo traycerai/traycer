@@ -24,11 +24,14 @@ import {
   userEvents,
 } from "./bot-search-surface-compact-support";
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   SEARCH_BOT_A,
   SEARCH_BOT_B,
 } from "@/lib/bots/__tests__/bot-search-test-support";
+import { tracyRecord } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
@@ -134,6 +137,73 @@ describe("the channel's bot picker in the compact header", () => {
       );
       expect(transcriptOf(conversationOf(SEARCH_BOT_B))).toBeTruthy();
       expect(headerPickerText()).toContain("Notes Bot");
+    },
+  );
+});
+
+/** A person with two main bots: the team's is the channel the surface shows. */
+const TEAM_AND_PERSONAL_MAIN_BOTS: StandaloneBotsDirectory = {
+  model: {
+    groups: [
+      {
+        environmentId: "env-team",
+        label: "traycerai",
+        ownerKind: "organization",
+        canCreate: true,
+        bots: [tracyRecord(SEARCH_BOT_A, "env-team")],
+        mainBotId: SEARCH_BOT_A,
+      },
+      {
+        environmentId: "env-me",
+        label: "Personal",
+        ownerKind: "user",
+        canCreate: true,
+        bots: [tracyRecord(SEARCH_BOT_B, "env-me")],
+        mainBotId: SEARCH_BOT_B,
+      },
+    ],
+    botCount: 2,
+  },
+  setups: [],
+};
+
+describe("the Threads picker in the compact header with two main bots", () => {
+  const form = installCompactHeaderLifecycle();
+
+  afterEach(() => {
+    useStandaloneBotsStore.setState({
+      directory: { model: { groups: [], botCount: 0 }, setups: [] },
+      settled: false,
+      botsListed: false,
+    });
+  });
+
+  it.each(FORMS)(
+    "names Threads without the channel's team, and still returns to the channel when the current bot is chosen, at the %s form",
+    async (_form, shape) => {
+      const user = userEvents();
+      useStandaloneBotsStore.setState({
+        directory: TEAM_AND_PERSONAL_MAIN_BOTS,
+        settled: true,
+        botsListed: true,
+      });
+      form.shell().set(shape);
+      render(<UnderHeader />);
+      expect(headerPickerText()).toContain("Release Bot · traycerai");
+
+      await showThreadsFromHeader(user);
+
+      expect(headerPickerText()).toBe("Threads");
+
+      await chooseFromPicker(
+        user,
+        () => headerButton(/^Threads$/),
+        "Release Bot",
+      );
+
+      expect(useTracyPlaceStore.getState().threadsShown).toBe(false);
+      expect(screen.getByTestId("bot-tab-view-messages")).toBeTruthy();
+      expect(headerPickerText()).toContain("Release Bot");
     },
   );
 });
