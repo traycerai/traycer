@@ -9,6 +9,10 @@ import {
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -5400,5 +5404,93 @@ describe("FallbackSettingsPanel - R5: the populated-list footer restore is gated
     expect(
       screen.getByRole("button", { name: "Restore the default tiers" }),
     ).not.toBeNull();
+  });
+});
+
+describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
+  // The read-back after an unknown outcome would otherwise settle the line.
+  function failEveryRead(): void {
+    fallbackMocks.refetchMock.mockResolvedValue({
+      isSuccess: false,
+      data: fallbackMocks.queryData,
+    });
+  }
+
+  it("leaves the control on its new value, draws no line, and sends the draft again with the next edit", async () => {
+    fallbackMocks.queryData = respond(
+      policy({ graceWindowSeconds: 15, maxWaitMinutes: 360 }),
+    );
+    fallbackMocks.setMutateAsync.mockRejectedValueOnce(
+      abandonedSaveError("providers.fallbackPolicy.set"),
+    );
+    fallbackMocks.setMutateAsync.mockResolvedValue({ policy: policy({}) });
+    renderPanel();
+
+    openCombobox("Time to cancel a switch");
+    chooseOption("11 seconds");
+    await waitFor(() =>
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    await flushHostReplies();
+
+    expect(screen.queryByTestId("fallback-host-error")).toBeNull();
+    expect(
+      screen.queryByText(ABANDONED_SAVE_MESSAGE, { exact: false }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "Time to cancel a switch" })
+        .textContent,
+    ).toContain("11 seconds");
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
+    await waitFor(() =>
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2),
+    );
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[1][0].policy.graceWindowSeconds,
+    ).toBe(11);
+  });
+
+  it("a restore that was never sent still draws the lost-contact line", async () => {
+    fallbackMocks.queryData = respond(
+      policy({ enabled: false, graceWindowSeconds: 15, tierGroups: [] }),
+    );
+    fallbackMocks.restoreMutateAsync.mockRejectedValueOnce(
+      abandonedSaveError("providers.fallbackPolicy.restoreTierGroups"),
+    );
+    failEveryRead();
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore the default tiers" }),
+    );
+    await flushHostReplies();
+
+    const notice = await screen.findByTestId("fallback-host-error");
+    expect(notice.textContent).toBe(
+      "Lost contact with this host before it answered. We couldn't confirm whether the default tiers were restored. This page still shows the settings it loaded.Check saved settings",
+    );
+  });
+
+  it("a reset that was never sent still draws the lost-contact line", async () => {
+    fallbackMocks.queryData = respond(policy({ graceWindowSeconds: 15 }));
+    fallbackMocks.resetMutateAsync.mockRejectedValueOnce(
+      abandonedSaveError("providers.fallbackPolicy.reset"),
+    );
+    failEveryRead();
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await flushHostReplies();
+
+    const dangerZone = screen.getByTestId("settings-fallback-danger-zone");
+    const notice = await within(dangerZone).findByTestId("fallback-host-error");
+    expect(notice.textContent).toBe(
+      "Lost contact with this host before it answered. We couldn't confirm whether model routing was reset. This page still shows the settings it loaded.Check saved settings",
+    );
   });
 });
