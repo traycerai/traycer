@@ -550,9 +550,12 @@ describe("bot.subscribe@1.4 watch start", () => {
       if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
       expect(parsed.tasks[0]).not.toHaveProperty("checkins");
     }
-    expect(botTaskEntrySchema.parse(TRACKING_EVERY)).not.toHaveProperty(
-      "checkins",
-    );
+    expect(
+      botTaskEntrySchema.parse({
+        ...TRACKING_EVERY,
+        checkins: REMOVED_HISTORY,
+      }),
+    ).not.toHaveProperty("checkins");
   });
 });
 

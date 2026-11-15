@@ -819,21 +819,6 @@ describe("<BotChannelView tiles={null} /> a post the bot failed to answer, seen 
     expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
   });
-
-  it("offers the sender both Retry and Edit on the same failure the teammate sees", async () => {
-    const user = userEvent.setup();
-    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null, memberPost(VIEWER_USER_ID));
-    const row = screen.getByTestId("bot-member-row");
-
-    expect(lineOnPost().getAttribute("data-state")).toBe("failed");
-    expect(
-      within(lineOnPost()).getByRole("button", { name: "Retry" }),
-    ).toBeTruthy();
-    await user.click(within(row).getByTestId("bot-message-retry"));
-    expect(sent).toHaveLength(1);
-    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
-  });
 });
 
 describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answer", () => {

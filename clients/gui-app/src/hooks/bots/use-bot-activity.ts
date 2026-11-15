@@ -124,14 +124,23 @@ export function botWorkingOf(activity: BotActivity | null): boolean | null {
 }
 
 /**
- * What the bot's mascot shows of it: `working` while it is answering
- * anywhere, `away` while its trunk's queue is paused, and `idle` otherwise,
- * with no reading included.
+ * What the bot's mascot shows of it, by where it is drawn. This is the one
+ * place that decides it.
+ *
+ * - `row`, a channel's row in the sidebar, which stands for the whole bot:
+ *   `working` while it is answering anywhere, its trunk or a thread.
+ * - `title`, the open channel's title: never moving, and `away` (eyes shut)
+ *   while its trunk's queue is paused.
+ *
+ * `idle` otherwise, with no reading included.
  */
-export function botExpressionOf(
+export function botExpressionOn(
+  surface: "row" | "title",
   activity: BotActivity | null,
 ): MascotExpression {
-  if (replyingSessionOf(activity) !== null) return "working";
+  if (surface === "row") {
+    return replyingSessionOf(activity) === null ? "idle" : "working";
+  }
   return activity?.trunk?.state === "parked" ? "away" : "idle";
 }
 

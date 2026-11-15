@@ -38,8 +38,7 @@ function fileItem(
 }
 
 /**
- * Runs the helper where the app does: inside a drop handler, on the transfer
- * React hands it, so the argument is a real `DataTransfer` and not a cast.
+ * Runs the helper inside React’s drop handler with a scripted transfer.
  */
 function collectOnDrop(
   items: ReadonlyArray<FakeItem>,
