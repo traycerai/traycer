@@ -12,6 +12,7 @@ import {
   mountTeamPage,
   poolSource,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -176,16 +177,17 @@ describe("TeamRows", () => {
 
   it("removes You edit from cached team rows after the environment list fails", async () => {
     const failed = { current: false };
-    const { Wrapper, queryClient } = mountClient(async () => {
-      if (failed.current) throw new Error("Environment list unavailable");
-      return {
-        environments: [
-          personal,
-          team("admin", "Acme", "admin"),
-          team("editor", "Globex", "editor"),
-        ],
-      };
-    });
+    const { Wrapper, queryClient } = mountClient(() =>
+      failed.current
+        ? Promise.reject(new Error("Environment list unavailable"))
+        : Promise.resolve({
+            environments: [
+              personal,
+              team("admin", "Acme", "admin"),
+              team("editor", "Globex", "editor"),
+            ],
+          }),
+    );
     render(<PickerHarness onPick={vi.fn()} />, { wrapper: Wrapper });
 
     const adminRow = await screen.findByTestId("environment-team-env-admin");
