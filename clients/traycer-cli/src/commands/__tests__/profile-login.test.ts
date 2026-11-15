@@ -2866,7 +2866,11 @@ describe("profile login with --switch-account", () => {
     scenario.startFailure = new Error("fake sign-in failure");
 
     await expect(
-      runLogin(switchAccount("prof_work"), makeIo(false), makeCtx(false, false)),
+      runLogin(
+        switchAccount("prof_work"),
+        makeIo(false),
+        makeCtx(false, false),
+      ),
     ).rejects.toBe(scenario.startFailure);
     expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
       "providers.list",
@@ -2994,16 +2998,14 @@ describe("profile login with --switch-account", () => {
   });
 
   it("matches ordinary login byte for byte against a negotiated 10.11 answer", async () => {
-    const work = deviceList(
-      [workRow("prof_work", [], "Work", WORK_EMAIL)],
-      [],
-    );
+    const work = deviceList([workRow("prof_work", [], "Work", WORK_EMAIL)], []);
     const legacy = providersListResponseSchemaV1011Preimage.parse({
       providers: [work],
       native: null,
     });
     const legacyProvider = legacy.providers[0];
-    if (legacyProvider === undefined) throw new Error("unreachable: no provider");
+    if (legacyProvider === undefined)
+      throw new Error("unreachable: no provider");
     scenario.listState = legacyProvider;
     scenario.listEnvelope = legacy;
     scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];

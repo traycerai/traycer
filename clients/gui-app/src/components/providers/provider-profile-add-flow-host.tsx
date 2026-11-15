@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { hostIsLocalForLoginAutoOpen } from "@/components/providers/provider-signin-availability";
 import {
@@ -12,7 +13,10 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { SwitchAccountMoveDialog } from "./switch-account-move-dialog";
 import { listOffersSignIns } from "./provider-profile-model";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
-import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import {
+  useProviderProfileAddFlowStore,
+  type SwitchAccountSource,
+} from "@/stores/settings/provider-profile-add-flow-store";
 
 export function ProviderProfileAddFlowHost(): ReactNode {
   const harnessId = useProviderProfileAddFlowStore((state) => state.harnessId);
@@ -52,7 +56,11 @@ function ProviderProfileAddFlowSession({
   const switchSource = useProviderProfileAddFlowStore(
     (state) => state.switchSource,
   );
-  const [destinationId, setDestinationId] = useState<string | null>(null);
+  const [moveSession, setMoveSession] = useState<{
+    readonly providerId: ProviderId;
+    readonly source: SwitchAccountSource;
+    readonly destination: SwitchAccountSource;
+  } | null>(null);
   const signedIn = useRef(false);
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
@@ -76,25 +84,21 @@ function ProviderProfileAddFlowSession({
       (provider) => provider.providerId === providerId,
     ) ?? null;
 
-  if (state === null) return null;
-
-  const destination = state.profiles.find(
-    (profile) => profile.profileId === destinationId,
-  );
-  const switching =
-    switchSource !== null && listOffersSignIns(providersQuery.data);
-  if (switching && destination !== undefined) {
+  if (moveSession !== null) {
     return (
       <SwitchAccountMoveDialog
-        providerId={state.providerId}
-        source={switchSource}
-        destination={destination}
+        providerId={moveSession.providerId}
+        source={moveSession.source}
+        destination={moveSession.destination}
         moveHostId={hostId}
         teamName={null}
         onDone={close}
       />
     );
   }
+  if (state === null) return null;
+  const switching =
+    switchSource !== null && listOffersSignIns(providersQuery.data);
   const signInProps = {
     state,
     client,
@@ -106,18 +110,20 @@ function ProviderProfileAddFlowSession({
       if (!open && !signedIn.current) close();
     },
     onFailedAttempt: () => {},
-    onProfileCreated: (profileId: string) => {
-      onProfileCreated(profileId);
-      if (switching) {
-        signedIn.current = true;
-        setDestinationId(profileId);
-      }
-    },
+    onProfileCreated,
   };
   return switching ? (
     <SwitchAccountSignInDialog
       {...signInProps}
       switchSourceProfileId={switchSource.profileId}
+      onSwitchProfileChosen={(profile) => {
+        signedIn.current = true;
+        setMoveSession({
+          providerId: state.providerId,
+          source: switchSource,
+          destination: { profileId: profile.profileId, label: profile.label },
+        });
+      }}
     />
   ) : (
     <AddProviderProfileDialog {...signInProps} />

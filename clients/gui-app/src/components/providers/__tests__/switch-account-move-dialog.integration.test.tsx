@@ -72,6 +72,7 @@ vi.mock("@/lib/host-error-toast", async (importOriginal) => {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
+  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -139,6 +140,7 @@ type Offers = true | false | "absent";
 type Entry = "manage" | "reauth";
 
 type ListResponse = ResponseOfMethod<HostRpcRegistry, "providers.list">;
+type StartRequest = RequestOfMethod<HostRpcRegistry, "providers.startLogin">;
 type StartResponse = ResponseOfMethod<HostRpcRegistry, "providers.startLogin">;
 type AwaitResponse = ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">;
 type SetEnabledResponse = ResponseOfMethod<
@@ -161,6 +163,8 @@ interface SwitchHarnessInput {
 interface SwitchHarness {
   readonly calls: string[];
   readonly selected: Mock<(profileId: string | null) => void>;
+  readonly queryClient: QueryClient;
+  readonly startRequests: StartRequest[];
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
   readonly commitRequests: ProvidersCommitProfileMoveRequest[];
 }
@@ -230,6 +234,14 @@ function awaitBody(outcome: ProviderLoginProfileOutcome | null): AwaitResponse {
     refusal: null,
     installation: null,
     profileOutcome: outcome,
+  };
+}
+
+function legacyAwaitBody(): AwaitResponse {
+  const { state } = setEnabledBody();
+  return {
+    ...awaitBody(null),
+    state: { ...state, profiles: [account(SOURCE_ID, SOURCE_LABEL)] },
   };
 }
 
@@ -305,6 +317,7 @@ function registerSwitchMethods(supportedMoves: boolean): void {
 
 function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
   const calls: string[] = [];
+  const startRequests: StartRequest[] = [];
   const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
   const commitRequests: ProvidersCommitProfileMoveRequest[] = [];
   let awaited = false;
@@ -316,13 +329,17 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
         calls.push("providers.list");
         return listBody(input.offers, awaited ? input.after : input.before);
       },
-      "providers.startLogin": () => {
+      "providers.startLogin": (params) => {
         calls.push("providers.startLogin");
-        return startBody(input.entry === "reauth" ? SOURCE_ID : DESTINATION_ID);
+        startRequests.push(params);
+        return startBody(params.profileId ?? DESTINATION_ID);
       },
       "providers.awaitLogin": () => {
         calls.push("providers.awaitLogin");
         awaited = true;
+        if (input.offers === "absent" && input.entry === "manage") {
+          return legacyAwaitBody();
+        }
         return awaitBody(input.outcome);
       },
       "providers.cancelLogin": () => {
@@ -383,7 +400,14 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  return { calls, selected, previewRequests, commitRequests };
+  return {
+    calls,
+    selected,
+    queryClient,
+    startRequests,
+    previewRequests,
+    commitRequests,
+  };
 }
 
 function renderMoveDialog(input: MoveDialogInput): MoveDialogHarness {
@@ -612,6 +636,105 @@ describe("Switch account moves only previewed work", () => {
       destinationProfileId: DESTINATION_ID,
     });
     expect(harness.selected).toHaveBeenCalledWith(DESTINATION_ID);
+  });
+
+  it("keeps the admitted move result after the live list drops Switch account", async () => {
+    const target = agentTarget("epic-idle", "agent-idle", "Idle agent", "idle");
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [target],
+    };
+    const results: ProvidersCommitProfileMoveResponse["results"] = [
+      {
+        outcome: "moved",
+        target: agentRef(target.epicId, target.agentId),
+        row: target,
+      },
+    ];
+    const harness = renderSwitchHarness(
+      successfulSwitchInput(preview, results),
+    );
+
+    await loginIntoSwitchDialog();
+    expect(await screen.findByRole("button", { name: "Move 1" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+    expect(await screen.findByText("Moved 1 to New account.")).toBeTruthy();
+
+    act(() => {
+      harness.queryClient.setQueryData(
+        PROFILE_LIST_KEY,
+        listBody(false, [account(SOURCE_ID, SOURCE_LABEL)]),
+      );
+    });
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("Moved 1 to New account.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Add as a new profile" }),
+    ).toBeNull();
+    expect(harness.startRequests).toHaveLength(1);
+    expect(harness.previewRequests).toHaveLength(1);
+    expect(harness.commitRequests).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps a failed commit retryable after the live provider row disappears", async () => {
+    const target = agentTarget("epic-idle", "agent-idle", "Idle agent", "idle");
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [target],
+    };
+    const results: ProvidersCommitProfileMoveResponse["results"] = [
+      {
+        outcome: "moved",
+        target: agentRef(target.epicId, target.agentId),
+        row: target,
+      },
+    ];
+    const harness = renderSwitchHarness({
+      ...successfulSwitchInput(preview, results),
+      failFirstCommit: true,
+    });
+
+    await loginIntoSwitchDialog();
+    expect(await screen.findByRole("button", { name: "Move 1" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+    await waitFor(() => expect(harness.commitRequests).toHaveLength(1));
+    await waitFor(() =>
+      expect(toastFallbacks.values).toContain(
+        "Couldn't move the agents and bots.",
+      ),
+    );
+
+    act(() => {
+      harness.queryClient.setQueryData(
+        PROFILE_LIST_KEY,
+        listBody("absent", []),
+      );
+    });
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Move 1" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
+    expect(harness.startRequests).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+
+    expect(await screen.findByText("Moved 1 to New account.")).toBeTruthy();
+    expect(harness.commitRequests).toHaveLength(2);
+    expect(harness.commitRequests[1]).toEqual(harness.commitRequests[0]);
+    expect(harness.startRequests).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("leaves work on the source when the person chooses none", async () => {
@@ -951,7 +1074,7 @@ describe("Switch account moves only previewed work", () => {
     expect(harness.done).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Manage's legacy 10.11 account-change screen when offersSignIns is absent", async () => {
+  it("keeps Manage's legacy 10.11 profile-scoped sign-in when offersSignIns is absent", async () => {
     const source = account(SOURCE_ID, SOURCE_LABEL);
     const harness = renderSwitchHarness({
       offers: "absent",
@@ -970,10 +1093,33 @@ describe("Switch account moves only previewed work", () => {
         "Sign in with a different account for this profile.",
       ),
     ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+
+    expect(await screen.findByText("Authenticated profile")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(harness.startRequests).toHaveLength(1);
+    expect(harness.startRequests[0]).toMatchObject({
+      providerId: "claude-code",
+      profileId: SOURCE_ID,
+      createProfile: null,
+      target: null,
+    });
+    expect(harness.calls).not.toContain("providers.setEnabled");
     expect(harness.previewRequests).toHaveLength(0);
     expect(harness.commitRequests).toHaveLength(0);
     expect(useProviderProfileAddFlowStore.getState().switchSource).toBeNull();
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBeNull();
+    expect(useProviderProfileAddFlowStore.getState().hostId).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(
+      await screen.findByText(
+        "Sign in with a different account for this profile.",
+      ),
+    ).toBeTruthy();
+    expect(harness.selected).not.toHaveBeenCalled();
   });
 });
 
