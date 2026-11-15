@@ -1,4 +1,5 @@
 import { NotificationHookRefusalError } from "@traycer-clients/shared/environment/notification-hook-refusal";
+import type { CloudNotificationHook } from "@traycer-clients/shared/environment/notification-hook-values";
 import { CloudNotificationHooksSection } from "../panels/cloud-notification-hooks-section";
 import { TEAM_NOTIFICATION_HOOKS_COPY } from "../panels/cloud-notification-copy";
 import { SettingsPanelShell } from "../settings-panel-shell";
@@ -21,14 +22,14 @@ export function TeamNotificationHooksSettingsPanel() {
   );
 }
 
-function TeamHooks() {
-  const name = useConfigurationName();
-  const { read, put, canEdit } = useTeamNotificationHooks();
-  const refusal =
-    put.error instanceof NotificationHookRefusalError ? put.error : null;
+function hookRefusalFeedback(
+  error: Error | null,
+  submittedHooks: readonly CloudNotificationHook[] | undefined,
+) {
+  const refusal = error instanceof NotificationHookRefusalError ? error : null;
   const refusedHookId =
     refusal !== null && refusal.index !== null
-      ? (put.variables?.hooks[refusal.index]?.id ?? null)
+      ? (submittedHooks?.[refusal.index]?.id ?? null)
       : null;
   const editorProblem =
     refusal?.code === "hook_local_only"
@@ -37,6 +38,16 @@ function TeamHooks() {
           message: TEAM_NOTIFICATION_HOOKS_COPY.localOnly("$NAME"),
         }
       : null;
+  return { refusedHookId, editorProblem };
+}
+
+function TeamHooks() {
+  const name = useConfigurationName();
+  const { read, put, canEdit } = useTeamNotificationHooks();
+  const { refusedHookId, editorProblem } = hookRefusalFeedback(
+    put.error,
+    put.variables?.hooks,
+  );
   return (
     <div className="space-y-3">
       <p className="text-ui-sm text-muted-foreground">
