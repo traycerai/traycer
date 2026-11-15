@@ -37,6 +37,7 @@ import {
 } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -52,10 +53,7 @@ import {
   canManageTeamProviderAccounts,
   useConfigurationSource,
 } from "./configuration-source";
-import {
-  useTeamProviderRecords,
-  type TeamProviderRecords,
-} from "./team-provider-records";
+import { useTeamProviderSignInRead } from "./team-provider-records";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { teamSignInRefusalText } from "./team-profile-login-copy";
 import { TeamProfileLoginResult } from "./team-profile-login-result";
@@ -89,13 +87,14 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   );
   const source = useConfigurationSource();
   const canManage = canManageTeamProviderAccounts(source);
-  const records = useTeamProviderRecords();
+  const tooOld = teamComputerTooOld({ client, startVersion, awaitVersion });
+  const canRead = canManage && !tooOld;
+  const records = useTeamProviderSignInRead(props.environmentId, canRead);
+  const readingRecords = canRead && (records.isIdle || records.isPending);
   const refusalReason = teamLoginRefusal({
-    client,
-    startVersion,
-    awaitVersion,
+    tooOld,
     canManage,
-    records,
+    records: records.data ?? null,
     providerId: props.providerId,
     profileId: props.profile?.profileId ?? null,
   });
@@ -112,35 +111,17 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
     refusalReason === null
       ? null
       : teamSignInRefusalText(refusalReason, teamName);
-  if (state === undefined || refusal !== null)
+  if (state === undefined || refusal !== null || readingRecords)
     return (
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open) props.onClose();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {props.profile === null ? "Add a profile" : "Sign in again"}
-            </DialogTitle>
-          </DialogHeader>
-          {catalog.isPending && client !== null && refusal === null ? (
-            <MutedAgentSpinner />
-          ) : (
-            <>
-              <p>
-                {refusal ??
-                  `This computer can't sign in for ${teamName}. Use another computer.`}
-              </p>
-              <Button type="button" onClick={props.onClose}>
-                Done
-              </Button>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      <TeamLoginNotReadyDialog
+        profile={props.profile}
+        teamName={teamName}
+        refusal={refusal}
+        readingRecords={readingRecords}
+        catalogPending={catalog.isPending}
+        clientAvailable={client !== null}
+        onClose={props.onClose}
+      />
     );
   if (props.profile !== null)
     return (
@@ -179,21 +160,61 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   );
 }
 
+function TeamLoginNotReadyDialog(props: {
+  readonly profile: ProviderProfile | null;
+  readonly teamName: string;
+  readonly refusal: string | null;
+  readonly readingRecords: boolean;
+  readonly catalogPending: boolean;
+  readonly clientAvailable: boolean;
+  readonly onClose: () => void;
+}): ReactNode {
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {props.profile === null ? "Add a profile" : "Sign in again"}
+          </DialogTitle>
+        </DialogHeader>
+        {props.readingRecords ||
+        (props.catalogPending &&
+          props.clientAvailable &&
+          props.refusal === null) ? (
+          <MutedAgentSpinner />
+        ) : (
+          <>
+            <p>
+              {props.refusal ??
+                `This computer can't sign in for ${props.teamName}. Use another computer.`}
+            </p>
+            <Button type="button" onClick={props.onClose}>
+              Done
+            </Button>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function teamLoginRefusal(input: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly startVersion: NegotiatedMethodVersion;
-  readonly awaitVersion: NegotiatedMethodVersion;
+  readonly tooOld: boolean;
   readonly canManage: boolean;
-  readonly records: TeamProviderRecords | null;
+  readonly records: EnvironmentProfileRecords | null;
   readonly providerId: ProviderId;
   readonly profileId: string | null;
 }): ProviderLoginTargetRefusal | null {
+  if (input.tooOld) return "unsupported-computer";
   if (!input.canManage) return "not-authorized";
-  if (input.records === null) return "target-unavailable";
+  if (input.records?.profileSyncEnabled !== true) return "target-unavailable";
   if (
     input.profileId !== null &&
-    !input.records.readPending &&
-    !input.records.readFailed &&
     !input.records.providers.some(
       (provider) =>
         provider.providerId === input.providerId &&
@@ -203,7 +224,7 @@ function teamLoginRefusal(input: {
     )
   )
     return "target-removed";
-  return teamComputerTooOld(input) ? "unsupported-computer" : null;
+  return null;
 }
 
 function teamComputerTooOld(input: {
