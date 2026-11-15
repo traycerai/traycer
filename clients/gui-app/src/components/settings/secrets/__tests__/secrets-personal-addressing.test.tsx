@@ -160,7 +160,7 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     expect(screen.queryByTestId("secrets-page-error")).toBeNull();
   });
 
-  it("reads a Local pick through the host's own environment, and says so in its own words", async () => {
+  it("shows the Personal read failure for a Local pick without calling the host", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
     });
@@ -173,9 +173,7 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     expect(error.textContent).toContain("Couldn't read Personal's secrets.");
     expect(document.body.textContent).not.toContain(NOT_SET_UP);
     expect(document.body.textContent).not.toContain("this team");
-    expect(sentTo(harness, "environment.secrets.list")).toEqual([
-      { environmentId: null },
-    ]);
+    expect(sentTo(harness, "environment.secrets.list")).toEqual([]);
     expect(screen.queryByTestId("secret-row")).toBeNull();
   });
 
