@@ -36,6 +36,14 @@ import {
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { StatusChangeHandler } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 const TAB_HOST_ID = "tab-host-id";
 const TEAM_HOST_ID = "team-host-id";
@@ -100,9 +108,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
     ...actual,
     useHostClient: () =>
       dialogMocks.clientsByHostId.get(dialogMocks.appWideHostId) ?? null,
-    useHostBinding: () => ({
-      directory: { selectById: vi.fn() },
-    }),
   };
 });
 
@@ -376,6 +381,119 @@ interface AttachCall {
 
 /** `epic.attachEnvironment` calls the person's host received, held open. */
 const attachCalls: AttachCall[] = [];
+const authnCalls: Array<
+  | { readonly kind: "list"; readonly bearer: string }
+  | {
+      readonly kind: "attach";
+      readonly bearer: string;
+      readonly request: { readonly taskId: string; readonly environmentId: string };
+    }
+> = [];
+
+let authService: AuthService | null = null;
+let authRunnerHost: MockRunnerHost | null = null;
+let authRuntime: HostRuntime<HostRpcRegistry> | null = null;
+let authDirectory: HostDirectoryService | null = null;
+let runtimeBinding: HostRuntimeBinding<HostRpcRegistry> | null = null;
+
+const TEAM_ENVIRONMENT = {
+  environmentId: TEAM_ENVIRONMENT_ID,
+  ownerKind: "organization" as const,
+  ownerId: TEAM_ID,
+  roomId: "team-9-room",
+  label: "Team",
+};
+
+function validAuthnResponse(userId: string): Response {
+  return new Response(
+    JSON.stringify({
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
+  );
+}
+
+function createAuthRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+async function signInAs(
+  service: AuthService,
+  runnerHost: MockRunnerHost,
+  token: string,
+): Promise<void> {
+  await service.signIn();
+  runnerHost.deviceFlow.emitResult({
+    kind: "authorized",
+    token,
+    refreshToken: `${token}-refresh`,
+  });
+  await waitFor(() => {
+    expect(service.getCurrentSessionSnapshot().token).toBe(token);
+  });
+}
+
+function requireAuthService(): AuthService {
+  if (authService === null) throw new Error("AuthService fixture is missing");
+  return authService;
+}
+
+function requireAuthRunnerHost(): MockRunnerHost {
+  if (authRunnerHost === null)
+    throw new Error("MockRunnerHost fixture is missing");
+  return authRunnerHost;
+}
+
+function requireRuntimeBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  if (runtimeBinding === null)
+    throw new Error("HostRuntimeBinding fixture is missing");
+  return runtimeBinding;
+}
 
 function attachHandler(
   hostId: string,
@@ -503,15 +621,17 @@ function renderDialog(): void {
     defaultOptions: { mutations: { retry: false } },
   });
   const ui = (open: boolean) => (
-    <QueryClientProvider client={queryClient}>
-      <ChatForkDialog
-        open={open}
-        target={forkTarget()}
-        epicId="epic-test"
-        tabId="tab-test"
-        onOpenChange={onOpenChange}
-      />
-    </QueryClientProvider>
+    <HostRuntimeContext.Provider value={requireRuntimeBinding()}>
+      <QueryClientProvider client={queryClient}>
+        <ChatForkDialog
+          open={open}
+          target={forkTarget()}
+          epicId="epic-test"
+          tabId="tab-test"
+          onOpenChange={onOpenChange}
+        />
+      </QueryClientProvider>
+    </HostRuntimeContext.Provider>
   );
   const view = render(ui(false), { wrapper: HostRuntimeTestProvider });
   view.rerender(ui(true));
@@ -544,13 +664,6 @@ function rpcError(
   });
 }
 
-/** Lets promise continuations and the mutation observer settle. */
-async function flush(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
-}
-
 async function startFork(): Promise<void> {
   renderDialog();
   fillTitle();
@@ -562,7 +675,7 @@ async function startFork(): Promise<void> {
 }
 
 describe("ChatForkDialog continuing a personal task on a team host", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     dialogMocks.creates.length = 0;
     dialogMocks.events.length = 0;
     dialogMocks.toastError.mockReset();
@@ -573,6 +686,70 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     dialogMocks.clientsByHostId.set(TAB_HOST_ID, TAB_HOST_CLIENT);
     dialogMocks.clientsByHostId.set(TEAM_HOST_ID, TEAM_HOST_CLIENT);
     dialogMocks.directoryHosts = [TAB_ENTRY, TEAM_ENTRY];
+    authnCalls.length = 0;
+    const runnerHost = createAuthRunnerHost();
+    const auth = new AuthService({ runnerHost });
+    authService = auth;
+    authRunnerHost = runnerHost;
+    vi.stubGlobal(
+      "fetch",
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("Authorization");
+        const userId = authorization?.includes("token-b") === true
+          ? "user-b"
+          : "user-a";
+        return validAuthnResponse(userId);
+      },
+    );
+    vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
+      authnCalls.push({ kind: "list", bearer });
+      return Promise.resolve({
+        kind: "ok",
+        list: { environments: [TEAM_ENVIRONMENT] },
+      });
+    });
+    vi.spyOn(runnerHost, "attachTaskEnvironment").mockImplementation(
+      (bearer, request) => {
+        authnCalls.push({ kind: "attach", bearer, request });
+        return Promise.resolve({ kind: "ok" });
+      },
+    );
+    const directory = new HostDirectoryService({
+      runnerHost,
+      remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+      onRegistryPollTick: null,
+      authContextId: () => auth.currentAuthEra().identity,
+      credentialGeneration: () => auth.getCredentialGeneration(),
+      localHostIdSeeder: () => Promise.resolve(TAB_HOST_ID),
+    });
+    authDirectory = directory;
+    let requestId = 0;
+    const runtime = new HostRuntime<HostRpcRegistry>({
+      runnerHost,
+      registry: hostRpcRegistry,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `auth-runtime-${++requestId}`,
+        handlers: {},
+      }),
+      requestContextProvider: auth.getRequestContextProvider(),
+      directory,
+      invalidator: createHostQueryInvalidator(new QueryClient()),
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      authorityRegistry: null,
+      requestCoordinator: null,
+      selectedHostId: () => TAB_HOST_ID,
+      connectionRegistry: null,
+    });
+    authRuntime = runtime;
+    runtimeBinding = {
+      runtime,
+      hostClient: runtime.hostClient,
+      directory,
+      auth,
+      hostId: TAB_HOST_ID,
+    };
+    await signInAs(auth, runnerHost, "token-a");
     const rows = new Map<string, HostDirectoryEntry>([
       [TAB_HOST_ID, TAB_ENTRY],
       [TEAM_HOST_ID, TEAM_ENTRY],
@@ -595,22 +772,41 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+    authRuntime?.dispose();
+    authDirectory?.dispose();
+    authService?.dispose();
+    authService = null;
+    authRunnerHost = null;
+    authRuntime = null;
+    authDirectory = null;
+    runtimeBinding = null;
+    vi.unstubAllGlobals();
   });
 
-  it("attaches on the person's host first and creates on the team host only once that resolves", async () => {
+  it("waits for preparation before the person's sign-in attaches the task and the team host creates it", async () => {
     await startFork();
 
     expect(attachCalls[0]?.params).toEqual({
       epicId: "epic-test",
-      teamId: TEAM_ID,
     });
-    await flush();
     expect(dialogMocks.creates).toHaveLength(0);
+    expect(authnCalls).toEqual([]);
 
     attachCalls[0]?.settle("resolve");
     await waitFor(() => {
       expect(dialogMocks.creates).toHaveLength(1);
     });
+    expect(authnCalls).toEqual([
+      { kind: "list", bearer: "token-a" },
+      {
+        kind: "attach",
+        bearer: "token-a",
+        request: {
+          taskId: "epic-test",
+          environmentId: TEAM_ENVIRONMENT_ID,
+        },
+      },
+    ]);
     expect(dialogMocks.creates[0]?.client).toBe(TEAM_HOST_CLIENT);
     expect(dialogMocks.creates[0]?.input).toMatchObject({
       epicId: "epic-test",
@@ -621,13 +817,75 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       "attach-settled",
       "create",
     ]);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("keeps the attachment on the sign-in that pressed Fork if another account signs in while host preparation is open", async () => {
+    await startFork();
+    const auth = requireAuthService();
+    const runnerHost = requireAuthRunnerHost();
+
+    await auth.signOut();
+    await signInAs(auth, runnerHost, "token-b");
+    attachCalls[0]?.settle("resolve");
+
+    await waitFor(() => expect(forkButton().disabled).toBe(false));
+    expect(authnCalls).toEqual([]);
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("keeps the attachment on the sign-in that pressed Fork if the same account signs in again during preparation", async () => {
+    await startFork();
+    const auth = requireAuthService();
+    const runnerHost = requireAuthRunnerHost();
+
+    await auth.signOut();
+    await signInAs(auth, runnerHost, "token-a-again");
+    attachCalls[0]?.settle("resolve");
+
+    await waitFor(() => expect(forkButton().disabled).toBe(false));
+    expect(authnCalls).toEqual([]);
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("keeps a bearer rotation on the same sign-in and attaches with the rotated bearer", async () => {
+    await startFork();
+    const auth = requireAuthService();
+    const identityGeneration = auth.getIdentityGeneration();
+    const session = auth.getCurrentSessionSnapshot();
+
+    await auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "token-a-rotated",
+    });
+    expect(auth.getIdentityGeneration()).toBe(identityGeneration);
+    expect(auth.getCurrentSessionSnapshot().token).toBe("token-a-rotated");
+
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => expect(dialogMocks.creates).toHaveLength(1));
+    expect(authnCalls).toEqual([
+      { kind: "list", bearer: "token-a-rotated" },
+      {
+        kind: "attach",
+        bearer: "token-a-rotated",
+        request: {
+          taskId: "epic-test",
+          environmentId: TEAM_ENVIRONMENT_ID,
+        },
+      },
+    ]);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
   });
 
   it("sends no create when the attachment fails for any other reason", async () => {
     await startFork();
 
     attachCalls[0]?.settle(rpcError("RPC_ERROR"));
-    await flush();
+    await waitFor(() => {
+      expect(dialogMocks.toastError).toHaveBeenCalledTimes(1);
+    });
 
     expect(dialogMocks.creates).toHaveLength(0);
     expect(dialogMocks.events).toEqual([
@@ -705,7 +963,6 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     expect(dialogMocks.events).toEqual([`attach-sent@${TAB_HOST_ID}`]);
     expect(attachCalls[0]?.params).toEqual({
       epicId: "epic-test",
-      teamId: TEAM_ID,
     });
     attachCalls[0]?.settle("resolve");
     await waitFor(() => {
