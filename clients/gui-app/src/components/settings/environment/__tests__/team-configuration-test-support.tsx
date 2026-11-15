@@ -337,7 +337,6 @@ function buildTeamPage(
       environments: () => currentRows,
       onRequest: cloudHandlers.onRequest,
     }),
-    runnerHostOverrides: { onHostTokenRenewal: () => undefined },
   });
   let requestCounter = 0;
   const messengerOptions = {
@@ -359,6 +358,7 @@ function buildTeamPage(
     messenger,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
+    onHostTokenRenewal: () => undefined,
     invalidator: createHostQueryInvalidator(queryClient),
     schedulingPolicy: hostRpcSchedulingPolicy,
     authorityRegistry: null,
