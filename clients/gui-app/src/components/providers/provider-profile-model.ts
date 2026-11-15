@@ -40,6 +40,10 @@ export function listOffersSignIns(
   return list?.offersSignIns === true;
 }
 
+export function profileUsesRecord(profile: ProviderProfile): boolean {
+  return profile.aliases !== undefined;
+}
+
 /** One account a person removed, as `providers.list` names it: ids only. */
 export type RemovedProviderProfile = NonNullable<
   ProvidersListResponse["removedProfiles"]
@@ -371,6 +375,7 @@ export function profileEligibilityToggleDisabledReason(
       ? `${providerLabel} is turned off. Turn it on to change its profiles.`
       : null;
   }
+  if (profileUsesRecord(profile)) return null;
   if (!profile.enabled) return null;
   return profiles.some(
     (candidate) =>

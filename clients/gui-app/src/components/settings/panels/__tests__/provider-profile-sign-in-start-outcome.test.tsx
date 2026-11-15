@@ -34,6 +34,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // on `requestWithResponseTimeout`, which no flow in this suite uses).
 const host = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+  signInRecordingService: {
+    recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+  },
   requestWithOptions:
     vi.fn<
       (
@@ -52,7 +55,18 @@ vi.mock("@/lib/host", async (importOriginal) => {
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
   });
-  return { ...actual, useHostClient: () => client };
+  return {
+    ...actual,
+    useHostClient: () => client,
+    useAuthService: () => host.signInRecordingService,
+  };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useAuthService: () => host.signInRecordingService,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -529,6 +543,8 @@ function renderAntigravityAddDialog(
           client={client}
           isLocalHost
           open
+          target={null}
+          targetResult={null}
           onOpenChange={() => undefined}
           onFailedAttempt={onFailedAttempt}
           onProfileCreated={() => undefined}
@@ -816,6 +832,8 @@ describe.each(MOUNT_MODES)(
                 client={client}
                 isLocalHost
                 open
+                target={null}
+                targetResult={null}
                 onOpenChange={() => undefined}
                 onFailedAttempt={() => undefined}
                 onProfileCreated={() => undefined}

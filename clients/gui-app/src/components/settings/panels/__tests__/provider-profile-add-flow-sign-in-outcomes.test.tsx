@@ -6,17 +6,33 @@ const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
 const openLinkMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
 
 // The flow host reads `useHostClient` through the barrel, and Vite rewrites
 // that re-export onto `@/lib/host/runtime`. Both have to answer the pinned
 // client or the session throws before the dialog mounts.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
@@ -27,6 +43,7 @@ vi.mock("@/lib/links/open-link", async (importOriginal) => {
 });
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -63,6 +80,19 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 const HOST_ID = "host-add-flow";
 const PROFILE_ID = "work";
@@ -107,11 +137,13 @@ interface AddFlowHarness {
   readonly releaseListRefresh: () => void;
   readonly releaseStart: () => void;
   readonly releaseRecolor: () => void;
+  readonly signInFetch: SignInRequestFetchHarness;
 }
 
 let settleHeldStart: () => void = () => undefined;
 let settleHeldRecolor: () => void = () => undefined;
 let settleHeldAwait: () => void = () => undefined;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
 
 const ADD_FLOW_DEFAULTS = {
   echoedProfiles: undefined,
@@ -128,6 +160,8 @@ const ADD_FLOW_DEFAULTS = {
   holdAwait: false,
   failRecolor: false,
   freshlyLinkedProfile: false,
+  ownership: false,
+  awaitAnswers: [],
 } satisfies {
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
   readonly echoedExistingProfileId: string | null | undefined;
@@ -145,6 +179,8 @@ const ADD_FLOW_DEFAULTS = {
   readonly holdAwait: boolean;
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
+  readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 };
 
 afterEach(() => {
@@ -155,6 +191,10 @@ afterEach(() => {
   settleHeldAwait();
   settleHeldAwait = () => undefined;
   cleanup();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   useProviderProfileAddFlowStore.getState().close();
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
   clientMock.current = null;
@@ -264,6 +304,13 @@ function nothingChanged(
   };
 }
 
+function asksToRecordSignIn(): AwaitResponse {
+  return {
+    ...nothingChanged(null),
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
+  };
+}
+
 function setEnabledEcho(): SetEnabledResponse {
   const state: ProviderMutationCliStateV21 = {
     providerId: "claude-code",
@@ -342,10 +389,14 @@ function renderAddFlow(input: {
   readonly submitOutcome: SubmitLoginCodeResponse["outcome"];
   readonly failRecolor: boolean;
   readonly freshlyLinkedProfile: boolean;
+  /** Record the login-ownership manifest before the dialog mounts. */
+  readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 }): AddFlowHarness {
   const calls: RecordedCall[] = [];
   const created = vi.fn<(profileId: string) => void>();
   let awaitStarted = false;
+  let awaitAnswerIndex = 0;
   let listsAfterAwait = 0;
   let listCalls = 0;
   let release: ((value: SetEnabledResponse) => void) | null = null;
@@ -390,8 +441,8 @@ function renderAddFlow(input: {
         }
         return startedBody();
       },
-      "providers.awaitLogin": () => {
-        calls.push({ method: "providers.awaitLogin", params: null });
+      "providers.awaitLogin": (params) => {
+        calls.push({ method: "providers.awaitLogin", params });
         awaitStarted = true;
         if (input.holdAwait) {
           return new Promise<AwaitResponse>((resolve) => {
@@ -399,6 +450,12 @@ function renderAddFlow(input: {
             settleHeldAwait = release;
           });
         }
+        if (awaitAnswerIndex < input.awaitAnswers.length) {
+          const scriptedAnswer = input.awaitAnswers[awaitAnswerIndex];
+          awaitAnswerIndex += 1;
+          return scriptedAnswer;
+        }
+        awaitAnswerIndex += 1;
         const echoedAnswer =
           input.echoedProfiles === undefined
             ? nothingChanged(input.outcome)
@@ -458,15 +515,24 @@ function renderAddFlow(input: {
     },
   });
   clientMock.current = client;
+  const signInFetch = installSignInRequestFetchHarness();
+  activeSignInFetch = signInFetch;
+  authServiceForTest = signInRequestAuthService(signInFetch.client);
   const oldComputer = input.offers === "10.11" || input.offers === "absent";
   recordNegotiatedHostManifest(HOST_ID, {
     "providers.list": { major: 10, minor: oldComputer ? 11 : 12 },
     "providers.startLogin": { major: 1, minor: oldComputer ? 4 : 5 },
-    "providers.awaitLogin": { major: 2, minor: oldComputer ? 2 : 4 },
+    "providers.awaitLogin": { major: 2, minor: oldComputer ? 2 : 5 },
     "providers.cancelLogin": { major: 1, minor: 2 },
     "providers.submitLoginCode": { major: 1, minor: 0 },
     "providers.touchLogin": { major: 1, minor: 0 },
   });
+  if (input.ownership) {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.startLogin": { major: 1, minor: 4 },
+      "providers.cancelLogin": { major: 1, minor: 2 },
+    });
+  }
   settleHeldRecolor = () => {
     if (released) return;
     released = true;
@@ -522,6 +588,7 @@ function renderAddFlow(input: {
       released = true;
       release(setEnabledEcho());
     },
+    signInFetch,
   };
 }
 
@@ -1834,7 +1901,7 @@ describe("Add a profile around one sign-in", () => {
     expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
   });
 
-  it("reads today's unfinished sign-in when the outcome is null", async () => {
+  it("keeps today's result for an older computer without a sign-in request", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1846,6 +1913,118 @@ describe("Add a profile around one sign-in", () => {
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expectNoSuccessSentence();
     expect(harness.created).not.toHaveBeenCalled();
+    expect(harness.signInFetch.fetchMock).not.toHaveBeenCalled();
+    const awaitRequests = harness.messenger.calls
+      .filter((call) => call.method === "providers.awaitLogin")
+      .map((call) => call.params);
+    expect(awaitRequests).toHaveLength(1);
+    expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
+  });
+
+  it("records the request and asks again with its id before showing the signed-in profile", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: null,
+      awaitAnswers: [
+        asksToRecordSignIn(),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
+    const awaitRequests = harness.messenger.calls
+      .filter((call) => call.method === "providers.awaitLogin")
+      .map((call) => call.params);
+    expect(awaitRequests).toHaveLength(2);
+    expect(awaitRequests[1]).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "a 403", reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY },
+    { name: "a 404", reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY },
+    { name: "no answer", reply: noAnswerReply() },
+    { name: "a 401", reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+  }>)(
+    "shows the existing did-not-finish result after recording ends on $name",
+    async ({ reply }) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers: true,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        awaitAnswers: [asksToRecordSignIn()],
+      });
+      harness.signInFetch.enqueue(reply);
+      await pressAccount(true);
+
+      expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+      expect(
+        harness.messenger.calls.filter(
+          (call) => call.method === "providers.awaitLogin",
+        ),
+      ).toHaveLength(1);
+      expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+      expect(harness.created).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows the did-not-finish result after a duplicate record answer", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: null,
+      awaitAnswers: [
+        asksToRecordSignIn(),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    harness.signInFetch.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expectNoSuccessSentence();
+    expect(harness.created).not.toHaveBeenCalled();
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "providers.awaitLogin",
+      ),
+    ).toHaveLength(1);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not record twice when the computer asks again for the recorded id", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+      awaitAnswers: [asksToRecordSignIn(), asksToRecordSignIn()],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    await pressAccount(true);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "providers.awaitLogin",
+      ),
+    ).toHaveLength(2);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, "absent"] as const)(

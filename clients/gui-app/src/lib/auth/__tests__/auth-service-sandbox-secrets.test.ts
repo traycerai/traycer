@@ -14,6 +14,14 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installSignInRequestFetchHarness,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  unreadableBodyReply,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 // The identity route the sign-in validation hits; every fixture answers it.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
@@ -112,6 +120,7 @@ function okWithProfile(): Promise<Response> {
 }
 
 const trackedServices: AuthService[] = [];
+let activeSignInRequestHarness: SignInRequestFetchHarness | null = null;
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
   const host = new MockRunnerHost({
@@ -154,6 +163,8 @@ describe("AuthService secrets-broker calls", () => {
   });
 
   afterEach(() => {
+    activeSignInRequestHarness?.restore();
+    activeSignInRequestHarness = null;
     while (trackedServices.length > 0) {
       trackedServices.pop()?.dispose();
     }
@@ -331,6 +342,295 @@ describe("AuthService secrets-broker calls", () => {
       await expect(
         service.decideSecretRequest("env-1", "req-1", "approve_default"),
       ).resolves.toBe(conflict);
+    });
+  });
+
+  describe("recordSignInRequest", () => {
+    it("sends the verified session bearer with the sign-in request", async () => {
+      const { service } = await signedInService();
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "recorded" });
+
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchHarness.fetchMock.mock.calls[0];
+      expect(url).toBe(
+        `http://localhost:5005/api/v3/environments/${SIGN_IN_REQUEST_FIXTURE.environmentId}/profile-records/intents`,
+      );
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    });
+
+    it("answers unauthorized without a verified session and makes no fetch", async () => {
+      const { service } = makeService();
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+      expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("revalidates the current context once after a 401", async () => {
+      const { service } = await signedInService();
+      const revalidate = vi
+        .spyOn(service, "revalidateCurrentContext")
+        .mockResolvedValue(null);
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(UNAUTHORIZED_SIGN_IN_REQUEST_REPLY);
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("revalidates the current context once after a 401 with an unreadable body", async () => {
+      const { service } = await signedInService();
+      const revalidate = vi
+        .spyOn(service, "revalidateCurrentContext")
+        .mockResolvedValue(null);
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(unreadableBodyReply(401));
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("profile-record verified-session gate", () => {
+    const environmentId = "environment-synthetic";
+    const providerId = "claude-code";
+    const profileId = "profile-synthetic";
+    const callerSignal = null;
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    async function expectAllMethodsUnauthorized(
+      service: AuthService,
+    ): Promise<void> {
+      await expect(
+        service.readProfileRecords(environmentId, callerSignal),
+      ).resolves.toEqual({ kind: "unauthorized" });
+      await expect(
+        service.signOutProfileRecord(
+          environmentId,
+          providerId,
+          profileId,
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "unauthorized",
+        message: "Please sign in again.",
+      });
+      await expect(
+        service.removeProfileRecord(
+          environmentId,
+          providerId,
+          profileId,
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "unauthorized",
+        message: "Please sign in again.",
+      });
+      await expect(
+        service.nameProfileRecord(
+          environmentId,
+          providerId,
+          { profileId, name: "Renamed profile" },
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "unauthorized",
+        message: "Please sign in again.",
+      });
+    }
+
+    function installProductFetch() {
+      const requests: {
+        readonly url: string;
+        readonly method: string | undefined;
+        readonly authorization: string | null;
+        readonly body: BodyInit | null | undefined;
+      }[] = [];
+      const fetchMock = vi.fn<typeof fetch>((input, init) => {
+        let url: string;
+        if (typeof input === "string") {
+          url = input;
+        } else if (input instanceof URL) {
+          url = input.href;
+        } else {
+          url = input.url;
+        }
+        const headers = new Headers(init?.headers);
+        requests.push({
+          url,
+          method: init?.method,
+          authorization: headers.get("Authorization"),
+          body: init?.body,
+        });
+        const action = {
+          profileId,
+          harnessId: "claude",
+          recordRevision: "17",
+        };
+        const response = url.endsWith("/name")
+          ? { ...action, name: "Renamed profile" }
+          : action;
+        const body = init?.method === "GET" ? { enabled: false } : response;
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return { fetchMock, requests };
+    }
+
+    it("keeps signed-out calls unauthorized without HTTP", async () => {
+      const { service } = makeService();
+      const { fetchMock } = installProductFetch();
+
+      await expectAllMethodsUnauthorized(service);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps unverified calls unauthorized without HTTP", async () => {
+      const { service } = await signedInService();
+      const currentState = useAuthStore.getState();
+      if (
+        currentState.profile === null ||
+        currentState.contextMetadata === null
+      ) {
+        throw new Error(
+          "Expected the validation fixture to establish a session.",
+        );
+      }
+      currentState.setUnverifiedSession(
+        currentState.profile,
+        currentState.contextMetadata,
+      );
+      expect(useAuthStore.getState().status).toBe("unverified");
+      const { fetchMock } = installProductFetch();
+
+      await expectAllMethodsUnauthorized(service);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("sends verified calls to authn with exact requests", async () => {
+      const { service } = await signedInService();
+      const { fetchMock, requests } = installProductFetch();
+
+      await expect(
+        service.readProfileRecords(environmentId, callerSignal),
+      ).resolves.toEqual({
+        kind: "ok",
+        list: { profileSyncEnabled: false, providers: [] },
+      });
+      await expect(
+        service.signOutProfileRecord(
+          environmentId,
+          providerId,
+          profileId,
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "ok",
+        profileId,
+        harnessId: "claude",
+        recordRevision: "17",
+      });
+      await expect(
+        service.removeProfileRecord(
+          environmentId,
+          providerId,
+          profileId,
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "ok",
+        profileId,
+        harnessId: "claude",
+        recordRevision: "17",
+      });
+      await expect(
+        service.nameProfileRecord(
+          environmentId,
+          providerId,
+          { profileId, name: "Renamed profile" },
+          callerSignal,
+        ),
+      ).resolves.toEqual({
+        kind: "ok",
+        profileId,
+        harnessId: "claude",
+        recordRevision: "17",
+        name: "Renamed profile",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(requests).toEqual([
+        {
+          url: "http://localhost:5005/api/v3/environments/environment-synthetic/profile-records",
+          method: "GET",
+          authorization: `Bearer ${BEARER}`,
+          body: null,
+        },
+        {
+          url: "http://localhost:5005/api/v3/environments/environment-synthetic/profile-records/profile-synthetic/sign-out",
+          method: "POST",
+          authorization: `Bearer ${BEARER}`,
+          body: JSON.stringify({ harnessId: "claude" }),
+        },
+        {
+          url: "http://localhost:5005/api/v3/environments/environment-synthetic/profile-records/profile-synthetic/remove",
+          method: "POST",
+          authorization: `Bearer ${BEARER}`,
+          body: JSON.stringify({ harnessId: "claude" }),
+        },
+        {
+          url: "http://localhost:5005/api/v3/environments/environment-synthetic/profile-records/profile-synthetic/name",
+          method: "POST",
+          authorization: `Bearer ${BEARER}`,
+          body: JSON.stringify({
+            harnessId: "claude",
+            name: "Renamed profile",
+          }),
+        },
+      ]);
     });
   });
 });
