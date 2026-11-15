@@ -558,12 +558,20 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         if (attended.kind === "give") return install(null, attended);
         // Staged before anything is downloaded or started, so the host's first
         // start enrols it as the team's and no personal credential is made.
-        return withStagedTeamToken(
-          ctx.runtime.environment,
-          attended.token,
-          attended.environmentId,
-          (prepared) => install(prepared, attended),
-        );
+        let succeeded = false;
+        try {
+          const result = await withStagedTeamToken(
+            ctx.runtime.environment,
+            attended.token,
+            attended.environmentId,
+            (prepared) => install(prepared, attended),
+          );
+          succeeded = result.exitCode === 0;
+          return result;
+        } finally {
+          if (!succeeded)
+            await warnIfTeamInstallSignInRemains(ctx, attended.session);
+        }
       },
     );
   };
