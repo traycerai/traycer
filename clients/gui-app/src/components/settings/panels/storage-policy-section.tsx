@@ -4,6 +4,10 @@
  */
 import { useState, type ReactNode } from "react";
 import type { z } from "zod";
+import type {
+  EnvironmentConfigurationItemPutRequest,
+  EnvironmentConfigurationItemWriteResponse,
+} from "@traycer/protocol/host/environment/configuration-contracts";
 import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import {
   configurationWriteIssue,
@@ -35,6 +39,7 @@ import {
   snapshotPolicyValueSchema,
   storagePolicyValueSchema,
   useConfigurationStoragePolicy,
+  type ConfigurationStoragePolicy,
   type SnapshotPolicyValue,
   type StoragePolicyValue,
 } from "@/hooks/environment/use-storage-policy";
@@ -114,16 +119,17 @@ function StoragePolicySectionBody(props: {
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   const policy = read.data;
+  const held = useHeldSaves(environment?.environmentId ?? null, policy);
   const pending = put.isPending ? put.variables : null;
   const shown = shownValue(
     storagePolicyValueSchema,
-    pending?.kind === STORAGE_POLICY_KIND ? pending.value : undefined,
+    pickedValue(pending, STORAGE_POLICY_KIND, held.storage),
     policy?.storage.value,
     STORAGE_POLICY_DEFAULTS,
   );
   const shownSnapshots = shownValue(
     snapshotPolicyValueSchema,
-    pending?.kind === SNAPSHOT_POLICY_KIND ? pending.value : undefined,
+    pickedValue(pending, SNAPSHOT_POLICY_KIND, held.snapshots),
     policy?.snapshots.value,
     SNAPSHOT_POLICY_DEFAULTS,
   );
@@ -132,14 +138,28 @@ function StoragePolicySectionBody(props: {
     environment.role === null ||
     policy === undefined ||
     put.isPending;
+  // A held item's next save would quote the revision its own save replaced.
+  const storageDisabled = disabled || held.storage !== null;
+  const snapshotsDisabled = disabled || held.snapshots !== null;
+  const save = (
+    field: StorageControl,
+    item: keyof HeldSaves,
+    request: EnvironmentConfigurationItemPutRequest,
+  ): void => {
+    trackSettingChanged("storage", ANALYTICS_SETTING[field]);
+    setSaving(field);
+    put.mutate(request, {
+      onSuccess: (result) => {
+        held.hold(item, field, request, result);
+      },
+    });
+  };
   const write = <F extends StorageField>(
     field: F,
     value: StoragePolicyValue[F],
   ): void => {
     if (environment === null || policy === undefined) return;
-    trackSettingChanged("storage", ANALYTICS_SETTING[field]);
-    setSaving(field);
-    put.mutate({
+    save(field, "storage", {
       environmentId: environment.environmentId,
       kind: STORAGE_POLICY_KIND,
       key: STORAGE_POLICY_KEY,
@@ -150,9 +170,7 @@ function StoragePolicySectionBody(props: {
   };
   const writeSnapshots = (value: SnapshotPolicyValue): void => {
     if (environment === null || policy === undefined) return;
-    trackSettingChanged("storage", ANALYTICS_SETTING.quietChatDays);
-    setSaving("quietChatDays");
-    put.mutate({
+    save("quietChatDays", "snapshots", {
       environmentId: environment.environmentId,
       kind: SNAPSHOT_POLICY_KIND,
       key: SNAPSHOT_POLICY_KEY,
@@ -162,7 +180,9 @@ function StoragePolicySectionBody(props: {
     });
   };
   const spinner = (field: StorageControl): ReactNode =>
-    put.isPending && saving === field ? (
+    (put.isPending && saving === field) ||
+    held.storage?.field === field ||
+    held.snapshots?.field === field ? (
       <AgentSpinningDots
         className={undefined}
         testId="storage-policy-saving"
@@ -198,7 +218,7 @@ function StoragePolicySectionBody(props: {
               {spinner("chats")}
               <Switch
                 checked={shown.chats}
-                disabled={disabled}
+                disabled={storageDisabled}
                 aria-label={STORAGE.definitions.chats.label}
                 onCheckedChange={(chats) => {
                   write("chats", chats);
@@ -223,7 +243,7 @@ function StoragePolicySectionBody(props: {
                 format={afterDays}
                 value={shown.idleTaskDays}
                 // The window cleans only while chats are on.
-                disabled={disabled || !shown.chats}
+                disabled={storageDisabled || !shown.chats}
                 onWindowChange={(days) => {
                   write("idleTaskDays", days);
                 }}
@@ -255,7 +275,7 @@ function StoragePolicySectionBody(props: {
                   presets={ARCHIVED_CHAT_PRESETS}
                   format={afterHours}
                   value={shown.archivedChatHours}
-                  disabled={disabled}
+                  disabled={storageDisabled}
                   onWindowChange={(hours) => {
                     write("archivedChatHours", hours);
                   }}
@@ -292,7 +312,7 @@ function StoragePolicySectionBody(props: {
                 presets={SNAPSHOT_PRESETS}
                 format={afterDays}
                 value={shownSnapshots.quietChatDays}
-                disabled={disabled}
+                disabled={snapshotsDisabled}
                 onWindowChange={(days) => {
                   const next = snapshotPolicyValueSchema.safeParse({
                     quietChatDays: days,
@@ -315,9 +335,99 @@ function windowLabel(group: string, row: string): string {
 }
 
 /**
- * What an item's controls show: its save in flight while there is one, else
- * what was read, else the defaults while the read is out. A refused save drops
- * back to the value read, and the mutation's toast says why.
+ * A saved item's value, held from the save's answer until the read reports
+ * the item past the revision the save addressed: the save's own revision or
+ * any later one. A read still at the addressed revision is the state the save
+ * replaced, whenever its fetch began, so it never ends the hold.
+ */
+interface HeldSave {
+  /** The control the save was made from, for its spinner. */
+  readonly field: StorageControl;
+  readonly environmentId: string;
+  readonly value: unknown;
+  readonly addressed: number | null;
+}
+
+interface HeldSaves {
+  readonly storage: HeldSave | null;
+  readonly snapshots: HeldSave | null;
+}
+
+const NO_HELD_SAVES: HeldSaves = { storage: null, snapshots: null };
+
+/** The hold while the read of its environment still reports the old state. */
+function heldSaveInForce(
+  held: HeldSave | null,
+  environmentId: string | null,
+  readRevision: number | null | undefined,
+): HeldSave | null {
+  if (held === null || held.environmentId !== environmentId) return null;
+  return readRevision === held.addressed ? held : null;
+}
+
+/**
+ * Each item's held save in force, and `hold` to start one from a save's
+ * answer. Only a `saved` answer that moved the revision holds: a conflict,
+ * a refusal or a failed save shows the read as it did before.
+ */
+function useHeldSaves(
+  environmentId: string | null,
+  policy: ConfigurationStoragePolicy | undefined,
+): HeldSaves & {
+  readonly hold: (
+    item: keyof HeldSaves,
+    field: StorageControl,
+    request: EnvironmentConfigurationItemPutRequest,
+    result: EnvironmentConfigurationItemWriteResponse,
+  ) => void;
+} {
+  const [held, setHeld] = useState<HeldSaves>(NO_HELD_SAVES);
+  const storage = heldSaveInForce(
+    held.storage,
+    environmentId,
+    policy?.storage.revision,
+  );
+  const snapshots = heldSaveInForce(
+    held.snapshots,
+    environmentId,
+    policy?.snapshots.revision,
+  );
+  // A hold the read has moved past is done: forget it, so it never comes back.
+  if (storage !== held.storage || snapshots !== held.snapshots) {
+    setHeld({ storage, snapshots });
+  }
+  return {
+    storage,
+    snapshots,
+    hold: (item, field, request, result) => {
+      if (result.outcome !== "saved" || result.revision === request.revision)
+        return;
+      setHeld((current) => ({
+        ...current,
+        [item]: {
+          field,
+          environmentId: request.environmentId,
+          value: request.value,
+          addressed: request.revision,
+        },
+      }));
+    },
+  };
+}
+
+/** An item's value being saved, else its held save's, else none. */
+function pickedValue(
+  pending: EnvironmentConfigurationItemPutRequest | null,
+  kind: string,
+  held: HeldSave | null,
+): unknown {
+  return pending?.kind === kind ? pending.value : held?.value;
+}
+
+/**
+ * What an item's controls show: its save in flight or held while there is
+ * one, else what was read, else the defaults while the read is out. A refused
+ * save drops back to the value read, and the mutation's toast says why.
  */
 function shownValue<V>(
   schema: z.ZodType<V>,

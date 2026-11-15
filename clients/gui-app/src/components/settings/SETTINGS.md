@@ -6054,7 +6054,11 @@ wrap`). Each row names the account its first usable match runs on, the
     `environment.configuration.items.put` with the revision it read (`null`
     creates the item), so a concurrent edit of one field cannot lose
     another. While a write is pending, every control shows the value being
-    saved, is disabled, and the changed control has a spinner beside it. A
+    saved, is disabled, and the changed control has a spinner beside it.
+    Once the write is saved, its item's controls keep that value, disabled,
+    with the spinner, until the read reports the item at a revision other
+    than the one the write addressed; the other item's controls are free
+    again, and a read still at the old revision never shows the old value. A
     refused write drops back to the value read, and the shared mutation's
     toast says why. A stale or refused outcome shows
     `ConfigurationWriteFeedback` under the groups. A viewer of a team
