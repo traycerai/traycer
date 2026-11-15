@@ -153,6 +153,18 @@ test("a new track starts its title from the beginning", async ({ page }) => {
   expect(Math.abs(await transformX(page))).toBeLessThan(1);
 });
 
+/** The title's real CSS animation: its play state and where its timeline is. */
+async function marqueeAnimation(
+  page: Page,
+): Promise<{ readonly state: string; readonly at: number }> {
+  return marquee(page).evaluate(async (element) => {
+    const animation = element.getAnimations().at(0);
+    if (animation === undefined) throw new Error("the title has no animation");
+    await animation.ready;
+    return { state: animation.playState, at: Number(animation.currentTime) };
+  });
+}
+
 test("Pause holds the title where it is, and Play lets it go on", async ({
   page,
 }) => {
@@ -161,15 +173,27 @@ test("Pause holds the title where it is, and Play lets it go on", async ({
   await expect
     .poll(() => transformX(page), { timeout: 10_000 })
     .toBeLessThan(-1);
+  expect((await marqueeAnimation(page)).state).toBe("running");
 
   await page.evaluate(() => window.__soundtrackControlsProbe?.setPaused(true));
-  await nextFrames(page, 2);
-  const held = await transformX(page);
-  await page.waitForTimeout(500);
-  expect(await transformX(page)).toBe(held);
+  // The browser's own animation state, not a wait: the paused animation's
+  // timeline stands still across frames, and so does what is drawn.
+  await expect
+    .poll(async () => (await marqueeAnimation(page)).state)
+    .toBe("paused");
+  const held = await marqueeAnimation(page);
+  const heldX = await transformX(page);
+  await nextFrames(page, 3);
+  expect(await marqueeAnimation(page)).toEqual(held);
+  expect(await transformX(page)).toBe(heldX);
 
   await page.evaluate(() => window.__soundtrackControlsProbe?.setPaused(false));
-  await expect.poll(() => transformX(page)).not.toBe(held);
+  await expect
+    .poll(async () => (await marqueeAnimation(page)).state)
+    .toBe("running");
+  await expect
+    .poll(async () => (await marqueeAnimation(page)).at)
+    .toBeGreaterThan(held.at);
 });
 
 test.describe("with reduced motion", () => {
