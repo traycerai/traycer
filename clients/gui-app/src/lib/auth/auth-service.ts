@@ -1,3 +1,29 @@
+import {
+  recordSignInRequestViaHttp,
+  type SignInRequestRecordAnswer,
+} from "@traycer-clients/shared/host-client/provider-sign-in-request";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
+import {
+  setProfileRecordEnabledViaHttp,
+  setProfileRecordColorViaHttp,
+  type ProfileRecordColorClient,
+  type ProfileRecordColorChange,
+  type ProfileRecordEnablementClient,
+  type ProfileRecordEnabledChange,
+  type ProfileRecordEnablementResult,
+} from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import {
+  readProfileRecordsViaHttp,
+  signOutProfileRecordViaHttp,
+  removeProfileRecordViaHttp,
+  nameProfileRecordViaHttp,
+  profileRecordActionFailure,
+  type ProfileRecordClient,
+  type ProfileRecordListResult,
+  type ProfileRecordActionResult,
+  type ProfileRecordNameResult,
+  type ProfileRecordNameChange,
+} from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   changeProviderKeyRecordViaHttp,
@@ -87,6 +113,8 @@ import type {
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -634,7 +662,12 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService {
+export class AuthService
+  implements
+    ProfileRecordClient,
+    ProfileRecordEnablementClient,
+    ProfileRecordColorClient
+{
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -3580,6 +3613,18 @@ export class AuthService {
     return this.runnerHost.getTeamEnvironment(bearer, teamId);
   }
 
+  async replaceEnvironmentApiKey(
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    try {
+      return await this.runnerHost.replaceEnvironmentApiKey(bearer, request);
+    } catch {
+      return { kind: "failed" };
+    }
+  }
+
   /** An environment's provider counts: its API keys and linked plans. */
   async getEnvironmentProviders(
     environmentId: string,
@@ -3608,6 +3653,136 @@ export class AuthService {
       change,
       callerSignal,
     );
+  }
+
+  async readProfileRecords(
+    environmentId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordListResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return readProfileRecordsViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      callerSignal,
+    );
+  }
+
+  async signOutProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("sign-out", { kind: "unauthorized" });
+    return signOutProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async removeProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("remove", { kind: "unauthorized" });
+    return removeProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async nameProfileRecord(
+    environmentId: string,
+    providerId: string,
+    change: ProfileRecordNameChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordNameResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("name", { kind: "unauthorized" });
+    return nameProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      change.profileId,
+      change.name,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordColor(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordColorChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordColorViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordEnabled(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordEnabledChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordEnabledViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change.profileId,
+      change.enabled,
+      callerSignal,
+    );
+  }
+
+  /**
+   * Records the person's sign-in request on a verified session. A 401 hands
+   * the session to the shared revalidator, which is what any refused session
+   * gets: it rotates, or signs out and says the session expired.
+   */
+  async recordSignInRequest(
+    request: ProviderLoginSignInRequest,
+    signal: AbortSignal,
+  ): Promise<SignInRequestRecordAnswer> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const answer = await recordSignInRequestViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      request,
+      signal,
+    );
+    if (answer.kind === "unauthorized") void this.revalidateCurrentContext();
+    return answer;
   }
 
   /** The user's answer to an agent's grant request. */

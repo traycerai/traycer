@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { createHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
@@ -11,6 +12,7 @@ import {
   MockHostMessenger,
   type MockHandlerMap,
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   HostMethodVersionUnsatisfiedError,
   type HostRequestOptions,
@@ -26,8 +28,66 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+
+export interface TeamProfileRecordHttpRequest {
+  readonly url: string;
+  readonly method: string;
+  readonly authorization: string | null;
+  readonly body: string | null;
+}
+
+export interface TeamProfileRecordHttpAnswer {
+  readonly status: number;
+  readonly body: unknown;
+}
+
+export interface TeamProfileRecordWireRow {
+  readonly profileId: string;
+  readonly harnessId: string;
+  readonly name: string;
+  readonly color: string | null;
+  readonly enabled: boolean;
+  readonly kind: string | null;
+  readonly readerLabel: "live" | "waiting" | "needs-sign-in";
+  readonly otherNames: readonly string[];
+}
+
+export type TeamProfileRecordListBody =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly records: readonly TeamProfileRecordWireRow[];
+    };
+
+export const teamProfileRecordHttpBoundary: {
+  list: TeamProfileRecordHttpAnswer & { body: TeamProfileRecordListBody };
+  items: TeamProfileRecordHttpAnswer;
+  action: TeamProfileRecordHttpAnswer;
+  itemWriteStatus: number;
+  calls: TeamProfileRecordHttpRequest[];
+} = {
+  list: { status: 200, body: { enabled: false } },
+  items: { status: 200, body: { items: [] } },
+  action: {
+    status: 200,
+    body: {
+      profileId: "team-profile",
+      harnessId: "claude",
+      recordRevision: "1",
+    },
+  },
+  itemWriteStatus: 200,
+  calls: [],
+};
 
 /**
  * The shared host client a page under test reads through `useHostClient()`.
@@ -119,9 +179,191 @@ export function configurationItem(
 export interface TeamPageHarness {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
+  readonly auth: AuthService;
+  readonly runnerHost: MockRunnerHost;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
+}
+
+interface TeamAuthRuntime {
+  readonly auth: AuthService;
+  readonly directory: HostDirectoryService;
+  readonly runtime: HostRuntime<HostRpcRegistry>;
+  readonly runnerHost: MockRunnerHost;
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+}
+
+const activeTeamAuthRuntimes: TeamAuthRuntime[] = [];
+let restoreTeamFetch: (() => void) | null = null;
+
+function installTeamFetch(): void {
+  if (restoreTeamFetch !== null) return;
+  const originalFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: RequestInfo | URL, init: RequestInit | undefined) =>
+      teamFetch(input, init),
+  });
+  restoreTeamFetch = () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: originalFetch,
+    });
+  };
+}
+
+function teamFetch(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  const url =
+    input instanceof URL
+      ? input
+      : typeof input === "string"
+        ? new URL(input)
+        : new URL(input.url);
+  const method = init?.method ?? "GET";
+  const headers = new Headers(init?.headers);
+  const body = typeof init?.body === "string" ? init.body : null;
+  teamProfileRecordHttpBoundary.calls.push({
+    url: url.toString(),
+    method,
+    authorization: headers.get("authorization"),
+    body,
+  });
+  if (url.pathname === "/api/v3/user/negotiated")
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          user: {
+            id: "team-test-user",
+            name: "Team Test User",
+            providerId: "team-test-provider",
+            providerHandle: "team-test-handle",
+            providerType: "GITHUB",
+            email: "team-test@example.invalid",
+            avatarUrl: null,
+            activatedAt: null,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            lastSeenAt: null,
+            privacyMode: false,
+            isLearningEnabled: true,
+          },
+          userSubscription: {
+            id: "team-test-subscription",
+            userID: "team-test-user",
+            orgID: null,
+            teamID: null,
+            customerId: "team-test-customer",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            subscriptionExpiry: null,
+            trialEndsAt: null,
+            subscriptionStatus: "FREE",
+            hasPaymentMethod: false,
+            isInTrial: false,
+            rechargeRateSeconds: 0,
+          },
+          teamSubscriptions: [],
+          payAsYouGoUsage: { allowPayAsYouGo: false },
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "x-traycer-user-record-version": "2.0",
+          },
+        },
+      ),
+    );
+  if (url.pathname.endsWith("/profile-records"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.list);
+  if (url.pathname.includes("/profile-records/"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.action);
+  if (url.pathname.endsWith("/items/managed_profile"))
+    return Promise.resolve(
+      new Response(null, {
+        status: teamProfileRecordHttpBoundary.itemWriteStatus,
+      }),
+    );
+  if (url.pathname.endsWith("/items"))
+    return teamHttpResponse(teamProfileRecordHttpBoundary.items);
+  return Promise.resolve(new Response(null, { status: 500 }));
+}
+
+function teamHttpResponse(
+  answer: TeamProfileRecordHttpAnswer,
+): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify(answer.body), {
+      status: answer.status,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const auth = new AuthService({ runnerHost });
+  const directory = createAuthBoundHostDirectory({
+    auth,
+    runnerHost,
+    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    localHostIdSeeder: () => Promise.resolve(null),
+    onRegistryPollTick: null,
+  });
+  let requestId = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `team-auth-${++requestId}`,
+      handlers: {},
+    }),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => null,
+    connectionRegistry: null,
+  });
+  const binding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
+    hostClient: runtime.hostClient,
+    directory,
+    auth,
+    hostId: null,
+  };
+  const harness = { auth, directory, runtime, runnerHost, binding };
+  activeTeamAuthRuntimes.push(harness);
+  return harness;
+}
+
+async function startVerifiedTeamAuth(harness: TeamAuthRuntime): Promise<void> {
+  await harness.runnerHost.tokenStore.signIn(
+    { token: "team-test-app-session", refreshToken: "team-test-refresh" },
+    {
+      id: "team-test-user",
+      email: "team-test@example.invalid",
+      name: "Team Test User",
+    },
+  );
+  await harness.auth.start();
 }
 
 export function mountTeamPage(
@@ -211,6 +453,7 @@ function buildTeamPage(
   negotiated: Readonly<Record<string, { major: number; minor: number }>> | null,
   withPool: boolean,
 ): TeamPageHarness {
+  installTeamFetch();
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -253,27 +496,57 @@ function buildTeamPage(
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({ status: "signed-out" });
+  const authHarness = buildTeamAuthRuntime(queryClient);
+  void startVerifiedTeamAuth(authHarness);
   return {
     messenger,
     queryClient,
+    auth: authHarness.auth,
+    runnerHost: authHarness.runnerHost,
     paramsOf: (method) =>
       messenger.calls
         .filter((call) => call.method === method)
         .map((call) => call.params),
     Wrapper: (props) => (
-      <QueryClientProvider client={queryClient}>
-        <ConfigurationSourceContext.Provider value={source}>
-          {props.children}
-        </ConfigurationSourceContext.Provider>
-      </QueryClientProvider>
+      <RunnerHostProvider runnerHost={authHarness.runnerHost}>
+        <HostRuntimeContext.Provider value={authHarness.binding}>
+          <QueryClientProvider client={queryClient}>
+            <ConfigurationSourceContext.Provider value={source}>
+              {props.children}
+            </ConfigurationSourceContext.Provider>
+          </QueryClientProvider>
+        </HostRuntimeContext.Provider>
+      </RunnerHostProvider>
     ),
   };
 }
 
 export function resetTeamPageHarness(): void {
+  for (const harness of activeTeamAuthRuntimes.splice(0)) {
+    harness.runtime.dispose();
+    harness.directory.dispose();
+    harness.auth.dispose();
+  }
+  restoreTeamFetch?.();
+  restoreTeamFetch = null;
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out" });
+  teamProfileRecordHttpBoundary.list = {
+    status: 200,
+    body: { enabled: false },
+  };
+  teamProfileRecordHttpBoundary.items = { status: 200, body: { items: [] } };
+  teamProfileRecordHttpBoundary.action = {
+    status: 200,
+    body: {
+      profileId: "team-profile",
+      harnessId: "claude",
+      recordRevision: "1",
+    },
+  };
+  teamProfileRecordHttpBoundary.itemWriteStatus = 200;
+  teamProfileRecordHttpBoundary.calls.length = 0;
 }

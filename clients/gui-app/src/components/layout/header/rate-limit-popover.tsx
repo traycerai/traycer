@@ -1,3 +1,5 @@
+import { useCachedProvidersList } from "@/hooks/providers/use-cached-providers-list";
+import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
@@ -38,6 +40,7 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { ProfileOtherNameChips } from "@/components/providers/profile-other-name-chips";
 import {
+  listOffersSignIns,
   profileCommitId,
   profileDisplayLabel,
   resolvedProfileRow,
@@ -116,10 +119,7 @@ import {
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import { mergeOrder } from "@/lib/order-merge";
 import {
@@ -2176,7 +2176,7 @@ function ProfileRateLimitProviderBlock({
   const fetchScope = useProviderRateLimitFetchScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
-  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+  const setProfileEnabled = useAccountProfileSetEnabledForClient(
     client,
     providerId,
   );
@@ -2184,6 +2184,7 @@ function ProfileRateLimitProviderBlock({
     client,
     providerId,
   );
+  const offersSignIns = listOffersSignIns(useCachedProvidersList(client));
   const profileEnablementAvailable = profiles.some(
     (profile) => profile.kind === "managed",
   );
@@ -2358,7 +2359,7 @@ function ProfileRateLimitProviderBlock({
                 true,
                 providerDisplayName(providerId),
                 target.profile,
-                profiles,
+                { profiles, offersSignIns },
               )}
               onSetProfileEnabled={(enabled) =>
                 setProfileEnabled.mutate({

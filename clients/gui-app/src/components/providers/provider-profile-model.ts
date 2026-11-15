@@ -40,6 +40,13 @@ export function listOffersSignIns(
   return list?.offersSignIns === true;
 }
 
+export function profileUsesRecord(
+  profile: ProviderProfile,
+  offersSignIns: boolean,
+): boolean {
+  return offersSignIns && profile.aliases !== undefined;
+}
+
 /** One account a person removed, as `providers.list` names it: ids only. */
 export type RemovedProviderProfile = NonNullable<
   ProvidersListResponse["removedProfiles"]
@@ -363,8 +370,13 @@ export function profileEligibilityToggleDisabledReason(
   providerEnabled: boolean,
   providerLabel: string,
   profile: ProviderProfile,
-  profiles: readonly ProviderProfile[],
+  inventory: {
+    readonly profiles: readonly ProviderProfile[];
+    readonly offersSignIns: boolean;
+  },
 ): string | null {
+  const { profiles, offersSignIns } = inventory;
+  if (profileUsesRecord(profile, offersSignIns)) return null;
   if (!providerEnabled) {
     const anyEnabled = profiles.some((candidate) => candidate.enabled);
     return anyEnabled
