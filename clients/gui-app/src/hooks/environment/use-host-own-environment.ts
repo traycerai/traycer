@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
@@ -16,6 +17,16 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 
 const STATUS_PARAMS = {};
+
+/** {@link AddressedEnvironment}, and a way to ask again what could not be read. */
+export interface HostOwnEnvironment extends AddressedEnvironment {
+  /**
+   * Re-asks the reads that failed (the host's status, the environment list,
+   * a team's host list); a read that answered is not asked again.
+   */
+  readonly retry: () => void;
+}
+
 const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 const NONE: AddressedEnvironment = { environmentId: null, resolved: true };
 
@@ -35,7 +46,7 @@ export function useHostOwnEnvironment(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): AddressedEnvironment {
+): HostOwnEnvironment {
   const asking = enabled && client !== null && hostId !== null;
   const statusSupported = useHostMethodSupport(hostId, "environment.status");
   const status = useHostQuery<HostRpcRegistry, "environment.status">({
@@ -55,8 +66,18 @@ export function useHostOwnEnvironment(
   const listed = environmentReadData(environments);
   const teamIds = teamEnvironmentIds(listed);
   const hostLists = useEnvironmentHostLists(teamIds, onTeam);
-  if (!asking) return PENDING;
-  return ownEnvironmentFrom({
+  const { isError: statusFailed, refetch: refetchStatus } = status;
+  const { isError: listFailed, refetch: refetchList } = environments;
+  const { retryFailed: retryHostLists } = hostLists;
+  // The environment list is one cache entry: Personal's id and the team ids
+  // are both read from it.
+  const retry = useCallback(() => {
+    if (statusFailed) void refetchStatus();
+    if (listFailed) void refetchList();
+    retryHostLists();
+  }, [statusFailed, refetchStatus, listFailed, refetchList, retryHostLists]);
+  if (!asking) return { ...PENDING, retry };
+  const own = ownEnvironmentFrom({
     statusSupported,
     statusFailed: status.isError,
     principal,
@@ -69,6 +90,7 @@ export function useHostOwnEnvironment(
       hostId,
     ),
   });
+  return { ...own, retry };
 }
 
 /** What the host's status, and the reads it picks, name. */

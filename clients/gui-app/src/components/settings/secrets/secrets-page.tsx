@@ -4,7 +4,7 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -14,6 +14,7 @@ import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { useSecretsEnvironment } from "@/hooks/environment/use-environment-secrets-calls";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
@@ -85,7 +86,20 @@ export function SecretsPage(props: {
   const [adding, setAdding] = useState(false);
   const configurationClient = usePoolTierHostClient(props.client);
   const list = useEnvironmentSecretsQuery(configurationClient);
-  const read = useBoundedRead(list);
+  // Retry asks again first for what naming the environment needed, so a
+  // list that could not be named is read once that answers.
+  const { retry: retryEnvironment } =
+    useSecretsEnvironment(configurationClient);
+  const { refetch: refetchList } = list;
+  const refetch = useCallback(() => {
+    retryEnvironment();
+    return refetchList();
+  }, [retryEnvironment, refetchList]);
+  const read = useBoundedRead({
+    isPending: list.isPending,
+    isError: list.isError,
+    refetch,
+  });
   const configurationName = useConfigurationName();
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();

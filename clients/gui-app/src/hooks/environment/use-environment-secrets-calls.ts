@@ -13,11 +13,11 @@ import {
   useEnvironmentCloudQuery,
   useEnvironmentCloudOperation,
 } from "@/hooks/environment/use-environment-cloud";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
-  useAddressedEnvironment,
-  type AddressedEnvironment,
-} from "@/hooks/environment/use-addressed-environment";
-import { useHostOwnEnvironment } from "@/hooks/environment/use-host-own-environment";
+  useHostOwnEnvironment,
+  type HostOwnEnvironment,
+} from "@/hooks/environment/use-host-own-environment";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { EnvironmentCloudMethod } from "@/lib/environment/environment-cloud-calls";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -35,11 +35,12 @@ type SecretsMethod = Extract<
 /**
  * The environment a Settings page's secrets calls name: the page's own (a
  * team's, or Personal's), else the one `client`'s host runs, which the host
- * filled in when it was asked for its own.
+ * filled in when it was asked for its own. `retry` re-asks what that lookup
+ * could not read.
  */
 export function useSecretsEnvironment(
   client: HostClient<HostRpcRegistry> | null,
-): AddressedEnvironment {
+): HostOwnEnvironment {
   const addressed = useAddressedEnvironment();
   const hostOwn = addressed.resolved && addressed.environmentId === null;
   const own = useHostOwnEnvironment(
@@ -47,7 +48,7 @@ export function useSecretsEnvironment(
     useRequesterHostId(client),
     hostOwn,
   );
-  return hostOwn ? own : addressed;
+  return hostOwn ? own : { ...addressed, retry: own.retry };
 }
 
 /** A secrets read, from authn. */
