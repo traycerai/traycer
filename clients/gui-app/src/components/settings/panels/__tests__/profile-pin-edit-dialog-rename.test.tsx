@@ -1,33 +1,26 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import type { RefObject } from "react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  recordNegotiatedHostMethods,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
-import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
-  createProfileListHost,
   readinessFor,
-  type ProfileListAnswer,
   type ProfileListHost,
 } from "@/components/providers/__tests__/profile-pin-host-fixture";
-import {
-  pinProfile,
-  providerState,
-} from "@/components/providers/__tests__/profile-pin-fixtures";
+import { legacyProfile } from "@/components/providers/__tests__/profile-pin-fixtures";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createProfileRecordAuthFixture,
+  type ProfileRecordAuthFixture,
+} from "@/components/providers/__tests__/profile-record-auth-fixture";
+import {
+  managedProfileForTest,
+  mountProfileEditDialog,
+} from "@/components/providers/__tests__/profile-pin-edit-dialog-test-fixture";
+
+const AUTH = vi.hoisted(() => ({ service: null as AuthService | null }));
 
 const holder = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
@@ -49,7 +42,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => holder.client,
-    useAuthService: () => ({}),
+    useAuthService: () => AUTH.service,
   };
 });
 
@@ -99,107 +92,78 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
 }));
 
-const INPUT_REF: RefObject<HTMLInputElement | null> = { current: null };
+const PROFILE_RECORD_URL =
+  "http://localhost:5005/api/v3/environments/environment-profile-fixture/profile-records/work-row/name";
 
-function managed(input: {
-  readonly profileId: string;
-  readonly label: string;
-  readonly otherNames: readonly string[];
-}): ProviderProfile {
-  return pinProfile({
-    profileId: input.profileId,
-    label: input.label,
-    kind: "managed",
-    enabled: true,
-    authStatus: "authenticated",
-    aliases: [],
-    personNotice: null,
-    terminalOnThisComputer: false,
-    otherNames: input.otherNames,
-  });
-}
+type ProfileRecordReply =
+  | "accepted"
+  | "unauthorized"
+  | "forbidden"
+  | "untyped-failure";
 
-function answerOf(profiles: readonly ProviderProfile[]): ProfileListAnswer {
-  return {
-    providers: [
-      providerState({
-        providerId: "opencode",
-        authStatus: "authenticated",
-        profiles,
+const recordNameTransport = {
+  onNameAccepted: (_name: string): void => undefined,
+};
+
+async function signedInAuthService(
+  reply: ProfileRecordReply,
+): Promise<ProfileRecordAuthFixture> {
+  const fixture = await createProfileRecordAuthFixture((request) => {
+    if (reply === "accepted" && request.url === PROFILE_RECORD_URL) {
+      recordNameTransport.onNameAccepted("Desk");
+    }
+    const statusByReply: Record<ProfileRecordReply, number> = {
+      accepted: 200,
+      unauthorized: 401,
+      forbidden: 403,
+      "untyped-failure": 500,
+    };
+    const status = statusByReply[reply];
+    let body: Record<string, number | string>;
+    if (reply === "accepted") {
+      body = {
+        profileId: "work-row",
+        harnessId: "opencode",
+        recordRevision: "18",
+        name: "Desk",
+      };
+    } else if (reply === "forbidden") {
+      body = {
+        statusCode: 403,
+        error: "private response detail",
+        code: "environment_action_forbidden",
+      };
+    } else {
+      body = { error: "private response detail" };
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
       }),
-    ],
-    native: null,
-    removedProfiles: [],
-  };
-}
-
-function ListedDropdown() {
-  const list = useProvidersListForClient(holder.client, {
-    enabled: true,
-    subscribed: true,
+    );
   });
-  const state = list.data?.providers.find(
-    (provider) => provider.providerId === "opencode",
-  );
-  if (state === undefined || holder.hostId === null) return null;
-  return (
-    <PickerProfileDropdown
-      providerId="opencode"
-      providerLabel="OpenCode"
-      profiles={state.profiles}
-      activeProfileId="work-row"
-      onSelectProfile={() => undefined}
-      onCreateProfile={() => undefined}
-      createProfileDisabled={false}
-      createProfileDisabledReason={undefined}
-      shortcutHintForIndex={() => null}
-      profileEnablementPending={() => false}
-      contentContainer={null}
-      inputRef={INPUT_REF}
-      runTargetHostId={holder.hostId}
-      admissionByProfileId={null}
-    />
-  );
+  AUTH.service = fixture.service;
+  return fixture;
 }
 
 function mount(input: {
   readonly profiles: readonly ProviderProfile[];
   readonly profile: ProviderProfile;
   readonly methods: readonly string[];
+  readonly offersSignIns: boolean | undefined;
 }): ProfileListHost {
-  const host = createProfileListHost({
-    answer: answerOf(input.profiles),
+  return mountProfileEditDialog({
+    profiles: input.profiles,
+    profile: input.profile,
+    methods: input.methods,
+    offersSignIns: input.offersSignIns,
     answerProfileName: (request) => ({ label: request.label }),
-    failSetEnabled: false,
+    bindHost: (client, hostId) => {
+      holder.client = client;
+      holder.hostId = hostId;
+    },
   });
-  holder.client = host.client;
-  holder.hostId = host.hostId;
-  recordNegotiatedHostMethods(host.hostId, input.methods);
-  const state = answerOf(input.profiles).providers[0];
-  render(
-    <host.Wrapper>
-      <TooltipProvider>
-        <ListedDropdown />
-        <ProfileEditDialog
-          state={state}
-          profile={input.profile}
-          profiles={input.profiles}
-          canOauth={false}
-          oauthUnavailableHint={null}
-          startInReauth={false}
-          isLocalHost
-          open
-          onOpenChange={() => undefined}
-          remainingProfilesAfterRemoval={input.profiles}
-          onSelectedProfileIdChange={() => undefined}
-          profileEnablementAvailable={false}
-          profileEnablementPending={() => false}
-          onSetProfileEnabled={() => undefined}
-        />
-      </TooltipProvider>
-    </host.Wrapper>,
-  );
-  return host;
 }
 
 function nameField(): HTMLInputElement {
@@ -210,7 +174,7 @@ function nameField(): HTMLInputElement {
   return field;
 }
 
-const side = managed({
+const side = managedProfileForTest({
   profileId: "side-row",
   label: "Side",
   otherNames: [],
@@ -218,14 +182,85 @@ const side = managed({
 
 describe("ProfileEditDialog rename", () => {
   afterEach(() => {
+    AUTH.service?.dispose();
+    AUTH.service = null;
+    useAuthStore.getState().setSignedOut();
     holder.client = null;
     holder.hostId = null;
+    recordNameTransport.onNameAccepted = () => undefined;
     resetNegotiatedManifests();
     cleanup();
+    vi.unstubAllGlobals();
   });
 
-  it("a row with other names sends answerProfileName and the chip leaves", async () => {
-    const named = managed({
+  it("a record with empty aliases uses the app name route when sign-in offers are absent", async () => {
+    const auth = await signedInAuthService("accepted");
+    const named = managedProfileForTest({
+      profileId: "work-row",
+      label: "Work",
+      otherNames: [],
+    });
+    const host = mount({
+      profiles: [side, named],
+      profile: named,
+      methods: [
+        "providers.list",
+        "providers.answerProfileName",
+        "providers.setEnabled",
+      ],
+      offersSignIns: undefined,
+    });
+    recordNameTransport.onNameAccepted = (name) => {
+      host.answer.providers = host.answer.providers.map((provider) =>
+        provider.providerId !== "opencode"
+          ? provider
+          : {
+              ...provider,
+              profiles: provider.profiles.map((profile) =>
+                profile.profileId === "work-row"
+                  ? { ...profile, label: name, otherNames: [] }
+                  : profile,
+              ),
+            },
+      );
+    };
+    await screen.findByText("environment-profile-fixture");
+    await screen.findByRole("textbox", { name: "Profile name" });
+    fireEvent.change(nameField(), { target: { value: "Desk" } });
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" }),
+    );
+    await waitFor(() => {
+      expect(auth.requests).toEqual([
+        {
+          url: PROFILE_RECORD_URL,
+          method: "POST",
+          body: JSON.stringify({ harnessId: "opencode", name: "Desk" }),
+        },
+      ]);
+    });
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.answerProfileName",
+    );
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.setEnabled",
+    );
+    await waitFor(() => expect(host.listCalls.length).toBeGreaterThan(1));
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", {
+            name: /^OpenCode profile: /,
+            hidden: true,
+          })
+          .getAttribute("aria-label"),
+      ).toBe("OpenCode profile: Desk");
+    });
+  });
+
+  it("a record with other names also uses the app name route", async () => {
+    const auth = await signedInAuthService("accepted");
+    const named = managedProfileForTest({
       profileId: "work-row",
       label: "Work",
       otherNames: ["Home"],
@@ -234,18 +269,43 @@ describe("ProfileEditDialog rename", () => {
       profiles: [side, named],
       profile: named,
       methods: ["providers.list", "providers.answerProfileName"],
+      offersSignIns: false,
     });
+    recordNameTransport.onNameAccepted = (name) => {
+      host.answer.providers = host.answer.providers.map((provider) =>
+        provider.providerId !== "opencode"
+          ? provider
+          : {
+              ...provider,
+              profiles: provider.profiles.map((profile) =>
+                profile.profileId === "work-row"
+                  ? { ...profile, label: name, otherNames: [] }
+                  : profile,
+              ),
+            },
+      );
+    };
     await screen.findByText("Home");
     fireEvent.change(nameField(), { target: { value: "Desk" } });
     fireEvent.click(
       screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" }),
     );
     await waitFor(() => {
-      expect(host.answerNameCalls).toEqual([
-        { providerId: "opencode", profileId: "work-row", label: "Desk" },
+      expect(auth.requests).toEqual([
+        {
+          url: PROFILE_RECORD_URL,
+          method: "POST",
+          body: JSON.stringify({ harnessId: "opencode", name: "Desk" }),
+        },
       ]);
     });
-    expect(host.setEnabledCalls).toEqual([]);
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.answerProfileName",
+    );
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.setEnabled",
+    );
+    await waitFor(() => expect(host.listCalls.length).toBeGreaterThan(1));
     await waitFor(() => {
       expect(
         screen
@@ -260,16 +320,20 @@ describe("ProfileEditDialog rename", () => {
     expect(screen.queryByText("Home")).toBeNull();
   });
 
-  it("a row with no other names still renames through setEnabled", async () => {
-    const plain = managed({
+  it("a local row keeps its computer rename call", async () => {
+    const auth = await signedInAuthService("accepted");
+    const local = legacyProfile({
       profileId: "work-row",
       label: "Work",
-      otherNames: [],
+      kind: "managed",
+      enabled: true,
+      authStatus: "authenticated",
     });
     const host = mount({
-      profiles: [side, plain],
-      profile: plain,
-      methods: ["providers.list", "providers.answerProfileName"],
+      profiles: [side, local],
+      profile: local,
+      methods: ["providers.list"],
+      offersSignIns: undefined,
     });
     await screen.findByRole("textbox", { name: "Profile name" });
     fireEvent.change(nameField(), { target: { value: "Desk" } });
@@ -284,7 +348,6 @@ describe("ProfileEditDialog rename", () => {
       profileId: "work-row",
       label: "Desk",
     });
-    expect(host.answerNameCalls).toEqual([]);
     await waitFor(() => {
       expect(
         screen
@@ -295,18 +358,26 @@ describe("ProfileEditDialog rename", () => {
           .getAttribute("aria-label"),
       ).toBe("OpenCode profile: Desk");
     });
+    expect(auth.requests).toEqual([]);
   });
 
-  it("a host without answerProfileName renames through setEnabled", async () => {
-    const named = managed({
-      profileId: "work-row",
-      label: "Work",
+  it("a local row without answerProfileName keeps the rename fallback", async () => {
+    const auth = await signedInAuthService("accepted");
+    const local = {
+      ...legacyProfile({
+        profileId: "work-row",
+        label: "Work",
+        kind: "managed",
+        enabled: true,
+        authStatus: "authenticated",
+      }),
       otherNames: ["Home"],
-    });
+    };
     const host = mount({
-      profiles: [side, named],
-      profile: named,
+      profiles: [side, local],
+      profile: local,
       methods: ["providers.list"],
+      offersSignIns: undefined,
     });
     await screen.findByText("Home");
     fireEvent.change(nameField(), { target: { value: "Desk" } });
@@ -316,11 +387,104 @@ describe("ProfileEditDialog rename", () => {
     await waitFor(() => {
       expect(host.setEnabledCalls).toHaveLength(1);
     });
-    expect(host.answerNameCalls).toEqual([]);
     expect(host.setEnabledCalls[0]?.profileAction).toEqual({
       type: "rename",
       profileId: "work-row",
       label: "Desk",
     });
+    expect(auth.requests).toEqual([]);
   });
+
+  it("shows the existing refusal sentence without exposing the server error", async () => {
+    const auth = await signedInAuthService("forbidden");
+    const named = managedProfileForTest({
+      profileId: "work-row",
+      label: "Work",
+      otherNames: [],
+    });
+    const host = mount({
+      profiles: [side, named],
+      profile: named,
+      methods: [
+        "providers.list",
+        "providers.answerProfileName",
+        "providers.setEnabled",
+      ],
+      offersSignIns: undefined,
+    });
+    await screen.findByText("environment-profile-fixture");
+    await screen.findByRole("textbox", { name: "Profile name" });
+    fireEvent.change(nameField(), { target: { value: "Desk" } });
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" }),
+    );
+    await screen.findByText("You don't have permission to do that.");
+    expect(screen.queryByText("private response detail")).toBeNull();
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.setEnabled",
+    );
+    expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+      "providers.answerProfileName",
+    );
+    expect(auth.requests).toEqual([
+      {
+        url: PROFILE_RECORD_URL,
+        method: "POST",
+        body: JSON.stringify({ harnessId: "opencode", name: "Desk" }),
+      },
+    ]);
+    expect(host.listCalls.length).toBeGreaterThan(1);
+  });
+
+  it.each([
+    { reply: "unauthorized" as const, message: "Please sign in again." },
+    { reply: "untyped-failure" as const, message: "Couldn't rename profile." },
+  ])(
+    "shows the safe $reply name failure and keeps editing available",
+    async ({ reply, message }) => {
+      const auth = await signedInAuthService(reply);
+      const named = managedProfileForTest({
+        profileId: "work-row",
+        label: "Work",
+        otherNames: [],
+      });
+      const host = mount({
+        profiles: [side, named],
+        profile: named,
+        methods: ["providers.list", "providers.answerProfileName"],
+        offersSignIns: false,
+      });
+      await screen.findByText("environment-profile-fixture");
+      await screen.findByRole("textbox", { name: "Profile name" });
+      const listReadsBeforeSave = host.listCalls.length;
+      fireEvent.change(nameField(), { target: { value: "Desk" } });
+      fireEvent.click(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" }),
+      );
+      await screen.findByText(message);
+      expect(screen.queryByText("private response detail")).toBeNull();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(nameField().value).toBe("Desk");
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" })
+          .disabled,
+      ).toBe(false);
+      expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+        "providers.setEnabled",
+      );
+      expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+        "providers.answerProfileName",
+      );
+      expect(auth.requests).toEqual([
+        {
+          url: PROFILE_RECORD_URL,
+          method: "POST",
+          body: JSON.stringify({ harnessId: "opencode", name: "Desk" }),
+        },
+      ]);
+      await waitFor(() =>
+        expect(host.listCalls.length).toBeGreaterThan(listReadsBeforeSave),
+      );
+    },
+  );
 });

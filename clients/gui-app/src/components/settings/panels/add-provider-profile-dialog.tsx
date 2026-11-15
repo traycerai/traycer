@@ -10,6 +10,7 @@ import {
   Link2,
   LogIn,
 } from "lucide-react";
+import type { ProfileRecordActionFailure } from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -60,6 +61,7 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useNameProfileRecordForClient } from "@/hooks/providers/use-name-profile-record-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -263,7 +265,6 @@ function ProviderProfileSignInDialog({
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
-  const renameProfile = useRenameProviderProfileForClient(client);
   const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const hostBlock = providerHostBlock(state, "sign-in-and-enable");
   const macosBlock = hostBlock?.kind === "macos" ? hostBlock : null;
@@ -298,6 +299,8 @@ function ProviderProfileSignInDialog({
     target,
     client,
   );
+  const { mutation: renameProfile, recordFailure: namingRecordFailure } =
+    useAddProfileRename(client, state.providerId, flow.state, offersSignIns);
   const targetTerminal = destinationResult(flow.state);
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
@@ -478,6 +481,7 @@ function ProviderProfileSignInDialog({
               duplicateProfile={duplicateProfile}
               naming={naming}
               namingError={renameProfile.error}
+              namingRecordFailure={namingRecordFailure}
               emailRevealed={emailRevealed}
               setEmailRevealed={setEmailRevealed}
               linkDisabled={linkHeldOff({
@@ -684,6 +688,7 @@ function AddProfileAccountSection({
   duplicateProfile,
   naming,
   namingError,
+  namingRecordFailure,
   emailRevealed,
   setEmailRevealed,
   linkDisabled,
@@ -708,6 +713,7 @@ function AddProfileAccountSection({
   readonly duplicateProfile: ProviderProfile | null;
   readonly naming: NamingStepState | null;
   readonly namingError: Error | null;
+  readonly namingRecordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
   readonly linkDisabled: boolean;
@@ -806,6 +812,7 @@ function AddProfileAccountSection({
         profile={naming.profile}
         collisionProfile={naming.collisionProfile}
         error={namingError}
+        recordFailure={namingRecordFailure}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
       />
@@ -1110,12 +1117,14 @@ function AddProfileNamingStep({
   profile,
   collisionProfile,
   error,
+  recordFailure,
   emailRevealed,
   setEmailRevealed,
 }: {
   readonly profile: ProviderProfile;
   readonly collisionProfile: ProviderProfile;
   readonly error: Error | null;
+  readonly recordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
 }): ReactNode {
@@ -1134,7 +1143,11 @@ function AddProfileNamingStep({
       {error !== null ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-xs text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>Couldn&apos;t save the name. Try again.</span>
+          <span>
+            {recordFailure === null
+              ? "Couldn't save the name. Try again."
+              : recordFailure.message}
+          </span>
         </div>
       ) : null}
     </div>
@@ -1533,6 +1546,30 @@ function resolveDialogLockState({
   return {
     finalizing,
     dismissalLocked: commitPending || finalizing || identityCompletionPending,
+  };
+}
+
+/** Only a named sign-in outcome makes the naming step a record action. */
+function useAddProfileRename(
+  client: HostClient<HostRpcRegistry> | null,
+  providerId: ProviderCliState["providerId"],
+  flowState: ProviderProfileLoginFlowState,
+  offersSignIns: boolean,
+) {
+  const local = useRenameProviderProfileForClient(client);
+  const recordProfileId =
+    offersSignIns && flowState.kind === "identity"
+      ? flowState.recordProfileId
+      : null;
+  const record = useNameProfileRecordForClient(
+    client,
+    providerId,
+    recordProfileId !== null,
+  );
+  return {
+    mutation: recordProfileId === null ? local : record,
+    recordFailure:
+      recordProfileId === null ? null : (record.error?.failure ?? null),
   };
 }
 
