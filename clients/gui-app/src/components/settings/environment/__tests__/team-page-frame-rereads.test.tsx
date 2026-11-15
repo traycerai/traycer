@@ -21,6 +21,7 @@ import { PersonalPageFrame } from "@/components/settings/personal/personal-page-
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   configurationItem,
@@ -138,6 +139,14 @@ function mountFrame(
     useSettingsEnvironmentPickStore.setState({ pick });
   });
   const harness = mountTeamPage({ kind: "host" }, handlers);
+  // The account's teams as the app has them at sign-in: the environment list
+  // joins the viewer's role and the team's handle from them as its first read
+  // starts.
+  useAuthStore.setState({
+    shareableTeams: [
+      { teamId: acme.ownerId, slug: "handle-a", avatarUrl: null },
+    ],
+  });
   harness.queryClient.setDefaultOptions({
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
     mutations: { retry: false },

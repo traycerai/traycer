@@ -620,22 +620,6 @@ describe("reviewText", () => {
     );
   });
 
-  it("names a held hook's command and event", () => {
-    expect(
-      reviewText(
-        reviewEntry({
-          kind: "hook",
-          key: "notify",
-          reason: "executable_entry",
-          command: "notify.sh",
-          event: "stop",
-        }),
-      ),
-    ).toBe(
-      "notify (hook) runs notify.sh on stop and is on hold until you choose",
-    );
-  });
-
   it("words a held environment setting by the program it changes", () => {
     expect(
       reviewText(

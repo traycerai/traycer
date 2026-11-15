@@ -425,14 +425,36 @@ async function listMcpServers(
   return answer({ servers: authnServerRowsFromItems(listed.items) }, 200);
 }
 
-async function setMcpServerEnabled(
+function setMcpServerEnabled(
   environmentId: string,
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
   // This PATCH only keeps the current tool switches. The actual disable is
   // the revision-guarded DELETE of the mcp_server item that follows.
   context.mcpServerLists.delete(environmentId);
-  return answer({ outcome: "saved" }, 200);
+  return Promise.resolve(answer({ outcome: "saved" }, 200));
+}
+
+/**
+ * The put's credential, read back from authn's wire body (`pat`,
+ * `customHeaders`, `patSecretId`), which the put schema then checks.
+ */
+function credentialOfBody(body: Record<string, unknown>): unknown {
+  if (typeof body.patSecretId === "string") {
+    return { kind: "secret", secretId: body.patSecretId };
+  }
+  if (typeof body.pat === "string") return { kind: "pat", pat: body.pat };
+  if (body.customHeaders !== null && body.customHeaders !== undefined) {
+    return { kind: "headers", headers: body.customHeaders };
+  }
+  if ("pat" in body) return { kind: "none" };
+  return { kind: "unchanged" };
+}
+
+/** An edit carries the providers it is off for in its item's value, not at the top. */
+function offForOfBody(body: Record<string, unknown>): unknown {
+  const value = objectBody(objectBody(body.item)?.value);
+  return value?.offFor ?? body.offFor ?? [];
 }
 
 async function putMcpServer(
@@ -447,8 +469,9 @@ async function putMcpServer(
       ...body,
       environmentId,
       serverId,
-      offFor: body.offFor ?? [],
-      credential: body.credential ?? { kind: "unchanged" },
+      toolToggles: body.toolToggles ?? {},
+      offFor: offForOfBody(body),
+      credential: credentialOfBody(body),
     },
   );
   if (!parsed.success)
