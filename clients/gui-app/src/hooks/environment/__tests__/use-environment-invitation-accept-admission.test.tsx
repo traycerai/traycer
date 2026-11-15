@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
@@ -46,8 +47,10 @@ const mocks = vi.hoisted(() => ({
   binding: null as {
     readonly auth: {
       getRequestContextProvider: () => { current: () => object | null };
+      chosenSignIn: () => ChosenSignIn;
       acceptEnvironmentInvitation: (
         environmentId: string,
+        chosenBy: ChosenSignIn,
       ) => Promise<EnvironmentInvitationsAcceptResponse>;
     };
     readonly directory: {
@@ -90,9 +93,18 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+/** The sign-in every press here is made under. */
+const PRESSED_AS: ChosenSignIn = {
+  identityGeneration: 0,
+  userId: "invitation-user",
+};
+
+const PRESS = { request: { environmentId: "team-1" }, chosenBy: PRESSED_AS };
+
 function installAuth(
   acceptEnvironmentInvitation: (
     environmentId: string,
+    chosenBy: ChosenSignIn,
   ) => Promise<EnvironmentInvitationsAcceptResponse>,
   context: RequestContext,
 ): void {
@@ -101,6 +113,7 @@ function installAuth(
     getRequestContextProvider: () => ({
       current: () => mocks.currentContext,
     }),
+    chosenSignIn: () => PRESSED_AS,
     acceptEnvironmentInvitation,
   };
   mocks.binding = { auth, directory: { refresh: () => Promise.resolve([]) } };
@@ -164,10 +177,10 @@ describe("invitation acceptance clears the local host door state", () => {
     );
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
+      await result.current.mutateAsync(PRESS);
     });
 
-    expect(accept).toHaveBeenCalledWith("team-1");
+    expect(accept).toHaveBeenCalledWith("team-1", PRESSED_AS);
     expectLocalDoorCleared();
   });
 
@@ -180,7 +193,7 @@ describe("invitation acceptance clears the local host door state", () => {
     );
 
     await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
+      await result.current.mutateAsync(PRESS);
     });
 
     expectDoorStatesKept();
@@ -197,9 +210,9 @@ describe("invitation acceptance clears the local host door state", () => {
     });
 
     await act(async () => {
-      await expect(
-        failed.result.current.mutateAsync({ environmentId: "team-1" }),
-      ).rejects.toThrow("request failed");
+      await expect(failed.result.current.mutateAsync(PRESS)).rejects.toThrow(
+        "request failed",
+      );
     });
     expectDoorStatesKept();
     failed.unmount();
@@ -219,9 +232,7 @@ describe("invitation acceptance clears the local host door state", () => {
       value: Promise<EnvironmentInvitationsAcceptResponse> | null;
     } = { value: null };
     await act(async () => {
-      mutation.value = switched.result.current.mutateAsync({
-        environmentId: "team-1",
-      });
+      mutation.value = switched.result.current.mutateAsync(PRESS);
       await acceptStarted.promise;
     });
     mocks.currentContext = createContext("after-switch");

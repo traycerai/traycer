@@ -3,6 +3,7 @@ import {
   useTeamComputerInstallTokenLatest,
   useTeamComputerInstallTokenMutation,
 } from "@/hooks/host/use-team-computer-install-token-mutation";
+import { useHostBinding } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { usePickedTeamHandle } from "@/components/settings/environment/team-pick-label";
 import { TeamComputerUnattended } from "./team-computer-unattended";
@@ -28,6 +29,7 @@ function AccountInstallToken(props: {
   readonly environmentId: string;
   readonly teamHandle: string;
 }): ReactNode {
+  const binding = useHostBinding();
   const mutation = useTeamComputerInstallTokenMutation(props.environmentId);
   const latest = useTeamComputerInstallTokenLatest(props.environmentId);
   return (
@@ -37,7 +39,8 @@ function AccountInstallToken(props: {
       token={latest.token}
       failure={latest.failure}
       onMint={() => {
-        if (!latest.pending) mutation.mutate();
+        if (!latest.pending)
+          mutation.mutate(binding?.auth.chosenSignIn() ?? null);
       }}
     />
   );
