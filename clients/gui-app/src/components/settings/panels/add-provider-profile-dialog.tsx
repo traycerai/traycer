@@ -918,7 +918,7 @@ function SignInCard({
 }
 
 /** A profile's name and dot with its provider, as the dialog's body. */
-function ProfileAccountRow({
+export function ProfileAccountRow({
   providerId,
   profile,
 }: {
@@ -1087,7 +1087,7 @@ function AddProfileOutcomeFooter({
   return null;
 }
 
-function DuplicateAccountNotice({
+export function DuplicateAccountNotice({
   profile,
 }: {
   readonly profile: ProviderProfile;
@@ -1417,7 +1417,7 @@ export function AddProfileIdentityStep({
   );
 }
 
-function AddProfileFailureStep({
+export function AddProfileFailureStep({
   providerId,
   message,
   refusal,

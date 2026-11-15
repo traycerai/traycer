@@ -9,7 +9,10 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type {
+  AwaitLoginAnswer,
+  AwaitLoginVariables,
+} from "@/hooks/providers/use-providers-await-login-mutation";
 import {
   providerProfileSchema,
   type ProviderCliState,
@@ -67,7 +70,7 @@ export type StartLoginMutation = UseMutationResult<
   LoginMutationContext
 >;
 export type AwaitLoginMutation = UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   LoginMutationContext
@@ -102,7 +105,7 @@ export type ProviderTargetLoginResult =
       readonly kind: "target-refused";
       readonly targetRefusal: ProviderLoginTargetRefusal;
     }
-  | (AwaitLoginResult & {
+  | (AwaitLoginAnswer & {
       readonly kind: "target-outcome";
       readonly profileOutcome: ProviderLoginProfileOutcome | null;
       readonly admissionId: string | null;
@@ -363,7 +366,7 @@ function classifyAmbientAwaitResult(
  * still in flight is "not settled yet", never a failure. Managed rows get an
  * awaited per-profile probe host-side, so that window is ambient-only.
  */
-function classifyProfileAwaitResult(
+export function classifyProfileAwaitResult(
   result: AwaitLoginResult,
   awaitedProfileId: string | null,
 ): AwaitLoginResolution {
@@ -393,6 +396,26 @@ function classifyProfileAwaitResult(
     return { kind: "authPending" };
   }
   return { kind: "notAuthenticated" };
+}
+
+function classifyAwaitResultForAttempt(
+  result: AwaitLoginResult,
+  attempt: {
+    readonly target: ProviderLoginTarget | null;
+    readonly mode: ProviderProfileLoginFlowMode;
+    readonly existingProfileId: string | null;
+    readonly nextProfileId: string | null;
+    readonly awaitProfileId: string | null;
+  },
+): AwaitLoginResolution {
+  const { target, mode, existingProfileId, nextProfileId, awaitProfileId } =
+    attempt;
+  return target === null && mode === "reauth" && existingProfileId === null
+    ? classifyAmbientAwaitResult(result)
+    : classifyProfileAwaitResult(
+        result,
+        target === null ? nextProfileId : awaitProfileId,
+      );
 }
 
 /**
@@ -1348,22 +1371,23 @@ export function useProviderDestinationLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          const handleAwaitSuccess = (result: AwaitLoginResult): void => {
+          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
-            if (target !== null) {
+            const profileOutcome = result.profileOutcome ?? null;
+            if (target !== null && profileOutcome !== null) {
               setState({
                 ...result,
                 kind: "target-outcome",
-                profileOutcome: result.profileOutcome ?? null,
+                profileOutcome,
                 admissionId: nextProfileId,
               });
               return;
             }
             const outcome =
-              profileOutcomes === null
+              target !== null || profileOutcomes === null
                 ? null
                 : resolveProfileOutcome(
-                    result.profileOutcome ?? null,
+                    profileOutcome,
                     mode,
                     () =>
                       (result.state?.profiles ?? []).map((profile) =>
@@ -1390,10 +1414,32 @@ export function useProviderDestinationLoginFlow(
               awaitOnce();
               return;
             }
-            const resolution =
-              mode === "reauth" && existingProfileId === null
-                ? classifyAmbientAwaitResult(result)
-                : classifyProfileAwaitResult(result, nextProfileId);
+            const resolution = classifyAwaitResultForAttempt(result, {
+              target,
+              mode,
+              existingProfileId,
+              nextProfileId,
+              awaitProfileId,
+            });
+            if (resolution.kind === "codeRejected") {
+              restart("codeRejected");
+              return;
+            }
+            if (
+              resolution.kind === "authPending" &&
+              scheduleAuthPendingRepoll()
+            ) {
+              return;
+            }
+            if (target !== null) {
+              setState({
+                ...result,
+                kind: "target-outcome",
+                profileOutcome: null,
+                admissionId: awaitProfileId,
+              });
+              return;
+            }
             if (resolution.kind === "authenticated") {
               awaitOutcomeRef.current = "authenticated";
               successPayloadRef.current = resolution.payload;
@@ -1409,16 +1455,6 @@ export function useProviderDestinationLoginFlow(
                 "authentication",
                 resolution.refusal,
               );
-              return;
-            }
-            if (resolution.kind === "codeRejected") {
-              restart("codeRejected");
-              return;
-            }
-            if (
-              resolution.kind === "authPending" &&
-              scheduleAuthPendingRepoll()
-            ) {
               return;
             }
             awaitOutcomeRef.current = "notAuthenticated";
