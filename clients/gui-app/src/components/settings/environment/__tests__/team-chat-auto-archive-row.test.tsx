@@ -67,7 +67,7 @@ const SAVED = {
   updatedAt: 1_763_100_000_000,
 };
 
-function renderRow(role: "admin" | "editor" | null): void {
+function renderRow(role: "admin" | "editor" | "viewer"): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -138,7 +138,7 @@ describe("TeamChatAutoArchiveRow", () => {
 
   it("shows a reader who may not change it the saved value with every control greyed out", async () => {
     mocks.read.mockResolvedValue({ kind: "ok", record: SAVED });
-    renderRow(null);
+    renderRow("viewer");
 
     expect(
       await screen.findByText("Include chats members started"),
