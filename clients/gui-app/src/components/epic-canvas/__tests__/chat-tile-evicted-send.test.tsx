@@ -120,6 +120,7 @@ const MOCK_HOST_ENTRY = {
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
   getLocalEntry: () => null,
+  getLocalHostId: () => null,
   findById: (hostId: string) => {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return hostId === poolEntry.hostId ? poolEntry : null;
