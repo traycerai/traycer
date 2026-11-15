@@ -15,7 +15,6 @@ import {
 } from "./configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 
 /** Team rows share the picker's configuration radio group. */
 export interface TeamRowsProps {
@@ -31,9 +30,8 @@ export interface TeamRowsProps {
  * list must not hide an invitation the person can still review.
  */
 export function TeamRows(props: TeamRowsProps): ReactNode {
-  const client = useHostClient();
   const query = useEnvironmentListQuery(true);
-  const invitationsQuery = useEnvironmentInvitationsQuery(client);
+  const invitationsQuery = useEnvironmentInvitationsQuery();
   const teams =
     query.data?.environments.filter(
       (entry) => entry.ownerKind === "organization",

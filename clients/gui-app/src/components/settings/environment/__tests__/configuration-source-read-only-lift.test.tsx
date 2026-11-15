@@ -1,10 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  EnvironmentDescriptorV11,
-  EnvironmentInvitation,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
@@ -146,15 +143,11 @@ function mountBoundary(options: {
   readonly activeHost: HostDirectoryEntry;
 }): void {
   negotiateMethodsOn(options.activeHost.hostId, {
-    "environment.invitations.list": VERSION_1,
-    "environment.invitations.accept": VERSION_1,
     "environment.configuration.guide.set": VERSION_1,
     "environment.configuration.guide.reset": VERSION_1,
   });
-  const invitations: readonly EnvironmentInvitation[] = [];
   const harness = mountTeamPage(poolSource("admin"), {
     "environment.list": () => ({ environments: [...options.environments] }),
-    "environment.invitations.list": () => ({ invitations: [...invitations] }),
     "environment.configuration.guide.get": () => ({
       outcome: "unset",
       revision: "rev-1",

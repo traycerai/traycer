@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptorV11,
   EnvironmentInvitation,
+  EnvironmentInvitationsListResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -29,8 +30,6 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
-import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
@@ -45,17 +44,14 @@ import { SettingsSurface } from "@/components/settings/settings-surface";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import {
-  negotiateMethods,
-  negotiateMethodsOn,
-} from "./mcp-skills-test-support";
 import {
   mountTeamPage,
   poolSource,
   requireTeamHostClient,
-  requireViewingHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
 } from "./team-configuration-test-support";
@@ -167,8 +163,25 @@ beforeEach(() => {
   hoisted.toasts.length = 0;
 });
 
+/**
+ * Answers the invitations read, which goes to authn on every build. The page's
+ * binding carries a real `AuthService`, so its one method is stood in for and
+ * the query, cache and cancellation above it stay real.
+ */
+function answerInvitations(
+  read: () =>
+    | EnvironmentInvitationsListResponse
+    | Promise<EnvironmentInvitationsListResponse>,
+): void {
+  vi.spyOn(
+    AuthService.prototype,
+    "listEnvironmentInvitations",
+  ).mockImplementation(async () => read());
+}
+
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   resetTeamPageHarness();
   useAuthStore.setState({ contextMetadata: null });
   resetNegotiatedManifests();
@@ -184,8 +197,6 @@ afterEach(() => {
     defaultPick: PERSONAL_PICK,
   });
 });
-
-const V10 = { major: 1, minor: 0 } as const;
 
 const PERSONAL: EnvironmentDescriptorV11 = {
   environmentId: "env-personal",
@@ -236,18 +247,6 @@ const INVITATION: EnvironmentInvitation = {
   role: "editor",
   paidPlan: false,
 };
-
-/**
- * Reads the other host, as a second window on the same account does, so that
- * host's entries exist and hold its answers. Unmounted, those entries stay in
- * cache with nothing observing them — the window closed.
- */
-function WarmOtherHost(): ReactNode {
-  const client = requireViewingHostClient();
-  useEnvironmentListQuery(true);
-  useEnvironmentInvitationsQuery(client);
-  return null;
-}
 
 /**
  * A render of the page that is already mounted, which is the only re-render a
@@ -346,18 +345,14 @@ function mountBoundary(options: {
   readonly environments: () => readonly EnvironmentDescriptorV11[];
   readonly invitations: readonly EnvironmentInvitation[];
 }): { readonly rerenderList: () => Promise<void> } {
-  negotiateMethods({
-    "environment.invitations.list": V10,
-    "environment.invitations.accept": V10,
-  });
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
+  answerInvitations(() => ({
+    invitations: [...options.invitations],
+  }));
   const harness = mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [...options.environments()] }),
-    "environment.invitations.list": () => ({
-      invitations: [...options.invitations],
-    }),
   });
   render(
     <HeldValueHostRuntime>
@@ -391,18 +386,14 @@ function mountFrame(options: {
   readonly environments: () => readonly EnvironmentDescriptorV11[];
   readonly invitations: readonly EnvironmentInvitation[];
 }): { readonly rerenderList: () => Promise<void> } {
-  negotiateMethods({
-    "environment.invitations.list": V10,
-    "environment.invitations.accept": V10,
-  });
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
+  answerInvitations(() => ({
+    invitations: [...options.invitations],
+  }));
   const harness = mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [...options.environments()] }),
-    "environment.invitations.list": () => ({
-      invitations: [...options.invitations],
-    }),
   });
   render(
     <HeldValueHostRuntime>
@@ -501,10 +492,6 @@ describe("a team the environment list no longer carries", () => {
   });
 
   it("re-reads the invitations the membership list's answer outdated, and keeps the team", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
@@ -514,11 +501,11 @@ describe("a team the environment list no longer carries", () => {
     const invited: { current: readonly EnvironmentInvitation[] } = {
       current: [],
     };
+    answerInvitations(() => ({
+      invitations: [...invited.current],
+    }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [...listed.current] }),
-      "environment.invitations.list": () => ({
-        invitations: [...invited.current],
-      }),
     });
     render(
       <HeldValueHostRuntime>
@@ -553,202 +540,17 @@ describe("a team the environment list no longer carries", () => {
     });
   });
 
-  it("stops trusting its answer when the read moves to the other slot", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "team", environmentId: "env-a" },
-    });
-    const listed: { current: readonly EnvironmentDescriptorV11[] } = {
-      current: [PERSONAL, team("editor")],
-    };
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => ({ environments: [...listed.current] }),
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-    });
-    render(
-      <HeldValueHostRuntime>
-        <PersonalPageFrame section="secrets">
-          <Probe />
-        </PersonalPageFrame>
-      </HeldValueHostRuntime>,
-      { wrapper: harness.Wrapper },
-    );
-    await screen.findByTestId("probe");
-
-    // Removed and invited back: the host's route answers, so the team stays
-    // and Review is offered.
-    listed.current = [PERSONAL];
-    await harness.queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey.includes("environment.list"),
-    });
-    expect(await screen.findByRole("button", { name: "Review" })).toBeTruthy();
-
-    // Now the serving host stops advertising Accept, which moves the read to
-    // the authn route's slot. That slot holds nothing this session, so the
-    // list the page renders becomes empty — but nothing has ANSWERED there, so
-    // the answer the host's route gave is no longer evidence about what is on
-    // screen, and a removal claimed on it would move a person off a team they
-    // can rejoin and never offer them the Accept.
-    await act(async () => {
-      negotiateMethods({ "environment.invitations.list": V10 });
-      await Promise.resolve();
-    });
-
-    expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-      kind: "team",
-      environmentId: "env-a",
-    });
-  });
-
-  // Two entries of ONE slot. A build with no server pool gives each host its
-  // own RPC entry for the same account, so the slot never changes when the
-  // client does — and a question certified while one entry served must not
-  // survive the move to the other, whose cached list predates the removal.
-  //
-  // The clock is held so both hosts' membership answers carry the same
-  // `listedAt`: that equality is what isolates the entry identity as the only
-  // thing standing between the old answer and the new entry's stale data. It
-  // is a condition of this case, not a claim that every host switch fails.
-  it("cannot reuse one entry's answer for another entry of the same slot", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "team", environmentId: "env-a" },
-    });
-    const frozen = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
-    try {
-      const listed: { current: readonly EnvironmentDescriptorV11[] } = {
-        current: [PERSONAL, team("editor")],
-      };
-      const invited = { current: false };
-      const harness = mountTeamPage(poolSource("editor"), {
-        "environment.list": () => ({ environments: [...listed.current] }),
-        "environment.invitations.list": () => ({
-          invitations: invited.current ? [INVITATION] : [],
-        }),
-      });
-      // A held clock makes `timeUntilStale` zero, so without a `staleTime` the
-      // harness refetches forever and nothing ever settles. The clock is held
-      // for the membership timestamps, so the staleness has to be restored by
-      // hand.
-      harness.queryClient.setDefaultOptions({
-        queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
-      });
-      const remote = requireViewingHostClient();
-      negotiateMethodsOn(remote.getActiveHostId() ?? "", {
-        "environment.invitations.list": V10,
-        "environment.invitations.accept": V10,
-      });
-      const tree = (warm: boolean): ReactNode => (
-        <HeldValueHostRuntime>
-          {warm ? <WarmOtherHost /> : null}
-          <PersonalPageFrame section="secrets">
-            <Probe />
-          </PersonalPageFrame>
-        </HeldValueHostRuntime>
-      );
-      const view = render(tree(true), { wrapper: harness.Wrapper });
-      await screen.findByTestId("probe");
-      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-
-      // The other window closes. Its entries stay in cache, unobserved, with
-      // the invitations list from before the reinvitation below — which is what
-      // makes this host's answer the only one anything is observing, and so the
-      // one a route-scoped identity would credit to the other host's entry.
-      act(() => {
-        view.rerender(tree(false));
-      });
-      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-
-      // Removed and invited back. THIS host's entry answers, so the team stays
-      // and Review is offered — the answer is real, for this entry.
-      listed.current = [PERSONAL];
-      invited.current = true;
-      await act(() =>
-        harness.queryClient.invalidateQueries({
-          predicate: (query) => query.queryKey.includes("environment.list"),
-        }),
-      );
-      expect(
-        await screen.findByRole("button", { name: "Review" }),
-      ).toBeTruthy();
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
-
-      // The other host's membership answer says the same thing, in the same
-      // millisecond, so `listedAt` does not move. Its invitations entry still
-      // holds the list from before the reinvitation.
-      const otherList = harness.queryClient
-        .getQueryCache()
-        .getAll()
-        .find(
-          (query) =>
-            query.queryKey.includes("environment.list") &&
-            query.queryKey.includes(remote.getActiveHostId()),
-        );
-      expect(otherList).toBeDefined();
-      if (otherList !== undefined) {
-        act(() => {
-          harness.queryClient.setQueryData(otherList.queryKey, {
-            environments: [PERSONAL],
-          });
-        });
-      }
-
-      act(() => {
-        teamHostBoundary.client = remote;
-        view.rerender(tree(false));
-      });
-
-      // Nothing has answered on the entry now being read, so no removal may be
-      // claimed off it — the answer held is about the entry this page has just
-      // stopped reading.
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
-      expect(hoisted.toasts).toEqual([]);
-
-      // And the right outcome once the new entry answers its own question: the
-      // person is invited back, so Review is what this page offers on the host
-      // now serving it.
-      expect(
-        await screen.findByRole("button", { name: "Review" }),
-      ).toBeTruthy();
-      expect(hoisted.toasts).toEqual([]);
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "team",
-        environmentId: "env-a",
-      });
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
   it("claims no removal on a read that failed, and asks again no more than once", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
     let asked = 0;
+    answerInvitations(() => {
+      asked += 1;
+      throw new Error("down");
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
-      "environment.invitations.list": () => {
-        asked += 1;
-        throw new Error("down");
-      },
     });
     // The page renders again IN PLACE, which is the only re-render this case
     // can mean. Both ways of doing it through `view.rerender` measured
@@ -758,21 +560,10 @@ describe("a team the environment list no longer carries", () => {
     // child whose element is the same object and no context it reads changed.
     // The count then holds without the page having rendered at all.
     //
-    // A FRESH element, measured HERE, tore the read's observers down and built
-    // new ones (`observerRemoved` to `obs=0` on both routes, then
-    // `observerAdded`), and a new observer on a stale entry refetches by
-    // design — `refetchOnMount`, and this harness sets no `staleTime`. A second
-    // request then arrived from the client's own queue, drained after the first
-    // settled (`HostRequestCoordinator.drain`, no `queryFn` in its stack).
-    // Both are requests nothing asked this page for, and whether they landed
-    // before the assertion was a race.
-    //
-    // That is what happened at THIS site, and not a property of the API: the
-    // `cannot reuse one entry's answer…` case below also rerenders with fresh
-    // elements, and its evidence survives them — a remount there would reset
-    // `answeredQuestion`, so its RED on the old code could not have failed the
-    // way it did. What differs between the two sites is not pinned down, which
-    // is the reason this case no longer depends on either shape.
+    // A FRESH element tears the read's observers down and builds new ones, and
+    // a new observer on a stale entry refetches by design — `refetchOnMount`,
+    // and this harness sets no `staleTime`. That is a request nothing asked
+    // this page for, and whether it landed before the assertion was a race.
     //
     // Rendering from inside the mounted tree keeps the observer and the effect,
     // so the count below is evidence about the effect's dependencies — which is
@@ -837,16 +628,12 @@ describe("a team the environment list no longer carries", () => {
   // the route is replaced — which activates nothing, a surface owning the
   // route being the focused route owner already.
   async function removalOnMembers(alongside: ReactNode): Promise<void> {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
+    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     render(
       <HeldValueHostRuntime>
@@ -917,16 +704,12 @@ describe("a team the environment list no longer carries", () => {
 
   // A page the selection still offers is left where it is.
   it("leaves the surface alone when the selection it lands on offers the page", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
+    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     render(
       <HeldValueHostRuntime>
@@ -958,10 +741,6 @@ describe("a team the environment list no longer carries", () => {
   // question was answered, and a removal claimed on it is claimed on the
   // answer from before the question.
   it("claims nothing when its own request is cancelled by another reader", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
@@ -973,13 +752,13 @@ describe("a team the environment list no longer carries", () => {
     }>();
     let asked = 0;
     const listed = { current: [PERSONAL, team("editor")] };
+    answerInvitations(() => {
+      asked += 1;
+      if (asked === 2) return ownRead.promise;
+      return { invitations: asked === 1 ? [] : [INVITATION] };
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: listed.current }),
-      "environment.invitations.list": () => {
-        asked += 1;
-        if (asked === 2) return ownRead.promise;
-        return { invitations: asked === 1 ? [] : [INVITATION] };
-      },
     });
     render(
       <HeldValueHostRuntime>
@@ -1009,8 +788,7 @@ describe("a team the environment list no longer carries", () => {
     // cannot be read.
     await act(async () => {
       await harness.queryClient.cancelQueries({
-        predicate: (query) =>
-          query.queryKey.includes("environment.invitations.list"),
+        queryKey: authQueryKeys.environmentInvitationsAll(),
       });
     });
     expect(hoisted.toasts).toEqual([]);
@@ -1039,10 +817,6 @@ describe("a team the environment list no longer carries", () => {
   });
 
   it("acts on its own request, not on a read that was already in flight", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
@@ -1053,12 +827,12 @@ describe("a team the environment list no longer carries", () => {
     }>();
     let asked = 0;
     const listed = { current: [PERSONAL, team("editor")] };
+    answerInvitations(() => {
+      asked += 1;
+      return asked === 1 ? inFlight.promise : { invitations: [INVITATION] };
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: listed.current }),
-      "environment.invitations.list": () => {
-        asked += 1;
-        return asked === 1 ? inFlight.promise : { invitations: [INVITATION] };
-      },
     });
     render(
       <HeldValueHostRuntime>
@@ -1121,21 +895,17 @@ describe("a team the environment list no longer carries", () => {
     const frozen = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
     try {
-      negotiateMethods({
-        "environment.invitations.list": V10,
-        "environment.invitations.accept": V10,
-      });
       useSettingsEnvironmentPickStore.setState({
         pick: { kind: "team", environmentId: "env-a" },
       });
       let asked = 0;
       const listed = { current: [PERSONAL, team("editor")] };
+      answerInvitations(() => {
+        asked += 1;
+        return { invitations: [] };
+      });
       const harness = mountTeamPage(poolSource("editor"), {
         "environment.list": () => ({ environments: listed.current }),
-        "environment.invitations.list": () => {
-          asked += 1;
-          return { invitations: [] };
-        },
       });
       render(
         <HeldValueHostRuntime>
@@ -1180,22 +950,18 @@ describe("a team the environment list no longer carries", () => {
   });
 
   it("asks again on the membership answer after a failed read, and keeps the invited team", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
     const invitationsFail = { current: true };
     let asked = 0;
+    answerInvitations(() => {
+      asked += 1;
+      if (invitationsFail.current) throw new Error("down");
+      return { invitations: [INVITATION] };
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
-      "environment.invitations.list": () => {
-        asked += 1;
-        if (invitationsFail.current) throw new Error("down");
-        return { invitations: [INVITATION] };
-      },
     });
     render(
       <HeldValueHostRuntime>
@@ -1257,15 +1023,11 @@ describe("a team the environment list no longer carries", () => {
   });
 
   it("keeps the failed read's own line and Retry, which an answer has not refuted", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
+    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => {
         throw new Error("down");
       },
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     render(
       <ConfigurationSourceBoundary
@@ -1306,15 +1068,11 @@ describe("the name a picked configuration is called", () => {
     readonly environments: readonly EnvironmentDescriptorV11[];
     readonly invitations: readonly EnvironmentInvitation[];
   }): Promise<void> {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
+    answerInvitations(() => ({
+      invitations: [...options.invitations],
+    }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [...options.environments] }),
-      "environment.invitations.list": () => ({
-        invitations: [...options.invitations],
-      }),
     });
     render(<Label />, { wrapper: harness.Wrapper });
     await waitFor(() => {

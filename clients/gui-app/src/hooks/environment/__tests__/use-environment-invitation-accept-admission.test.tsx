@@ -2,15 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { hostRpcRegistry } from "@traycer/protocol/host/index";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   hostDoorStateFor,
   noteHostDoorState,
@@ -44,11 +39,9 @@ function expectDoorStatesKept(): void {
 }
 
 const localHostId = "local-team-computer";
-const rpcHostId = "invitation-rpc-host";
 
 const mocks = vi.hoisted(() => ({
   localHostId: null as string | null,
-  methodSupport: false,
   currentContext: null as object | null,
   binding: null as {
     readonly auth: {
@@ -65,7 +58,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => mocks.binding,
-  useHostClient: () => null,
 }));
 
 vi.mock("@/lib/host/local-host-id-snapshot", () => ({
@@ -76,25 +68,12 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => "invitation-user",
 }));
 
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => mocks.methodSupport,
-}));
-
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     hostManagement: null,
     refreshHostFleet: () => Promise.resolve(),
   }),
 }));
-
-const localEntry: HostDirectoryEntry = {
-  hostId: rpcHostId,
-  label: "Invitation host",
-  kind: "local",
-  websocketUrl: "ws://127.0.0.1:4917/rpc",
-  version: "test",
-  transportDialability: "dialable",
-};
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -153,29 +132,6 @@ function createWrapper(
   );
 }
 
-function createRpcClient(
-  queryClient: QueryClient,
-  context: RequestContext,
-  answer: EnvironmentInvitationsAcceptResponse,
-): HostClient<HostRpcRegistry> {
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    requestId: () => "invitation-request",
-    handlers: {
-      "environment.invitations.accept": () => Promise.resolve(answer),
-    },
-  });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === localEntry.hostId ? localEntry : null,
-    messenger,
-  });
-  spine.setRequestContext(context);
-  return spine.createRequester(localEntry);
-}
-
 describe("invitation acceptance clears the local host door state", () => {
   let queryClient: QueryClient;
 
@@ -183,7 +139,6 @@ describe("invitation acceptance clears the local host door state", () => {
     queryClient = createQueryClient();
     useHostDoorStateStore.setState({ byHost: new Map() });
     mocks.localHostId = localHostId;
-    mocks.methodSupport = false;
     mocks.currentContext = null;
     mocks.binding = null;
     seedDoorStates();
@@ -197,14 +152,14 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.currentContext = null;
   });
 
-  it("invalidates after a direct accepted invitation", async () => {
+  it("invalidates after an accepted invitation", async () => {
     const context = createContext("direct-user");
     const accept = vi.fn(() =>
       Promise.resolve({ outcome: "accepted" } as const),
     );
     installAuth(accept, context);
     const { result } = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(null),
+      () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
 
@@ -216,49 +171,11 @@ describe("invitation acceptance clears the local host door state", () => {
     expectLocalDoorCleared();
   });
 
-  it("does not invalidate after a direct invitation was not found", async () => {
+  it("does not invalidate after an invitation was not found", async () => {
     const context = createContext("direct-user");
     installAuth(() => Promise.resolve({ outcome: "not_found" }), context);
     const { result } = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(null),
-      { wrapper: createWrapper(queryClient) },
-    );
-
-    await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
-    });
-
-    expectDoorStatesKept();
-  });
-
-  it("invalidates after an RPC accepted invitation", async () => {
-    mocks.methodSupport = true;
-    const context = createContext("rpc-user");
-    installAuth(() => Promise.resolve({ outcome: "not_found" }), context);
-    const client = createRpcClient(queryClient, context, {
-      outcome: "accepted",
-    });
-    const { result } = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(client),
-      { wrapper: createWrapper(queryClient) },
-    );
-
-    await act(async () => {
-      await result.current.mutateAsync({ environmentId: "team-1" });
-    });
-
-    expectLocalDoorCleared();
-  });
-
-  it("does not invalidate after an RPC invitation was not found", async () => {
-    mocks.methodSupport = true;
-    const context = createContext("rpc-user");
-    installAuth(() => Promise.resolve({ outcome: "accepted" }), context);
-    const client = createRpcClient(queryClient, context, {
-      outcome: "not_found",
-    });
-    const { result } = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(client),
+      () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
 
@@ -275,10 +192,9 @@ describe("invitation acceptance clears the local host door state", () => {
       Promise.reject(new Error("request failed")),
     );
     installAuth(rejectAccept, failureContext);
-    const failed = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(null),
-      { wrapper: createWrapper(queryClient) },
-    );
+    const failed = renderHook(() => useEnvironmentInvitationAcceptMutation(), {
+      wrapper: createWrapper(queryClient),
+    });
 
     await act(async () => {
       await expect(
@@ -296,7 +212,7 @@ describe("invitation acceptance clears the local host door state", () => {
       return pending.promise;
     }, accountChangeContext);
     const switched = renderHook(
-      () => useEnvironmentInvitationAcceptMutation(null),
+      () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
     );
     const mutation: {
