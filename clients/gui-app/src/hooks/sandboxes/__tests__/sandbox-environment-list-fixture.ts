@@ -8,20 +8,29 @@ export type SandboxBillingEnvironmentAnswer =
   | { readonly kind: "loading" }
   | { readonly kind: "failed" };
 
+/** The team the served environment belongs to, as the person's account names it. */
+export interface BillingTeam {
+  readonly id: string;
+  readonly slug: string;
+}
+
+export const ACME_TEAM: BillingTeam = { id: "team-a", slug: "acme" };
+
 function buildEnvironment(
   environmentId: string,
   role: "admin" | "editor" | "viewer",
+  team: BillingTeam,
 ): EnvironmentDescriptorV11 {
   return {
     environmentId,
     ownerKind: "organization",
-    ownerId: "team-a",
-    roomId: "room-team-a",
-    label: "Acme",
+    ownerId: team.id,
+    roomId: `room-${team.id}`,
+    label: team.slug,
     effectiveRole: role,
     kind: "team",
     hostCount: 0,
-    providerHandle: "acme",
+    providerHandle: team.slug,
   };
 }
 
@@ -37,14 +46,16 @@ export function serveEnvironmentList(
   options: {
     readonly answer: SandboxBillingEnvironmentAnswer;
     readonly environmentId: string;
+    readonly team: BillingTeam;
     readonly onRead: (() => void) | null;
   },
 ): void {
-  const { answer, environmentId, onRead } = options;
+  const { answer, environmentId, team, onRead } = options;
   const rows = [
     buildEnvironment(
       environmentId,
       answer.kind === "ready" ? answer.role : "viewer",
+      team,
     ),
   ];
   // The join names the team by its slug from the person's own account.

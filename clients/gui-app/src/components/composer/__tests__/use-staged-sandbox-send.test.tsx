@@ -246,6 +246,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
+  useBillingUrlOf: () => () => "https://example.test/billing",
 }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),

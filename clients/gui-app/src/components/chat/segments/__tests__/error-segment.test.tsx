@@ -29,7 +29,10 @@ import {
   SandboxBillingRuntime,
   type SandboxBillingEnvironmentAnswer,
 } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
-import { serveEnvironmentList } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
+import {
+  ACME_TEAM,
+  serveEnvironmentList,
+} from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
@@ -842,6 +845,7 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     serveEnvironmentList(binding.auth, {
       answer: input.answer,
       environmentId: "env-acme",
+      team: ACME_TEAM,
       onRead: () => {
         environmentListRequests.push(1);
       },

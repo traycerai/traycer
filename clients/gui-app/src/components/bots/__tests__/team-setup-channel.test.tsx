@@ -55,7 +55,10 @@ import {
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
-import { serveEnvironmentList } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
+import {
+  ACME_TEAM,
+  serveEnvironmentList,
+} from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 
 const billingRoleRead = vi.hoisted(() => ({ viaTransport: false }));
@@ -199,6 +202,7 @@ function teamSetupForBillingRole(
     serveEnvironmentList(mocks.binding.auth, {
       answer: { kind: "ready", role },
       environmentId: "env-new",
+      team: ACME_TEAM,
       onRead: () => {
         environmentListRequests.push(1);
       },

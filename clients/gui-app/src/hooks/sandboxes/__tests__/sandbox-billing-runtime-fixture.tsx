@@ -19,6 +19,7 @@ import { useHostBinding } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
+  ACME_TEAM,
   serveEnvironmentList,
   type SandboxBillingEnvironmentAnswer,
 } from "./sandbox-environment-list-fixture";
@@ -169,6 +170,7 @@ export function SandboxBillingRuntime(props: {
       serveEnvironmentList(binding.auth, {
         answer,
         environmentId,
+        team: ACME_TEAM,
         onRead: onEnvironmentListRead,
       });
       onBinding?.(binding);
