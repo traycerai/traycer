@@ -23,6 +23,7 @@ import {
 } from "@/hooks/host/use-host-query";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
@@ -182,6 +183,7 @@ function hostRowStatus(input: {
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const queryClient = useQueryClient();
   const entryHash = useHostQueryEntryHash({
     cacheKeyIdentity: undefined,
@@ -191,11 +193,15 @@ function AgentMemoriesRow(): ReactNode {
   });
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
-    followSettingsSave: (request, sentOn) =>
-      prepareSave(
-        { method: AGENT_MEMORIES_SET, request },
-        sentOn.getActiveHostId(),
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_MEMORIES_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+    },
     mutationKey: configMutationKeys.agentMemoriesSet(),
     errorMessage: "Couldn't update memories",
     // The observer owns sequential confirmation reads. Mark this exact entry
