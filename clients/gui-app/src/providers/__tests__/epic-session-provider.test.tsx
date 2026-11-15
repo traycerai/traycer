@@ -138,6 +138,13 @@ const resolveSessionHostClient = vi.hoisted(
 // network boundary (`createRemoteHostTransport`), whose stream client is the
 // inert one `fakeDurableStreamTransports().opener` mints (a case may replace
 // that opener to count or throw on the socket's creation).
+// The suite setup (`__tests__/test-browser-apis.ts`) mocks this module with the
+// fake opener for every file; naming it here with its original puts the real
+// hook back for this one.
+vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
+  importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
+);
+
 vi.mock("@/providers/use-runner-host", async () => {
   const { MockRunnerHost } =
     await import("@traycer-clients/shared/host-client/mock/mock-runner-host");
