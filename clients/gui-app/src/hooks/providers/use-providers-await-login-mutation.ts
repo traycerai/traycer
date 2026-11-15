@@ -159,6 +159,21 @@ export function useProvidersAwaitLoginForClient(args: {
   AwaitLoginVariables,
   AwaitLoginContext
 > {
+  return useProvidersDestinationAwaitLoginForClient(args, false);
+}
+
+export function useProvidersDestinationAwaitLoginForClient(
+  args: {
+    readonly client: HostClient<HostRpcRegistry> | null;
+    readonly getCacheHostId: () => string | null;
+  },
+  targeted: boolean,
+): UseMutationResult<
+  AwaitLoginResponse,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
   const queryClient = useQueryClient();
   return useHostMutationWithResponseTimeout<
     HostRpcRegistry,
@@ -168,6 +183,10 @@ export function useProvidersAwaitLoginForClient(args: {
   >({
     client: args.client,
     method: "providers.awaitLogin",
+    requiredHostMethodVersion: () =>
+      targeted
+        ? { method: "providers.awaitLogin", version: { major: 2, minor: 4 } }
+        : null,
     mapVariables: (variables) => variables.request,
     signalFor: (variables) => variables.signal,
     // Long-poll: the host holds the response until the OAuth child
@@ -179,7 +198,7 @@ export function useProvidersAwaitLoginForClient(args: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
       onSuccess: async (data: AwaitLoginResponse, variables, context) => {
-        if (context.hostId === null) return;
+        if (targeted || context.hostId === null) return;
         const next = data.state;
         if (next === null) {
           // A caller that reads outcomes looks a named profile up in the
