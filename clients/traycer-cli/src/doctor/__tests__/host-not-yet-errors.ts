@@ -14,6 +14,10 @@ export interface HostNotYetErrors {
   readonly notYetOnRequest: (method: string) => Error;
   /** A retryable refusal at the open, before any request. */
   readonly notYetAtOpen: (method: string) => Error;
+  /** The post-open request timeout a current host sends, retryable. */
+  readonly requestTimeout: (method: string) => Error;
+  /** The same timeout as a host through 1.1.9 sends it: no `retryable`. */
+  readonly legacyRequestTimeout: (method: string) => Error;
   /** Nothing answered. */
   readonly silent: (method: string) => Error;
   /** A final refusal: not retryable. */
@@ -54,6 +58,35 @@ export const hostNotYetErrors: HostNotYetErrors = {
         upgradeGuidance: null,
         doorReason: "not_admitted",
         retryable: true,
+      },
+      replaySafetyFromKey: false,
+    }),
+  requestTimeout: (method) =>
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Timed out waiting for 'request' frame after openAck (30000ms)",
+      requestId: "request-timeout",
+      method,
+      fatalDetails: {
+        code: "RPC_REQUEST_TIMEOUT",
+        reason: "Timed out waiting for 'request' frame after openAck (30000ms)",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+      replaySafetyFromKey: false,
+    }),
+  legacyRequestTimeout: (method) =>
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Timed out waiting for 'request' frame after openAck (30000ms)",
+      requestId: "legacy-request-timeout",
+      method,
+      fatalDetails: {
+        code: "UNAUTHORIZED",
+        reason: "Timed out waiting for 'request' frame after openAck (30000ms)",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
       },
       replaySafetyFromKey: false,
     }),
