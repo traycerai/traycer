@@ -188,6 +188,7 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
     everyRequestWentToThePool(harness, "environment.configuration.items");
   });
 

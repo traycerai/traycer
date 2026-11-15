@@ -2,6 +2,10 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+} from "../../../../../__tests__/create-fake-runner-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -13,6 +17,9 @@ import {
   type EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   DropdownMenu,
@@ -94,6 +101,29 @@ type ListHandler = () => Promise<EnvironmentListResponseV11>;
 function mountClient(list: ListHandler): {
   readonly Wrapper: (p: { children: ReactNode }) => ReactNode;
 } {
+  let currentRows: EnvironmentDescriptorV11[] = [];
+  const auth = createFakeEnvironmentCloudAuth({
+    listEnvironments: async () => {
+      const response = await list();
+      currentRows = [...response.environments];
+      return { kind: "ok", list: { environments: [...currentRows] } };
+    },
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => currentRows,
+    }),
+  });
+  const authBinding = Object.create(
+    null,
+  ) as HostRuntimeBinding<HostRpcRegistry>;
+  Object.defineProperty(authBinding, "auth", { value: auth });
+  useAuthStore.setState({
+    status: "signed-in",
+    shareableTeams: ["admin", "editor", "viewer", "old", "a"].map((id) => ({
+      teamId: `team-${id}`,
+      slug: `handle-${id}`,
+      avatarUrl: null,
+    })),
+  });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -115,7 +145,9 @@ function mountClient(list: ListHandler): {
   return {
     Wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
-        {props.children}
+        <HostRuntimeContext.Provider value={authBinding}>
+          {props.children}
+        </HostRuntimeContext.Provider>
       </QueryClientProvider>
     ),
   };
@@ -124,7 +156,10 @@ function mountClient(list: ListHandler): {
 beforeEach(() => {
   boundary.client = null;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
+});
 
 describe("TeamRows", () => {
   function PickerHarness(props: {

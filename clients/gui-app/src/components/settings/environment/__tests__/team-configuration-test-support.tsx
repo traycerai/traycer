@@ -18,8 +18,13 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
@@ -27,8 +32,15 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
 
 /**
  * The shared host client a page under test reads through `useHostClient()`.
@@ -163,6 +175,127 @@ export function hostIdsOf(harness: TeamPageHarness, method: string): string[] {
     .map((call) => call.authority.endpoint.hostId);
 }
 
+async function answerEnvironmentReadFromHandlers(
+  request: EnvironmentTransportRequest,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): Promise<EnvironmentTransportAnswer | null> {
+  if (request.method !== "GET") return null;
+
+  const url = new URL(request.url);
+  const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
+  if (match === null) return null;
+
+  const environmentId = decodeURIComponent(match[1] ?? "");
+  switch (match[2]) {
+    case "items": {
+      const response = await handlers["environment.configuration.items"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      const kind = url.searchParams.get("kind");
+      return jsonEnvironmentAnswer({
+        items: response.items.filter((item) => item.kind === kind),
+      });
+    }
+    case "revision": {
+      const response = await handlers["environment.configuration.revision"]?.({
+        environmentId,
+      });
+      return response === undefined
+        ? null
+        : jsonEnvironmentAnswer({ revision: response.revision });
+    }
+    case "mcp-servers": {
+      const response = await handlers[
+        "environment.configuration.mcpServers.list"
+      ]?.({ environmentId });
+      return response === undefined ? null : jsonEnvironmentAnswer(response);
+    }
+    case "secrets": {
+      const response = await handlers["environment.secrets.list"]?.({});
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        secrets: response.secrets.map((secret) => ({
+          id: secret.secretId,
+          name: secret.name,
+          kind: secret.kind,
+          protocol: secret.protocol ?? secret.kind,
+          hosts: secret.destinations,
+          currentVersionId: secret.currentVersionId ?? secret.secretId,
+          updatedAt: secret.updatedAt,
+          variables: secret.variables.map((name) => ({ name })),
+        })),
+        removed: response.removed,
+      });
+    }
+    case "secrets/harness-connections": {
+      const response = await handlers["environment.plans.list"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        connections: response.plans.map((plan) => ({
+          profileId: plan.profileId,
+          harnessId: plan.harness,
+          bindingVersion: plan.bindingVersion ?? null,
+          kind: plan.harness === "api_key" ? "api_key" : "harness",
+          status:
+            plan.status === "linked"
+              ? "connected"
+              : plan.status === "empty"
+                ? "absent"
+                : plan.status,
+          linkedBy:
+            plan.linkedBy === null
+              ? null
+              : {
+                  displayName: plan.linkedBy.name,
+                  you: plan.linkedBy.you,
+                },
+        })),
+      });
+    }
+    case "hosts": {
+      if (!url.searchParams.has("include")) return null;
+      const response = await handlers["environment.host.list"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        hosts: response.hosts.map((host) => ({
+          hostId: host.hostId,
+          hostName: host.hostLabel,
+          hostPlatform: host.hostPlatform,
+          enrolledByUserId: host.enrolledByUserId,
+          hostKind: host.kind,
+          boundAt: host.boundAt,
+          reportedAt: host.lastReportedAt,
+          online: host.reachable,
+          purgePending: false,
+          hasLocalRow: host.hasLocalRow,
+          items: host.applied.map((item) => {
+            const separator = item.itemKey.indexOf(":");
+            return {
+              kind:
+                separator < 0 ? item.itemKey : item.itemKey.slice(0, separator),
+              key: separator < 0 ? "" : item.itemKey.slice(separator + 1),
+              status:
+                item.state === "applied"
+                  ? "applied"
+                  : item.state === "not_applied"
+                    ? "failed"
+                    : "pending",
+              code: item.reason ?? "ok",
+            };
+          }),
+        })),
+      });
+    }
+    default:
+      return null;
+  }
+}
+
 /**
  * A host whose connection negotiated `negotiated` for a method: a request that
  * carries a higher version floor for that method is refused before anything is
@@ -229,6 +362,43 @@ function buildTeamPage(
       mutations: { retry: false },
     },
   });
+  const fallbackRows: EnvironmentDescriptorV11[] =
+    source.kind === "pool"
+      ? [
+          {
+            environmentId: source.environmentId,
+            ownerKind:
+              source.configuration === "personal" ? "user" : "organization",
+            ownerId: source.configuration === "personal" ? "user-me" : "team-a",
+            roomId: source.roomId,
+            label: source.configuration === "personal" ? "Personal" : "Acme",
+            effectiveRole:
+              source.configuration === "personal"
+                ? "owner"
+                : (source.effectiveRole ?? "viewer"),
+            kind: source.configuration,
+            hostCount: 1,
+            providerHandle: source.providerHandle,
+          },
+        ]
+      : [];
+  let currentRows: EnvironmentDescriptorV11[] = [...fallbackRows];
+  const auth = createFakeEnvironmentCloudAuth({
+    listEnvironments: async () => {
+      const response = await handlers["environment.list"]?.({});
+      if (response !== undefined) currentRows = [...response.environments];
+      return { kind: "ok", list: { environments: [...currentRows] } };
+    },
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => currentRows,
+      onRequest: (request) =>
+        answerEnvironmentReadFromHandlers(request, handlers),
+    }),
+  });
+  const authBinding = Object.create(
+    null,
+  ) as HostRuntimeBinding<HostRpcRegistry>;
+  Object.defineProperty(authBinding, "auth", { value: auth });
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -265,7 +435,19 @@ function buildTeamPage(
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    shareableTeams: [
+      {
+        teamId: "team-a",
+        slug:
+          source.kind === "pool" && source.configuration === "team"
+            ? (source.providerHandle ?? "handle-a")
+            : "handle-a",
+        avatarUrl: null,
+      },
+    ],
+  });
   return {
     messenger,
     queryClient,
@@ -275,9 +457,11 @@ function buildTeamPage(
         .map((call) => call.params),
     Wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
-        <ConfigurationSourceContext.Provider value={source}>
-          {props.children}
-        </ConfigurationSourceContext.Provider>
+        <HostRuntimeContext.Provider value={authBinding}>
+          <ConfigurationSourceContext.Provider value={source}>
+            {props.children}
+          </ConfigurationSourceContext.Provider>
+        </HostRuntimeContext.Provider>
       </QueryClientProvider>
     ),
   };
@@ -287,5 +471,5 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
 }
