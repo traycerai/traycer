@@ -1,5 +1,6 @@
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   MockHostMessenger,
   type MockHandlerMap,
@@ -38,21 +39,34 @@ export interface EnvironmentClientFixture {
   readonly client: HostClient<HostRpcRegistry>;
 }
 
+export interface EnvironmentMessengerLayers {
+  readonly messenger: IHostMessenger<HostRpcRegistry>;
+  readonly singleAttemptMessenger: IHostMessenger<HostRpcRegistry> | null;
+}
+
+export type EnvironmentMessengerWrapper = (
+  messenger: IHostMessenger<HostRpcRegistry>,
+) => EnvironmentMessengerLayers;
+
 export function buildEnvironmentClient(options: {
   readonly hostId: string;
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
+  readonly wrapMessenger?: EnvironmentMessengerWrapper;
 }): EnvironmentClientFixture {
   const entry = hostEntryFixture(options.hostId);
+  const rawMessenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `req-${options.hostId}`,
+    handlers: options.handlers,
+  });
+  const layers = options.wrapMessenger?.(rawMessenger);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     schedulingPolicy: hostRpcSchedulingPolicy,
     findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${options.hostId}`,
-      handlers: options.handlers,
-    }),
+    messenger: layers?.messenger ?? rawMessenger,
+    singleAttemptMessenger: layers?.singleAttemptMessenger ?? undefined,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),

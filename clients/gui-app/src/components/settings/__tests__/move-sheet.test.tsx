@@ -9,33 +9,76 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  recordNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  EnvironmentMoveAcceptRequest,
-  EnvironmentMoveAcceptResponse,
-  EnvironmentMovePlanResponseV12,
+  EnvironmentMovePlanRequestV20,
+  EnvironmentMovePlanResponseV20,
+  EnvironmentMoveStageRequest,
+  EnvironmentMoveStageResponse,
+  EnvironmentMoveStartRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  fakeEnvironmentCloud,
+  type FakeEnvironmentCloud,
+  type FakeEnvironmentCloudAnswer,
+  type FakeEnvironmentCloudResponder,
+} from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { MoveSheet } from "@/components/settings/move-sheet";
 import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
-const HOST_ID = "old";
+const HOST_ID = "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60";
+const ENVIRONMENT_ID = "env-personal";
+const ATTEMPT_ID = "a7b8c9d0-e1f2-4a3b-8c5d-6e7f8091a2b3";
+const ACCEPTANCE_ID = "c3d4e5f6-0718-4a29-8b3c-4d5e6f708192";
+const MANIFEST_HASH = "c".repeat(64);
+const PERSONAL_DIRECTORY: EnvironmentDirectoryResult = {
+  kind: "ok",
+  list: {
+    environments: [
+      {
+        environmentId: ENVIRONMENT_ID,
+        ownerKind: "user",
+        ownerId: "user-me",
+        roomId: "room-personal",
+        label: "Personal",
+      },
+    ],
+  },
+};
 
-const clientMock = vi.hoisted(
-  (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
+const fixtureMock = vi.hoisted(
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    binding: {
+      auth: unknown;
+      directory: { refresh: () => Promise<void> };
+    } | null;
+  } => ({
+    client: null,
+    binding: null,
+  }),
 );
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => clientMock.current,
+  useHostClientForHostId: () => fixtureMock.client,
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => fixtureMock.binding };
+});
 
 // The computers running Personal, as the one hook answers them.
 const runningPersonalMock = vi.hoisted(
@@ -51,7 +94,7 @@ vi.mock(
   }),
 );
 
-type PlanRows = EnvironmentMovePlanResponseV12["rows"];
+type PlanRows = EnvironmentMovePlanResponseV20["rows"];
 
 function row(key: string, label: string, detail: string | null) {
   return { kind: "variable" as const, key, os: null, label, detail };
@@ -64,23 +107,16 @@ function rowOfKind(key: string, kind: string, label: string) {
 function plan(
   planHash: string,
   rows: Partial<PlanRows>,
-): EnvironmentMovePlanResponseV12 {
-  return planWith(planHash, rows, {
-    personalHoldsSecrets: false,
-    itemChoices: false,
-  });
+): EnvironmentMovePlanResponseV20 {
+  return planWith(planHash, rows, { personalHoldsSecrets: false });
 }
 
 function planWith(
   planHash: string,
   rows: Partial<PlanRows>,
-  flags: {
-    readonly personalHoldsSecrets: boolean;
-    readonly itemChoices: boolean;
-  },
-): EnvironmentMovePlanResponseV12 {
+  flags: { readonly personalHoldsSecrets: boolean },
+): EnvironmentMovePlanResponseV20 {
   return {
-    ...flags,
     planHash,
     planRevision: 1,
     hostVersion: "1.5.0",
@@ -97,6 +133,7 @@ function planWith(
       ...rows,
     },
     guideDiffers: false,
+    personalHoldsSecrets: flags.personalHoldsSecrets,
   };
 }
 
@@ -113,12 +150,19 @@ const FIRST_PLAN = plan("hash-1", {
 });
 
 interface Harness {
-  readonly accepts: EnvironmentMoveAcceptRequest[];
+  readonly plans: EnvironmentMovePlanRequestV20[];
+  readonly stages: EnvironmentMoveStageRequest[];
+  readonly starts: EnvironmentMoveStartRequest[];
+  readonly authn: FakeEnvironmentCloud;
 }
 
 interface MountOptions {
-  readonly plans: readonly EnvironmentMovePlanResponseV12[];
-  readonly acceptAnswers: readonly EnvironmentMoveAcceptResponse[];
+  readonly plans: readonly EnvironmentMovePlanResponseV20[];
+  readonly authnAnswer?:
+    | FakeEnvironmentCloudAnswer
+    | FakeEnvironmentCloudResponder;
+  readonly firstPlanError?: Error;
+  readonly stageError?: Error;
 }
 
 function mount(options: MountOptions): Harness {
@@ -151,31 +195,90 @@ function mountWithRunning(
   options: MountOptions,
   running: HostsRunningConfiguration,
 ): Harness {
-  const accepts: EnvironmentMoveAcceptRequest[] = [];
+  const plans: EnvironmentMovePlanRequestV20[] = [];
+  const stages: EnvironmentMoveStageRequest[] = [];
+  const starts: EnvironmentMoveStartRequest[] = [];
   let planReads = 0;
+  let latestPlan: EnvironmentMovePlanResponseV20 | null = null;
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.move.plan": () => {
+      "environment.move.plan": (request) => {
+        plans.push(request);
+        if (planReads === 0 && options.firstPlanError !== undefined) {
+          planReads += 1;
+          throw options.firstPlanError;
+        }
         const answer =
           options.plans[Math.min(planReads, options.plans.length - 1)];
         planReads += 1;
+        latestPlan = answer;
         return answer;
       },
-      "environment.move.accept": (request) => {
-        accepts.push(request);
-        return options.acceptAnswers[
-          Math.min(accepts.length - 1, options.acceptAnswers.length - 1)
-        ];
+      "environment.move.stage": (request) => {
+        stages.push(request);
+        if (options.stageError !== undefined) throw options.stageError;
+        if (latestPlan === null)
+          throw new Error("The plan must be read before staging.");
+        return {
+          evidence: {
+            attemptId: ATTEMPT_ID,
+            planHash: latestPlan.planHash,
+            planRevision: latestPlan.planRevision,
+            hostVersion: latestPlan.hostVersion,
+            itemCount: latestPlan.rows.moves.length,
+            keyChoices: request.keyChoices,
+            sourceHostId: HOST_ID,
+            sharingGeneration: 1,
+            targetKind: "personal",
+            environmentId: ENVIRONMENT_ID,
+            disclosureVersion: latestPlan.disclosureVersion,
+          },
+          authorization: { manifestHash: MANIFEST_HASH },
+        } satisfies EnvironmentMoveStageResponse;
+      },
+      "environment.move.start": (request) => {
+        starts.push(request);
+        return {
+          state: "running",
+          attemptId: ATTEMPT_ID,
+          acceptanceId: ACCEPTANCE_ID,
+        };
       },
     },
   });
-  clientMock.current = client;
+  const authn = fakeEnvironmentCloud(
+    options.authnAnswer ??
+      ((request) => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`))
+          return { status: 200, body: { hosts: [{ purgePending: false }] } };
+        if (path.endsWith("/move-acceptances"))
+          return { status: 201, body: { acceptanceId: ACCEPTANCE_ID } };
+        throw new Error(
+          `Unexpected environment request: ${request.method} ${path}`,
+        );
+      }),
+  );
+  fixtureMock.client = client;
+  fixtureMock.binding = {
+    auth: {
+      environmentCloud: () => authn.cloud,
+      listEnvironments: () => Promise.resolve(PERSONAL_DIRECTORY),
+    },
+    directory: { refresh: () => Promise.resolve() },
+  };
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user" },
+    shareableTeams: [],
+  });
   runningPersonalMock.current = running;
-  recordNegotiatedHostMethods(HOST_ID, [
-    "environment.move.plan",
-    "environment.move.accept",
-  ]);
+  recordNegotiatedHostManifest(HOST_ID, {
+    "environment.move.plan": { major: 2, minor: 0 },
+    "environment.move.stage": { major: 1, minor: 0 },
+    "environment.move.start": { major: 1, minor: 0 },
+  });
   render(
     <QueryClientProvider
       client={
@@ -195,7 +298,7 @@ function mountWithRunning(
       .getState()
       .openSheet({ hostId: HOST_ID, hostName: "Old laptop" });
   });
-  return { accepts };
+  return { plans, stages, starts, authn };
 }
 
 async function settle(): Promise<void> {
@@ -210,18 +313,50 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
-  clientMock.current = null;
+  fixtureMock.client = null;
+  fixtureMock.binding = null;
+  useAuthStore.getState().setSignedOut();
 });
 
-const ACCEPTED: EnvironmentMoveAcceptResponse = {
-  outcome: "accepted",
-  attemptId: "a",
-  consentId: "c",
-};
-
 describe("<MoveSheet />", () => {
+  it("shows the disclosure and Move to Personal for disclosure version 1", async () => {
+    const harness = mount({ plans: [FIRST_PLAN] });
+    await settle();
+
+    expect(screen.getByTestId("move-sheet-disclosure").textContent).toContain(
+      "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.",
+    );
+    expect(screen.getByTestId("move-sheet-accept").textContent).toContain(
+      "Move to Personal",
+    );
+    expect(harness.plans).toEqual([
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        personal: null,
+      },
+    ]);
+  });
+
+  it("asks for an update and stages nothing for an unsupported disclosure version", async () => {
+    const harness = mount({
+      plans: [{ ...FIRST_PLAN, disclosureVersion: 2 }],
+    });
+    await settle();
+
+    expect(
+      screen.getByText("Old laptop needs an update to show its settings here."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("move-sheet-accept")).toBeNull();
+    expect(harness.stages).toEqual([]);
+    expect(
+      harness.authn.requests.some((request) =>
+        request.url.endsWith("/move-acceptances"),
+      ),
+    ).toBe(false);
+  });
+
   it("draws the plan's rows: Moves, Stays with a key-shaped value, Already in Personal (empty)", async () => {
-    mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [FIRST_PLAN] });
     await settle();
 
     expect(screen.getByText("Move Old laptop to Personal?")).toBeTruthy();
@@ -266,7 +401,6 @@ describe("<MoveSheet />", () => {
           differsMasked: [row("PAGER", "PAGER", "value differs")],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -289,7 +423,6 @@ describe("<MoveSheet />", () => {
           differsMasked: [row("PAGER", "PAGER", "value differs")],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -305,7 +438,6 @@ describe("<MoveSheet />", () => {
   it("says above Moves where an edited agent selection guide goes, naming the computer", async () => {
     mount({
       plans: [{ ...FIRST_PLAN, guideDiffers: true }],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -320,7 +452,7 @@ describe("<MoveSheet />", () => {
   });
 
   it("says nothing of the guide while it is not edited", async () => {
-    mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [FIRST_PLAN] });
     await settle();
 
     expect(screen.queryByTestId("move-sheet-guide-differs")).toBeNull();
@@ -328,7 +460,7 @@ describe("<MoveSheet />", () => {
 
   it("holds Move to Personal while the computers running Personal are unread", async () => {
     mountWithRunning(
-      { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
+      { plans: [FIRST_PLAN] },
       {
         hosts: [],
         state: "loading",
@@ -348,7 +480,7 @@ describe("<MoveSheet />", () => {
   it("says it couldn't read which computers run Personal, and Retry reads again", async () => {
     const retry = vi.fn<() => void>();
     mountWithRunning(
-      { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
+      { plans: [FIRST_PLAN] },
       {
         hosts: [],
         state: "failed",
@@ -371,7 +503,7 @@ describe("<MoveSheet />", () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-  it("offers Move to Personal when no row moves, and closes after the empty accept", async () => {
+  it("stages an empty plan with no choices and closes after start", async () => {
     const harness = mount({
       plans: [
         plan("hash-n", {
@@ -379,7 +511,6 @@ describe("<MoveSheet />", () => {
           staysOnThisComputer: [],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -394,9 +525,19 @@ describe("<MoveSheet />", () => {
     expect(screen.queryByTestId("move-sheet-staysOnThisComputer")).toBeNull();
     expect(screen.getByTestId("move-sheet-alreadyInPersonal")).toBeTruthy();
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await settle();
-    expect(harness.accepts).toEqual([{ planHash: "hash-n", keyChoices: [] }]);
-    expect(useMoveSheetStore.getState().target).toBeNull();
+    await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
+    const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
+    expect(harness.plans).toEqual([{ target, personal: null }]);
+    expect(harness.stages).toEqual([
+      { target, keyChoices: [], personal: null },
+    ]);
+    expect(harness.starts).toEqual([
+      {
+        attemptId: ATTEMPT_ID,
+        planHash: "hash-n",
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    ]);
   });
 
   it("shows Personal's existing secrets when an empty move reaches them", async () => {
@@ -407,11 +548,9 @@ describe("<MoveSheet />", () => {
           {},
           {
             personalHoldsSecrets: true,
-            itemChoices: false,
           },
         ),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -435,7 +574,6 @@ describe("<MoveSheet />", () => {
           ],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -458,11 +596,10 @@ describe("<MoveSheet />", () => {
     const secretPlan = plan("hash-s", {
       moves: [rowOfKind("TOKEN", "secret", "TOKEN")],
     });
-    const options = { plans: [secretPlan], acceptAnswers: [ACCEPTED] };
+    const options = { plans: [secretPlan] };
 
     mount({
       plans: [plan("hash-v", { moves: [row("EDITOR", "EDITOR", null)] })],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
     expect(disclosure()).toBe(accepts);
@@ -487,7 +624,7 @@ describe("<MoveSheet />", () => {
   });
 
   it("offers How Traycer handles this under the disclosure, and not on the nothing-to-move sheet", async () => {
-    mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [FIRST_PLAN] });
     await settle();
 
     expect(screen.queryByTestId("members-data-handling-notice")).toBeNull();
@@ -503,7 +640,6 @@ describe("<MoveSheet />", () => {
       plans: [
         plan("hash-n", { alreadyInPersonal: [row("HOME", "HOME", null)] }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
     expect(screen.queryByTestId("members-data-handling-trigger")).toBeNull();
@@ -514,7 +650,6 @@ describe("<MoveSheet />", () => {
       plans: [
         plan("hash-n2", { staysOnThisComputer: [row("SSH", "SSH", null)] }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -533,7 +668,6 @@ describe("<MoveSheet />", () => {
           ],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -556,7 +690,6 @@ describe("<MoveSheet />", () => {
           staysOnThisComputer: [row("EDITOR", "EDITOR", null)],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -569,7 +702,7 @@ describe("<MoveSheet />", () => {
   });
 
   it("opens a section to its items", async () => {
-    mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [FIRST_PLAN] });
     await settle();
 
     fireEvent.click(
@@ -588,37 +721,206 @@ describe("<MoveSheet />", () => {
     );
   });
 
-  it("sends the plan hash alone when no row's choice was changed", async () => {
-    const { accepts } = mount({
+  it("stages and starts the displayed plan when no row choice changed", async () => {
+    const harness = mount({
       plans: [FIRST_PLAN],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
+
+    const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
+    expect(harness.plans).toEqual([{ target, personal: null }]);
+    expect(harness.stages).toEqual([
+      { target, keyChoices: [], personal: null },
+    ]);
+    expect(harness.starts).toEqual([
+      {
+        attemptId: ATTEMPT_ID,
+        planHash: "hash-1",
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    ]);
+    expect(
+      harness.authn.requests
+        .filter((request) => request.url.endsWith("/move-acceptances"))
+        .map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "POST",
+        `https://authn.test/api/v3/hosts/${HOST_ID}/move-acceptances`,
+        {
+          attemptId: ATTEMPT_ID,
+          planHash: "hash-1",
+          planRevision: 1,
+          hostVersion: "1.5.0",
+          itemCount: 1,
+          keyChoices: [],
+          sourceHostId: HOST_ID,
+          sharingGeneration: 1,
+          targetKind: "personal",
+          environmentId: ENVIRONMENT_ID,
+          disclosureVersion: 1,
+          manifestHash: MANIFEST_HASH,
+        },
+      ],
+    ]);
+  });
+
+  it("reads Personal again after its first refusal before retrying the plan", async () => {
+    const personalItem = {
+      kind: "variable",
+      key: "EDITOR",
+      os: null,
+      value: "zed",
+      revision: 4,
+      updatedAt: 1_700_000_000_000,
+      writtenBy: { source: "app", hostId: HOST_ID, hostName: "Old laptop" },
+    };
+    let personalReadSucceeds = false;
+    const harness = mount({
+      plans: [FIRST_PLAN],
+      firstPlanError: new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Personal is unavailable to this computer.",
+        requestId: "plan-personal-unavailable",
+        method: "environment.move.plan",
+        fatalDetails: null,
+      }),
+      authnAnswer: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/environments/me")) {
+          return personalReadSucceeds
+            ? { status: 200, body: { environmentId: ENVIRONMENT_ID } }
+            : { status: 403, body: {} };
+        }
+        if (url.pathname.endsWith(`/environments/${ENVIRONMENT_ID}/items`)) {
+          return {
+            status: 200,
+            body: {
+              items:
+                url.searchParams.get("kind") === "variable"
+                  ? [personalItem]
+                  : [],
+            },
+          };
+        }
+        if (url.pathname.endsWith(`/environments/${ENVIRONMENT_ID}/secrets`))
+          return { status: 200, body: { secrets: [], removed: [] } };
+        if (url.pathname.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`))
+          return { status: 200, body: { hosts: [{ purgePending: false }] } };
+        if (url.pathname.endsWith("/move-acceptances"))
+          return { status: 201, body: { acceptanceId: ACCEPTANCE_ID } };
+        throw new Error(
+          `Unexpected environment request: ${request.method} ${url.pathname}`,
+        );
+      },
+    });
+    await screen.findByText("Personal is unavailable to this computer.");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(harness.plans).toEqual([
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        personal: null,
+      },
+    ]);
+
+    personalReadSucceeds = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByTestId("move-sheet-moves")).toBeTruthy();
+    expect(harness.plans).toEqual([
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        personal: null,
+      },
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        personal: {
+          items: [{ kind: "variable", key: "EDITOR", os: null, value: "zed" }],
+          holdsSecrets: false,
+        },
+      },
+    ]);
+    expect(
+      harness.authn.requests.filter((request) =>
+        request.url.endsWith("/api/v3/environments/me"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("does not start or close when the sign-in changes during acceptance", async () => {
+    const acceptanceRequested = Promise.withResolvers<void>();
+    const acceptanceAnswer =
+      Promise.withResolvers<FakeEnvironmentCloudAnswer>();
+    const harness = mount({
+      plans: [FIRST_PLAN],
+      authnAnswer: (request) => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`))
+          return { status: 200, body: { hosts: [{ purgePending: false }] } };
+        if (path.endsWith("/move-acceptances")) {
+          acceptanceRequested.resolve();
+          return acceptanceAnswer.promise;
+        }
+        throw new Error(
+          `Unexpected environment request: ${request.method} ${path}`,
+        );
+      },
+    });
     await settle();
 
-    expect(accepts).toEqual([{ planHash: "hash-1", keyChoices: [] }]);
-    // An accepted move closes the sheet.
-    expect(useMoveSheetStore.getState().target).toBeNull();
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await acceptanceRequested.promise;
+    harness.authn.origin.current = false;
+    acceptanceAnswer.resolve({
+      status: 201,
+      body: { acceptanceId: ACCEPTANCE_ID },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("move-sheet-accept").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(useMoveSheetStore.getState().target).not.toBeNull();
+    expect(harness.starts).toEqual([]);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("move-sheet-plan-changed")).toBeNull();
+    expect(screen.queryByTestId("move-sheet-not-awaiting")).toBeNull();
   });
 
   it("re-reads the plan on plan_changed, says so, and sends the new hash next", async () => {
     const changed = planWith(
       "hash-2",
-      { moves: [row("EDITOR", "EDITOR", null)] },
-      { personalHoldsSecrets: false, itemChoices: true },
+      { moves: [row("EDITOR-UPDATED", "EDITOR updated", null)] },
+      { personalHoldsSecrets: false },
     );
-    const { accepts } = mount({
+    let acceptanceCalls = 0;
+    const harness = mount({
       plans: [
         planWith(
           "hash-1",
           { moves: [row("EDITOR", "EDITOR", null)] },
-          { personalHoldsSecrets: false, itemChoices: true },
+          { personalHoldsSecrets: false },
         ),
         changed,
       ],
-      acceptAnswers: [{ outcome: "plan_changed" }, ACCEPTED],
+      authnAnswer: (request) => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`))
+          return { status: 200, body: { hosts: [{ purgePending: false }] } };
+        if (path.endsWith("/move-acceptances")) {
+          acceptanceCalls += 1;
+          return acceptanceCalls === 1
+            ? { status: 409, body: { code: "operation_acceptance_invalid" } }
+            : { status: 201, body: { acceptanceId: ACCEPTANCE_ID } };
+        }
+        throw new Error(
+          `Unexpected environment request: ${request.method} ${path}`,
+        );
+      },
     });
     await settle();
     fireEvent.click(
@@ -631,28 +933,41 @@ describe("<MoveSheet />", () => {
     );
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await settle();
+    expect(await screen.findByTestId("move-sheet-plan-changed")).toBeTruthy();
 
     expect(screen.getByTestId("move-sheet-plan-changed").textContent).toBe(
       "This list changed. Read it again.",
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
+    expect(await screen.findByText("EDITOR updated")).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await settle();
+    await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
 
-    expect(accepts.map((request) => request.planHash)).toEqual([
-      "hash-1",
-      "hash-2",
+    expect(harness.stages).toEqual([
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        keyChoices: [{ key: "item:variable:EDITOR", choice: "stays" }],
+        personal: null,
+      },
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        keyChoices: [],
+        personal: null,
+      },
     ]);
-    // The re-read dropped the choice made against the list that is gone.
-    expect(accepts[1]?.keyChoices).toEqual([]);
+    expect(harness.starts).toEqual([
+      {
+        attemptId: ATTEMPT_ID,
+        planHash: "hash-2",
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    ]);
   });
 
   it("closes on Not now and sends nothing", async () => {
-    const { accepts } = mount({
+    const harness = mount({
       plans: [FIRST_PLAN],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -660,20 +975,43 @@ describe("<MoveSheet />", () => {
     await settle();
 
     expect(useMoveSheetStore.getState().target).toBeNull();
-    expect(accepts).toEqual([]);
+    expect(harness.stages).toEqual([]);
+    expect(
+      harness.authn.requests.some((request) =>
+        request.url.endsWith("/move-acceptances"),
+      ),
+    ).toBe(false);
   });
 
   it("says nothing moved, and leaves the sheet open, when the host has no move waiting", async () => {
-    const { accepts } = mount({
+    const harness = mount({
       plans: [FIRST_PLAN],
-      acceptAnswers: [{ outcome: "not_awaiting" }],
+      stageError: new HostRpcError({
+        code: "E_MOVE_NOT_AWAITING",
+        message: "no move awaits",
+        requestId: "stage-not-awaiting",
+        method: "environment.move.stage",
+        fatalDetails: null,
+      }),
     });
     await settle();
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await settle();
+    expect(await screen.findByTestId("move-sheet-not-awaiting")).toBeTruthy();
 
-    expect(accepts).toHaveLength(1);
+    expect(harness.stages).toEqual([
+      {
+        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+        keyChoices: [],
+        personal: null,
+      },
+    ]);
+    expect(harness.starts).toEqual([]);
+    expect(
+      harness.authn.requests.some((request) =>
+        request.url.endsWith("/move-acceptances"),
+      ),
+    ).toBe(false);
     expect(screen.getByTestId("move-sheet-not-awaiting").textContent).toBe(
       "Old laptop has no move waiting to start, so nothing moved.",
     );
@@ -692,7 +1030,6 @@ describe("<MoveSheet />", () => {
           ],
         }),
       ],
-      acceptAnswers: [ACCEPTED],
     });
     await settle();
 
@@ -715,14 +1052,14 @@ describe("<MoveSheet />", () => {
     const disclosure = () =>
       screen.getByTestId("move-sheet-disclosure").textContent;
 
-    mount({ plans: [secretPlan], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [secretPlan] });
     await settle();
     expect(disclosure()).toContain(
       `No other computer runs Personal yet. Any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.`,
     );
     cleanup();
 
-    mountReaching({ plans: [secretPlan], acceptAnswers: [ACCEPTED] }, [
+    mountReaching({ plans: [secretPlan] }, [
       { hostId: "a", name: "A" },
       { hostId: "b", name: "B" },
       { hostId: HOST_ID, name: "Old laptop" },
@@ -740,25 +1077,25 @@ describe("<MoveSheet />", () => {
       planWith(
         "hash-h",
         { moves: [row("EDITOR", "EDITOR", null)] },
-        { personalHoldsSecrets: holds, itemChoices: false },
+        { personalHoldsSecrets: holds },
       );
 
-    mount({ plans: [variablePlan(true)], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [variablePlan(true)] });
     await settle();
     expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
       `${arrives} ${accepts}`,
     );
     cleanup();
 
-    mount({ plans: [variablePlan(false)], acceptAnswers: [ACCEPTED] });
+    mount({ plans: [variablePlan(false)] });
     await settle();
     expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
       accepts,
     );
   });
 
-  describe("choices on a Moves row (itemChoices)", () => {
-    const itemPlan = (itemChoices: boolean) =>
+  describe("choices on a Moves row", () => {
+    const itemPlan = () =>
       planWith(
         "hash-i",
         {
@@ -768,7 +1105,7 @@ describe("<MoveSheet />", () => {
             rowOfKind("fallback", "fallback_policy", "fallback"),
           ],
         },
-        { personalHoldsSecrets: false, itemChoices },
+        { personalHoldsSecrets: false },
       );
 
     function rowButtons(index: number): string[] {
@@ -789,7 +1126,7 @@ describe("<MoveSheet />", () => {
     }
 
     it("offers Leave on a variable and a secret, and nothing on a fallback policy", async () => {
-      mount({ plans: [itemPlan(true)], acceptAnswers: [ACCEPTED] });
+      mount({ plans: [itemPlan()] });
       await settle();
       openMoves();
 
@@ -798,26 +1135,8 @@ describe("<MoveSheet />", () => {
       expect(rowButtons(2)).toEqual([]);
     });
 
-    it("offers no choice on a host that does not honour them, and sends no item entry", async () => {
-      const { accepts } = mount({
-        plans: [itemPlan(false)],
-        acceptAnswers: [ACCEPTED],
-      });
-      await settle();
-      openMoves();
-
-      expect(rowButtons(0)).toEqual([]);
-      expect(rowButtons(1)).toEqual([]);
-      fireEvent.click(screen.getByTestId("move-sheet-accept"));
-      await settle();
-      expect(accepts[0]?.keyChoices).toEqual([]);
-    });
-
     it("moves a row left on this computer only under Stays, where its pressed button takes it back", async () => {
-      const { accepts } = mount({
-        plans: [itemPlan(true)],
-        acceptAnswers: [ACCEPTED],
-      });
+      const harness = mount({ plans: [itemPlan()] });
       await settle();
       openMoves();
 
@@ -840,17 +1159,20 @@ describe("<MoveSheet />", () => {
       expect(pressed.getAttribute("aria-pressed")).toBe("true");
 
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
-      await settle();
-      expect(accepts[0]?.keyChoices).toEqual([
-        { key: "item:variable:EDITOR", choice: "stays" },
+      await waitFor(() =>
+        expect(useMoveSheetStore.getState().target).toBeNull(),
+      );
+      expect(harness.stages).toEqual([
+        {
+          target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+          keyChoices: [{ key: "item:variable:EDITOR", choice: "stays" }],
+          personal: null,
+        },
       ]);
     });
 
     it("sends nothing for a row whose choice was taken back", async () => {
-      const { accepts } = mount({
-        plans: [itemPlan(true)],
-        acceptAnswers: [ACCEPTED],
-      });
+      const harness = mount({ plans: [itemPlan()] });
       await settle();
       openMoves();
 
@@ -874,9 +1196,17 @@ describe("<MoveSheet />", () => {
         }),
       ).toBeTruthy();
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
-      await settle();
+      await waitFor(() =>
+        expect(useMoveSheetStore.getState().target).toBeNull(),
+      );
 
-      expect(accepts[0]?.keyChoices).toEqual([]);
+      expect(harness.stages).toEqual([
+        {
+          target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+          keyChoices: [],
+          personal: null,
+        },
+      ]);
     });
   });
 });
