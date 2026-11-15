@@ -1,8 +1,12 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
-import { hostDoorRefusalCliError } from "../internal/host-door-words";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+} from "../internal/host-door-words";
 import {
   createCliHostTokens,
+  type CliHostTokenFailure,
   type SignInRevalidator,
 } from "../internal/cli-host-tokens";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
@@ -339,6 +343,10 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
               .streamRecovery(endpoint.hostId)
               .revalidateRefused(details),
       () => signInRejected,
+      (listener) =>
+        hostTokens.onMintRefused((hostId, failure) => {
+          if (endpoint?.hostId === hostId) listener(failure);
+        }),
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
@@ -365,6 +373,11 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 /** A fresh host-only token after the host refused this one. */
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
 
+/** Mints for the watched host refused for good, until the returned stop. */
+type InboxMintRefusals = (
+  listener: (failure: CliHostTokenFailure) => void,
+) => () => void;
+
 /**
  * Drives the inbox subscription until a terminal failure or until stdout's
  * reader goes away. Resolves only on `readerClosed` (an orphaned monitor whose
@@ -382,11 +395,16 @@ type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
  *                       out in fact.
  * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
  * when it is a door refusal.
+ *
+ * A mint authn refuses for good, whether the stream was waiting for its first
+ * token or recovering, is terminal with the mint's line: no reconnect could
+ * be given a token. One that cannot reach authn is waited out.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
   signInRejected: () => boolean,
+  mintRefusals: InboxMintRefusals,
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
@@ -397,6 +415,7 @@ function runInboxSubscription(
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
+    let stopMintRefusals: () => void = () => undefined;
     const acknowledgements = new InboxAcknowledgementQueue(target, logger);
 
     const clearHealthTimer = (): void => {
@@ -428,6 +447,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       readerClosed.removeEventListener("abort", stopForClosedReader);
@@ -446,6 +466,7 @@ function runInboxSubscription(
       });
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       resolve();
@@ -594,6 +615,15 @@ function runInboxSubscription(
     }
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
+    });
+    stopMintRefusals = mintRefusals((failure) => {
+      logger.warn("Monitor host-only token mint refused", {
+        environment: config.environment,
+        failure: failure.kind,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
+      fail(hostTokenFailureCliError(failure));
     });
     subscribe();
   });

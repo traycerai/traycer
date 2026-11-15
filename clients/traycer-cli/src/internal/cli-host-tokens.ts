@@ -11,8 +11,8 @@ import type {
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
 import {
-  hostTokenBearer,
   hostTokenRevalidator,
+  type HostTokenAccess,
   type HostTokenRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -21,6 +21,7 @@ import {
   type HostTokenSource,
   type VerifiedSignIn,
 } from "@traycer-clients/shared/auth/host-token-source";
+import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { config } from "../config";
 import {
@@ -51,6 +52,29 @@ export type CliHostTokenFailure = Exclude<
   { readonly kind: "ok" }
 >;
 
+/**
+ * Told of every mint for a host that no wait can turn into a token: authn
+ * refused this person for that host, or refused the sign-in and its refresh.
+ */
+export type CliMintRefusalListener = (
+  hostId: string,
+  failure: CliHostTokenFailure,
+) => void;
+
+/** authn's answers about the host that a later mint would repeat. */
+function isHostRefusal(
+  outcome: HostTokenMintOutcome,
+): outcome is Extract<
+  CliHostTokenFailure,
+  { readonly kind: "not-a-member" | "not-admitted" | "sandbox-frozen" }
+> {
+  return (
+    outcome.kind === "not-a-member" ||
+    outcome.kind === "not-admitted" ||
+    outcome.kind === "sandbox-frozen"
+  );
+}
+
 export type CliHostBearer =
   | { readonly kind: "ok"; readonly bearer: OpenFrameBearerSource }
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
@@ -77,9 +101,16 @@ export interface CliHostTokens {
   streamRecovery(hostId: string): HostTokenRevalidator;
   /**
    * A long-lived stream's credential for `hostId`: the token on disk, or
-   * `null` while one is minted, which the transport waits out.
+   * `null` while one is minted, which the transport waits out. A mint that
+   * cannot reach authn is waited out the same way; one refused for good goes
+   * to {@link onMintRefused}'s listeners.
    */
   streamBearer(hostId: string): BearerSourceProvider;
+  /**
+   * Tells `listener` of every mint refused for good from now on, the ones a
+   * stream's recovery makes among them, until the returned stop is called.
+   */
+  onMintRefused(listener: CliMintRefusalListener): () => void;
   /** One fresh token for `hostId` after the sign-in was refreshed. */
   renewAfterSignInRefresh(hostId: string): Promise<void>;
 }
@@ -100,9 +131,23 @@ function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
 
 export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const userId = signIn.lease.identity.userId;
-  const source = createSource((id) =>
+  const listeners = new Set<CliMintRefusalListener>();
+  const report = (hostId: string, failure: CliHostTokenFailure): void => {
+    for (const listener of listeners) listener(hostId, failure);
+  };
+  const stored = createSource((id) =>
     id === userId ? readLeaseBearer(signIn.lease) : null,
   );
+  // Every mint, a recovery's included, passes here, so a refusal for good is
+  // reported wherever it was asked.
+  const source: HostTokenAccess = {
+    current: (id, hostId) => stored.current(id, hostId),
+    obtain: async (id, hostId, fresh, signal) => {
+      const outcome = await stored.obtain(id, hostId, fresh, signal);
+      if (isHostRefusal(outcome)) report(hostId, outcome);
+      return outcome;
+    },
+  };
   const signInRecovery = {
     revalidateForReconnect: (): Promise<RevalidateOutcome> => signIn.refresh(),
   };
@@ -139,17 +184,22 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     return recovery;
   };
 
-  const signInSource: BearerSourceProvider = () => signIn.lease;
   const streamBearers = new Map<string, BearerSourceProvider>();
+  const minting = new Set<string>();
 
   const obtain = async (
     hostId: string,
     fresh: boolean,
   ): Promise<CliHostBearer> => {
     const first = await source.obtain(userId, hostId, fresh, null);
+    if (first.kind === "no-sign-in") report(hostId, first);
     if (first.kind !== "sign-in-rejected") return answer(hostId, first);
-    // The step that refreshes an expired sign-in mints once more.
-    if ((await signIn.refresh()) !== "rotated") return answer(hostId, first);
+    // The step that refreshes an expired sign-in mints once more. A refresh
+    // that could not reach authn leaves the sign-in unjudged, so only one
+    // refused is final.
+    const refreshed = await signIn.refresh();
+    if (refreshed === "rejected") report(hostId, first);
+    if (refreshed !== "rotated") return answer(hostId, first);
     return answer(hostId, await source.obtain(userId, hostId, true, null));
   };
 
@@ -178,13 +228,34 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     streamBearer: (hostId) => {
       let provider = streamBearers.get(hostId);
       if (provider === undefined) {
-        provider = hostTokenBearer(source, signInSource, hostId, onState);
+        // One lease object per host, read afresh on every frame.
+        const lease = bearerOf(hostId);
+        provider = () => {
+          if (isUsableHostToken(source.current(userId, hostId), Date.now()))
+            return lease;
+          if (!minting.has(hostId)) {
+            minting.add(hostId);
+            void obtain(hostId, false)
+              .then(
+                () => undefined,
+                () => undefined,
+              )
+              .finally(() => minting.delete(hostId));
+          }
+          return null;
+        };
         streamBearers.set(hostId, provider);
       }
       return provider;
     },
+    onMintRefused: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     renewAfterSignInRefresh: async (hostId) => {
-      await source.renew(userId, [hostId]);
+      await stored.renew(userId, [hostId]);
     },
   };
 }
