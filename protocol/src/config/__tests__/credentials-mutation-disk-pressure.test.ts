@@ -1334,6 +1334,14 @@ describe("credentials store disk pressure", () => {
     const writeSpy = vi.mocked(fsPromises.writeFile);
     writeSpy.mockClear();
 
+    const thirdDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(thirdDirectory);
+    // Stands in for an earlier case's leftover job landing during this case.
+    const third = createCaseMock(thirdDirectory);
+    caseMocks.byDirectory.set(thirdDirectory, third);
+    const thirdPath = join(thirdDirectory, "leftover");
+    await fsPromises.writeFile(thirdPath, "leftover");
+
     refreshRelease.resolve();
     const result = await rotating;
 
@@ -1341,8 +1349,12 @@ describe("credentials store disk pressure", () => {
     expect(result.outcome).toBe("applied");
     expect(lateWrites.some((write) => isFlushWrite(write.options))).toBe(true);
     expect(writeSpy.mock.calls.map((call) => String(call[0]))).toEqual(
-      lateWrites.map((write) => write.path),
+      expect.arrayContaining([
+        thirdPath,
+        ...lateWrites.map((write) => write.path),
+      ]),
     );
+    expect(third.writes.map((write) => write.path)).toEqual([thirdPath]);
     expect(second.writes).toHaveLength(0);
   });
 
