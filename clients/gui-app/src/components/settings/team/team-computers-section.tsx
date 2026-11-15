@@ -1,3 +1,4 @@
+import { useHostBinding } from "@/lib/host";
 import { TeamComputerUnattendedSetup } from "./team-computer-unattended-setup";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
@@ -38,6 +39,7 @@ export function TeamComputersSection(props: {
 
 function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   const { read, claim } = useTeamComputers(props.environmentId);
+  const binding = useHostBinding();
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
   // Only a team's Admins and Editors claim its computers.
@@ -138,9 +140,10 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
         failure={claim.error?.message ?? null}
         onClose={() => setClaiming(null)}
         onClaim={(hostId) =>
-          claim.mutate(hostId, {
-            onSuccess: () => setClaiming(null),
-          })
+          claim.mutate(
+            { hostId, chosenBy: binding?.auth.chosenSignIn() ?? null },
+            { onSuccess: () => setClaiming(null) },
+          )
         }
       />
     </section>

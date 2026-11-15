@@ -26,6 +26,7 @@ import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import {
   hostEnvironmentBindingQueryKey,
   useHostEnvironmentBindings,
@@ -61,6 +62,9 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => connectable,
 }));
 
+/** The sign-in the claim here is pressed under. */
+const PRESSED_AS: ChosenSignIn = { identityGeneration: 0, userId: "user-a" };
+
 const bindingRef = vi.hoisted(() => ({
   current: null as {
     hostClient: HostClient<HostRpcRegistry>;
@@ -69,6 +73,7 @@ const bindingRef = vi.hoisted(() => ({
       releaseTeamComputer: (
         hostId: string,
         environmentId: string,
+        chosenBy: ChosenSignIn,
       ) => Promise<{ readonly kind: "ok" }>;
     };
     directory: {
@@ -569,7 +574,10 @@ describe("environment.binding.read in a pool build", () => {
     });
 
     await act(async () => {
-      await claim.result.current.mutateAsync(TARGET_HOST);
+      await claim.result.current.mutateAsync({
+        hostId: TARGET_HOST,
+        chosenBy: PRESSED_AS,
+      });
     });
 
     await waitFor(() => {
@@ -578,6 +586,7 @@ describe("environment.binding.read in a pool build", () => {
     expect(fixture.releaseTeamComputer).toHaveBeenCalledWith(
       TARGET_HOST,
       "env-team",
+      PRESSED_AS,
     );
     expect(noteHostMembershipChanged).toHaveBeenCalledWith(TARGET_HOST);
     expect(fixture.reads).toEqual([TARGET_HOST, TARGET_HOST]);

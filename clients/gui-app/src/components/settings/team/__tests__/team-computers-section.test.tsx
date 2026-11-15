@@ -16,7 +16,7 @@ import type {
 } from "@traycer-clients/shared/host-client/team-computers";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ChosenSignIn } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
   type ConfigurationRole,
@@ -79,12 +79,19 @@ const releaseTeamComputer =
     (
       hostId: string,
       environmentId: string,
+      chosenBy: ChosenSignIn,
     ) => Promise<TeamComputerReleaseResult>
   >();
+/** The sign-in every press here is made under. */
+const PRESSED_AS: ChosenSignIn = { identityGeneration: 0, userId: "user-a" };
 const auth = {
   listTeamComputers,
   releaseTeamComputer,
-} satisfies Pick<AuthService, "listTeamComputers" | "releaseTeamComputer">;
+  chosenSignIn: () => PRESSED_AS,
+} satisfies Pick<
+  AuthService,
+  "listTeamComputers" | "releaseTeamComputer" | "chosenSignIn"
+>;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
 function computer(overrides: Partial<TeamComputer>): TeamComputer {
@@ -332,6 +339,7 @@ describe("TeamComputersSection", () => {
       expect(releaseTeamComputer).toHaveBeenCalledWith(
         "host-computer-a",
         ENVIRONMENT_ID,
+        PRESSED_AS,
       ),
     );
     expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
@@ -479,6 +487,7 @@ describe("TeamComputersSection", () => {
     expect(releaseTeamComputer).toHaveBeenCalledWith(
       "host-computer-a",
       ENVIRONMENT_ID,
+      PRESSED_AS,
     );
     expect(noteHostMembershipChanged).not.toHaveBeenCalled();
   });
