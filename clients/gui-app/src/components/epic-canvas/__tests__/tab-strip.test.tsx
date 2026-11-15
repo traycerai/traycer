@@ -17,11 +17,19 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
+import { LandingTerminalTabStrip } from "@/components/home/terminal-panel/landing-terminal-tab-strip";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  createTerminalViewerTestSession,
+  type TerminalViewerTestSession,
+} from "@/components/terminals/__tests__/terminal-viewer-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -29,6 +37,7 @@ import type {
   EpicNodeRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import {
@@ -46,6 +55,7 @@ import {
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { markRenameInFlight } from "@/stores/epics/open-epic/rename-in-flight";
@@ -220,6 +230,14 @@ const TERMINAL_TAB: EpicNodeRef = {
   cwd: "/repo",
 };
 
+const terminalDirectory = new Map<
+  string,
+  { readonly displayName: string; readonly avatarUrl: string | null }
+>();
+const terminalDirectoryResolver: BotMemberResolver = (userId) =>
+  terminalDirectory.get(userId) ?? null;
+let terminalViewerSession: TerminalViewerTestSession | null = null;
+
 const CHAT_TAB: EpicNodeRef = {
   id: "chat-1",
   instanceId: "inst-chat-1",
@@ -350,29 +368,31 @@ function renderTabStripForTab(
           value={consumeNotificationEntity}
         >
           <TooltipProvider delayDuration={0}>
-            <TabStrip
-              epicId="epic-1"
-              tabId={VIEW_TAB_ID}
-              groupId="group-1"
-              tabs={[tab]}
-              activeTabId={tab.instanceId}
-              onSelectTab={() => undefined}
-              onCloseTab={input.onClose}
-              onPromotePreview={input.onPromotePreview}
-              onSplit={onSplit}
-              onCloseGroup={() => undefined}
-              onOpenBlankTab={input.onOpenBlankTab}
-              canRenameTabs
-              menuHandlers={{
-                onClose: input.onMenuClose ?? (() => undefined),
-                onCloseOthers: () => undefined,
-                onCloseRight: () => undefined,
-                onCloseAll: () => undefined,
-                onSplit: () => undefined,
-                onRevealInSidebar: () => undefined,
-                onRename: () => undefined,
-              }}
-            />
+            <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+              <TabStrip
+                epicId="epic-1"
+                tabId={VIEW_TAB_ID}
+                groupId="group-1"
+                tabs={[tab]}
+                activeTabId={tab.instanceId}
+                onSelectTab={() => undefined}
+                onCloseTab={input.onClose}
+                onPromotePreview={input.onPromotePreview}
+                onSplit={onSplit}
+                onCloseGroup={() => undefined}
+                onOpenBlankTab={input.onOpenBlankTab}
+                canRenameTabs
+                menuHandlers={{
+                  onClose: input.onMenuClose ?? (() => undefined),
+                  onCloseOthers: () => undefined,
+                  onCloseRight: () => undefined,
+                  onCloseAll: () => undefined,
+                  onSplit: () => undefined,
+                  onRevealInSidebar: () => undefined,
+                  onRename: () => undefined,
+                }}
+              />
+            </PersonMembersContext.Provider>
           </TooltipProvider>
         </NotificationConsumptionContext.Provider>
       </BrowserSessionsContext.Provider>
@@ -383,6 +403,11 @@ function renderTabStripForTab(
 describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
+    if (terminalViewerSession !== null) {
+      terminalViewerSession.dispose();
+      terminalViewerSession = null;
+    }
+    terminalDirectory.clear();
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
@@ -397,6 +422,222 @@ describe("<TabStrip />", () => {
     liveTitlesById.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+  });
+
+  it("shows terminal viewer identities and the remaining names in the canvas tab strip", async () => {
+    const viewerIds = [
+      "viewer-a",
+      "viewer-b",
+      "viewer-c",
+      "viewer-d",
+      "viewer-unrecorded",
+    ];
+    terminalDirectory.set(viewerIds[0], {
+      displayName: "Viewer A",
+      avatarUrl: "https://images.example.test/viewer-a.png",
+    });
+    terminalDirectory.set(viewerIds[1], {
+      displayName: "Viewer B",
+      avatarUrl: "https://images.example.test/viewer-b.png",
+    });
+    terminalDirectory.set(viewerIds[2], {
+      displayName: "Viewer C",
+      avatarUrl: "https://images.example.test/viewer-c.png",
+    });
+    terminalDirectory.set(viewerIds[3], {
+      displayName: "Viewer D",
+      avatarUrl: "https://images.example.test/viewer-d.png",
+    });
+    terminalViewerSession = createTerminalViewerTestSession(
+      TERMINAL_TAB.instanceId,
+      TERMINAL_TAB.hostId,
+      "terminal-viewers-session",
+    );
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    act(() => {
+      terminalViewerSession?.emitViewers(
+        [viewerIds[0]],
+        "terminal-viewers-session",
+      );
+    });
+    let faces = within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+      "person-avatar",
+    );
+    expect(faces).toHaveLength(1);
+    expect(await tooltipTextFor(faces[0])).toBe("Viewer A");
+
+    act(() => {
+      terminalViewerSession?.emitViewers(
+        ["viewer-unrecorded"],
+        "terminal-viewers-session",
+      );
+    });
+    faces = within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+      "person-avatar",
+    );
+    expect(faces).toHaveLength(1);
+    expect(await tooltipTextFor(faces[0])).toBe("viewer-unrecorded");
+
+    act(() => {
+      terminalViewerSession?.emitViewers(
+        viewerIds.slice(0, 3),
+        "terminal-viewers-session",
+      );
+    });
+    faces = within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+      "person-avatar",
+    );
+    expect(faces).toHaveLength(3);
+    expect(screen.queryByTestId("terminal-viewers-more")).toBeNull();
+
+    act(() => {
+      terminalViewerSession?.emitViewers(viewerIds, "terminal-viewers-session");
+    });
+    faces = within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+      "person-avatar",
+    );
+    expect(faces).toHaveLength(3);
+    expect(screen.getByTestId("terminal-viewers-more").textContent).toBe("+2");
+    expect(await tooltipTextFor(faces[0])).toBe("Viewer A");
+    expect(
+      await tooltipTextFor(screen.getByTestId("terminal-viewers-more")),
+    ).toBe("Viewer D, viewer-unrecorded");
+  });
+
+  it("draws nothing for an unknown or empty viewer set", () => {
+    terminalViewerSession = createTerminalViewerTestSession(
+      TERMINAL_TAB.instanceId,
+      TERMINAL_TAB.hostId,
+      "terminal-viewers-session",
+    );
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+    expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+
+    act(() => {
+      terminalViewerSession?.emitViewers([], "terminal-viewers-session");
+    });
+    expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+  });
+
+  it("draws both members sharing one terminal session", () => {
+    terminalDirectory.set("member-a", {
+      displayName: "Member A",
+      avatarUrl: "https://images.example.test/member-a.png",
+    });
+    terminalDirectory.set("member-b", {
+      displayName: "Member B",
+      avatarUrl: "https://images.example.test/member-b.png",
+    });
+    terminalViewerSession = createTerminalViewerTestSession(
+      TERMINAL_TAB.instanceId,
+      TERMINAL_TAB.hostId,
+      "terminal-viewers-session",
+    );
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+    act(() => {
+      terminalViewerSession?.emitViewers(
+        ["member-a", "member-b"],
+        "terminal-viewers-session",
+      );
+    });
+    expect(
+      within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+        "person-avatar",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("shows a terminal viewer in the landing panel's terminal tab", async () => {
+    stubImmediateImage();
+    const viewerId = "landing-viewer";
+    const landingTab: LandingTerminalTabRef = {
+      kind: "terminal",
+      instanceId: "landing-terminal-viewers",
+      sessionId: "landing-viewers-session",
+      hostId: "host-A",
+      cwd: "/repo",
+      name: "Team terminal",
+      titleSource: "default",
+    };
+    terminalDirectory.set(viewerId, {
+      displayName: "Landing Viewer",
+      avatarUrl: "https://images.example.test/landing-viewer.png",
+    });
+    terminalViewerSession = createTerminalViewerTestSession(
+      landingTab.instanceId,
+      landingTab.hostId,
+      landingTab.sessionId,
+    );
+    act(() => {
+      terminalViewerSession?.emitViewers([viewerId], landingTab.sessionId);
+    });
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <TooltipProvider delayDuration={0}>
+          <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+            <LandingTerminalTabStrip
+              tabs={[landingTab]}
+              placeholder={null}
+              activeInstanceId={landingTab.instanceId}
+              addTooltip="New tab"
+              onAdd={() => undefined}
+              onActivate={() => undefined}
+              onClose={() => undefined}
+              onDismissPlaceholder={() => undefined}
+              onCloseAll={() => undefined}
+              onRename={() => undefined}
+              canRename={() => false}
+              terminalViewModels={{}}
+              browserViewModels={{}}
+            />
+          </PersonMembersContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    const faces = within(screen.getByTestId("terminal-viewers")).getAllByTestId(
+      "person-avatar",
+    );
+    expect(faces).toHaveLength(1);
+    await waitFor(() => {
+      expect(faces[0]?.querySelector("img")?.getAttribute("src")).toBe(
+        "https://images.example.test/landing-viewer.png",
+      );
+    });
+    const face = faces[0];
+    if (!(face instanceof HTMLElement)) {
+      throw new Error("Expected the landing viewer face to be an HTMLElement");
+    }
+    expect(await tooltipTextFor(face)).toBe("Landing Viewer");
   });
 
   it("writes a chat tile's resolved title into its persisted name snapshot", () => {
@@ -512,8 +753,10 @@ describe("<TabStrip />", () => {
     const frame = screen
       .getByTestId(`tab-item-${TAB.instanceId}`)
       .closest("[data-tile-item-id]");
-    expect(frame).not.toBeNull();
-    expect((frame as HTMLElement).style.opacity).toBe("0.36");
+    if (!(frame instanceof HTMLElement)) {
+      throw new Error("Expected the tab item frame to be an HTMLElement");
+    }
+    expect(frame.style.opacity).toBe("0.36");
   });
 
   it("uses the live browser tab title, URL, and favicon", () => {

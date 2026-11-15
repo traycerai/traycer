@@ -651,12 +651,15 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     readonly callbacks: TerminalStreamCallbacks;
     readonly dataChunks: string[];
     readonly otherKinds: string[];
+    readonly viewerFrames: unknown[];
   } {
     const dataChunks: string[] = [];
     const otherKinds: string[] = [];
+    const viewerFrames: unknown[] = [];
     return {
       dataChunks,
       otherKinds,
+      viewerFrames,
       callbacks: {
         onSnapshot: () => {
           otherKinds.push("snapshot");
@@ -678,7 +681,9 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
         onSessionUpdated: () => {
           otherKinds.push("sessionUpdated");
         },
-        onViewers: () => undefined,
+        onViewers: (frame) => {
+          viewerFrames.push(frame);
+        },
         onConnectionStatus: () => undefined,
       },
     };
@@ -707,6 +712,7 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     expect(warn).not.toHaveBeenCalled();
     expect(recorded.dataChunks).toEqual([]);
     expect(recorded.otherKinds).toEqual([]);
+    expect(recorded.viewerFrames).toEqual([viewersEnvelope]);
 
     sockets[0].fireText(dataEnvelope);
 
@@ -748,6 +754,7 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     );
     expect(recorded.dataChunks).toEqual([]);
     expect(recorded.otherKinds).toEqual([]);
+    expect(recorded.viewerFrames).toEqual([]);
 
     sockets[0].fireText(dataEnvelope);
 

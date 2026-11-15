@@ -28,6 +28,7 @@ type TerminalExitFrame = Extract<
   TerminalSubscribeServerFrame,
   { readonly kind: "exit" }
 >;
+type TerminalViewersFrame = Parameters<TerminalStreamCallbacks["onViewers"]>[0];
 
 function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
@@ -93,6 +94,18 @@ function exit(exitCode: number): TerminalExitFrame {
     hasBinaryPayload: false,
     sessionId: "terminal-1",
     exitCode,
+  };
+}
+
+function viewers(
+  userIds: ReadonlyArray<string>,
+  sessionId: string,
+): TerminalViewersFrame {
+  return {
+    kind: "viewers",
+    hasBinaryPayload: false,
+    sessionId,
+    viewers: userIds.map((userId) => ({ userId })),
   };
 }
 
@@ -1446,6 +1459,57 @@ describe("createTerminalSessionStore", () => {
       harness.handle.store.getState().restateViewer("cache");
       harness.handle.store.getState().setViewer("cache");
       expect(harness.factory).toHaveBeenCalledTimes(2);
+      harness.handle.dispose();
+    });
+  });
+
+  describe("viewer set (terminal.subscribe@1.8)", () => {
+    it("starts unknown, replaces the whole ordered set, accepts empty, and ignores another session", () => {
+      const harness = createHarness();
+      const state = harness.handle.store.getState();
+
+      expect(state.viewers).toBeNull();
+
+      harness
+        .callbacks()
+        .onViewers(viewers(["member-a", "member-b"], "terminal-1"));
+      expect(harness.handle.store.getState().viewers).toEqual([
+        "member-a",
+        "member-b",
+      ]);
+
+      harness.callbacks().onViewers(viewers(["member-c"], "terminal-1"));
+      expect(harness.handle.store.getState().viewers).toEqual(["member-c"]);
+
+      harness
+        .callbacks()
+        .onViewers(viewers(["other-session-member"], "terminal-2"));
+      expect(harness.handle.store.getState().viewers).toEqual(["member-c"]);
+
+      harness.callbacks().onViewers(viewers([], "terminal-1"));
+      expect(harness.handle.store.getState().viewers).toEqual([]);
+      harness.handle.dispose();
+    });
+
+    it("retains the set through a held reconnect and clears it after a non-held drop", () => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      callbacks.onViewers(viewers(["member-a", "member-b"], "terminal-1"));
+
+      callbacks.onConnectionStatus("reconnecting", null, null, "held");
+      expect(harness.handle.store.getState().viewers).toEqual([
+        "member-a",
+        "member-b",
+      ]);
+
+      callbacks.onConnectionStatus("open", null, null, "continued");
+      expect(harness.handle.store.getState().viewers).toEqual([
+        "member-a",
+        "member-b",
+      ]);
+
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
+      expect(harness.handle.store.getState().viewers).toBeNull();
       harness.handle.dispose();
     });
   });
