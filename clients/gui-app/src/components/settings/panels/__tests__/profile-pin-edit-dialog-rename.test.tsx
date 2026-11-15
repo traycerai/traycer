@@ -80,8 +80,8 @@ vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   }),
 }));
 
-vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
-  useRecolorProviderProfile: () => ({
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
     mutate: () => undefined,
     isPending: false,
     error: null,
