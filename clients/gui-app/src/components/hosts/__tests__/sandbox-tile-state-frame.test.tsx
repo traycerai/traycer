@@ -30,6 +30,7 @@ import {
   type FakeSandboxBinding,
   refusal,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { installHostConnectionRegistrySource } from "@traycer-clients/shared/host-client/host-connection-registry";
 import {
   installHostDirectoryRows,
   resetHostDirectoryRows,
@@ -237,6 +238,23 @@ function bodyWrapper(): HTMLElement {
   return wrapper;
 }
 
+/**
+ * The frozen cover reads whose credits the sandbox is on from the person's
+ * host directory: the same row the entry mock gives the frame, with the
+ * signed-in person named as its owner, so the line is the Personal one.
+ */
+function frozenOnThePersonsOwnSandbox(): void {
+  if (mocks.entry === null) throw new Error("expected a sandbox row");
+  mocks.entry = { ...mocks.entry, owner: { kind: "user", id: "u1" } };
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => (hostId === HOST_ID ? mocks.entry : null),
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
+}
+
 function overlayParagraph(
   overlay: HTMLElement,
   index: number,
@@ -266,7 +284,10 @@ beforeEach(() => {
   mocks.entryReads.mockClear();
   mocks.unavailableReason = null;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetHostDirectoryRows();
+});
 
 describe("<SandboxTileStateFrame /> around a chat tile", () => {
   it.each([
@@ -577,6 +598,7 @@ describe("<SandboxTileStateFrame />", () => {
   it("overlays a frozen sandbox with the frozen line and its destroy date, and offers no wake", () => {
     const frozenAt = new Date(2026, 9, 9, 12).getTime();
     setSandboxEntry("suspended", true);
+    frozenOnThePersonsOwnSandbox();
     mocks.list = {
       sandboxes: [
         sandboxSummaryFixture({
@@ -603,6 +625,7 @@ describe("<SandboxTileStateFrame />", () => {
 
   it("frames a frozen row without a destroy date when the server sent no frozenAt", () => {
     setSandboxEntry("stopped", true);
+    frozenOnThePersonsOwnSandbox();
     renderFrame(false);
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.textContent).toBe(
