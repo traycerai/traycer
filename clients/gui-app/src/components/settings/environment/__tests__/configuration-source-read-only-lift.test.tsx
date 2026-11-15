@@ -53,14 +53,16 @@ const PERSONAL: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-function team(role: string): EnvironmentDescriptorV11 {
+function team(
+  role: EnvironmentDescriptorV11["effectiveRole"],
+): EnvironmentDescriptorV11 {
   return {
     environmentId: "env-team",
     ownerKind: "organization",
     ownerId: "team-a",
     roomId: "room-team",
     label: "Acme",
-    effectiveRole: role as EnvironmentDescriptorV11["effectiveRole"],
+    effectiveRole: role,
     kind: "team",
     hostCount: 1,
     providerHandle: "acme",
@@ -97,7 +99,7 @@ const ACCESS_CASES = [
     activeHost: TEAM_COMPUTER,
   },
   {
-    role: "unknown-role",
+    role: null,
     canEdit: false,
     selected: "team computer",
     activeHost: TEAM_COMPUTER,
@@ -121,7 +123,7 @@ const ACCESS_CASES = [
     activeHost: OTHER_COMPUTER,
   },
   {
-    role: "unknown-role",
+    role: null,
     canEdit: false,
     selected: "another computer",
     activeHost: OTHER_COMPUTER,
@@ -203,7 +205,7 @@ describe("named team settings read the authn role on either selected computer", 
       await waitFor(() => {
         expect(probe.getAttribute("data-can-edit")).toBe(String(canEdit));
       });
-      if (role === "viewer" || role === "unknown-role") {
+      if (role === "viewer" || role === null) {
         expect(
           screen.getByText("You can see Acme's settings but not change them."),
         ).toBeTruthy();

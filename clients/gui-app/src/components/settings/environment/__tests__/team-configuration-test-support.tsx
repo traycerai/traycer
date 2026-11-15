@@ -30,7 +30,6 @@ import {
   configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";

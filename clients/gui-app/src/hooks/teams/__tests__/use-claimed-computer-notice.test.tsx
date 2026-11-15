@@ -60,7 +60,6 @@ vi.mock("@/hooks/host/use-host-lease", () => ({
 
 import { useClaimedComputerNotice } from "@/hooks/teams/use-claimed-computer-notice";
 import {
-  noteOwnClaim,
   useClaimNoticesToldStore,
   useOwnClaimsStore,
 } from "@/stores/hosts/claimed-computer-notice-store";
@@ -294,16 +293,19 @@ describe("useClaimedComputerNotice", () => {
     expect(toldFor("user-b", CLAIM)).toBe(false);
   });
 
-  it("settles the person's own claim made here without telling it", async () => {
-    noteOwnClaim("user-a", { environmentId: "env-a", hostId: "host-1" });
+  it("tells the signed-in claimant about a claim from another computer", async () => {
+    const ownClaim = { ...CLAIM, claimantName: "user-a" };
     mocks.read.mockImplementation(() =>
-      answer({ kind: "ok", claims: [CLAIM] }),
+      answer({ kind: "ok", claims: [ownClaim] }),
     );
 
     mount();
-    await waitFor(() => expect(toldFor("user-a", CLAIM)).toBe(true));
-    expect(mocks.toastInfo).not.toHaveBeenCalled();
-    expect(useOwnClaimsStore.getState().byViewer["user-a"]).toEqual([]);
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(
+        "user-a claimed this computer. It no longer belongs to Acme.",
+        { id: `claimed-computer:${ownClaim.hostId}@${ownClaim.claimedAt}` },
+      ),
+    );
   });
 
   it.each([
@@ -311,23 +313,6 @@ describe("useClaimedComputerNotice", () => {
     ["a not-found answer", { kind: "not-found" }],
   ] as const)("does not tell a claim after %s", async (_case, result) => {
     mocks.read.mockImplementation(() => answer(result));
-
-    mount();
-    await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mocks.toastInfo).not.toHaveBeenCalled();
-  });
-
-  it("does not tell a claim without a claimant name", async () => {
-    const unnamed = {
-      ...CLAIM,
-      claimantName: null,
-    } as unknown as ClaimedComputer;
-    mocks.read.mockImplementation(() =>
-      answer({ kind: "ok", claims: [unnamed] }),
-    );
 
     mount();
     await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));

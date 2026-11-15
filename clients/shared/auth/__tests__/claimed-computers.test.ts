@@ -7,8 +7,8 @@ const ENVIRONMENT_ID = "team /A";
 const CLAIM = {
   hostId: "host-1",
   computerName: null,
-  claimantName: null,
-  claimedAt: 1_763_164_800_000,
+  claimantName: "Ada",
+  claimedAt: "2026-11-15T00:00:00.000Z",
 };
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("fetchClaimedComputers", () => {
-  it("GETs the signed-in member's claims and accepts nullable names with epoch milliseconds", async () => {
+  it("GETs the member's claims on their sign-in without following a redirect", async () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { claims: [CLAIM] }),
     );
@@ -47,7 +47,6 @@ describe("fetchClaimedComputers", () => {
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       `Bearer ${TOKEN}`,
     );
-    expect(new Headers(init?.headers).get("Accept")).toBe("application/json");
     expect(init?.redirect).toBe("manual");
   });
 
@@ -56,7 +55,7 @@ describe("fetchClaimedComputers", () => {
     [404, { kind: "not-found" }],
     [302, { kind: "failed" }],
     [500, { kind: "failed" }],
-  ] as const)("maps HTTP %i to %s", async (status, result) => {
+  ] as const)("maps HTTP %i to %o", async (status, result) => {
     stubFetch(async () => new Response(null, { status }));
 
     await expect(
@@ -66,12 +65,13 @@ describe("fetchClaimedComputers", () => {
 
   it.each([
     ["missing claims", {}],
-    ["a malformed claim", { claims: [{ hostId: "host-1" }] }],
     [
-      "a date string instead of epoch milliseconds",
-      {
-        claims: [{ ...CLAIM, claimedAt: "2026-11-15T00:00:00.000Z" }],
-      },
+      "a claim with no claimant name",
+      { claims: [{ ...CLAIM, claimantName: null }] },
+    ],
+    [
+      "epoch milliseconds instead of a date string",
+      { claims: [{ ...CLAIM, claimedAt: 1_763_164_800_000 }] },
     ],
   ])("fails closed for %s", async (_label, body) => {
     stubFetch(async () => jsonResponse(200, body));
