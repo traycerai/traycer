@@ -5,6 +5,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
@@ -12,9 +13,14 @@ import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-
 
 function resetStore(): void {
   act(() => {
-    const state = useImportedUnseenStore.getState();
-    for (const epicId of Object.keys(state.unseen)) state.markSeen(epicId);
+    for (const epicId of ["epic-1", "epic-2", "epic-native"]) {
+      useImportedUnseenStore.getState().markSeen(epicId);
+    }
   });
+}
+
+function DotRenderProbe(props: { readonly epicId: string }) {
+  return <ImportedUnseenDot epicId={props.epicId} />;
 }
 
 beforeEach(resetStore);
@@ -105,6 +111,38 @@ describe("<ImportedUnseenDot />", () => {
     expect(screen.getByRole("tooltip").textContent).toBe(
       "Imported from Claude Code - not opened yet",
     );
+  });
+
+  it("updates the marked dot in the same act without rendering another epic's dot", () => {
+    let firstRenders = 0;
+    let secondRenders = 0;
+    render(
+      <>
+        <Profiler id="first-dot" onRender={() => (firstRenders += 1)}>
+          <DotRenderProbe epicId="epic-1" />
+        </Profiler>
+        <Profiler id="second-dot" onRender={() => (secondRenders += 1)}>
+          <DotRenderProbe epicId="epic-2" />
+        </Profiler>
+      </>,
+    );
+    const secondBaseline = secondRenders;
+
+    act(() => {
+      useImportedUnseenStore.getState().markImported("epic-1", "claude");
+    });
+
+    expect(screen.getByTestId("imported-unseen-dot")).toBeTruthy();
+    expect(secondRenders).toBe(secondBaseline);
+    const firstAfterImport = firstRenders;
+
+    act(() => {
+      useImportedUnseenStore.getState().markSeen("epic-1");
+    });
+
+    expect(screen.queryByTestId("imported-unseen-dot")).toBeNull();
+    expect(firstRenders).toBeGreaterThan(firstAfterImport);
+    expect(secondRenders).toBe(secondBaseline);
   });
 
   it("stays neutral when a THIRD provider lands - neutral is sticky, not just 'exactly two'", () => {

@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { OrganizationSyncNote } from "@/components/organization/organization-metadata";
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  useOrganizationView,
+} from "@/hooks/organization/organization-context";
 import type { ReactNode } from "react";
 import { Plus, Ungroup, X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -25,8 +28,10 @@ export function TabGroupEditor(props: {
   const navigate = useNavigate();
   const { group, groupId, onDone } = props;
   const organization = useOrganization();
-  const cloudGroup = organization?.view?.groups.groups.find(
-    (candidate) => candidate.groupId === groupId,
+  const cloudGroup = useOrganizationView(
+    (view) =>
+      view?.groups.groups.find((candidate) => candidate.groupId === groupId),
+    Object.is,
   );
   // A group's name and colour belong to the account, so they are editable
   // only through the account's command. A group the account does not have is

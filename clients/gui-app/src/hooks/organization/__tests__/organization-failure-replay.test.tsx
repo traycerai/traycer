@@ -10,7 +10,10 @@ import {
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  useOrganizationView,
+} from "@/hooks/organization/organization-context";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -174,7 +177,7 @@ function openTask(taskId: string): string {
 
 /** Shows how many failures the provider's current view carries (or none yet). */
 function ViewProbe() {
-  const view = useOrganization()?.view;
+  const view = useOrganizationView((current) => current, Object.is);
   return (
     <output data-testid="view">
       {view === undefined ? "no-view" : `failures:${view.failures.length}`}

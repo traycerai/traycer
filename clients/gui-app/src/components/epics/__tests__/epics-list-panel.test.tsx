@@ -41,7 +41,8 @@ const organizationState = vi.hoisted(() => ({
   value: null as {
     readonly supported: boolean;
     readonly userId: string | null;
-    readonly view: undefined;
+    readonly readView: () => undefined;
+    readonly subscribeView: (listener: () => void) => () => void;
     readonly openDialog: (dialog: OrganizationDialog) => void;
   } | null,
   openDialog: vi.fn<(dialog: OrganizationDialog) => void>(),
@@ -78,10 +79,16 @@ vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/organization/organization-context")
     >();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganization: () => organizationState.value,
     useOrganizationTasks: () => null,
+    ...organizationViewHookOverrides(
+      () => organizationState.value?.readView(),
+      actual.taskOrganization,
+    ),
   };
 });
 import {
@@ -562,8 +569,7 @@ function seedMessageHits(
 
 function resetImportedUnseenStore(): void {
   act(() => {
-    const state = useImportedUnseenStore.getState();
-    for (const epicId of Object.keys(state.unseen)) state.markSeen(epicId);
+    useImportedUnseenStore.getState().markSeen("epic-from-history");
   });
 }
 
@@ -1061,7 +1067,8 @@ describe("<EpicsListPanel />", () => {
       organizationState.value = {
         supported: true,
         userId: "user-1",
-        view: undefined,
+        readView: () => undefined,
+        subscribeView: () => () => undefined,
         openDialog: organizationState.openDialog,
       };
       testState.items = [
@@ -1144,7 +1151,8 @@ describe("<EpicsListPanel />", () => {
     organizationState.value = {
       supported: true,
       userId: "user-1",
-      view: undefined,
+      readView: () => undefined,
+      subscribeView: () => () => undefined,
       openDialog: organizationState.openDialog,
     };
     testState.items = [

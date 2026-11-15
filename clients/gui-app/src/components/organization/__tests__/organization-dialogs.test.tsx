@@ -52,7 +52,8 @@ const state = vi.hoisted(() => {
   const organization = {
     supported: true,
     userId: "user-1",
-    view,
+    readView: () => view,
+    subscribeView: () => () => undefined,
     register: vi.fn((_key: string, _taskIds: readonly string[]) => () => {
       return undefined;
     }),
@@ -64,7 +65,7 @@ const state = vi.hoisted(() => {
     readonly userId: string;
     readonly displayName: string;
   }> = [];
-  return { command, collaboratorRows, organization };
+  return { command, collaboratorRows, organization, view };
 });
 
 const queryClient = new QueryClient({
@@ -82,10 +83,16 @@ function render(ui: ReactNode) {
 vi.mock("@/hooks/organization/organization-context", async (load) => {
   const actual =
     await load<typeof import("@/hooks/organization/organization-context")>();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganization: () => state.organization,
     useOrganizationTasks: () => state.organization,
+    ...organizationViewHookOverrides(
+      () => state.organization.readView(),
+      actual.taskOrganization,
+    ),
   };
 });
 
@@ -127,16 +134,16 @@ function resetOrganization(): void {
   state.command.mockReset();
   state.command.mockImplementation(() => Promise.resolve());
   state.organization.openDialog.mockReset();
-  state.organization.view.catalog = [];
-  state.organization.view.groups = {
+  state.view.catalog = [];
+  state.view.groups = {
     version: "0",
     groups: [],
     memberships: [],
   };
-  state.organization.view.appearances = [
+  state.view.appearances = [
     { taskId: "task-1", version: "0", color: null, icon: null },
   ];
-  state.organization.view.taskLabels = {};
+  state.view.taskLabels = {};
   state.collaboratorRows.length = 0;
 }
 
@@ -302,7 +309,7 @@ describe("organization dialogs", () => {
   });
 
   it("preserves the opener through label management and its editor", async () => {
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [], removed: [] },
     };
     render(<FocusHarness initialDialog={{ kind: "manage-labels" }} />);
@@ -402,7 +409,7 @@ describe("organization dialogs", () => {
       labelId: "label-2",
       name: "Shared",
     });
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [appliedLabel(foreign)], removed: [] },
     };
     renderDialog({ kind: "labels", taskId: "task-1", canEdit: false });
@@ -434,10 +441,10 @@ describe("organization dialogs", () => {
       labelId: "label-2",
       name: "Shared",
     });
-    state.organization.view.catalog = [
+    state.view.catalog = [
       label({ ownerId: "user-1", labelId: "label-1", name: "Shared" }),
     ];
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [appliedLabel(foreign)], removed: [] },
     };
     renderDialog({ kind: "labels", taskId: "task-1", canEdit: false });
@@ -464,14 +471,14 @@ describe("organization dialogs", () => {
 
   it("does not treat an optimistic create-and-apply catalog entry as a duplicate", async () => {
     const user = userEvent.setup();
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [], removed: [] },
     };
     let resolveAttach: (() => void) | undefined;
     state.command.mockImplementation((action) => {
       if (action.kind === "catalog" && action.command.operation === "create") {
-        state.organization.view.catalog = [
-          ...state.organization.view.catalog,
+        state.view.catalog = [
+          ...state.view.catalog,
           label({
             ownerId: "user-1",
             labelId: action.command.labelId,
@@ -528,10 +535,10 @@ describe("organization dialogs", () => {
 
   it("blocks a case-insensitive duplicate when creating a label", async () => {
     const user = userEvent.setup();
-    state.organization.view.catalog = [
+    state.view.catalog = [
       label({ ownerId: "user-1", labelId: "existing", name: "Existing" }),
     ];
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [], removed: [] },
     };
     renderDialog({ kind: "labels", taskId: "task-1", canEdit: true });
@@ -559,7 +566,7 @@ describe("organization dialogs", () => {
       labelId: "label-b",
       name: "QA Beta 0923 — Long label for overflow verification",
     });
-    state.organization.view.groups = {
+    state.view.groups = {
       version: "0",
       groups: [
         {
@@ -571,7 +578,7 @@ describe("organization dialogs", () => {
       ],
       memberships: [{ taskId: "task-1", groupId: "group-long", position: 0 }],
     };
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": {
         labels: [appliedLabel(first), appliedLabel(second)],
         removed: [],

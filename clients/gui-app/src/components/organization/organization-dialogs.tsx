@@ -37,9 +37,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TabColorPicker } from "@/components/layout/tabs/tab-appearance-menu";
 import { TAB_COLORS } from "@/stores/tabs/tab-groups";
 import {
-  taskOrganization,
   useOrganization,
   useOrganizationTasks,
+  useOrganizationView,
+  useTaskOrganization,
 } from "@/hooks/organization/organization-context";
 import { OrganizationDot, OrganizationSyncNote } from "./organization-metadata";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -199,7 +200,7 @@ function NewGroupEditor(props: {
             groupId,
             name: name.trim(),
             color,
-            position: organization.view?.groups.groups.length ?? 0,
+            position: organization.readView()?.groups.groups.length ?? 0,
           },
           {
             operation: "moveTask",
@@ -279,7 +280,8 @@ function LabelEditor(props: {
   const [name, setName] = useState(source?.name ?? "");
   const [color, setColor] = useState(source?.color ?? TAB_COLORS[1].value);
   const normalized = name.trim().toLocaleLowerCase();
-  const collision = organization?.view?.catalog.find(
+  const catalog = useOrganizationView((view) => view?.catalog, Object.is);
+  const collision = catalog?.find(
     (l) =>
       l.name.toLocaleLowerCase() === normalized &&
       (props.editor.kind !== "edit" ||
@@ -417,6 +419,10 @@ function TaskLabelsEditor(props: {
   readonly taskId: string;
   readonly canEdit: boolean;
 }) {
+  const taskLabels = useOrganizationView(
+    (view) => view?.taskLabels[props.taskId]?.labels,
+    Object.is,
+  );
   const organization = useOrganizationTasks([props.taskId]);
   const collaborators = useEpicCollaboratorsQuery(props.taskId, {
     client: organization?.client ?? null,
@@ -439,7 +445,7 @@ function TaskLabelsEditor(props: {
         task={{
           taskId: props.taskId,
           canEdit: props.canEdit,
-          labels: organization?.view?.taskLabels[props.taskId]?.labels,
+          labels: taskLabels,
         }}
         ownerNames={
           new Map(
@@ -454,8 +460,7 @@ function TaskLabelsEditor(props: {
 }
 
 function TaskGroupDetails({ taskId }: { readonly taskId: string }) {
-  const organization = useOrganization();
-  const group = taskOrganization(organization?.view, taskId, undefined)?.group;
+  const group = useTaskOrganization(taskId, undefined)?.group;
   if (!group) return null;
   return (
     <section aria-label="Group" className="space-y-1.5">
@@ -510,11 +515,8 @@ function LabelCatalogList(props: {
     opener: HTMLElement | null;
   } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const labels = catalogListLabels(
-    organization?.view?.catalog ?? [],
-    props.task,
-    search,
-  );
+  const catalog = useOrganizationView((view) => view?.catalog, Object.is);
+  const labels = catalogListLabels(catalog ?? [], props.task, search);
   const showOwners =
     props.task !== null &&
     hasSharedLabelOwner(labels, organization?.userId ?? null);

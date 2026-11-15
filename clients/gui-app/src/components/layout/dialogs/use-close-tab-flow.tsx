@@ -333,7 +333,7 @@ function tasksUngroupedByClose(
   closing: readonly HeaderTab[],
   organization: OrganizationContextValue | null,
 ): string[] {
-  const memberships = organization?.view?.groups.memberships ?? [];
+  const memberships = organization?.readView()?.groups.memberships ?? [];
   if (memberships.length === 0) return [];
   const canvas = useEpicCanvasStore.getState();
   const closingTabIds = new Set(

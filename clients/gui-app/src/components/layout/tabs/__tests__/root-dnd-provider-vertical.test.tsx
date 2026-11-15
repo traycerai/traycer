@@ -62,6 +62,7 @@ import {
 } from "@/hooks/organization/organization-context";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { organizationViewSource } from "@/__tests__/organization-view-source";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -643,7 +644,7 @@ describe("RootDndProvider on a vertical strip", () => {
         supported: true,
         hostSupport: true,
         userId: "user-1",
-        view: {
+        ...organizationViewSource({
           catalog: [],
           groups: {
             version: "1",
@@ -662,7 +663,7 @@ describe("RootDndProvider on a vertical strip", () => {
           authenticationRequired: false,
           pending: [],
           failures: [],
-        },
+        }),
         register: () => () => undefined,
         command,
         refresh: () => Promise.resolve(),
@@ -1068,7 +1069,7 @@ describe("RootDndProvider on a vertical strip", () => {
       ): OrganizationContextValue => ({
         ...organizationOf(command),
         supported: true,
-        view: undefined,
+        ...organizationViewSource(undefined),
       });
 
       it("refuses a drop that would join an account group, leaving membership and order as they were", async () => {

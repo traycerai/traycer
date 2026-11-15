@@ -7,8 +7,9 @@ import { Label } from "@/components/ui/label";
 import { GroupFollowNote } from "@/components/layout/tabs/group-follow-note";
 import { TabColorPicker } from "@/components/layout/tabs/tab-appearance-menu";
 import {
-  taskOrganization,
   useOrganizationTasks,
+  useOrganizationView,
+  useTaskOrganization,
 } from "@/hooks/organization/organization-context";
 import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { effectiveTabColor } from "@/stores/tabs/tab-groups";
@@ -20,11 +21,11 @@ import { effectiveTabColor } from "@/stores/tabs/tab-groups";
  */
 export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
   const organization = useOrganizationTasks([taskId]);
-  const appearance = organization?.view?.appearances.find(
-    (a) => a.taskId === taskId,
+  const appearance = useOrganizationView(
+    (view) => view?.appearances.find((a) => a.taskId === taskId),
+    Object.is,
   );
-  const group =
-    taskOrganization(organization?.view, taskId, undefined)?.group ?? null;
+  const group = useTaskOrganization(taskId, undefined)?.group ?? null;
   const [draftIcon, setDraftIcon] = useState<string | null>(null);
   const colorDraft = useCustomColorDraft(organization?.command, taskId);
   const saveIconMutation = useMutation({

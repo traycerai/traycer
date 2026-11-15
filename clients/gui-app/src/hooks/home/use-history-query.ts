@@ -1,5 +1,6 @@
 import {
   taskOrganization,
+  useOrganizationTaskSlices,
   useOrganizationTasks,
 } from "@/hooks/organization/organization-context";
 import type {
@@ -256,6 +257,7 @@ export function useHistoryQuery(
       (id) => !taskContexts.localHomedTaskIds.has(id),
     ),
   ]);
+  const organizationSlices = useOrganizationTaskSlices();
   const contextItems = useMemo(
     () =>
       filterHistoryItemsLocally(
@@ -271,7 +273,7 @@ export function useHistoryQuery(
         ).map((item) => ({
           ...item,
           organization: taskOrganization(
-            organization?.view,
+            organizationSlices,
             item.epicId,
             item.organization,
           ),
@@ -284,7 +286,7 @@ export function useHistoryQuery(
       effectiveSearch,
       taskContexts.tasksById,
       taskContexts.localHomedTaskIds,
-      organization,
+      organizationSlices,
     ],
   );
   // Locally matched tasks are unioned under the cloud page: the cloud rows
@@ -314,14 +316,14 @@ export function useHistoryQuery(
         allBaseItems.map((item) => ({
           ...item,
           organization: taskOrganization(
-            organization?.view,
+            organizationSlices,
             item.epicId,
             item.organization,
           ),
         })),
         worktreesByEpicId,
       ),
-    [allBaseItems, worktreesByEpicId, organization],
+    [allBaseItems, worktreesByEpicId, organizationSlices],
   );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {

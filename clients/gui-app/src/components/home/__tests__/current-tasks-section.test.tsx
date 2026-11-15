@@ -196,6 +196,7 @@ import {
 } from "@/hooks/organization/organization-context";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { organizationViewSource } from "@/__tests__/organization-view-source";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 
@@ -309,7 +310,7 @@ function renderSectionWithOrganization(view: OrganizationView) {
     supported: true,
     hostSupport: true,
     userId: "user-1",
-    view,
+    ...organizationViewSource(view),
     register: registerOrganizationTasks,
     command: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),

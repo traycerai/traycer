@@ -130,7 +130,8 @@ interface StagedOrganization {
    * the account has an answer to put behind them, so a staged context that
    * carries no view is one that draws nothing.
    */
-  readonly view: OrganizationView;
+  readonly readView: () => OrganizationView | undefined;
+  readonly subscribeView: (listener: () => void) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
 }
 
@@ -159,15 +160,22 @@ const testState = vi.hoisted(() => ({
   openOrganizationDialog: vi.fn<(dialog: OrganizationDialog) => void>(),
 }));
 
-vi.mock(
-  "@/hooks/organization/organization-context",
-  async (importOriginal) => ({
-    ...(await importOriginal<
+vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<
       typeof import("@/hooks/organization/organization-context")
-    >()),
+    >();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
+  return {
+    ...actual,
     useOrganization: () => testState.organization,
-  }),
-);
+    ...organizationViewHookOverrides(
+      () => testState.organization?.readView(),
+      actual.taskOrganization,
+    ),
+  };
+});
 
 // The desktop scope bar names the host through the directory, which needs a
 // runtime provider this fixture does not mount.
@@ -329,7 +337,7 @@ function supportedOrganization(
     supported: true,
     hostSupport: true,
     userId: "user-test",
-    view: {
+    readView: () => ({
       catalog: [],
       groups: {
         version: "1",
@@ -346,7 +354,8 @@ function supportedOrganization(
       authenticationRequired: false,
       pending: [],
       failures: [],
-    },
+    }),
+    subscribeView: () => () => undefined,
     openDialog: testState.openOrganizationDialog,
   };
 }

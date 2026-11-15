@@ -47,7 +47,11 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
-import { DEFAULT_TAB_CUSTOMIZATION } from "@/stores/tabs/tab-groups";
+import {
+  DEFAULT_TAB_CUSTOMIZATION,
+  type TabCustomization,
+  type TabGroup,
+} from "@/stores/tabs/tab-groups";
 import { useAppearanceEdits } from "./use-appearance-edits";
 
 const EMPTY_TASK_IDS: string[] = [];
@@ -429,6 +433,11 @@ export function OrganizationProvider({
     if (projectedView === undefined || !projectedView.ready) return;
     projectOrganizationToTabs(projectedView, userId);
   }, [supported, projectedView, openIds, lifecycle, userId, scope]);
+  const [viewSource] = useState(createOrganizationViewSource);
+  const shownView = ownAccount ? projectedView : undefined;
+  useLayoutEffect(() => {
+    viewSource.publish(shownView);
+  }, [viewSource, shownView]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
       const opener = captureOrganizationDialogOpener();
@@ -447,7 +456,8 @@ export function OrganizationProvider({
       hostSupport,
       client,
       userId,
-      view: ownAccount ? projectedView : undefined,
+      readView: viewSource.readView,
+      subscribeView: viewSource.subscribeView,
       register,
       command,
       refresh,
@@ -456,10 +466,9 @@ export function OrganizationProvider({
     [
       supported,
       hostSupport,
-      ownAccount,
       client,
       userId,
-      projectedView,
+      viewSource,
       register,
       command,
       refresh,
@@ -553,6 +562,36 @@ function OrganizationSubscription(props: {
   return null;
 }
 
+/**
+ * The view the provider's consumers read, outside the context value. Every
+ * frame replaces the view, and only the consumers whose slice moved may
+ * re-render (`useOrganizationView`).
+ */
+function createOrganizationViewSource() {
+  let current: OrganizationView | undefined;
+  const listeners = new Set<() => void>();
+  return {
+    readView: (): OrganizationView | undefined => current,
+    subscribeView: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    publish: (view: OrganizationView | undefined): void => {
+      if (view === current) return;
+      current = view;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+/**
+ * Writes the view's groups and each open tab's appearance into the tab store.
+ * Most frames change neither - a moved History token, another task's labels -
+ * and the store is left alone for them: every strip row selects these maps,
+ * so a write of equal content re-renders the whole strip.
+ */
 function projectOrganizationToTabs(
   view: OrganizationView,
   userId: string | null,
@@ -561,35 +600,81 @@ function projectOrganizationToTabs(
   const state = useTabsStore.getState();
   const groups = { ...state.groups };
   const customizations = { ...state.customizations };
-  for (const group of view.groups.groups)
-    groups[group.groupId] = {
-      name: group.name,
-      color: group.color,
-      organizationOwnerId: userId,
-      collapsed: state.groups?.[group.groupId]?.collapsed ?? false,
-    };
+  let changed = false;
+  for (const group of view.groups.groups) {
+    const next = projectedGroup(group, state.groups?.[group.groupId], userId);
+    if (next === null) continue;
+    groups[group.groupId] = next;
+    changed = true;
+  }
   for (const tabId of tabs.openTabOrder) {
     const tab = tabs.tabsById[tabId];
     if (tab === undefined) continue;
-    const org = taskOrganization(view, tab.epicId, undefined);
     const key = `epic:${tabId}`;
-    if (org === undefined) {
-      const current = state.customizations?.[key];
-      // Groups are account-wide, even before this task's appearance loads.
-      if (current?.groupId && current.organizationOwnerId === userId)
-        customizations[key] = { ...current, groupId: null };
-      continue;
-    }
-    customizations[key] = {
-      ...(customizations[key] ?? DEFAULT_TAB_CUSTOMIZATION),
-      organizationOwnerId: userId,
-      groupId: org.group?.groupId ?? null,
-      color: org.appearance.color,
-      icon: org.appearance.icon,
-    };
+    const next = projectedCustomization(
+      view,
+      tab.epicId,
+      state.customizations?.[key],
+      userId,
+    );
+    if (next === null) continue;
+    customizations[key] = next;
+    changed = true;
   }
+  if (!changed) return;
   useTabsStore.setState({ groups, customizations });
   state.repair();
+}
+
+/** The strip's entry for an account group, or `null` when it already holds it. */
+function projectedGroup(
+  group: OrganizationView["groups"]["groups"][number],
+  current: TabGroup | undefined,
+  userId: string | null,
+): TabGroup | null {
+  const next = {
+    name: group.name,
+    color: group.color,
+    organizationOwnerId: userId,
+    collapsed: current?.collapsed ?? false,
+  };
+  return current !== undefined && sameEntries(current, next) ? null : next;
+}
+
+/** An open tab's drawn appearance, or `null` when the strip already has it. */
+function projectedCustomization(
+  view: OrganizationView,
+  epicId: string,
+  current: TabCustomization | undefined,
+  userId: string | null,
+): TabCustomization | null {
+  const org = taskOrganization(view, epicId, undefined);
+  if (org === undefined) {
+    // Groups are account-wide, even before this task's appearance loads.
+    if (!current?.groupId || current.organizationOwnerId !== userId)
+      return null;
+    return { ...current, groupId: null };
+  }
+  const next = {
+    ...(current ?? DEFAULT_TAB_CUSTOMIZATION),
+    organizationOwnerId: userId,
+    groupId: org.group?.groupId ?? null,
+    color: org.appearance.color,
+    icon: org.appearance.icon,
+  };
+  return current !== undefined && sameEntries(current, next) ? null : next;
+}
+
+/** Whether two flat records hold the same values under the same keys. */
+function sameEntries(a: object, b: object): boolean {
+  const left = Object.entries(a);
+  const right = new Map(Object.entries(b));
+  return (
+    left.length === right.size &&
+    left.every(
+      ([key, value]) => right.has(key) && Object.is(value, right.get(key)),
+    )
+  );
 }
 
 function organizationFiltersChanged(

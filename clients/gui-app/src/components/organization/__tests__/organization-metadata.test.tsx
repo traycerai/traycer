@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   organization: {
     supported: true,
     userId: "user-1",
-    view: undefined,
+    readView: () => undefined,
+    subscribeView: () => () => undefined,
     register: () => () => undefined,
     openDialog: () => undefined,
     command: () => Promise.resolve(),
@@ -58,7 +59,9 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
 }
 
 function resetUnseen(): void {
-  useImportedUnseenStore.setState({ unseen: {} });
+  const { markSeen } = useImportedUnseenStore.getState();
+  for (const epicId of ["cloud-epic", "legacy-epic", "local-epic", "epic-1"])
+    markSeen(epicId);
 }
 
 beforeEach(() => {

@@ -14,7 +14,8 @@ import type {
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import {
   useOrganization,
-  taskOrganization,
+  useOrganizationView,
+  useTaskOrganization,
 } from "@/hooks/organization/organization-context";
 const iconSegmenter = new Intl.Segmenter(undefined, {
   granularity: "grapheme",
@@ -38,11 +39,7 @@ export function OrganizationDetails(props: {
   readonly fallback: TaskOrganization | undefined;
 }) {
   const organization = useOrganization();
-  const data = taskOrganization(
-    organization?.view,
-    props.taskId,
-    props.fallback,
-  );
+  const data = useTaskOrganization(props.taskId, props.fallback);
   const showOwners = hasSharedLabelOwner(
     data?.labels ?? [],
     organization?.userId ?? null,
@@ -93,11 +90,7 @@ export function OrganizationMetadata(props: {
   readonly fallback: TaskOrganization | undefined;
 }) {
   const organization = useOrganization();
-  const data = taskOrganization(
-    organization?.view,
-    props.taskId,
-    props.fallback,
-  );
+  const data = useTaskOrganization(props.taskId, props.fallback);
   if (!data || (!data.group && data.labels.length === 0)) return null;
   const visible = data.labels.slice(0, data.group ? 1 : 2);
   const overflow = data.labels.length - visible.length;
@@ -171,12 +164,7 @@ export function TaskPersonalDecoration(props: {
   readonly taskId: string;
   readonly fallback: TaskOrganization | undefined;
 }) {
-  const organization = useOrganization();
-  const data = taskOrganization(
-    organization?.view,
-    props.taskId,
-    props.fallback,
-  );
+  const data = useTaskOrganization(props.taskId, props.fallback);
   if (!data) return null;
   return (
     <>
@@ -207,11 +195,10 @@ export function OrganizationSyncNote(props: {
   readonly labels: readonly LabelDefinition[];
   readonly includeGroups?: boolean;
 }) {
-  const organization = useOrganization();
-  const view = organization?.view;
+  const userId = useOrganization()?.userId;
   const scopes = new Set(
     props.labels
-      .filter((label) => label.ownerId === organization?.userId)
+      .filter((label) => label.ownerId === userId)
       .map((label) => `label:${label.labelId}`),
   );
   if (props.includeGroups) scopes.add("groups");
@@ -222,12 +209,17 @@ export function OrganizationSyncNote(props: {
   }
   // Group delivery has only a collection-wide scope; it cannot identify work
   // affecting this task, so do not present it as this task's pending change.
-  if (!view?.pending.some((pending) => scopes.has(pending.scope))) return null;
+  const note = useOrganizationView((view) => {
+    if (!view?.pending.some((pending) => scopes.has(pending.scope)))
+      return null;
+    return view.authenticationRequired
+      ? "Sign in to sync your changes"
+      : "Waiting to sync";
+  }, Object.is);
+  if (note === null) return null;
   return (
     <p role="status" className="text-ui-xs text-muted-foreground">
-      {view.authenticationRequired
-        ? "Sign in to sync your changes"
-        : "Waiting to sync"}
+      {note}
     </p>
   );
 }

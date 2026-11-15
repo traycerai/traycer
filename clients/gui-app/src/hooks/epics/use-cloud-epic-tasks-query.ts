@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import {
+  hashKey,
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -510,12 +518,25 @@ export function useCloudEpicTasksQueryForClient(
     [queryClient],
   );
 
+  // The revalidation below waits out a fetch of a pending local-first page,
+  // and that is all this hook needs of the fetch state. Reading
+  // `query.isFetching` subscribed every observer of this list to it, so each
+  // refetch re-rendered all of them - the composer's mention list among them -
+  // even when the page came back unchanged. This changes only while such a
+  // page is in flight.
+  const fetchingPendingPage = useFetchingPendingLocalFirstPage(queryClient, {
+    dispatchable: initialLeg.dispatchable,
+    hostId,
+    userId,
+    request: effectiveRequest,
+  });
+
   useEffect(() => {
     if (
       hostId === null ||
       userId === null ||
       isPlaceholderData ||
-      query.isFetching ||
+      fetchingPendingPage ||
       !isPendingLocalFirstResponse(queryData)
     ) {
       return;
@@ -555,7 +576,7 @@ export function useCloudEpicTasksQueryForClient(
     hostId,
     queryClient,
     queryData,
-    query.isFetching,
+    fetchingPendingPage,
     isPlaceholderData,
     startLocalFirstRevalidation,
     userId,
@@ -803,6 +824,35 @@ export function useCloudEpicTasksQueryForClient(
     completeness,
     initialLegRefused,
   };
+}
+
+/** Whether this hook's cached first page is a pending local-first one being fetched. */
+function useFetchingPendingLocalFirstPage(
+  queryClient: QueryClient,
+  leg: {
+    readonly dispatchable: boolean;
+    readonly hostId: string | null;
+    readonly userId: string | null;
+    readonly request: ListCloudTasksRequest;
+  },
+): boolean {
+  const hash =
+    leg.dispatchable && leg.hostId !== null && leg.userId !== null
+      ? hashKey(cloudEpicTasksQueryKey(leg.hostId, leg.userId, leg.request))
+      : null;
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  const read = (): boolean => {
+    if (hash === null) return false;
+    const cached = queryClient.getQueryCache().get<ListTasksResponse>(hash);
+    return (
+      cached?.state.fetchStatus === "fetching" &&
+      isPendingLocalFirstResponse(cached.state.data)
+    );
+  };
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 function presentFirstPage(

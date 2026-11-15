@@ -46,6 +46,7 @@ import { useGroupEditorStore } from "@/stores/tabs/group-editor-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { OrganizationContextValue } from "@/hooks/organization/organization-context";
+import { organizationViewSource } from "@/__tests__/organization-view-source";
 import type {
   EpicTaskContexts,
   UseEpicGetTaskContextsOptions,
@@ -74,18 +75,28 @@ const organizationState = vi.hoisted((): OrganizationFixtureState => ({
   listeners: new Set(),
   loadTaskContext: vi.fn<() => Promise<GetTaskContextsResponse>>(),
 }));
-vi.mock("@/hooks/organization/organization-context", async (load) => ({
-  ...(await load<typeof import("@/hooks/organization/organization-context")>()),
-  useOrganization: () =>
-    useSyncExternalStore(
-      (listener) => {
-        organizationState.listeners.add(listener);
-        return () => organizationState.listeners.delete(listener);
-      },
-      () => organizationState.organization,
+vi.mock("@/hooks/organization/organization-context", async (load) => {
+  const actual =
+    await load<typeof import("@/hooks/organization/organization-context")>();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
+  return {
+    ...actual,
+    useOrganization: () =>
+      useSyncExternalStore(
+        (listener) => {
+          organizationState.listeners.add(listener);
+          return () => organizationState.listeners.delete(listener);
+        },
+        () => organizationState.organization,
+      ),
+    useOrganizationTasks: () => organizationState.organization,
+    ...organizationViewHookOverrides(
+      () => organizationState.organization?.readView(),
+      actual.taskOrganization,
     ),
-  useOrganizationTasks: () => organizationState.organization,
-}));
+  };
+});
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (
     taskIds: readonly string[],
@@ -219,7 +230,7 @@ function organizationFixture(
     supported: true,
     hostSupport: true,
     userId: "user-1",
-    view,
+    ...organizationViewSource(view),
     register: () => () => undefined,
     command: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),

@@ -57,9 +57,8 @@ const organizationState = vi.hoisted(() => {
   const context = {
     supported: true,
     userId: "user-1",
-    get view() {
-      return view;
-    },
+    readView: () => view,
+    subscribeView: () => () => undefined,
     register: () => () => undefined,
     openDialog: () => undefined,
     command,

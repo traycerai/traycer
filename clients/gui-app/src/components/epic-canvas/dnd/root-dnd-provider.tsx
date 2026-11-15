@@ -1152,7 +1152,9 @@ function groupDropCannotBeSaved(
   to: string | null,
 ): boolean {
   if (!leavesOrganization && !isOrganizationGroup(to)) return false;
-  return organization?.supported !== true || organization.view === undefined;
+  return (
+    organization?.supported !== true || organization.readView() === undefined
+  );
 }
 
 function isOrganizationGroup(groupId: string | null): groupId is string {
@@ -1172,7 +1174,7 @@ function saveOrganizationGroupMove(
   stripItemId: string,
   groups: DroppedGroups,
 ): void {
-  const view = organization?.supported ? organization.view : undefined;
+  const view = organization?.supported ? organization.readView() : undefined;
   if (organization === null || view === undefined) return;
   const action = organizationGroupAction(view, stripItemId, groups);
   if (action !== null) void organization.command(action).catch(() => undefined);

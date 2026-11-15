@@ -8,6 +8,7 @@ import {
 } from "@/hooks/organization/organization-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { organizationViewSource } from "@/__tests__/organization-view-source";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import { flattenStripItemRefs, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -42,7 +43,9 @@ export function FixtureOrganizationContext(props: {
       supported: true,
       hostSupport: true,
       userId: FIXTURE_ORGANIZATION_OWNER_ID,
-      view: organizationViewOf(groups, customizations, items, tabsById),
+      ...organizationViewSource(
+        organizationViewOf(groups, customizations, items, tabsById),
+      ),
       register: () => () => undefined,
       // The account accepts what the drop sends. The move itself is written
       // to the tabs store by the drop, which is what the drivers read; this

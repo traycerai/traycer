@@ -27,6 +27,7 @@ import {
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { organizationViewSource } from "@/__tests__/organization-view-source";
 
 // The editor's "New tab in group" navigates; nothing here is about routing.
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -65,7 +66,7 @@ const ORGANIZATION: OrganizationContextValue = {
   supported: true,
   hostSupport: true,
   userId: ORGANIZATION_OWNER_ID,
-  view: {
+  ...organizationViewSource({
     catalog: [],
     groups: {
       version: "1",
@@ -80,7 +81,7 @@ const ORGANIZATION: OrganizationContextValue = {
     authenticationRequired: false,
     pending: [],
     failures: [],
-  },
+  }),
   register: () => () => undefined,
   command: () => Promise.resolve(undefined),
   refresh: () => Promise.resolve(undefined),
