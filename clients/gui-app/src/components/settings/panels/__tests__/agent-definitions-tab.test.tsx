@@ -74,7 +74,6 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import { signedInEnvironmentCloud } from "@/components/settings/panels/__tests__/signed-in-environment-cloud";
 
 type PutRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -256,7 +255,6 @@ function renderPage(
           expiresInSeconds: 600,
         }),
       getCredentialGeneration: () => 0,
-      environmentCloud: signedInEnvironmentCloud,
     },
   };
   const queryClient = new QueryClient({
@@ -373,7 +371,7 @@ describe("<AgentDefinitionsTab />", () => {
       name: "reviewer.md",
       text: "Review the change, then approve.",
       expectedRevision: 3,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
 
     // The re-read remounts the editor on what the host now has: the new
@@ -435,7 +433,7 @@ describe("<AgentDefinitionsTab />", () => {
       name: "triage.md",
       text: "Triage the report.",
       expectedRevision: null,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
     // It lists once the host has it, and the form is empty again.
     await screen.findByRole("heading", { name: "triage.md" });
@@ -742,7 +740,6 @@ describe("<AgentDefinitionsTab />", () => {
             expiresInSeconds: 600,
           }),
         getCredentialGeneration: () => 0,
-        environmentCloud: signedInEnvironmentCloud,
       },
     };
     const queryClient = new QueryClient({

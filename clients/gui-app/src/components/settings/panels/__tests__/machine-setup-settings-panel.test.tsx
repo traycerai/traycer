@@ -57,12 +57,16 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import {
+  mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HOST_METHOD_POLL_TABLE } from "@/lib/host-rpc-policy/host-method-policy-table";
-import { signedInEnvironmentCloud } from "@/components/settings/panels/__tests__/signed-in-environment-cloud";
 
 type PutRequest = RequestOfMethod<HostRpcRegistry, "environment.setup.put">;
 
@@ -79,6 +83,7 @@ afterEach(() => {
   vi.useRealTimers();
   toastInfo.mockClear();
   resetNegotiatedManifests();
+  resetTeamPageHarness();
   hostMock.client = null;
   hostMock.binding = null;
   hostIdMock.id = "host-a";
@@ -195,9 +200,13 @@ function renderPage(options: RigOptions): Rig {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
+  mountTeamPage({ kind: "host" }, handlers);
+  const authnBinding = requireTeamEnvironmentAuthnBinding();
   hostMock.client = client;
   hostMock.binding = {
+    ...authnBinding,
     auth: {
+      ...authnBinding.auth,
       mintExecutableWriteGrant: () =>
         Promise.resolve({
           kind: "ok" as const,
@@ -205,7 +214,6 @@ function renderPage(options: RigOptions): Rig {
           expiresInSeconds: 600,
         }),
       getCredentialGeneration: () => 0,
-      environmentCloud: signedInEnvironmentCloud,
     },
   };
   const queryClient = new QueryClient({
@@ -303,7 +311,7 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "macos",
       text: "brew bundle --no-lock",
       expectedRevision: 4,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
     // The re-read remounts the editor on the revision it now has.
     await waitFor(() => {
@@ -348,7 +356,7 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "windows",
       text: "winget install jq",
       expectedRevision: null,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
   });
 
