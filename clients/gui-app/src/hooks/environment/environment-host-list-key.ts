@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 const HOST_LIST_METHOD = "environment.host.list";
@@ -50,6 +51,19 @@ export const CONFIGURATION_ITEM_READS = [
   "environment.plans.list",
 ] as const;
 
+/**
+ * What a move of the configuration's revision re-reads. authn moves it on
+ * every committed change, a secret's and an applied hold's included, so the
+ * secrets reads, the review list and the notices follow it as the items do.
+ * A hold proposed or discarded commits nothing, so it does not move it.
+ */
+export const REVISION_MOVED_READS = [
+  ...CONFIGURATION_ITEM_READS,
+  ...SECRET_READS,
+  "environment.review",
+  "environment.notices",
+] as const;
+
 /** Focus and stale-write recovery also refresh independent receipt/room state. */
 export const CONFIGURATION_READS = [
   ...CONFIGURATION_ITEM_READS,
@@ -58,6 +72,8 @@ export const CONFIGURATION_READS = [
   "environment.configuration.guide.get",
   "environment.secrets.list",
   "environment.secrets.versions",
+  "environment.review",
+  "environment.notices",
 ] as const;
 
 /**

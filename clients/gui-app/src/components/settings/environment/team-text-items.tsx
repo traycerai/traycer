@@ -1,4 +1,13 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +33,7 @@ import {
   type ConfigurationItemWrite,
   type ConfigurationItemWriteFailure,
   type ConfigurationItemWrites,
+  type ConfigurationWriteTrigger,
 } from "./configuration-item-writes";
 
 import {
@@ -348,6 +358,7 @@ function SavedTextRow(props: {
         pending={props.pending}
         busy={props.busy}
         onWrite={props.writes.write}
+        onUnmountWrite={props.writes.writeOnUnmount}
         onDraftChange={props.writes.updateDraft}
         onDiscardDraft={props.writes.discardDraft}
         saving={!props.accepted && written}
@@ -386,6 +397,7 @@ function NewTextRow(props: {
       pending={props.pending}
       busy={props.busy}
       onWrite={props.writes.write}
+      onUnmountWrite={props.writes.writeOnUnmount}
       onDraftChange={props.writes.updateDraft}
       onDiscardDraft={props.writes.discardDraft}
       saving={written ? props.pending?.original === null : false}
@@ -411,6 +423,7 @@ interface TeamTextEditorProps {
   readonly pending: ConfigurationItemWrite | null;
   readonly busy: boolean;
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: ConfigurationItemWrites["writeOnUnmount"];
   readonly saving: boolean;
   readonly accepted: boolean;
   readonly kind: "variable" | "env_override";
@@ -430,6 +443,9 @@ function TeamTextEditor(props: TeamTextEditorProps): ReactNode {
     <InlineTeamTextEditor {...props} />
   );
 }
+
+/** The phone writes only on its Save, the person's own write: no unmount write. */
+const PHONE_SAVE_ONLY: RefObject<EnvironmentCloud | null> = { current: null };
 
 function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const canEdit = useCanEditConfiguration();
@@ -461,8 +477,16 @@ function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     if (props.busy) return;
     if (props.item !== null) {
       commitSavedText(
-        { ...props, name, value, saved, displayName, snapName: setName },
-        true,
+        {
+          ...props,
+          name,
+          value,
+          saved,
+          displayName,
+          typedOn: PHONE_SAVE_ONLY,
+          snapName: setName,
+        },
+        "person",
       );
       if (value === saved) dismiss();
       return;
@@ -669,7 +693,13 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const removing =
     props.saving && props.pending !== null && props.pending.action === "remove";
+  // The sign-in the dirty text was typed on: an unmount's write goes only on
+  // it. Taken at the edit, kept while that sign-in lasts.
+  const cloud = useEnvironmentCloud();
+  const typedOn = useRef<EnvironmentCloud | null>(null);
   const changeValue = (next: string): void => {
+    if (typedOn.current === null || !typedOn.current.onOriginSignIn())
+      typedOn.current = cloud === null ? null : cloud();
     setValue(next);
     if (props.draft !== null)
       props.onDraftChange({ ...props.draft, value: { value: next } });
@@ -686,6 +716,8 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     kind: props.kind,
     onDiscardDraft: props.onDiscardDraft,
     onWrite: props.onWrite,
+    onUnmountWrite: props.onUnmountWrite,
+    typedOn,
     snapName: setName,
   };
   const snapRef = useRef(snapshot);
@@ -693,11 +725,11 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     snapRef.current = snapshot;
   });
   const commitSaved = (): void => {
-    commitSavedText(snapshot, true);
+    commitSavedText(snapshot, "person");
   };
   useEffect(
     () => () => {
-      commitSavedText(snapRef.current, false);
+      commitSavedText(snapRef.current, "unmount");
     },
     [],
   );
@@ -787,17 +819,24 @@ interface SavedTextCommit {
   readonly kind: "variable" | "env_override";
   readonly onDiscardDraft: ConfigurationItemWrites["discardDraft"];
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: ConfigurationItemWrites["writeOnUnmount"];
+  readonly typedOn: RefObject<EnvironmentCloud | null>;
   readonly snapName: (name: string) => void;
 }
 
 /**
- * A saved row's value, on blur and when the row unmounts. A revision change
- * remounts the row without a blur, so the unmount writes a dirty value.
- * The name snap stays on blur: a saved name is not a rename.
+ * A saved row's value, written by the person (a blur, the phone's Save) or by
+ * the row as it unmounts. A revision change, or leaving the page, unmounts the
+ * row without a blur, so the unmount writes a dirty value; the hook decides
+ * what an unmount may send (`ConfigurationWriteTrigger`).
+ * The name snap stays on the person's write: a saved name is not a rename.
  */
-function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
+function commitSavedText(
+  snap: SavedTextCommit,
+  trigger: ConfigurationWriteTrigger,
+): void {
   if (snap.item === null) return;
-  if (snapName && snap.name.trim() !== snap.displayName) {
+  if (trigger === "person" && snap.name.trim() !== snap.displayName) {
     snap.snapName(snap.displayName);
   }
   if (snap.busy || snap.value === snap.saved) return;
@@ -805,7 +844,10 @@ function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
     kind: snap.kind,
     draft: snap.draft,
     onDiscardDraft: snap.onDiscardDraft,
-    onWrite: snap.onWrite,
+    onWrite:
+      trigger === "person"
+        ? snap.onWrite
+        : (write) => snap.onUnmountWrite(write, snap.typedOn.current),
     key: snap.item.key,
     os: snap.item.os,
     value: snap.value,

@@ -40,7 +40,6 @@ function PanelOnly(): ReactNode {
         <BotSearchPanel
           botId={SEARCH_BOT_A}
           botTitle="Release Bot"
-          hostId={TAB_HOST}
           environmentId="env-team"
           onClose={() => undefined}
         />

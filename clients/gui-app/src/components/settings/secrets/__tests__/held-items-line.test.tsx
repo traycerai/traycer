@@ -67,7 +67,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("<HeldItemsLine />", () => {
-  it("counts a host's held commands, leaving the rest of the review out", () => {
+  it("counts every hold of a host, whatever its reason", () => {
     reads.entries = [
       entry("notify.sh", "executable_entry", "mac"),
       entry("setup", "executable_entry", "mac"),
@@ -76,7 +76,7 @@ describe("<HeldItemsLine />", () => {
     renderLine();
 
     expect(screen.getByTestId("held-items-line-mac").textContent).toBe(
-      "2 commands from MacBook Pro are on hold until you choose · Review them",
+      "3 commands from MacBook Pro are on hold until you choose · Review them",
     );
   });
 

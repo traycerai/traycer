@@ -1,4 +1,3 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -18,12 +17,14 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { MoveSheet } from "@/components/settings/move-sheet";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  mountTeamPage,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 const HOST_ID = "old";
@@ -31,22 +32,20 @@ const ENVIRONMENT_ID = "env-personal";
 
 const reads = vi.hoisted(
   (): {
-    client: HostClient<HostRpcRegistry> | null;
     scope: HostScope | null;
     readonly statuses: Map<string, unknown>;
   } => ({
-    client: null,
     scope: null,
     statuses: new Map(),
   }),
 );
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => reads.client,
+  useHostClientForHostId: () => requireTeamHostClient(),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => reads.client,
+  useHostClient: () => requireTeamHostClient(),
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => reads.scope,
@@ -123,9 +122,11 @@ function renderMoveSheet(): {
 } {
   const environmentListCalls: number[] = [];
   const hostListEnvironmentIds: string[] = [];
-  const { client } = buildEnvironmentClient({
-    hostId: HOST_ID,
-    handlers: {
+  // Personal's id and its running computers are the app's own reads on the
+  // sign-in; the move itself stays on the computer.
+  const harness = mountTeamPage(
+    { kind: "host" },
+    {
       "environment.list": () => {
         environmentListCalls.push(environmentListCalls.length + 1);
         if (environmentListCalls.length === 1) {
@@ -148,28 +149,14 @@ function renderMoveSheet(): {
         consentId: "consent-a",
       }),
     },
-  });
-  reads.client = client;
+  );
   reads.scope = hostScopeFixture({ host: null, hosts: [] });
   recordNegotiatedHostMethods(HOST_ID, [
     "environment.move.plan",
     "environment.move.accept",
   ]);
 
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-          },
-        })
-      }
-    >
-      <MoveSheet />
-    </QueryClientProvider>,
-  );
+  render(<MoveSheet />, { wrapper: harness.Wrapper });
   act(() => {
     useMoveSheetStore.getState().openSheet({
       hostId: HOST_ID,
@@ -181,7 +168,6 @@ function renderMoveSheet(): {
 }
 
 beforeEach(() => {
-  reads.client = null;
   reads.scope = null;
   reads.statuses.clear();
   useMoveSheetStore.setState({ target: null });
@@ -190,7 +176,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
-  reads.client = null;
+  resetTeamPageHarness();
   reads.scope = null;
 });
 

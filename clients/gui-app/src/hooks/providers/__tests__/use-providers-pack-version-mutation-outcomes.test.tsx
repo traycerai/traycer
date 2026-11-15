@@ -34,6 +34,21 @@ vi.mock("@/lib/host", () => ({
     request: mocks.request,
     getActiveHostId: () => HOST_ID,
   }),
+  useHostBinding: () => null,
+}));
+
+// The settings-save memory is not what these outcome tests check; the save
+// is still sent through the real `sendFollowedSave`.
+vi.mock("@/hooks/environment/use-settings-save", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/environment/use-settings-save")
+  >()),
+  useSettingsSave: () => () =>
+    Promise.resolve({
+      kind: "send",
+      answered: () => undefined,
+      failed: () => undefined,
+    }),
 }));
 
 import {
@@ -83,7 +98,11 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "2.0.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "2.0.0",
+      policy: null,
+    });
 
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(
@@ -100,7 +119,7 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: null });
+    result.current.mutate({ packId: "opencode", version: null, policy: null });
 
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(
@@ -120,7 +139,11 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "0.1.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "0.1.0",
+      policy: null,
+    });
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith(
@@ -139,7 +162,11 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "0.1.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "0.1.0",
+      policy: null,
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -166,7 +193,11 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "0.1.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "0.1.0",
+      policy: null,
+    });
     // A's popover closes mid-flight; B stays open.
     releaseA();
 
@@ -189,7 +220,11 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "2.0.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "2.0.0",
+      policy: null,
+    });
 
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(
@@ -206,7 +241,7 @@ describe("usePackVersion outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: null });
+    result.current.mutate({ packId: "opencode", version: null, policy: null });
 
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(
@@ -227,7 +262,10 @@ describe("remove outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "1.0.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "1.0.0",
+    });
 
     await waitFor(() => {
       expect(mocks.toastInfo).toHaveBeenCalled();
@@ -243,7 +281,10 @@ describe("remove outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "1.0.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "1.0.0",
+    });
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalled();
@@ -261,7 +302,10 @@ describe("install outcome delivery", () => {
       wrapper: wrapper(),
     });
 
-    result.current.mutate({ packId: "opencode", version: "1.0.0" });
+    result.current.mutate({
+      packId: "opencode",
+      version: "1.0.0",
+    });
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith(
