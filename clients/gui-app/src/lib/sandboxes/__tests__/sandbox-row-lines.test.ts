@@ -30,6 +30,7 @@ import {
   sandboxShapeAndCostLine,
   sandboxStartedByLabel,
   sandboxRowActions,
+  sandboxRowShapeAndCostLine,
   sandboxRowMatches,
   sandboxSessionsLine,
   sandboxSupportReferenceLine,
@@ -1333,5 +1334,78 @@ describe("team credits in the resource line", () => {
         }),
       ).toBe(SHAPE);
     });
+  });
+});
+
+// A row's credits are whose sandbox it is, which is not always the page it is
+// listed under: the page's configuration names the settings, `credits` names
+// the money. `null` is a row whose owner is not known, which tells no money.
+describe("a row's credits are not the page's", () => {
+  const ACME: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-acme",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
+  const PERSONAL: SandboxPageConfiguration = { kind: "personal" };
+
+  function clock(
+    summary: Partial<SandboxSummary>,
+    credits: SandboxPageConfiguration | null,
+  ): string {
+    return sandboxClockLine({
+      summary: sandboxSummaryFixture(summary),
+      configuration: PERSONAL,
+      credits,
+      cost: null,
+      wakeString: null,
+      viewerUserId: "viewer",
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    });
+  }
+
+  it("names no cause for a frozen row whose owner is not known", () => {
+    const frozen = {
+      state: "suspended",
+      frozen: true,
+      frozenAt: null,
+    } as const;
+
+    expect(clock(frozen, PERSONAL)).toBe("Your credits ran out.");
+    expect(clock(frozen, null)).toBe("");
+  });
+
+  it("names the storage credits of the row's owner, not the page's, and none while it is not known", () => {
+    const stopped = { state: "stopped" } as const;
+
+    expect(clock(stopped, ACME)).toContain("storage uses Acme's credits");
+    expect(clock(stopped, PERSONAL)).toContain("storage uses your credits");
+    expect(clock(stopped, null)).not.toContain("storage uses");
+  });
+
+  it("states what an Automations host is for and costs by its owner, and only what it cannot run while that is not known", () => {
+    const automations = sandboxSummaryFixture({ kind: "automation" });
+
+    expect(sandboxRowShapeAndCostLine(automations, PERSONAL)).toBe(
+      "Runs your long-running shells · agents can't run here · no charge",
+    );
+    expect(sandboxRowShapeAndCostLine(automations, ACME)).toBe(
+      "Runs Acme's long-running shells · agents can't run here · uses Acme's shared credits, not a member's allowance",
+    );
+    expect(sandboxRowShapeAndCostLine(automations, null)).toBe(
+      "agents can't run here",
+    );
+  });
+
+  it("leaves the funding clause off a priced row whose owner is not known", () => {
+    const priced = sandboxSummaryFixture({ burst: false });
+
+    expect(sandboxRowShapeAndCostLine(priced, PERSONAL)).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits",
+    );
+    expect(sandboxRowShapeAndCostLine(priced, null)).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+    );
   });
 });
