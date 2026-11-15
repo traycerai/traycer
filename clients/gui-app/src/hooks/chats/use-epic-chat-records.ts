@@ -33,7 +33,7 @@ import {
  */
 interface ChatRecordListAnswer {
   readonly publicationRedirectRevision: string | null;
-  readonly publicationRedirectRevisionSupported: boolean | null;
+  readonly publicationRedirectRevisionSupported: boolean;
   readonly answerSequence: number;
   /**
    * The `@1.4` row, NOT the base one and not an older minor's. A narrower row
@@ -299,7 +299,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
       return {
         publicationRedirectRevision: response.publicationRedirectRevision,
         publicationRedirectRevisionSupported:
-          hostSupportsPublicationRedirectRevision(hostId),
+          hostSupportsPublicationRedirectRevision(hostId) ?? false,
         answerSequence:
           (queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0) + 1,
         // `unchanged` maps to `null`, never to `[]`. An empty array is not the
@@ -331,24 +331,39 @@ export function useEpicSyncChatRecords(epicId: string): void {
   );
 
   const answer = query.data ?? null;
-  const recordListAuthoritative =
-    query.isSuccess ||
-    (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
+  const recordListUnsupported =
+    query.isError && query.error.code === "E_HOST_UNSUPPORTED";
+  const recordListAuthoritative = query.isSuccess || recordListUnsupported;
   const recordListFailed = query.isError && !recordListAuthoritative;
+  // Snapshot and unchanged answers settle negotiated support (@1.4 is false).
+  // Unsupported settles false and authorizes doc-only IDs. Other failures keep
+  // negotiated or last-known support for this viewer, using legacy false if
+  // neither is known, so the failed-list gate can read known IDs. A viewer reset
+  // alone leaves support null until that viewer's first terminal answer settles it.
   useEffect(() => {
     if (recordListFailed || recordListAuthoritative) {
       store?.getState().setChatRecordListFailed(recordListFailed);
     }
-    if (recordListFailed && store !== null) {
+    if ((recordListFailed || recordListUnsupported) && store !== null) {
       const state = store.getState();
       state.recordChatPublicationRedirectRevision(
         state.chatPublicationRedirectRevision,
-        hostSupportsPublicationRedirectRevision(hostId),
+        recordListUnsupported
+          ? false
+          : (hostSupportsPublicationRedirectRevision(hostId) ??
+              state.chatPublicationRedirectRevisionSupported ??
+              false),
         state.chatRecordListAnswerSequence,
         null,
       );
     }
-  }, [recordListFailed, recordListAuthoritative, hostId, store]);
+  }, [
+    recordListFailed,
+    recordListAuthoritative,
+    recordListUnsupported,
+    hostId,
+    store,
+  ]);
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {
@@ -356,7 +371,9 @@ export function useEpicSyncChatRecords(epicId: string): void {
         .getState()
         .recordChatPublicationRedirectRevision(
           answer.publicationRedirectRevision,
-          answer.publicationRedirectRevisionSupported,
+          recordListUnsupported
+            ? false
+            : answer.publicationRedirectRevisionSupported,
           answer.answerSequence,
           answer.chats === null
             ? null
@@ -402,7 +419,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
       stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
     store.getState().markChatRecordListAuthoritative();
-  }, [answer, recordListAuthoritative, stamp, store, viewerUserId]);
+  }, [
+    answer,
+    recordListAuthoritative,
+    recordListUnsupported,
+    stamp,
+    store,
+    viewerUserId,
+  ]);
 }
 
 /**

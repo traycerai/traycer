@@ -408,6 +408,9 @@ describe("record-list deletion authority", () => {
       );
     });
     expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBe(false);
     expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
 
     vi.useFakeTimers();
@@ -431,6 +434,9 @@ describe("record-list deletion authority", () => {
       },
       { timeout: 6_000 },
     );
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBe(false);
     expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
       false,
     );
@@ -444,6 +450,10 @@ describe("record-list deletion authority", () => {
         true,
       );
       expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(false);
     });
     expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
   });

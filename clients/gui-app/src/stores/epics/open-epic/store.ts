@@ -404,7 +404,7 @@ export interface OpenEpicState {
   readonly chatRecordListFailed: boolean;
   /** Opaque revision observed on this session host's latest record-list answer. */
   readonly chatPublicationRedirectRevision: string | null;
-  /** Null until this viewer's record list establishes host support. */
+  /** Null only before this viewer's first terminal record-list result. */
   readonly chatPublicationRedirectRevisionSupported: boolean | null;
   /** Snapshot coverage includes rows whose worker projection is still in flight. */
   readonly chatPublicationTargetCoverage: readonly string[];
