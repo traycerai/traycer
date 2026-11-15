@@ -105,4 +105,21 @@ describe("useSimulatorSessionsForHost below the version floor", () => {
     expect(records[0]?.closeCount).toBe(0);
     expect(hasSimulatorSessionsCoordinator(OWNER_KEY)).toBe(true);
   });
+
+  it("rebuilds the coordinator once when the host rises back to the floor", () => {
+    rowRef.current = { ...AT_FLOOR_ROW, version: "1.9.0" };
+    const { rerender } = renderHook(() =>
+      useSimulatorSessionsForHost({ hostId: HOST_ID, epicId: EPIC_ID }),
+    );
+    const { records } = fakeDurableStreamTransports();
+    expect(records).toHaveLength(0);
+    expect(hasSimulatorSessionsCoordinator(OWNER_KEY)).toBe(false);
+
+    act(() => {
+      rowRef.current = AT_FLOOR_ROW;
+      rerender();
+    });
+    expect(records).toHaveLength(1);
+    expect(hasSimulatorSessionsCoordinator(OWNER_KEY)).toBe(true);
+  });
 });
