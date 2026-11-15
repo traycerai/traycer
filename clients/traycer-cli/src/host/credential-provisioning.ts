@@ -1,7 +1,9 @@
+import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "../internal/local-open-auth";
+  createCliHostTokens,
+  type CliHostBearer,
+} from "../internal/cli-host-tokens";
+import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -10,6 +12,7 @@ import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-
 import {
   MutableBearerLease,
   readLeaseBearer,
+  type OpenFrameBearerSource,
 } from "../../../shared/auth/bearer-source";
 import type {
   RevalidateOutcome,
@@ -72,6 +75,19 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
 // client, so a withheld mint also ends the laps - re-dialing cannot change
 // the answer.
 //
+// The connection presents this CLI's host-only token, never the stored
+// sign-in, which is spent at authn alone (ruling 241). Its order:
+// - the host-only token first, the one on disk or one mint;
+// - only on authn's bare 404 (a computer with no live owner family, or one
+//   that is not this person's), one owner mint, then the host-only token once
+//   more. The owner mint is never made unconditionally: for a computer that
+//   already holds a family it adds a second one and revokes nothing. A
+//   refused owner mint is the end, and the pair is tried once per run;
+// - the open on that token. When the ack reports `missing` or
+//   `needs-reauth`, the credential the owner mint returned is the one pushed;
+//   with none held, the push mints one, as before.
+// authn unreachable is retried quietly inside the deadline.
+//
 // Every outcome here is advisory: the calling command (`host install`,
 // `host service install`, `host ensure`, `login`) already did its own work,
 // so callers render failures as warnings, never as a failed command. An
@@ -106,8 +122,8 @@ export type HostCredentialProvisionOutcome =
   // but no subsequent ack reported `active` inside the deadline. Never
   // claimed for a mint whose outcome is unknown - that is `mint-unavailable`.
   | { readonly kind: "not-adopted" }
-  // The stored sign-in is dead: the host rejected the bearer and refreshing
-  // it was terminally rejected too (revoked or expired refresh family).
+  // The stored sign-in is dead: authn refused its refresh, or refused a mint
+  // again right after a refresh it accepted (revoked or expired family).
   // Distinct from every kind above because no later client can mint on a
   // dead credential either, so the human line has to say `traycer login`. Also produced by the CALLER when the stored sign-in
   // disappeared between its pre-flight and this probe (a concurrent sign-out
@@ -212,8 +228,6 @@ export async function provisionInstalledHostCredential(
   // The most recent revalidation, awaited (bounded) before returning so a
   // refresh this probe started does not outlive the call.
   let inFlightRevalidation: Promise<RevalidateOutcome> | null = null;
-  // Set when a revalidation came back terminally `rejected`.
-  let credentialRejected = false;
 
   // The endpoint provider is synchronous, so a poller keeps a mutable slot
   // fresh (the monitor's pattern): the freshly-started host writes its pid
@@ -262,9 +276,9 @@ export async function provisionInstalledHostCredential(
   // it decided it cannot deliver (version-incompatible ack, or a non-UUID
   // host id). Deterministic per client - ends the laps.
   let mintWithheld = false;
-  // Authn answered the mint with 401/403. Unlike every other mint failure
-  // this one is NOT client-local - the same stored bearer fails for every
-  // client - so it is confirmed via a rotation below before the probe
+  // Authn answered the push's mint with 401/403. Unlike every other mint
+  // failure this one is NOT client-local - the same stored bearer fails for
+  // every client - so it is confirmed via a rotation below before the probe
   // decides between "a later client will heal this" and "sign in again".
   let mintUnauthorized = false;
   // The mint-401 confirmation ROTATES a single-use refresh family, so it may
@@ -294,29 +308,11 @@ export async function provisionInstalledHostCredential(
       void refreshEndpoint();
     }, ENDPOINT_POLL_MS);
 
-    const innerMint = createCliHostCredentialMintFlow({
-      authnBaseUrl: options.auth.authnBaseUrl,
-      // The LIVE lease, not the token this call was handed: a revalidation
-      // below can rotate the bearer mid-probe, and minting on the snapshot
-      // would spend a token authn has already retired.
-      bearer: () => readLeaseBearer(lease),
-      diag: (message) => options.progress(message),
-      signal: probeAbort.signal,
-      // The install's consequence, not the connection-lease one: this probe
-      // closes its connection on purpose, and the install already succeeded.
-      unavailableNote: "continuing - the host is not authorized yet.",
-      onUnauthorized: () => {
-        mintUnauthorized = true;
-      },
-    });
     // The stored access token has a ~4h TTL, so an ordinary "already signed
-    // in" install routinely starts this probe on an EXPIRED bearer - the
-    // common case, not an edge one. `auth: null` (correct only for a client
-    // that has no revalidator) would make that first UNAUTHORIZED terminal,
-    // and the host would never be minted for at all. Route reconnect recovery
-    // through the same locked, single-flight `rotate` the monitor uses, so a
-    // probe refresh and a concurrent desktop refresh cannot double-spend the
-    // refresh token.
+    // in" install routinely starts this probe on an EXPIRED sign-in - the
+    // common case, not an edge one. Its refresh routes through the same
+    // locked, single-flight `rotate` the monitor uses, so a probe refresh and
+    // a concurrent desktop refresh cannot double-spend the refresh token.
     store = createCliCredentialsStore();
     // Named narrowing, as `monitor` does: the factory's return intersects
     // `AuthRevalidator`, whose `revalidateCurrentContext` is declared
@@ -327,49 +323,118 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
-    const streamAuth: StreamAuthRevalidator = {
-      revalidateForReconnect: () => {
-        // Reaching this callback at all means the host answered and rejected
-        // the bearer we presented - it was up and talking, whatever happens
-        // to the refresh below. Recorded before the early return so even a
-        // rotation the deadline cannot cover still counts as contact.
-        hostAnswered = true;
-        // Never START a rotation the deadline cannot cover. The CLI sets
-        // `process.exitCode` rather than calling `process.exit` (see
-        // `runner/exit.ts`), so the process waits for the event loop to
-        // drain: a refresh begun as the budget ran out would keep
-        // `host install` alive past its advertised bound, and disposing the
-        // store does not cancel one already in flight.
-        if (remaining() <= 0) {
-          return Promise.resolve<RevalidateOutcome>("rejected");
-        }
+    // The one judge of a rejected sign-in for this run, as for every other
+    // CLI mint.
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => {
         const settled = revalidator.revalidateCurrentContext();
         inFlightRevalidation = settled;
-        // A terminal rejection means the stored sign-in is dead, which the
-        // fatal close alone cannot tell us apart from an unreachable host.
-        void settled.then((outcome) => {
-          if (outcome === "rejected") {
-            credentialRejected = true;
-          }
-        });
         return settled;
       },
+      signal: probeAbort.signal,
+    });
+    const innerMint = createCliHostCredentialMintFlow({
+      authnBaseUrl: options.auth.authnBaseUrl,
+      // The LIVE lease, not the token this call was handed: a refresh can
+      // rotate the sign-in mid-probe, and minting on the snapshot would spend
+      // a token authn has already retired.
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => options.progress(message),
+      signal: probeAbort.signal,
+      // The install's consequence, not the connection-lease one: this probe
+      // closes its connection on purpose, and the install already succeeded.
+      unavailableNote: "continuing - the host is not authorized yet.",
+      onUnauthorized: () => {
+        mintUnauthorized = true;
+      },
+    });
+    // Every wait before the connection opens ends at the deadline; what it
+    // abandoned is cancelled by the probe's abort on the way out.
+    const withinDeadline = async <Value>(
+      work: Promise<Value>,
+    ): Promise<Value | "deadline"> => {
+      const bound = cancelableDelay(remaining());
+      try {
+        return await Promise.race([
+          work,
+          bound.promise.then((): "deadline" => "deadline"),
+        ]);
+      } finally {
+        bound.cancel();
+      }
+    };
+
+    // The host's id names the token, so it is read before the first mint:
+    // the freshly-started host writes its pid metadata some time after the
+    // service start.
+    let hostId: string | null = null;
+    while (hostId === null && remaining() > 0) {
+      const current: HostTransportEndpoint | null = endpoint;
+      if (current === null) {
+        await sleep(Math.min(ENDPOINT_POLL_MS, remaining()));
+      } else {
+        hostId = current.hostId;
+      }
+    }
+    if (hostId === null) {
+      return { kind: "unreachable" };
+    }
+    const access = await acquireHostToken({
+      hostId,
+      hostToken: (id) => withinDeadline(tokens.bearerFor(id)),
+      // `missing`: authn's 404 is a computer with no live owner family.
+      ownerMint: (id) =>
+        withinDeadline(innerMint({ hostId: id, reason: "missing" })),
+      signInRejected: () => tokens.signInRejected(),
+      remaining,
+    });
+    if (access.kind === "settled") {
+      return access.outcome;
+    }
+    const tokenHostId = hostId;
+    const { bearer, ownerCredential } = access;
+    const recovery = tokens.streamRecovery(tokenHostId);
+    // Reaching either callback at all means the host answered and refused
+    // the token we presented - it was up and talking, whatever happens to
+    // the recovery. Recorded before the early return so even a recovery the
+    // deadline cannot cover still counts as contact.
+    const recover = (
+      work: () => Promise<RevalidateOutcome>,
+    ): Promise<RevalidateOutcome> => {
+      hostAnswered = true;
+      // Never START a recovery the deadline cannot cover. The CLI sets
+      // `process.exitCode` rather than calling `process.exit` (see
+      // `runner/exit.ts`), so the process waits for the event loop to drain:
+      // a mint or refresh begun as the budget ran out would keep `host
+      // install` alive past its advertised bound.
+      if (remaining() <= 0) {
+        return Promise.resolve<RevalidateOutcome>("rejected");
+      }
+      return work();
+    };
+    const streamAuth: StreamAuthRevalidator = {
+      revalidateForReconnect: () =>
+        recover(() => recovery.revalidateForReconnect()),
+      revalidateRefused: (refusal) =>
+        recover(() => recovery.revalidateRefused(refusal)),
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
       onClientClosed: (message) => options.logger.debug(message, {}),
-      localOpenAuth: createCliLocalOpenAuth(options.auth.authnBaseUrl),
       registry: hostStreamRpcRegistry,
-      // `null`, and not a stale read of the slot below: `endpoint` is declared
-      // `null` here and filled in by the poller, so at CONSTRUCTION this run
-      // genuinely does not know its host yet. Declining the seed is the honest
-      // answer - and it costs nothing, because a one-shot provisioning probe
-      // has no earlier handshake in this process to seed from anyway.
-      hostId: null,
-      endpoint: () => endpoint,
-      bearer: () => lease,
+      hostId: tokenHostId,
+      // The token names one host: an address that now answers for another is
+      // not dialed with it.
+      endpoint: () => (endpoint?.hostId === tokenHostId ? endpoint : null),
+      bearer: () => bearer,
       userId: lease.identity.userId,
       auth: streamAuth,
+      // Each admitted open resets the token's recovery.
+      door: {
+        refused: () => undefined,
+        admitted: () => recovery.admitted(),
+      },
       // No tracker wired yet on the CLI side: this is a short-lived
       // provisioning probe, not a long-lived session a user could rescue by
       // fixing their clock mid-run, and nothing here yet feeds server-time
@@ -377,7 +442,12 @@ export async function provisionInstalledHostCredential(
       clock: null,
       hostCredentialMint: (request) => {
         mintInvoked = true;
-        const settled = innerMint(request);
+        // The owner mint already made for this host is the one pushed, every
+        // time the host asks: the pair is tried once.
+        const settled =
+          ownerCredential === null
+            ? innerMint(request)
+            : Promise.resolve<HostCredentialMintOutcome>(ownerCredential);
         mintSettled = settled;
         return settled;
       },
@@ -433,7 +503,7 @@ export async function provisionInstalledHostCredential(
       // First: a dead sign-in explains every other symptom below it (the
       // stream never opens, nothing is ever minted) and is the only one that
       // does not self-heal, so it must not be reported as "unreachable".
-      if (credentialRejected) {
+      if (tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
       if (mintUnavailable) {
@@ -458,10 +528,9 @@ export async function provisionInstalledHostCredential(
         return { kind: "unsupported" };
       }
       // The host spoke to us but never got as far as reporting a credential
-      // state - the shape of an expired stored bearer whose refresh could
-      // not complete (authn unreachable), where the host answers
-      // UNAUTHORIZED, the revalidation returns a transient failure, and the
-      // stream just reconnects until the budget runs out. `unreachable`
+      // state - the shape of a refused token whose fresh one could not be
+      // had (authn unreachable), where the recovery returns a transient
+      // failure and the stream just reconnects until the budget runs out. `unreachable`
       // would say "the host did not respond in time" about a host that
       // answered every single dial; what actually failed is the handoff, and
       // that is `mint-unavailable`'s line - a later client with a live token
@@ -480,7 +549,7 @@ export async function provisionInstalledHostCredential(
     // needs to decide whether the close code is the most informative thing
     // this probe can report.
     const nothingExplainsTheClose = (): boolean =>
-      !credentialRejected &&
+      !tokens.signInRejected() &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&
@@ -563,44 +632,26 @@ export async function provisionInstalledHostCredential(
               await settleMint(pendingMint, options.logger, mintBoundMs);
             }
           }
-          // A 401 from AUTHN on the mint (fired synchronously before the
-          // flow resolved, so the flag is settled here whenever the mint is)
-          // reaches this probe as a plain `unavailable` - but it is the one
-          // mint failure that is not client-local: the host still accepted
-          // the very same bearer to open this stream, which is the shape of
-          // a token authn has revoked out from under an unexpired JWS. The
-          // stream's own revalidator never fires in that shape (the host
-          // keeps saying yes), so confirm here with one rotation: a terminal
-          // rejection means the sign-in is dead and every client's mint
-          // would 401 the same way - report `unauthorized`, because only a
-          // fresh sign-in helps - while a successful rotation
+          // A 401 from AUTHN on the push's mint (fired synchronously before
+          // the flow resolved, so the flag is settled here whenever the mint
+          // is) reaches this probe as a plain `unavailable` - but it is the
+          // one mint failure that is not client-local: the same sign-in fails
+          // for every client, while the host keeps admitting the host-only
+          // token it bought. So confirm here with one refresh: a terminal
+          // rejection means the sign-in is dead - report `unauthorized`,
+          // because only a fresh sign-in helps - while a successful refresh
           // means a later client CAN mint, and `mint-unavailable` stands.
           if (
             mintUnauthorized &&
             !mintUnauthorizedConfirmed &&
-            !credentialRejected &&
+            !tokens.signInRejected() &&
             remaining() > 0
           ) {
-            // Latched BEFORE awaiting: the rotation is the side effect being
+            // Latched BEFORE awaiting: the refresh is the side effect being
             // guarded, so a second lap must not slip past this branch while
             // the first is still settling.
             mintUnauthorizedConfirmed = true;
-            const confirm = revalidator.revalidateCurrentContext();
-            inFlightRevalidation = confirm;
-            const confirmBound = cancelableDelay(remaining());
-            try {
-              const outcome = await Promise.race([
-                confirm,
-                confirmBound.promise.then(
-                  (): RevalidateOutcome => "network-error",
-                ),
-              ]);
-              if (outcome === "rejected") {
-                credentialRejected = true;
-              }
-            } finally {
-              confirmBound.cancel();
-            }
+            await withinDeadline(tokens.refreshSignIn());
           }
           await sleep(Math.min(PUSH_DRAIN_MS, remaining()));
           session.close();
@@ -823,6 +874,98 @@ function observeNextAck(
       // retrying through the deadline - the host is likely still booting.
     });
   });
+}
+
+type ProvisionedCredential = Extract<
+  HostCredentialMintOutcome,
+  { readonly kind: "provisioned" }
+>;
+
+interface HostTokenAcquisition {
+  readonly hostId: string;
+  /** The host-only token: the one on disk, else one mint; bounded by the deadline. */
+  readonly hostToken: (hostId: string) => Promise<CliHostBearer | "deadline">;
+  /** The owner's delegated credential for the host; bounded by the deadline. */
+  readonly ownerMint: (
+    hostId: string,
+  ) => Promise<HostCredentialMintOutcome | "deadline">;
+  readonly signInRejected: () => boolean;
+  readonly remaining: () => number;
+}
+
+type HostTokenAcquired =
+  | {
+      readonly kind: "ready";
+      readonly bearer: OpenFrameBearerSource;
+      /** The owner mint's credential, pushed when the host asks; `null` when none was made. */
+      readonly ownerCredential: ProvisionedCredential | null;
+    }
+  | {
+      readonly kind: "settled";
+      readonly outcome: HostCredentialProvisionOutcome;
+    };
+
+/**
+ * Ruling 241's order before the connection opens: the host-only token; only
+ * on authn's bare 404 the owner mint, then the host-only token once more. The
+ * pair is tried once, and a refused owner mint is the end. authn unreachable
+ * is retried quietly until the deadline.
+ */
+async function acquireHostToken(
+  acquisition: HostTokenAcquisition,
+): Promise<HostTokenAcquired> {
+  let ownerCredential: ProvisionedCredential | null = null;
+  let pairTried = false;
+  let backoffMs = INITIAL_BACKOFF_MS;
+  const settled = (
+    outcome: HostCredentialProvisionOutcome,
+  ): HostTokenAcquired => ({ kind: "settled", outcome });
+  // The deadline ran out while authn could not be reached: with an owner
+  // credential minted and never delivered, the host did not confirm it.
+  const waitedOut = (): HostTokenAcquired =>
+    settled(
+      ownerCredential === null
+        ? { kind: "mint-unavailable" }
+        : { kind: "not-adopted" },
+    );
+  for (;;) {
+    const held = await acquisition.hostToken(acquisition.hostId);
+    if (held === "deadline") return waitedOut();
+    if (held.kind === "ok") {
+      return { kind: "ready", bearer: held.bearer, ownerCredential };
+    }
+    const failure = held.failure;
+    if (failure.kind === "not-admitted" && !pairTried) {
+      pairTried = true;
+      const owner = await acquisition.ownerMint(acquisition.hostId);
+      if (owner === "deadline" || owner.kind !== "provisioned") {
+        return settled(
+          acquisition.signInRejected()
+            ? { kind: "unauthorized" }
+            : { kind: "mint-unavailable" },
+        );
+      }
+      ownerCredential = owner;
+      continue;
+    }
+    if (failure.kind === "unavailable") {
+      if (acquisition.remaining() <= 0) return waitedOut();
+      await sleep(Math.min(backoffMs, acquisition.remaining()));
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+      continue;
+    }
+    // A dead sign-in, or none held any more: only signing in again helps.
+    if (failure.kind === "sign-in-rejected" || failure.kind === "no-sign-in") {
+      return settled({ kind: "unauthorized" });
+    }
+    // authn refused this person for this computer, or the sign-in was
+    // replaced while this ran: the reason is diagnostic, the line is the
+    // general one.
+    return settled({
+      kind: "error",
+      message: hostTokenFailureCliError(failure).message,
+    });
+  }
 }
 
 /**

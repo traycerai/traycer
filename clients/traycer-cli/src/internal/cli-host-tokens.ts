@@ -39,6 +39,12 @@ export interface CliSignIn {
   readonly lease: BearerLease;
   /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
   readonly refresh: () => Promise<RevalidateOutcome>;
+  /**
+   * Cancels this process's own mints: a deadline-bounded caller's, so an
+   * abandoned request cannot keep the CLI from exiting. `null` for a caller
+   * that lives as long as its command.
+   */
+  readonly signal: AbortSignal | null;
 }
 
 /** The stored sign-in's refresh under the credentials lock. */
@@ -230,7 +236,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     hostId: string,
     fresh: boolean,
   ): Promise<CliHostBearer> => {
-    const first = await source.obtain(userId, hostId, fresh, null);
+    const first = await source.obtain(userId, hostId, fresh, signIn.signal);
     if (first.kind === "no-sign-in") report(hostId, first);
     if (first.kind !== "sign-in-rejected") return answer(hostId, first);
     // authn refused the sign-in itself (401): it is refreshed once and the
@@ -247,7 +253,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       report(hostId, first);
       return answer(hostId, first);
     }
-    const second = await source.obtain(userId, hostId, true, null);
+    const second = await source.obtain(userId, hostId, true, signIn.signal);
     if (second.kind === "sign-in-rejected") report(hostId, second);
     return answer(hostId, second);
   };
@@ -309,7 +315,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     // reporting source, so authn's refusal for good ends the stream's
     // command as a refused mint anywhere else does.
     renewAfterSignInRefresh: async (hostId) =>
-      (await source.obtain(userId, hostId, true, null)).kind === "ok",
+      (await source.obtain(userId, hostId, true, signIn.signal)).kind === "ok",
   };
 }
 
@@ -353,6 +359,7 @@ export async function openCliHostSession(
   const tokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.revalidateCurrentContext(),
+    signal: null,
   });
   const pending = fresh ? tokens.mintFresh(hostId) : tokens.bearerFor(hostId);
   const held = await pending.catch((error: unknown) => {

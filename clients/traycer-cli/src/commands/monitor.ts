@@ -399,6 +399,7 @@ async function signInMonitorCredential(
   const hostTokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.revalidateCurrentContext(),
+    signal: null,
   });
   let refreshScheduler: { readonly stop: () => void } | null = null;
   return {
