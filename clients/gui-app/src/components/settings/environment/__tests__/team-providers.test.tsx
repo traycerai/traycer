@@ -38,6 +38,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import {
   mountTeamPage,
+  mountVerifiedTeamProvidersPage,
   personalPoolSource,
   poolSource,
   requireTeamHostClient,
@@ -333,11 +334,15 @@ describe("TeamProviders items", () => {
   });
 
   it("orders Plans & limits as Plans, Profiles, then rate limits", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [cursorProfile("Cursor Work", 1)]),
       "environment.secrets.list": () => ({
         secrets: [cursorKey],
         removed: [],
+      }),
+      "providers.list": () => ({
+        providers: [cursorProviderListRow()],
+        native: null,
       }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
@@ -588,13 +593,18 @@ describe("TeamProviders items", () => {
     );
     const unregister = registerDetailsProvider("env_override", provider);
     try {
-      const harness = mountTeamPage(
-        poolSource("viewer"),
-        handlers(() => [
+      const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
+        ...handlers(() => [
           profile(true, 4),
           envOverride("https://old.example", 7),
         ]),
-      );
+        "providers.list": () => ({
+          providers: [
+            providerState("claude-code", { mcp: false, skills: false }),
+          ],
+          native: null,
+        }),
+      });
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
       expect(await screen.findByText("On")).toBeTruthy();

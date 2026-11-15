@@ -1,7 +1,24 @@
 import type { ConfigurationWriteIssue } from "./configuration-write-issue";
 import type { ReactNode } from "react";
 import { ConfigurationConflict } from "./configuration-conflict";
-import { useCanEditConfiguration } from "./configuration-source";
+import {
+  canManageTeamProviderAccounts,
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "./configuration-source";
+
+export function TeamProviderWriteFeedback(props: {
+  readonly issue: ConfigurationWriteIssue;
+}): ReactNode {
+  const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
+  return (
+    <ConfigurationWriteFeedbackView
+      issue={props.issue}
+      canEdit={canEdit || canManageTeamProviderAccounts(source)}
+    />
+  );
+}
 
 /**
  * What became of the last write on this page. The access refusal belongs to
@@ -14,6 +31,15 @@ export function ConfigurationWriteFeedback(props: {
   readonly issue: ConfigurationWriteIssue;
 }): ReactNode {
   const canEdit = useCanEditConfiguration();
+  return (
+    <ConfigurationWriteFeedbackView issue={props.issue} canEdit={canEdit} />
+  );
+}
+
+function ConfigurationWriteFeedbackView(props: {
+  readonly issue: ConfigurationWriteIssue;
+  readonly canEdit: boolean;
+}): ReactNode {
   if (props.issue === null) return null;
   if (props.issue.kind === "conflict")
     return <ConfigurationConflict changedBy={props.issue.changedBy} />;
@@ -23,7 +49,7 @@ export function ConfigurationWriteFeedback(props: {
         {props.issue.line}
       </p>
     );
-  if (!canEdit) return null;
+  if (!props.canEdit) return null;
   return (
     <p role="status" className="text-ui-sm text-muted-foreground">
       You no longer have access to change these settings.

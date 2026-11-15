@@ -16,6 +16,7 @@ import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
+import { providerState } from "./mcp-skills-test-support";
 
 export const profile = (enabled: boolean, revision: number) =>
   configurationItem({
@@ -123,6 +124,62 @@ export function cursorProviderListRow(): ProviderCliState {
     loginCapability: null,
     availabilityPending: false,
     profiles: [],
+  };
+}
+
+export function cursorProviderWithTeamRecordKey(): ProviderCliState {
+  return {
+    ...cursorProviderListRow(),
+    apiKey: {
+      supported: true,
+      configured: true,
+      source: "stored",
+      recordEnvironmentId: "env-a",
+    },
+  };
+}
+
+export function claudeLoginProviderRow(): ProviderCliState {
+  return {
+    ...providerState("claude-code", { mcp: false, skills: false }),
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+    loginCapability: {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
+    },
+  };
+}
+
+export function teamProviderEnvironmentStatus() {
+  return {
+    principal: { kind: "team" as const, teamName: "Acme" },
+    reachability: "connected" as const,
+    bindingGeneration: 1,
+    desiredRevision: null,
+    receivedRevision: null,
+    appliedRevision: null,
+    receiptAgeMs: 0,
+    items: [],
+    pendingUploads: [],
+    setup: null,
+    remoteAccess: "on" as const,
+    consent: null,
+    planes: { records: "moved", broker: "moved", room: "moved" } as const,
+    returnedFromTeam: null,
+    stoppedAt: null,
+    acceptedUploads: [],
   };
 }
 
@@ -249,7 +306,9 @@ export function profileRowSwitch(profileName: string): HTMLElement {
 }
 
 export async function openProfileEditor(): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /^Manage(?: profile)?$/ }),
+  );
   return screen.findByRole("dialog", { name: "Edit profile" });
 }
 

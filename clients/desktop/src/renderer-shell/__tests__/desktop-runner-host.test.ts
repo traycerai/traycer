@@ -232,6 +232,7 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    replaceEnvironmentApiKey: async () => ({ kind: "failed" as const }),
     getEnvironmentProviders: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -1140,6 +1141,32 @@ describe("DesktopRunnerHost.getTeamEnvironment", () => {
 
     expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
     expect(getTeamEnvironment).toHaveBeenCalledWith("bearer-1", "team-acme");
+  });
+});
+
+describe("DesktopRunnerHost.replaceEnvironmentApiKey", () => {
+  it("passes the bearer and request to the preload bridge and returns its answer", async () => {
+    const result = { kind: "ok" as const };
+    const replaceEnvironmentApiKey = vi.fn<
+      DesktopPreloadBridge["replaceEnvironmentApiKey"]
+    >(async () => result);
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, replaceEnvironmentApiKey },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const request = {
+      environmentId: "env-acme",
+      profileId: "profile-1",
+      harnessId: "claude",
+      key: "fixture-key",
+    };
+
+    await expect(
+      host.replaceEnvironmentApiKey("bearer-1", request),
+    ).resolves.toEqual(result);
+
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledTimes(1);
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledWith("bearer-1", request);
   });
 });
 

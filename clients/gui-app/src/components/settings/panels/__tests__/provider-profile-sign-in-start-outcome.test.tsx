@@ -51,6 +51,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -73,6 +74,13 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
+}));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
 }));
 // A spy, so a test can see which link a button sent the user to.
 const links = vi.hoisted(() => ({
@@ -531,6 +539,7 @@ function renderAntigravityAddDialog(
   });
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -819,6 +828,7 @@ describe.each(MOUNT_MODES)(
       });
       const client = Object.assign({} as HostClient<HostRpcRegistry>, {
         getActiveHostId: () => "host-local",
+        onChange: () => () => undefined,
         request: host.request,
         requestWithSignal: host.request,
         requestWithOptions: host.requestWithOptions,

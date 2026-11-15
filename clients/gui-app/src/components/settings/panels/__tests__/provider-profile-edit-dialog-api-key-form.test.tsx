@@ -24,7 +24,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // whose `getActiveHostId()` returns null instead.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({}),
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -38,6 +42,13 @@ vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
 }));
 vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
   useRenameProviderProfile: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
