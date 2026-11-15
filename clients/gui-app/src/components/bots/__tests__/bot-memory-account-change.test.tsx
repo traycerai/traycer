@@ -566,4 +566,23 @@ describe("the bot's memory when the account changes", () => {
     emit(clientA, 1, ALPHA_AGAIN);
     expect(await screen.findByText(ALPHA_AGAIN_TEXT)).toBeTruthy();
   });
+
+  it("closes the previous account's session and empties its slot at the switch itself, before any render or effect cleanup", async () => {
+    mountAsAccountA(null);
+    emit(clientA, 0, ALPHA);
+    await screen.findByText(ALPHA_TEXT);
+    const mark = markRecords();
+    const closedInsideTheSwitch: boolean[] = [];
+    const slotInsideTheSwitch: (BotMemory | undefined)[] = [];
+
+    act(() => {
+      signInAs("account-b");
+      closedInsideTheSwitch.push(clientA.memorySessions()[0].closed);
+      slotInsideTheSwitch.push(slotData());
+    });
+
+    expect(closedInsideTheSwitch).toEqual([true]);
+    expect(slotInsideTheSwitch).toEqual([undefined]);
+    expect(drawnSince(mark, "Alpha")).toBe(false);
+  });
 });
