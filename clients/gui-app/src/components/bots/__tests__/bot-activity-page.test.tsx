@@ -396,7 +396,7 @@ function Harness(props: HarnessProps): ReactNode {
 }
 
 function HarnessBody(props: HarnessProps): ReactNode {
-  const active = useBotActiveTasks(props.tasks, HOST_ID, true);
+  const active = useBotActiveTasks(props.tasks, HOST_ID, true, BOT_ID);
   return (
     <BotActivityPage
       roomFresh
@@ -453,6 +453,20 @@ function rows(): ReadonlyArray<HTMLElement> {
 
 function rowIds(): ReadonlyArray<string | null> {
   return rows().map((el) => el.getAttribute("data-task-id"));
+}
+
+function endedRowIds(): ReadonlyArray<string | null> {
+  return screen
+    .queryAllByTestId("bot-activity-ended-task")
+    .map((el) => el.getAttribute("data-task-id"));
+}
+
+function endedRowFor(taskId: string): HTMLElement {
+  const found = screen
+    .getAllByTestId("bot-activity-ended-task")
+    .find((el) => el.getAttribute("data-task-id") === taskId);
+  if (found === undefined) throw new Error(`no ended row for ${taskId}`);
+  return found;
 }
 
 function row(taskId: string): HTMLElement {
@@ -747,14 +761,15 @@ describe("<BotActivityPage /> what is listed", () => {
     ]);
   });
 
-  it("rule 2: a task ended by its check-in with a working agent is listed once", () => {
+  it("rule 2: a task ended by its check-in is listed once, as ended, even while an agent in it still works", () => {
     working({ "t-ended": { working: ["a-1"], turn: ["a-1"] } });
     mount([completed("t-ended", { lastCheckinAt: NOW })], { boundHere: true });
 
-    expect(rowIds()).toEqual(["t-ended"]);
+    expect(rowIds()).toEqual([]);
+    expect(endedRowIds()).toEqual(["t-ended"]);
   });
 
-  it("lists a task the bot adopted by the same rule as one it started, once, and drops it when seen and quiet", () => {
+  it("lists a task the bot adopted by the same rule as one it started, once: a periodic one is active and the ended ones are recent", () => {
     working({ "t-adopted-working": { working: ["a-1"], turn: ["a-1"] } });
     mocks.state.feedMode = "cloud";
     holdCloudFeed([
@@ -774,8 +789,9 @@ describe("<BotActivityPage /> what is listed", () => {
       { boundHere: true },
     );
 
-    expect([...rowIds()].sort()).toEqual([
-      "t-adopted-every",
+    expect(rowIds()).toEqual(["t-adopted-every"]);
+    expect([...endedRowIds()].sort()).toEqual([
+      "t-adopted-seen",
       "t-adopted-unseen",
       "t-adopted-working",
     ]);
@@ -845,7 +861,7 @@ describe("<BotActivityPage /> what is listed", () => {
     const view = render(
       <Harness
         threads={[]}
-        tasks={[completed("t-quiet", { lastCheckinAt: NOW })]}
+        tasks={[]}
         boundHere
         notificationSubscriptions={[]}
       />,
@@ -873,7 +889,7 @@ describe("<BotActivityPage /> what is listed", () => {
       view.rerender(
         <Harness
           threads={[]}
-          tasks={[completed("t-quiet", { lastCheckinAt: NOW })]}
+          tasks={[]}
           boundHere
           notificationSubscriptions={subscriptions}
         />,
@@ -885,9 +901,8 @@ describe("<BotActivityPage /> what is listed", () => {
 });
 
 describe("<BotActivityPage /> when the evidence is incomplete", () => {
-  /** A task that ended with its result seen and nothing running: it leaves only on proof. */
-  const QUIET = (): BotTaskEntry =>
-    completed("t-quiet", { lastCheckinAt: NOW });
+  /** A periodic task, seen and quiet: it reads as unknown until every source proves it. */
+  const QUIET = (): BotTaskEntry => periodic("t-quiet", { lastCheckinAt: NOW });
 
   it("keeps an on-completion task still tracking as status unknown, though nothing works or is unseen yet, and drops its ended and seen counterpart", () => {
     mocks.state.feedMode = "cloud";
@@ -916,7 +931,7 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
     expect(row("t-quiet").textContent.split("Status unknown")).toHaveLength(2);
   });
 
-  it("keeps it while the host's indicator read is pending, and drops it when the read lands", () => {
+  it("keeps it unknown while the host's indicator read is pending, and reads it periodic when the read lands", () => {
     mocks.state.feedMode = "cloud";
     mocks.state.indicatorRead = "pending";
     const view = render(
@@ -939,7 +954,8 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
         notificationSubscriptions={null}
       />,
     );
-    expect(rowIds()).toEqual([]);
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("periodic");
   });
 
   it("keeps it when the host's indicator read failed", () => {
@@ -956,13 +972,15 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
     expect(rowIds()).toEqual(["t-quiet"]);
   });
 
-  it("keeps it while a cloud-fed centre is disconnected or has no snapshot, and drops it once connected", () => {
+  it("keeps it unknown while a cloud-fed centre is disconnected or has no snapshot, and reads it periodic once connected", () => {
     mountInCloudMode([QUIET()], { connected: false });
     expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
     cleanup();
 
     mountInCloudMode([QUIET()], { connected: true });
-    expect(rowIds()).toEqual([]);
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("periodic");
   });
 
   it("never lets missing evidence hide a positive signal: waiting, unseen and scheduled rows keep their own band", () => {
@@ -970,7 +988,7 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
     taskUnread("t-unseen", { unreadDone: true });
     mount(
       [
-        completed("t-unseen", { lastCheckinAt: NOW }),
+        task("t-unseen", { inputNeeded: [] }),
         task("t-waiting", {
           inputNeeded: [waiting("a-2", NOW, "Merge the release PR")],
         }),
@@ -1061,11 +1079,11 @@ function saysStatusUnknownOnce(taskId: string): boolean {
 }
 
 describe("<BotActivityPage /> a source that cannot vouch never reads as proof of quiet", () => {
-  /** Ended, seen, nothing working, and waiting on no one: it leaves only on proof from every source. */
+  /** A periodic task, seen, nothing working, and waiting on no one: it reads periodic only on proof from every source. */
   const QUIET = (overrides: Partial<BotTaskEntry>): BotTaskEntry =>
-    completed("t-quiet", { lastCheckinAt: NOW, ...overrides });
+    periodic("t-quiet", { lastCheckinAt: NOW, ...overrides });
 
-  it("keeps a task whose waiting is unknown (a host that predates it, or a room it cannot read) as status unknown, while a known-empty one leaves", () => {
+  it("keeps a task whose waiting is unknown (a host that predates it, or a room it cannot read) as status unknown, while a known-empty one reads periodic", () => {
     mountInCloudMode([QUIET({ inputNeeded: null })], { connected: true });
     expect(rowIds()).toEqual(["t-quiet"]);
     expect(band("t-quiet")).toBe("unknown");
@@ -1073,7 +1091,8 @@ describe("<BotActivityPage /> a source that cannot vouch never reads as proof of
     cleanup();
 
     mountInCloudMode([QUIET({ inputNeeded: [] })], { connected: true });
-    expect(rowIds()).toEqual([]);
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("periodic");
   });
 
   it("keeps a task whose waiting is unknown while the indicator read is still pending", () => {
@@ -1120,7 +1139,7 @@ describe("<BotActivityPage /> a source that cannot vouch never reads as proof of
     expect(saysStatusUnknownOnce("t-quiet")).toBe(true);
   });
 
-  it("keeps a quiet task while the notification feed needs an upgrade, and drops it over a connected cloud feed", () => {
+  it("keeps a quiet task while the notification feed needs an upgrade, and reads it periodic over a connected cloud feed", () => {
     mocks.state.feedMode = "upgrade-required";
     mount([QUIET({})], { boundHere: true });
     expect(rowIds()).toEqual(["t-quiet"]);
@@ -1128,7 +1147,8 @@ describe("<BotActivityPage /> a source that cannot vouch never reads as proof of
 
     mocks.state.feedMode = "cloud";
     mount([QUIET({})], { boundHere: true });
-    expect(rowIds()).toEqual([]);
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("periodic");
   });
 });
 
@@ -1168,7 +1188,7 @@ describe("<BotActivityPage /> what a lost connection leaves cached is never show
   it("shows Status unknown, not unread, for a result the cloud feed held before it disconnected", () => {
     mocks.state.feedMode = "cloud";
     holdCloudFeed([remoteUnseenResult("t-done", "chat-t-done", "host-remote")]);
-    mount([completed("t-done", { lastCheckinAt: NOW })], { boundHere: true });
+    mount([task("t-done", { inputNeeded: [] })], { boundHere: true });
     expect(band("t-done")).toBe("unseen");
 
     act(() =>
@@ -1252,7 +1272,7 @@ describe("<BotActivityPage /> activity held by two hosts' streams", () => {
     const view = render(
       <Harness
         threads={[]}
-        tasks={[completed("t-run", { lastCheckinAt: NOW })]}
+        tasks={[task("t-run", { inputNeeded: [] })]}
         boundHere
         notificationSubscriptions={null}
       />,
@@ -1269,7 +1289,7 @@ describe("<BotActivityPage /> activity held by two hosts' streams", () => {
     view.rerender(
       <Harness
         threads={[]}
-        tasks={[completed("t-run", { lastCheckinAt: NOW })]}
+        tasks={[task("t-run", { inputNeeded: [] })]}
         boundHere
         notificationSubscriptions={null}
       />,
@@ -1286,8 +1306,8 @@ describe("<BotActivityPage /> activity held by two hosts' streams", () => {
       <Harness
         threads={[]}
         tasks={[
-          completed("t-run", { lastCheckinAt: NOW }),
-          completed("t-quiet", { lastCheckinAt: NOW }),
+          task("t-run", { inputNeeded: [] }),
+          task("t-quiet", { inputNeeded: [] }),
         ]}
         boundHere
         notificationSubscriptions={null}
@@ -1961,8 +1981,7 @@ function planeHeld(
 }
 
 describe("<BotActivityPage /> a fresh cloud unread stands without the host's partition answering", () => {
-  const QUIET_UNSEEN = (): BotTaskEntry =>
-    completed("t-x", { lastCheckinAt: NOW });
+  const QUIET_UNSEEN = (): BotTaskEntry => task("t-x", { inputNeeded: [] });
 
   it.each(UNVOUCHED)(
     "lists the task as unseen, with its completed glyph, while the $name",
@@ -2703,5 +2722,243 @@ describe("<BotActivityPage /> the task's agents", () => {
     expect(
       within(row("t-cold")).queryByTestId("bot-activity-task-chevron"),
     ).toBeNull();
+  });
+});
+
+describe("<BotActivityPage /> an inspected task that ends", () => {
+  const AGENTS: ReadonlyArray<WarmAgent> = [
+    { id: "a-one", parentId: null, title: "Release agent", archivedAt: null },
+  ];
+
+  it("stays expanded with its agents, moves to the ended group with its reason, and navigates nowhere", async () => {
+    mocks.state.taskTitles = { "t-open": "Inspected task" };
+    warmTask("t-open", AGENTS);
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[
+          task("t-open", {
+            cadence: { kind: "every", seconds: 7_200 },
+            inputNeeded: [],
+          }),
+        ]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    await expandRow("t-open");
+    expect(within(row("t-open")).getByText("Release agent")).toBeTruthy();
+    mocks.navigateToTabIntent.mockClear();
+
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[
+          task("t-open", {
+            cadence: { kind: "none" },
+            state: "ended",
+            endedReason: "by-bot",
+            inputNeeded: [],
+          }),
+        ]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+
+    const ended = endedRowFor("t-open");
+    expect(
+      within(ended).getByRole("button", { name: "Hide agents" }),
+    ).toBeTruthy();
+    expect(within(ended).getByText("Release agent")).toBeTruthy();
+    expect(
+      within(ended).getByTestId("bot-activity-ended-reason").textContent,
+    ).toBe("Tracking stopped");
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+
+  const PAGE = 20;
+  const endedTask = (taskId: string): BotTaskEntry =>
+    task(taskId, {
+      cadence: { kind: "none" },
+      state: "ended",
+      endedReason: "completed",
+      inputNeeded: [],
+    });
+  const endedIds = (): ReadonlyArray<string | null> =>
+    screen
+      .queryAllByTestId("bot-activity-ended-task")
+      .map((el) => el.getAttribute("data-task-id"));
+  const harness = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode => (
+    <Harness
+      threads={[]}
+      tasks={tasks}
+      boundHere
+      notificationSubscriptions={null}
+    />
+  );
+
+  it("keeps an ended task with a pending indicator alone visible beyond the first page, and pages it again once it is addressed", () => {
+    const tasks = Array.from({ length: PAGE + 5 }, (_value, index) =>
+      endedTask(`t-e-${index}`),
+    );
+    mocks.state.epicFlags = { "t-e-0": { pendingApproval: true } };
+    const view = render(harness(tasks));
+
+    // The oldest task is last in reverse server order, past the first page.
+    expect(endedIds()).toHaveLength(PAGE + 1);
+    expect(endedIds()).toContain("t-e-0");
+    expect(screen.getByRole("button", { name: "Show older" })).toBeTruthy();
+
+    mocks.state.epicFlags = {};
+    mocks.forgetAnswers();
+    view.rerender(harness([...tasks]));
+
+    expect(endedIds()).toHaveLength(PAGE);
+    expect(endedIds()).not.toContain("t-e-0");
+    expect(screen.getByRole("button", { name: "Show older" })).toBeTruthy();
+  });
+
+  it("keeps an ended task with an unread failure visible beyond the first page until it is seen", () => {
+    const tasks = Array.from({ length: PAGE + 5 }, (_value, index) =>
+      endedTask(`t-e-${index}`),
+    );
+    taskUnread("t-e-0", { unreadFailure: true });
+    const view = render(harness(tasks));
+
+    expect(endedIds()).toHaveLength(PAGE + 1);
+    expect(endedIds()).toContain("t-e-0");
+
+    mocks.state.epicFlags = {};
+    mocks.forgetAnswers();
+    view.rerender(harness([...tasks]));
+
+    expect(endedIds()).toHaveLength(PAGE);
+    expect(endedIds()).not.toContain("t-e-0");
+  });
+
+  it("shows an ended task whose agent still works with its reason and no running glyph or words, while a tracking task with a working agent still shows running", () => {
+    warmTask("t-live", [
+      { id: "a-live", parentId: null, title: "Live agent", archivedAt: null },
+    ]);
+    warmTask("t-ended", [
+      { id: "a-late", parentId: null, title: "Late agent", archivedAt: null },
+    ]);
+    working({
+      "t-live": { working: ["a-live"], turn: ["a-live"] },
+      "t-ended": { working: ["a-late"], turn: ["a-late"] },
+    });
+    mount([task("t-live", { inputNeeded: [] }), endedTask("t-ended")], {
+      boundHere: true,
+    });
+
+    expect(glyphKind("t-live")).toBe("running");
+    const ended = endedRowFor("t-ended");
+    const glyph = within(ended).getByTestId("bot-activity-task-glyph");
+    expect(glyph.getAttribute("data-kind")).toBe("none");
+    expect(glyph.getAttribute("aria-label")).toBeNull();
+    expect(
+      within(ended).getByTestId("bot-activity-ended-reason").textContent,
+    ).toBe("Check-in completed");
+    expect(ended.textContent).not.toMatch(
+      /running|working|background|Status unknown/i,
+    );
+  });
+
+  it("shows an ended periodic task with a future nextAt by its reason, with no next check-in or interval", () => {
+    mount(
+      [
+        periodic("t-stopped", {
+          state: "ended",
+          endedReason: "by-bot",
+          nextAt: NOW + 3_600_000,
+        }),
+      ],
+      { boundHere: true },
+    );
+
+    const ended = screen
+      .getAllByTestId("bot-activity-ended-task")
+      .find((el) => el.getAttribute("data-task-id") === "t-stopped");
+    if (ended === undefined) throw new Error("no ended row for t-stopped");
+    expect(
+      within(ended).getByTestId("bot-activity-ended-reason").textContent,
+    ).toBe("Tracking stopped");
+    expect(within(ended).queryByTestId("bot-activity-every")).toBeNull();
+    expect(ended.textContent).not.toMatch(/next check-in|every \d/i);
+  });
+
+  it("hides what an expanded ended task's agents wait on while the room is not fresh, and shows it again once it is", async () => {
+    warmTask("t-open", [
+      { id: "a-one", parentId: null, title: "Release agent", archivedAt: null },
+    ]);
+    const stale = (): BotTaskEntry =>
+      task("t-open", {
+        cadence: { kind: "none" },
+        state: "ended",
+        endedReason: "completed",
+        inputNeeded: [waiting("a-one", NOW, "Merge the release PR")],
+      });
+    const view = render(harness([stale()]));
+    await userEvent.setup().click(
+      within(endedRowFor("t-open")).getByRole("button", {
+        name: "Show agents",
+      }),
+    );
+    expect(endedRowFor("t-open").textContent).toContain("Merge the release PR");
+
+    // The bot's serving host drops: the waiting list the snapshot held is not current.
+    mocks.state.unreachable.add(HOST_ID);
+    view.rerender(harness([stale()]));
+
+    const staleRow = endedRowFor("t-open");
+    expect(within(staleRow).getByText("Release agent")).toBeTruthy();
+    expect(
+      within(staleRow).getByTestId("bot-activity-ended-reason").textContent,
+    ).toBe("Check-in completed");
+    expect(staleRow.textContent).not.toContain("Merge the release PR");
+    expect(within(staleRow).queryByTestId("bot-activity-needs-you")).toBeNull();
+
+    mocks.state.unreachable.delete(HOST_ID);
+    view.rerender(harness([stale()]));
+    expect(endedRowFor("t-open").textContent).toContain("Merge the release PR");
+  });
+
+  it("keeps an expanded task that ended behind a full page of newer ones visible with its agents, and lets it collapse", async () => {
+    warmTask("t-open", [
+      { id: "a-one", parentId: null, title: "Release agent", archivedAt: null },
+    ]);
+    const others = Array.from({ length: PAGE + 1 }, (_value, index) =>
+      task(`t-other-${index}`, {
+        cadence: { kind: "every", seconds: 7_200 },
+        inputNeeded: [],
+      }),
+    );
+    const open = task("t-open", {
+      cadence: { kind: "every", seconds: 7_200 },
+      inputNeeded: [],
+    });
+    const view = render(harness([open, ...others]));
+    await expandRow("t-open");
+
+    view.rerender(harness([endedTask("t-open"), ...others]));
+    view.rerender(
+      harness([
+        endedTask("t-open"),
+        ...others.map((other) => endedTask(other.taskId)),
+      ]),
+    );
+
+    // Twenty-one tasks ended after it: it is past the first page, yet open.
+    expect(endedIds()).toContain("t-open");
+    expect(endedIds()).toHaveLength(PAGE + 1);
+    const opened = endedRowFor("t-open");
+    expect(within(opened).getByText("Release agent")).toBeTruthy();
+
+    await userEvent
+      .setup()
+      .click(within(opened).getByRole("button", { name: "Hide agents" }));
+
+    expect(screen.queryByText("Release agent")).toBeNull();
   });
 });

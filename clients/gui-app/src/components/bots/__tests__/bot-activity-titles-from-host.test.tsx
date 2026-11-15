@@ -156,6 +156,7 @@ function mountOver(session: StubSession, roomFresh: boolean): void {
       tasks,
       HOST_ID,
       subscription.snapshotFresh,
+      BOT_ID,
     );
     if (subscription.snapshot === null) return null;
     return (

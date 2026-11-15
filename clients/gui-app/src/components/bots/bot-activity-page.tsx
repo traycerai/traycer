@@ -58,6 +58,7 @@ import {
 import { describeTaskInterval, firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { displayTitle } from "@/lib/display-title";
+import { BOT_SEARCH_PAGE_SIZE } from "@/lib/bots/bot-search-model";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import { useRegisteredEpicLiveAgents } from "@/lib/epic-selectors";
@@ -95,8 +96,8 @@ const NO_FOCUS = {
 
 /**
  * A bot's Activity page (Tracy Bots, decision 182): one list of the tasks
- * the bot started, across its trunk and every thread, while anything is
- * still going on in them (`activeTasksOf`). A row is drawn as the Chats
+ * the bot started, across its trunk and every thread: active tasks first,
+ * then recently ended tracking. A row is drawn as the Chats
  * panel draws a parent: its status rolled up from the task's agents, its
  * title and badges, what it is doing in words, and, where this window holds
  * the task's session, its agents folded under a chevron.
@@ -123,9 +124,35 @@ export function BotActivityPage(props: {
       botActivityMemberName(memberId, viewer, resolveMember),
     [resolveMember, viewer],
   );
+  const [pageSize, setPageSize] = useState(BOT_SEARCH_PAGE_SIZE);
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const recentRows = active.recentRows;
+  const indicatorOf = active.indicatorOf;
+  const visibleRecent = useMemo(
+    () =>
+      recentRows.filter((entry, index) => {
+        const indicator = indicatorOf(entry.task.taskId);
+        return (
+          index < pageSize ||
+          expandedIds.has(entry.task.taskId) ||
+          (entry.task.inputNeeded?.length ?? 0) > 0 ||
+          indicator.pendingApproval ||
+          indicator.pendingInterview ||
+          indicator.pendingFork ||
+          indicator.unreadFailure
+        );
+      }),
+    [recentRows, indicatorOf, pageSize, expandedIds],
+  );
+  const visibleRows = useMemo(
+    () => [...active.rows, ...visibleRecent],
+    [active.rows, visibleRecent],
+  );
   const taskIds = useMemo(
-    () => active.rows.map((row) => row.task.taskId),
-    [active.rows],
+    () => visibleRows.map((row) => row.task.taskId),
+    [visibleRows],
   );
   const contexts = useEpicGetTaskContexts(taskIds, viewer?.userId ?? null, {
     enabled: taskIds.length > 0,
@@ -137,43 +164,68 @@ export function BotActivityPage(props: {
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
-      {active.rows.length === 0 && !props.roomFresh ? (
+      {visibleRows.length === 0 && !props.roomFresh ? (
         <p className="py-1 text-ui-xs text-muted-foreground">Status unknown</p>
       ) : null}
-      {active.rows.length === 0 &&
+      {visibleRows.length === 0 &&
       props.roomFresh &&
       props.notificationSubscriptions?.length === 0 ? (
         <ActivityEmptyState />
       ) : null}
-      {active.rows.length > 0 ? (
-        <>
-          <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
-            {heading}
-          </h3>
-          <ul className="flex flex-col gap-0.5">
-            {active.rows.map((entry) => (
-              <li key={entry.task.taskId}>
-                <ActiveTaskRow
-                  botId={botId}
-                  hostId={hostId}
-                  boundHere={boundHere}
-                  nameOf={nameOf}
-                  entry={entry}
-                  indicator={active.indicatorOf(entry.task.taskId)}
-                  title={
-                    contexts.tasksById.get(entry.task.taskId)?.epic?.light
-                      ?.title ?? null
-                  }
-                  titleState={taskTitleState(
-                    contexts.resolutionsById.get(entry.task.taskId),
-                    contexts.pendingTaskIds.has(entry.task.taskId),
-                  )}
-                  threads={props.threads}
-                />
-              </li>
-            ))}
-          </ul>
-        </>
+      {visibleRows.length > 0 ? (
+        <ul className="flex flex-col gap-0.5">
+          {active.rows.length > 0 ? (
+            <li key="heading-active">
+              <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+                {heading}
+              </h3>
+            </li>
+          ) : null}
+          {visibleRows.map((entry, index) => (
+            <li key={entry.task.taskId}>
+              {index === active.rows.length ? (
+                <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+                  Recently finished
+                </h3>
+              ) : null}
+              <ActiveTaskRow
+                botId={botId}
+                hostId={hostId}
+                boundHere={boundHere}
+                nameOf={nameOf}
+                entry={entry}
+                indicator={active.indicatorOf(entry.task.taskId)}
+                title={
+                  contexts.tasksById.get(entry.task.taskId)?.epic?.light
+                    ?.title ?? null
+                }
+                titleState={taskTitleState(
+                  contexts.resolutionsById.get(entry.task.taskId),
+                  contexts.pendingTaskIds.has(entry.task.taskId),
+                )}
+                threads={props.threads}
+                expanded={expandedIds.has(entry.task.taskId)}
+                onExpandedChange={(open) =>
+                  setExpandedIds((prior) => {
+                    const next = new Set(prior);
+                    if (open) next.add(entry.task.taskId);
+                    else next.delete(entry.task.taskId);
+                    return next;
+                  })
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {visibleRecent.length < recentRows.length ? (
+        <button
+          type="button"
+          onClick={() => setPageSize((size) => size + BOT_SEARCH_PAGE_SIZE)}
+          className="self-start text-ui-sm text-muted-foreground underline"
+        >
+          Show older
+        </button>
       ) : null}
       <BotActivityDetails
         subscriptions={
@@ -383,6 +435,8 @@ type ActiveTaskRowProps = {
   readonly title: string | null;
   readonly titleState: TaskTitleState;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly expanded: boolean;
+  readonly onExpandedChange: (open: boolean) => void;
 };
 
 /**
@@ -449,7 +503,7 @@ function ActiveTaskRowBody(
       }),
     [agentStates, indicator, inputNeeded, tiers],
   );
-  const [expanded, setExpanded] = useState(false);
+  const { expanded, onExpandedChange } = props;
   const navigate = useNavigate();
   const openTask = (): void =>
     navigateToTabIntent(
@@ -464,7 +518,9 @@ function ActiveTaskRowBody(
     );
   return (
     <div
-      data-testid="bot-activity-task"
+      data-testid={
+        task.state === "ended" ? "bot-activity-ended-task" : "bot-activity-task"
+      }
       data-task-id={taskId}
       data-band={entry.band}
       className="flex flex-col gap-0.5"
@@ -478,7 +534,7 @@ function ActiveTaskRowBody(
             aria-label={expanded ? "Hide agents" : "Show agents"}
             aria-expanded={expanded}
             data-testid="bot-activity-task-chevron"
-            onClick={() => setExpanded((open) => !open)}
+            onClick={() => onExpandedChange(!expanded)}
             className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/6 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
           >
             <ChevronRight
@@ -577,31 +633,19 @@ function TaskRowSummary(props: {
   readonly agentsReadable: boolean;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
-  const { entry, rollup } = props;
+  const { entry } = props;
   const { task } = entry;
+  const rollup =
+    task.state === "ended" &&
+    (props.rollup?.kind === "running" || props.rollup?.kind === "background")
+      ? null
+      : props.rollup;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
   const interval = describeTaskInterval(task);
   return (
     <>
       <span className="flex min-w-0 items-center gap-2">
-        {rollup === null ? (
-          <span
-            aria-hidden
-            className="size-3.5 shrink-0"
-            data-testid="bot-activity-task-glyph"
-            data-kind="none"
-          />
-        ) : (
-          <span
-            role="img"
-            aria-label={chatStatusRollupWords(rollup)}
-            className="inline-flex size-3.5 shrink-0 items-center justify-center"
-            data-testid="bot-activity-task-glyph"
-            data-kind={rollup.kind}
-          >
-            <NestedChatStatusGlyph kind={rollup.kind} />
-          </span>
-        )}
+        <TaskStatusGlyph rollup={rollup} />
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
           {activityTaskTitle(props.title, props.titleState)}
         </span>
@@ -629,18 +673,17 @@ function TaskRowSummary(props: {
         className="flex min-w-0 flex-wrap gap-x-1.5 pl-5.5 text-ui-xs text-muted-foreground"
         data-testid="bot-activity-task-line"
       >
-        <TaskStateWords
-          rollup={rollup}
-          entry={entry}
-          waiting={newestWaiting(inputNeeded)}
-        />
+        <TaskSummaryWords entry={entry} rollup={rollup} />
         {isPeriodicTask(task) && task.nextAt !== null ? (
           <span className="tabular-nums">
             next check-in {formatAbsoluteDateTime(task.nextAt)}
           </span>
         ) : null}
         {props.agentsReadable || entry.band === "unknown" ? null : (
-          <TaskHostOffline task={task} showUnknown={rollup === null} />
+          <TaskHostOffline
+            task={task}
+            showUnknown={task.state !== "ended" && rollup === null}
+          />
         )}
         <FromThread
           botId={props.botId}
@@ -649,6 +692,65 @@ function TaskRowSummary(props: {
           threads={props.threads}
         />
       </span>
+    </>
+  );
+}
+
+function TaskStatusGlyph(props: {
+  readonly rollup: ChatDescendantStatusRollup | null;
+}): ReactNode {
+  const { rollup } = props;
+  if (rollup === null) {
+    return (
+      <span
+        aria-hidden
+        className="size-3.5 shrink-0"
+        data-testid="bot-activity-task-glyph"
+        data-kind="none"
+      />
+    );
+  }
+  return (
+    <span
+      role="img"
+      aria-label={chatStatusRollupWords(rollup)}
+      className="inline-flex size-3.5 shrink-0 items-center justify-center"
+      data-testid="bot-activity-task-glyph"
+      data-kind={rollup.kind}
+    >
+      <NestedChatStatusGlyph kind={rollup.kind} />
+    </span>
+  );
+}
+
+function TaskSummaryWords(props: {
+  readonly entry: BotActiveTask;
+  readonly rollup: ChatDescendantStatusRollup | null;
+}): ReactNode {
+  const { entry, rollup } = props;
+  const { task } = entry;
+  const inputNeeded = task.inputNeeded ?? NO_WAITING;
+  const words = (
+    <TaskStateWords
+      rollup={rollup}
+      entry={entry}
+      waiting={newestWaiting(inputNeeded)}
+    />
+  );
+  if (task.state !== "ended") return words;
+  let reason = "Tracking ended";
+  if (task.endedReason === "completed") reason = "Check-in completed";
+  else if (task.endedReason === "by-bot") reason = "Tracking stopped";
+  const needsAttention =
+    inputNeeded.length > 0 ||
+    rollup?.kind === "failure" ||
+    rollup?.kind === "fork" ||
+    rollup?.kind === "approval" ||
+    rollup?.kind === "interview";
+  return (
+    <>
+      <span data-testid="bot-activity-ended-reason">{reason}</span>
+      {needsAttention ? words : null}
     </>
   );
 }
