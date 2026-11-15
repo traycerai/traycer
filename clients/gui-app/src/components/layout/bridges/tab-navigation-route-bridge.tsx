@@ -3,6 +3,7 @@ import { useRouter } from "@tanstack/react-router";
 import { tabNavigationController } from "@/lib/tab-navigation";
 import { isStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { declareTracyPlaceLanding } from "@/lib/bots/tracy-place-traversal";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import {
   consumeDesktopRestoredRoute,
@@ -55,6 +56,7 @@ export function TabNavigationRouteBridge(): null {
   const hydrationReadyRef = useRef(hydrationReady);
   const startupIntentBeforeHydrationRef = useRef(false);
   const skipRestoredRouteObservationRef = useRef(false);
+  const restoredRouteRef = useRef<{ route: string | null } | null>(null);
 
   useEffect(() => {
     hydrationReadyRef.current = hydrationReady;
@@ -120,16 +122,29 @@ export function TabNavigationRouteBridge(): null {
     // A later mount - by which point the current location no longer carries the
     // marker - would then spend the stale token and replace whatever the user
     // was looking at with an epic from the previous session.
-    const pendingRestoredRoute = consumeDesktopRestoredRoute();
-    // Read the marker off the CURRENT location as well as the observed commit,
-    // so this does not depend on the subscription having been live when the
-    // commit landed. The marker rides in history state, so a press taken in the
-    // gap between first paint and this bridge's passive effects is honoured.
-    const startupIntent =
-      startupIntentBeforeHydrationRef.current ||
-      isStartupNavigationIntent(router.state.location.state);
-    const restoredRoute = startupIntent ? null : pendingRestoredRoute;
-    if (restoredRoute !== null) {
+    //
+    // Held in a ref so StrictMode's second run of this effect, which keeps the
+    // ref, still has the route the first run spent but did not apply yet.
+    if (restoredRouteRef.current === null) {
+      restoredRouteRef.current = { route: consumeDesktopRestoredRoute() };
+    }
+    const restored = restoredRouteRef.current;
+    // The replace is a router load, and so may be what the corrections the
+    // synchronization below issues: neither starts while the router's own
+    // load is in flight, as it is when the shell is admitted during a reload
+    // (`runWhenRouterSettled`).
+    const cancelReplay = runWhenRouterSettled(router, () => {
+      const pendingRestoredRoute = restored.route;
+      restored.route = null;
+      // Read the marker off the CURRENT location as well as the observed
+      // commit, so this does not depend on the subscription having been live
+      // when the commit landed. The marker rides in history state, so a press
+      // taken in the gap between first paint and this replay is honoured.
+      const startupIntent =
+        startupIntentBeforeHydrationRef.current ||
+        isStartupNavigationIntent(router.state.location.state);
+      const restoredRoute = startupIntent ? null : pendingRestoredRoute;
+      if (restoredRoute === null) return;
       // Replace the current persisted entry before the first startup
       // synchronization. The subscription deliberately ignores this one
       // bookkeeping replacement, so the restored entry is queued as startup
@@ -161,14 +176,20 @@ export function TabNavigationRouteBridge(): null {
       // The restored entry says where the Tracy surface was: it is read as a
       // landing, not as an entry the app wrote for where the surface is now.
       declareTracyPlaceLanding(router.history.location);
-    }
-    // Subscribe before synchronizing so no committed entry can fall into the
-    // setup window. This bridge remains mounted outside HostReadyGate.
-    tabNavigationController.synchronizeInitialLocation();
-    updateDesktopTabsActiveRoute(
-      `${router.state.location.pathname}${router.state.location.searchStr}`,
-    );
-    tabNavigationController.setHydrationReady(true, router.navigate);
+    });
+    const cancelSynchronization = runWhenRouterSettled(router, () => {
+      // Subscribe before synchronizing so no committed entry can fall into the
+      // setup window. This bridge remains mounted outside HostReadyGate.
+      tabNavigationController.synchronizeInitialLocation();
+      updateDesktopTabsActiveRoute(
+        `${router.state.location.pathname}${router.state.location.searchStr}`,
+      );
+      tabNavigationController.setHydrationReady(true, router.navigate);
+    });
+    return () => {
+      cancelReplay();
+      cancelSynchronization();
+    };
   }, [hydrationReady, router]);
 
   return null;

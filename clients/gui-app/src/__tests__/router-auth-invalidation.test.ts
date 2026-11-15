@@ -12,8 +12,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * The contract of `bindAuthInvalidation` against a scripted router: an auth
- * change invalidates at once when the router is idle, and otherwise waits for
- * the in-flight load to resolve, never starting a load under it. The real
+ * change starts nothing before the router's first load, invalidates at once
+ * when a loaded router is idle, and otherwise waits for the in-flight load to
+ * resolve, never starting a load under it. The real
  * router-core behavior behind that rule is pinned in
  * `router-auth-invalidation.integration.test.tsx`.
  */
@@ -27,8 +28,15 @@ interface FakeRouter {
   readonly listenerCount: () => number;
 }
 
-function makeFakeRouter(status: "pending" | "idle"): FakeRouter {
-  const state: { status: "pending" | "idle" } = { status };
+/** `loaded`: the router has completed a load, so it holds a resolved location. */
+function makeFakeRouter(
+  status: "pending" | "idle",
+  loaded: boolean,
+): FakeRouter {
+  const state: { status: "pending" | "idle"; resolvedLocation: unknown } = {
+    status,
+    resolvedLocation: loaded ? "/" : undefined,
+  };
   const listeners = new Set<() => void>();
   const invalidate = vi.fn<() => Promise<void>>(() => Promise.resolve());
   const router: AuthInvalidationRouter = {
@@ -50,6 +58,7 @@ function makeFakeRouter(status: "pending" | "idle"): FakeRouter {
     resolve: () => {
       for (const listener of [...listeners]) listener();
       state.status = "idle";
+      state.resolvedLocation = "/";
     },
     listenerCount: () => listeners.size,
   };
@@ -95,8 +104,19 @@ describe("bindAuthInvalidation", () => {
     resetAuthStore();
   });
 
-  it("invalidates at once when the router is idle", () => {
-    const { router, invalidate, listenerCount } = makeFakeRouter("idle");
+  it("starts nothing for a change before the router's first load, which reads the latest auth itself", () => {
+    const { router, invalidate, listenerCount } = makeFakeRouter("idle", false);
+    const unsubscribe = bindAuthInvalidation(router);
+
+    signIn("user-a");
+
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(listenerCount()).toBe(0);
+    unsubscribe();
+  });
+
+  it("invalidates at once when the router is idle after a load", () => {
+    const { router, invalidate, listenerCount } = makeFakeRouter("idle", true);
     const unsubscribe = bindAuthInvalidation(router);
 
     signIn("user-a");
@@ -107,8 +127,10 @@ describe("bindAuthInvalidation", () => {
   });
 
   it("waits for an in-flight load to resolve, then invalidates once for every change that landed in it", async () => {
-    const { router, invalidate, resolve, listenerCount } =
-      makeFakeRouter("pending");
+    const { router, invalidate, resolve, listenerCount } = makeFakeRouter(
+      "pending",
+      false,
+    );
     const unsubscribe = bindAuthInvalidation(router);
 
     signIn("user-a");
@@ -130,7 +152,7 @@ describe("bindAuthInvalidation", () => {
 
   it("waits again when another load is already in flight by the time the first resolves", async () => {
     const { router, invalidate, resolve, setStatus, listenerCount } =
-      makeFakeRouter("pending");
+      makeFakeRouter("pending", false);
     const unsubscribe = bindAuthInvalidation(router);
 
     signIn("user-a");
@@ -150,7 +172,7 @@ describe("bindAuthInvalidation", () => {
   });
 
   it("does nothing when neither auth status nor userId changed", () => {
-    const { router, invalidate, listenerCount } = makeFakeRouter("idle");
+    const { router, invalidate, listenerCount } = makeFakeRouter("idle", true);
     const unsubscribe = bindAuthInvalidation(router);
 
     useAuthStore.setState({
@@ -164,8 +186,10 @@ describe("bindAuthInvalidation", () => {
   });
 
   it("stops reacting once unsubscribed, including a wait already armed", async () => {
-    const { router, invalidate, resolve, listenerCount } =
-      makeFakeRouter("pending");
+    const { router, invalidate, resolve, listenerCount } = makeFakeRouter(
+      "pending",
+      false,
+    );
     const unsubscribe = bindAuthInvalidation(router);
 
     signIn("user-a");

@@ -16,6 +16,10 @@ import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { observeNestedFocusTraversals } from "@/lib/nested-focus-history-traversal";
 import { observeTracyPlaceTraversals } from "@/lib/bots/tracy-place-traversal";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
+import {
+  runWhenRouterSettled,
+  type SettlingRouter,
+} from "@/lib/router-settled";
 import { routeTree } from "@/routeTree.gen";
 import type { QueryClient } from "@tanstack/react-query";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
@@ -74,62 +78,40 @@ export function createAppRouter(
   return router;
 }
 
-export interface AuthInvalidationRouter {
-  readonly state: { readonly status: "pending" | "idle" };
+export interface AuthInvalidationRouter extends SettlingRouter {
+  readonly state: {
+    readonly status: "pending" | "idle";
+    /**
+     * Set when the router's first load resolves and never cleared after:
+     * `undefined` means no load has completed yet.
+     */
+    readonly resolvedLocation: unknown;
+  };
   invalidate: () => Promise<void> | void;
-  subscribe: (eventType: "onResolved", fn: () => void) => () => void;
 }
 
 /**
  * Re-runs route guards when the auth status or the signed-in user changes,
- * and never starts a router load while a navigation or the initial load is in
- * flight, which is what `status: "pending"` covers. Intent preloads and the
- * background revalidation of successful matches do not set pending, so they
- * are not waited for.
+ * without ever starting a load under another (see `runWhenRouterSettled`):
+ * `router.invalidate()` is itself a `router.load()`.
  *
- * `router.invalidate()` is itself a `router.load()`, and a second load
- * started under an in-flight one is unsafe on these router-core versions in
- * both shapes it takes:
- *
- *  - Before anything commits (a cold launch, where stored tokens validate
- *    while the initial load runs), the new load retires the in-flight one
- *    inside router-core's scheduler and nothing reschedules it: the router
- *    sits at `status: "pending"` forever behind a blank screen.
- *  - Once a load has outlived `defaultPendingMs`, its pending matches are
- *    rendered, and the second load's copies share `_nonReactive` with them.
- *    The first match to finish resolves and clears the shared
- *    `loadPromise`, a suspended match retries against the cleared promise
- *    and throws `undefined`, and `CatchBoundary` lets a falsy error through
- *    to the root error boundary. A fresh mobile install reaches this window
- *    on nearly every launch.
- *
- * So an auth change that lands mid-load waits for the load to resolve and
- * then invalidates once. Its guards read the auth snapshot that was current
- * when they ran, possibly the stale one, and the follow-up invalidate corrects
- * them against the latest. However many changes land in one load, they share
- * that single invalidate.
+ * - Before the router has started its first load, a change starts nothing:
+ *   that load reads the latest auth when it runs. The provisional session
+ *   restored at start-up lands here, before `RouterProvider` mounts.
+ * - During a load, including the first, a change waits for it to resolve and
+ *   then invalidates once. That load's guards read the auth snapshot that was
+ *   current when they ran, possibly a stale one, and the invalidate corrects
+ *   them against the latest. However many changes land before it runs, they
+ *   share that one invalidate.
+ * - Otherwise it invalidates at once.
  */
 export function bindAuthInvalidation(
   router: AuthInvalidationRouter,
 ): () => void {
-  let disposed = false;
-  let disarm: (() => void) | null = null;
-  const invalidateWhenSettled = (): void => {
-    if (disposed) return;
-    if (router.state.status !== "pending") {
-      void router.invalidate();
-      return;
-    }
-    if (disarm !== null) return;
-    disarm = router.subscribe("onResolved", () => {
-      disarm?.();
-      disarm = null;
-      // The Transitioner emits `onResolved` BEFORE it sets `status: "idle"`,
-      // in the same layout effect. A load started inside this listener
-      // would be stamped idle while it runs, so it goes after that write.
-      queueMicrotask(invalidateWhenSettled);
-    });
-  };
+  // One invalidate waits at a time; a task that runs at once has already
+  // cleared the flag, and cancelling it after is a no-op.
+  let waiting = false;
+  let cancelWaiting: () => void = () => undefined;
   const unsubscribe = useAuthStore.subscribe((state, prevState) => {
     if (
       state.status === prevState.status &&
@@ -137,13 +119,23 @@ export function bindAuthInvalidation(
     ) {
       return;
     }
-    invalidateWhenSettled();
+    if (
+      router.state.status !== "pending" &&
+      router.state.resolvedLocation === undefined
+    ) {
+      return;
+    }
+    if (waiting) return;
+    waiting = true;
+    cancelWaiting = runWhenRouterSettled(router, () => {
+      waiting = false;
+      void router.invalidate();
+    });
   });
   return () => {
-    disposed = true;
     unsubscribe();
-    disarm?.();
-    disarm = null;
+    cancelWaiting();
+    waiting = false;
   };
 }
 
