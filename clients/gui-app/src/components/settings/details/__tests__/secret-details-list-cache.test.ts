@@ -140,8 +140,8 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(
-          requireTeamEnvironmentAuthnBinding().auth.environmentCloud,
+        environmentCloud: beginEnvironmentCloudOperation(() =>
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
         queryClient: harness.queryClient,
       },
@@ -185,8 +185,8 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(
-          requireTeamEnvironmentAuthnBinding().auth.environmentCloud,
+        environmentCloud: beginEnvironmentCloudOperation(() =>
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
         queryClient: harness.queryClient,
       },
