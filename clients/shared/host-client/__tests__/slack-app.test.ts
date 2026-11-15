@@ -414,3 +414,47 @@ describe("Slack app transport on a fetch that ignores its signal", () => {
     expect(await pending).toEqual(TIMED_OUT);
   });
 });
+
+describe("a redirect answered to a Slack app request", () => {
+  it.each([307, 308])(
+    "reads a %i to the register request as a network error and sends the secrets nowhere else",
+    async (status) => {
+      const fetchMock = stubFetch(
+        async () =>
+          new Response(null, {
+            status,
+            headers: { location: "https://elsewhere.test/collect" },
+          }),
+      );
+
+      await expect(
+        registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+      ).resolves.toEqual({
+        kind: "network-error",
+        detail: `the server answered HTTP ${status} without a typed refusal`,
+      });
+
+      // One request, to the route itself, told not to follow: the body with
+      // the app's secrets is not sent to the Location.
+      const { url, init } = onlyCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/slack/apps/register`);
+      expect(init.redirect).toBe("manual");
+    },
+  );
+
+  it("reads a browser's opaque redirect as a network error", async () => {
+    const opaque = new Response(null);
+    Object.defineProperty(opaque, "status", { value: 0 });
+    Object.defineProperty(opaque, "type", { value: "opaqueredirect" });
+    const fetchMock = stubFetch(async () => opaque);
+
+    await expect(
+      registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the server answered HTTP 0 without a typed refusal",
+    });
+
+    expect(onlyCall(fetchMock).init.redirect).toBe("manual");
+  });
+});

@@ -142,7 +142,11 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   const localHostEndpoint = (): LocalHostEndpoint | null => {
     const snapshot = bridge.options.host.getSnapshot();
     if (snapshot === null || snapshot.websocketUrl === null) return null;
-    return { hostId: snapshot.hostId, websocketUrl: snapshot.websocketUrl };
+    return {
+      hostId: snapshot.hostId,
+      websocketUrl: snapshot.websocketUrl,
+      version: snapshot.version,
+    };
   };
   let inventoryBearer: MutableBearerLease | null = null;
   const localInventory = startLocalHostInventorySubscription({

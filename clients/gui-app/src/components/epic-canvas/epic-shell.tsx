@@ -31,6 +31,15 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useOpenHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { useIsDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
 import {
   useArrangementValue,
@@ -299,7 +308,29 @@ function EpicRepointFailure(props: {
 function EpicRepointFailureCard(props: {
   readonly presentation: EpicSessionPresentation;
 }) {
-  const hostLabel = props.presentation.targetHostId ?? "the selected host";
+  const targetHostId = props.presentation.targetHostId;
+  const targetEntry = useHostDirectoryEntry(targetHostId);
+  const windowHostId = useSelectionAuthorityStore(
+    (state) => state.effectiveHostId ?? state.targetHostId,
+  );
+  const windowCoverDrawn = useIsDoorCoverDrawn(
+    targetHostId === windowHostId ? targetHostId : null,
+  );
+  if (
+    targetHostId !== null &&
+    targetEntry !== null &&
+    hostDirectoryEntryNeedsUpdate(targetEntry, MINIMUM_HOST_VERSION)
+  ) {
+    // The window's own older-host cover already says this for its host.
+    if (windowCoverDrawn) return null;
+    return (
+      <EpicOlderHostCard
+        hostId={targetHostId}
+        presentation={props.presentation}
+      />
+    );
+  }
+  const hostLabel = targetHostId ?? "the selected host";
   const originalHostId = props.presentation.originalHostId;
   return (
     <div
@@ -314,6 +345,43 @@ function EpicRepointFailureCard(props: {
           Retry
         </Button>
         {originalHostId !== null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={props.presentation.openOnOriginalHost}
+          >
+            Open on original host
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The failed card for a host below the version floor: what a chat tile draws
+ * for that host, and no Retry, since no session may be opened to it. Rising
+ * back above the floor rebuilds the session by itself. A tab's original host
+ * is its own host unless it was re-pointed, and re-opening on the same
+ * below-floor host would only draw this card again.
+ */
+function EpicOlderHostCard(props: {
+  readonly hostId: string;
+  readonly presentation: EpicSessionPresentation;
+}) {
+  const openHostUpdate = useOpenHostUpdate(props.hostId);
+  const originalHostId = props.presentation.originalHostId;
+  return (
+    <div
+      data-testid="epic-repoint-failure"
+      className="flex max-w-md flex-col gap-3 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-sm"
+    >
+      <p className="text-ui-sm font-medium">{HOST_UPDATE_SKEW_COPY.title}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={openHostUpdate}>
+          {HOST_UPDATE_SKEW_COPY.action}
+        </Button>
+        {originalHostId !== null && originalHostId !== props.hostId ? (
           <Button
             size="sm"
             variant="outline"

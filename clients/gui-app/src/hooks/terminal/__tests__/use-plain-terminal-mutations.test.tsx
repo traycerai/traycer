@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   hostRpcRegistry,
@@ -13,6 +14,7 @@ import {
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   getPlainTerminal,
   replacePlainTerminalSnapshot,
@@ -22,9 +24,10 @@ import {
 } from "@/lib/terminals/plain-terminal-authority";
 import { usePlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
 
-vi.mock("@/lib/host-error-toast", () => ({
-  toastFromHostError: vi.fn(),
-}));
+const toastFromHostError = vi.hoisted(() =>
+  vi.fn<(error: HostRpcError, fallbackMessage: string) => void>(),
+);
+vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError }));
 
 const SCOPE = { kind: "epic", epicId: "epic-1" } as const;
 
@@ -208,5 +211,133 @@ describe("plain terminal mutation authority", () => {
         manualTitle: "blocked",
       }),
     ).rejects.toThrow("Cached data is view-only");
+  });
+
+  it("keeps automatic plain-terminal floor failures silent while floor-blocked rename remains reportable", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "below-minimum",
+      handlers: {},
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger,
+      findHostById: (hostId) => ({ ...mockLocalHostEntry, hostId }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    const client = spine.createRequesterForHostId("host-a");
+    const request = vi.spyOn(messenger, "request").mockRejectedValue(
+      new HostBelowMinimumError({
+        requestId: "below-minimum",
+        method: "terminal.plain.create",
+      }),
+    );
+    const rendered = renderHook(
+      () =>
+        usePlainTerminalMutations({
+          authority: {
+            hostId: "host-a",
+            scope: SCOPE,
+            canMutate: true,
+            collection: collection("host-a"),
+          },
+          client,
+          resolveOwnerClient: () => client,
+        }),
+      { wrapper: wrapper(queryClient) },
+    );
+    const mutations = rendered.result.current;
+
+    await expect(
+      mutations.create.mutateAsync({
+        terminalId: "terminal-2",
+        scope: SCOPE,
+        cwd: "/work",
+        cols: 80,
+        rows: 24,
+      }),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
+
+    await expect(
+      mutations.ensureRunning.mutateAsync({
+        hostId: "host-a",
+        terminalId: "terminal-1",
+        cols: 80,
+        rows: 24,
+      }),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
+
+    await expect(
+      mutations.close.mutateAsync({
+        hostId: "host-a",
+        terminalId: "terminal-1",
+      }),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
+
+    await expect(
+      mutations.importLegacy.mutateAsync({
+        hostId: "host-a",
+        terminalId: "terminal-1",
+        scope: SCOPE,
+        cwd: "/work",
+        name: "Terminal",
+        titleSource: "default",
+        sourceStoreVersion: 1,
+      }),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(4);
+
+    const renameFloorError = new HostBelowMinimumError({
+      requestId: "rename-floor",
+      method: "terminal.plain.rename",
+    });
+    request.mockRejectedValue(renameFloorError);
+    await expect(
+      mutations.rename.mutateAsync({
+        hostId: "host-a",
+        terminalId: "terminal-1",
+        manualTitle: "Renamed",
+      }),
+    ).rejects.toBe(renameFloorError);
+    expect(toastFromHostError).toHaveBeenCalledExactlyOnceWith(
+      renameFloorError,
+      "Couldn't rename the terminal.",
+    );
+
+    const ordinaryError = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "create refused",
+      requestId: "create-refusal",
+      method: "terminal.plain.create",
+      fatalDetails: null,
+    });
+    request.mockRejectedValue(ordinaryError);
+    await expect(
+      mutations.create.mutateAsync({
+        terminalId: "terminal-3",
+        scope: SCOPE,
+        cwd: "/work",
+        cols: 80,
+        rows: 24,
+      }),
+    ).rejects.toBe(ordinaryError);
+    expect(toastFromHostError).toHaveBeenLastCalledWith(
+      ordinaryError,
+      "Couldn't create the terminal.",
+    );
+    expect(toastFromHostError).toHaveBeenCalledTimes(2);
   });
 });

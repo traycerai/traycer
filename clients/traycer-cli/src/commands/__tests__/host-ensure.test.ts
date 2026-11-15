@@ -10,6 +10,7 @@ import {
   LEGACY_TEAM,
 } from "../../host/__tests__/legacy-team-host";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host ensure` is the desktop's idempotent post-auth
@@ -60,6 +61,10 @@ const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
   credentialsPath: "",
   legacyHost: null as LegacyTeamHost | null,
+  resolveHostAuthMock: vi.fn(),
+  validateIdentityMock: vi.fn(),
+  createStoreBackedRevalidatorMock: vi.fn(),
+  readHostOwnershipMock: vi.fn(),
   ensureHostMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
@@ -73,11 +78,66 @@ vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
   return { ...actual, cliCredentialsPath: () => mocks.credentialsPath };
 });
+vi.mock("../../internal/host-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-auth")>();
+  return { ...actual, resolveHostAuth: mocks.resolveHostAuthMock };
+});
+
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    validateAuthTokenIdentityAccessOnly: mocks.validateIdentityMock,
+  };
+});
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createStoreBackedRevalidator: (
+      ...callArgs: Parameters<typeof actual.createStoreBackedRevalidator>
+    ) => mocks.createStoreBackedRevalidatorMock(...callArgs),
+  };
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >();
+    return {
+      ...actual,
+      readHostOwnershipViaHttp: (
+        ...callArgs: Parameters<typeof actual.readHostOwnershipViaHttp>
+      ) => mocks.readHostOwnershipMock(...callArgs),
+    };
+  },
+);
+
 vi.mock("../../internal/host-rpc", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
+    resolveEndpoint: async () => ({
+      hostId: "host-local",
+      websocketUrl: "ws://127.0.0.1:1/rpc",
+    }),
+    callHostRpcAtResolvedEndpoint: (
+      ...callArgs: Parameters<typeof actual.callHostRpcAtResolvedEndpoint>
+    ) => {
+      if (mocks.legacyHost === null)
+        throw new Error("No legacy host configured");
+      return mocks.legacyHost.request(callArgs[0], callArgs[1], callArgs[4]);
+    },
     callHostRpc: async () => ({ environments: [LEGACY_TEAM] }),
     callHostRpcWithDispatch: (
       ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
@@ -189,6 +249,27 @@ import type { HostCredentialProvisionOutcome } from "../../host/credential-provi
 import type { HostInstallAuthPreflight } from "../../host/install-auth";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 
+function signedInAcmeUser() {
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    user: { ...base.user, id: "user-1" },
+    environments: {
+      personal: null,
+      teams: [
+        {
+          teamId: "organization-acme",
+          environmentId: "environment-acme",
+        },
+      ],
+    },
+    teamSubscriptions: [
+      {
+        team: { id: "organization-acme", slug: "acme" },
+      } as (typeof base.teamSubscriptions)[number],
+    ],
+  };
+}
 const teamBindingFixture = {
   hostId: "host-local",
   environment: {
@@ -351,6 +432,24 @@ describe("buildHostEnsureCommand", () => {
   });
 
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    mocks.resolveHostAuthMock.mockResolvedValue({
+      token: "stored-bearer",
+      authnBaseUrl: "https://authn.test",
+      userId: "user-1",
+    });
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signedInAcmeUser(),
+    });
+    mocks.readHostOwnershipMock.mockResolvedValue({
+      kind: "ok",
+      host: {
+        hostId: "host-local",
+        owner: { kind: "user", id: "user-1" },
+        kind: "personal",
+        remoteAccess: false,
+      },
+    });
     const legacyHost = new LegacyTeamHost();
     mocks.legacyHost = legacyHost;
     const actual = await vi.importActual<
@@ -360,13 +459,21 @@ describe("buildHostEnsureCommand", () => {
       actual.completeTeamInstall,
     );
 
+    const ctx = fakeCtx();
     await expect(
-      buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+      buildHostEnsureCommand(baseArgs({ team: "acme" }))(ctx),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
     expect(legacyHost.requests).toEqual([]);
+    expect(ctx.progress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "host-team",
+        message: "Restarting Traycer on this computer to run as acme…",
+      }),
+    );
   });
 
   it.each(["ensure", "bind", "not-running", "unreadable"] as const)(

@@ -110,6 +110,27 @@ vi.mock(
   },
 );
 
+// The release floor is "0.0.0" (it admits every host), so a row can only fall
+// below it where a case raises it. A getter, not a constant, so every case
+// that does not raise it keeps the real floor.
+const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return {
+      ...actual,
+      get MINIMUM_HOST_VERSION(): string {
+        return minimumHostVersion.value;
+      },
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
   const actual =
     await importActual<
@@ -1148,5 +1169,98 @@ describe("HostStreamProvider", () => {
       subscribeSpy.mockRestore();
       notifySpy.mockRestore();
     }
+  });
+
+  describe("a host whose row is below the minimum version", () => {
+    const AT_FLOOR: HostDirectoryEntry = {
+      ...mockLocalHostEntry,
+      version: "2.0.0",
+    };
+    const BELOW_FLOOR: HostDirectoryEntry = {
+      ...mockLocalHostEntry,
+      version: "1.5.4",
+    };
+
+    function mountHostAt(row: HostDirectoryEntry): TestHostDirectory {
+      minimumHostVersion.value = "2.0.0";
+      const directory = new TestHostDirectory();
+      directory.publishUnannounced([row]);
+      installDirectory(directory);
+      pointWindowAt(buildClient(directory), row.hostId);
+      return directory;
+    }
+
+    afterEach(() => {
+      minimumHostVersion.value = "0.0.0";
+    });
+
+    it("closes the live client when its row falls below the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      act(() => {
+        directory.publish([BELOW_FLOOR]);
+      });
+
+      expect(result.current).toBeNull();
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy.mock.contexts[0]).toBe(first);
+    });
+
+    it("keeps the live client when its row goes offline at the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      act(() => {
+        directory.publish([
+          {
+            ...AT_FLOOR,
+            websocketUrl: null,
+            transportDialability: "not-dialable",
+          },
+        ]);
+      });
+
+      expect(result.current).toBe(first);
+      expect(closeSpy).not.toHaveBeenCalled();
+    });
+
+    it("builds one client when the row rises back above the floor", () => {
+      const directory = mountHostAt(BELOW_FLOOR);
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      expect(result.current).toBeNull();
+      const buildsBefore = streamFactorySpy.build.mock.calls.length;
+
+      act(() => {
+        directory.publish([AT_FLOOR]);
+      });
+
+      expect(result.current).toBeInstanceOf(WsStreamClient);
+      expect(streamFactorySpy.build.mock.calls.length - buildsBefore).toBe(1);
+    });
+
+    it("closes a client that a lease still holds when its row falls below the floor", () => {
+      const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+      const directory = mountHostAt(AT_FLOOR);
+      const { result } = renderHook(() => useStreamRuntimeBinding(), {
+        wrapper,
+      });
+      const first = result.current?.wsStreamClient ?? null;
+      expect(first).toBeInstanceOf(WsStreamClient);
+      expect(result.current?.retain?.() ?? null).not.toBeNull();
+
+      act(() => {
+        directory.publish([BELOW_FLOOR]);
+      });
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy.mock.contexts[0]).toBe(first);
+    });
   });
 });

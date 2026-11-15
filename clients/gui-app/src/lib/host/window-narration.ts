@@ -7,8 +7,10 @@ import type {
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import {
   describeVersionSkew,
+  HOST_UPDATE_SKEW_COPY,
   type VersionSkewCopy,
 } from "@/lib/host/version-skew-copy";
 
@@ -462,11 +464,31 @@ export function hostUpdateSkew(
   detail: SelectionIncompatibility,
   clientAppVersion: string | null,
 ): VersionSkewCopy {
+  if (detail.code === "older-host") return HOST_UPDATE_SKEW_COPY;
   return describeVersionSkew({
     hostAppVersion: detail.hostVersion,
     clientAppVersion,
     guidance: null,
   });
+}
+
+/** Shared by the version preflight and an older host's untyped refusal. */
+export function olderHostUpdateVariant(
+  hostId: string,
+  isTargetHost: boolean,
+  hostVersion: string | null,
+): Extract<WindowNarrationVariant, { readonly kind: "update-host" }> {
+  return {
+    kind: "update-host",
+    hostId,
+    isTargetHost,
+    detail: {
+      code: "older-host",
+      hostVersion,
+      minSupportedVersion: MINIMUM_HOST_VERSION,
+      clientCompatibility: null,
+    },
+  };
 }
 
 /**
@@ -484,9 +506,9 @@ export function hostUpdateActionApplies(
 }
 
 /**
- * The cover a blocking door state draws over this window, and its cause: the
- * state's own cover (see `ownDoorCover`), or else, while nothing is serving,
- * the "no host" cover - an unrecognised reason with its code beneath it.
+ * The state's own cover is chosen by `ownDoorCover`. While nothing is
+ * serving, an older host draws its update cover; another state falls
+ * back to the "no host" cover, with an unrecognised reason's code beneath it.
  */
 function doorStateCover(input: WindowNarrationInput): {
   readonly cause: WindowNarrationCause;
@@ -500,6 +522,16 @@ function doorStateCover(input: WindowNarrationInput): {
   const own = ownDoorCover(state, alreadyServing, input.hostClaim ?? null);
   if (own !== null) return { cause: "door-state", variant: own };
   if (alreadyServing) return null;
+  if (state.kind === "older-host") {
+    return {
+      cause: "no-usable-host",
+      variant: olderHostUpdateVariant(
+        state.hostId,
+        state.hostId === input.targetHostId,
+        null,
+      ),
+    };
+  }
   if (state.kind === "unrecognised-refusal" && state.detail !== null) {
     return {
       cause: "no-usable-host",

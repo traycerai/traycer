@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useCallback, useMemo } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
@@ -57,6 +58,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
   });
 
   const refresh = useCallback(async () => {
+    if (showHostUpdateNeededForGesture(hostId)) return;
     if (client === null || hostId === null || rootRunningDir === null) {
       return;
     }
