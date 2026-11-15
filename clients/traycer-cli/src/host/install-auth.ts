@@ -905,11 +905,12 @@ function acceptanceFailure(
 }
 
 /**
- * Follows the started attempt on `environment.status`'s `move` across the
- * computer's restart, on the health probe's own budget and cadence (each try
- * reads the pid record again, so it reaches the restarted host), until it is
- * done and the computer is explicitly in the team's environment. Null when
- * the attempt needs a person, is not this attempt, or the budget ran out.
+ * Waits across the computer's restart, on the health probe's own budget and
+ * cadence (each try reads the pid record again, so it reaches the restarted
+ * host), until the computer is explicitly in the team's environment. The
+ * status's `move` only ends the wait early, when it says this attempt needs
+ * a person; a host may never fill it. Null when the attempt needs a person or
+ * the budget ran out, including a give the computer completes after it.
  */
 async function awaitGivenBinding(
   hostId: string,
@@ -941,29 +942,23 @@ async function awaitGivenBinding(
           auth,
           bounded,
         );
-        if (move?.attemptId === attemptId) {
-          if (move.state === "needs_person") {
-            settled.ended = true;
-            return true;
-          }
-          if (move.state !== "done") return false;
-          const current = await callHostRpcAtResolvedEndpoint(
-            "environment.host.read",
-            {},
-            restarted,
-            auth,
-            bounded,
-          );
-          if (
-            !current.explicit ||
-            current.environment.environmentId !== target.environmentId
-          )
-            return false;
-          settled.binding = current;
+        if (move?.attemptId === attemptId && move.state === "needs_person") {
+          settled.ended = true;
           return true;
         }
-        // PENDING (Host cloud fact b): an answer naming no attempt or another.
-        settled.ended = true;
+        const current = await callHostRpcAtResolvedEndpoint(
+          "environment.host.read",
+          {},
+          restarted,
+          auth,
+          bounded,
+        );
+        if (
+          !current.explicit ||
+          current.environment.environmentId !== target.environmentId
+        )
+          return false;
+        settled.binding = current;
         return true;
       } catch {
         return false;
