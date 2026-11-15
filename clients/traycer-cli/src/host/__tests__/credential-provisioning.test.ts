@@ -23,6 +23,7 @@ import type { StreamAuthRevalidator } from "../../../../shared/auth/bearer-reval
 import type { BearerSourceProvider } from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import type { HostPidMetadata } from "../pid-metadata";
+import { config } from "../../config";
 
 // Pins `provisionInstalledHostCredential`'s own orchestration: the
 // bounded-lap ack/mint/verify loop, independent of `WsStreamClient`'s
@@ -481,7 +482,7 @@ describe("provisionInstalledHostCredential", () => {
     });
     expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
     expect(mocks.hostTokenMintMock).toHaveBeenCalledWith(
-      "https://authn.test",
+      config.authnBaseUrl,
       "host-1",
       "test-bearer-token",
       expect.any(AbortSignal),
@@ -506,7 +507,11 @@ describe("provisionInstalledHostCredential", () => {
         const auth = options.auth;
         if (auth === null)
           throw new Error("probe wired no host-token recovery");
-        const recovery = auth.revalidateRefused(refusal);
+        const revalidateRefused = auth.revalidateRefused;
+        if (revalidateRefused === undefined) {
+          throw new Error("probe wired no refused-token recovery");
+        }
+        const recovery = revalidateRefused(refusal);
         void recovery.then(
           (result) => {
             mocks.hostTokenRecoveryResult = result;
@@ -1026,7 +1031,7 @@ describe("provisionInstalledHostCredential", () => {
     const deadlineMs = 20_000;
     mocks.onSessionCreated = (session): void => {
       setTimeout(() => {
-        session.emitStatus("open", null);
+        session.emitStatus("open", null, null);
       }, 0);
     };
 
@@ -1398,6 +1403,7 @@ describe("provisionInstalledHostCredential", () => {
   it("reports unauthorized when the host-token mint and its one sign-in refresh are refused", async () => {
     // Authn refuses the stored sign-in while minting this host's token. The
     // one refresh is refused too, so no later client can mint for the host.
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
     mocks.hostTokenMintMock.mockResolvedValueOnce({ kind: "sign-in-rejected" });
     mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
     mocks.onSessionCreated = (): void => {
