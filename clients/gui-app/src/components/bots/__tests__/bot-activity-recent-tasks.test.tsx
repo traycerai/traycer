@@ -3,8 +3,8 @@
  * active ones with the reason they ended, over the real `bot.subscribe`
  * snapshot, subscription hook, active-task hook and page. Transitions the
  * session saw come first, newest observed first; rows the session never saw
- * end follow in reverse server creation order. Only the host transport edges
- * are stood in for.
+ * end follow in reverse server creation order. Host transport and unrelated
+ * Activity dependencies are stood in for.
  */
 import {
   BOT_ID,

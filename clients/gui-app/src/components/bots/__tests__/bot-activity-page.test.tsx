@@ -2888,6 +2888,42 @@ describe("<BotActivityPage /> an inspected task that ends", () => {
     expect(ended.textContent).not.toMatch(/next check-in|every \d/i);
   });
 
+  it("hides what an expanded ended task's agents wait on while the room is not fresh, and shows it again once it is", async () => {
+    warmTask("t-open", [
+      { id: "a-one", parentId: null, title: "Release agent", archivedAt: null },
+    ]);
+    const stale = (): BotTaskEntry =>
+      task("t-open", {
+        cadence: { kind: "none" },
+        state: "ended",
+        endedReason: "completed",
+        inputNeeded: [waiting("a-one", NOW, "Merge the release PR")],
+      });
+    const view = render(harness([stale()]));
+    await userEvent.setup().click(
+      within(endedRowFor("t-open")).getByRole("button", {
+        name: "Show agents",
+      }),
+    );
+    expect(endedRowFor("t-open").textContent).toContain("Merge the release PR");
+
+    // The bot's serving host drops: the waiting list the snapshot held is not current.
+    mocks.state.unreachable.add(HOST_ID);
+    view.rerender(harness([stale()]));
+
+    const staleRow = endedRowFor("t-open");
+    expect(within(staleRow).getByText("Release agent")).toBeTruthy();
+    expect(
+      within(staleRow).getByTestId("bot-activity-ended-reason").textContent,
+    ).toBe("Check-in completed");
+    expect(staleRow.textContent).not.toContain("Merge the release PR");
+    expect(within(staleRow).queryByTestId("bot-activity-needs-you")).toBeNull();
+
+    mocks.state.unreachable.delete(HOST_ID);
+    view.rerender(harness([stale()]));
+    expect(endedRowFor("t-open").textContent).toContain("Merge the release PR");
+  });
+
   it("keeps an expanded task that ended behind a full page of newer ones visible with its agents, and lets it collapse", async () => {
     warmTask("t-open", [
       { id: "a-one", parentId: null, title: "Release agent", archivedAt: null },

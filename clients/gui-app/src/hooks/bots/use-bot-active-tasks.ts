@@ -143,7 +143,10 @@ export function useBotActiveTasks(
       snapshotFresh && servingReachability.status === "reachable";
     const indicatorOf = (taskId: string): NotificationIndicatorState =>
       indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
-    const endedTasks = tasks.filter(
+    const visibleTasks = roomFresh
+      ? tasks
+      : tasks.map((task) => ({ ...task, inputNeeded: null }));
+    const endedTasks = visibleTasks.filter(
       (task) => task.state === "ended" && task.endedReason !== "deleted",
     );
     const byId = new Map(endedTasks.map((task) => [task.taskId, task]));
@@ -162,9 +165,7 @@ export function useBotActiveTasks(
       roomFresh,
       recentRows,
       rows: activeTasksOf({
-        tasks: roomFresh
-          ? tasks
-          : tasks.map((task) => ({ ...task, inputNeeded: null })),
+        tasks: visibleTasks,
         evidenceFresh: activityFresh && notificationFresh && roomFresh,
         workingInTask: (taskId) => working.get(taskId) ?? 0,
         pendingInTask: (taskId) => {

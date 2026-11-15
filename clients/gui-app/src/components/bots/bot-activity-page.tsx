@@ -96,8 +96,8 @@ const NO_FOCUS = {
 
 /**
  * A bot's Activity page (Tracy Bots, decision 182): one list of the tasks
- * the bot started, across its trunk and every thread, while anything is
- * still going on in them (`activeTasksOf`). A row is drawn as the Chats
+ * the bot started, across its trunk and every thread: active tasks first,
+ * then recently ended tracking. A row is drawn as the Chats
  * panel draws a parent: its status rolled up from the task's agents, its
  * title and badges, what it is doing in words, and, where this window holds
  * the task's session, its agents folded under a chevron.
