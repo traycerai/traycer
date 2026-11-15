@@ -65,6 +65,7 @@ import {
   createSigningKey,
   jwksResponse,
   userBearerClaims,
+  type BearerSigningKey,
 } from "../../auth/__tests__/jws-fixture";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
@@ -1424,9 +1425,15 @@ describe("an offline start", () => {
       await expect(
         restoreLocalHandler()(sender(101), { userId: USER_ID, token }),
       ).resolves.toBe("restored");
+      // The identity is the credentials file's, never the window's claim.
       expect(authSession.get()).toEqual({
-        ...handOver(token),
         status: "unverified",
+        token,
+        profile: {
+          userId: USER_ID,
+          userName: stored.user.name,
+          email: stored.user.email,
+        },
         verified: false,
       });
       await awaitSelectionTarget(windowA, "local-host");
@@ -1490,7 +1497,7 @@ describe("an offline start", () => {
     {
       label: "a wrong signature",
       reason: "bad-signature" as const,
-      tokenFor: (_key: ReturnType<typeof createSigningKey>) =>
+      tokenFor: (_key: BearerSigningKey) =>
         createSigningKey("kid-1", "bearer").sign(
           userBearerClaims(USER_ID, Date.now() + 3_600_000),
         ),
@@ -1498,7 +1505,7 @@ describe("an offline start", () => {
     {
       label: "an unknown signing key",
       reason: "unknown-signing-key" as const,
-      tokenFor: (_key: ReturnType<typeof createSigningKey>) =>
+      tokenFor: (_key: BearerSigningKey) =>
         createSigningKey("kid-unpublished", "bearer").sign(
           userBearerClaims(USER_ID, Date.now() + 3_600_000),
         ),
@@ -1506,7 +1513,7 @@ describe("an offline start", () => {
     {
       label: "an expired token",
       reason: "expired" as const,
-      tokenFor: (key: ReturnType<typeof createSigningKey>) =>
+      tokenFor: (key: BearerSigningKey) =>
         key.sign(userBearerClaims(USER_ID, Date.now() - 120_000)),
     },
   ])(
