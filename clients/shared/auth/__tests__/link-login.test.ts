@@ -10,6 +10,7 @@ import {
   claimantDeviceLabel,
   claimantDeviceName,
   claimLinkLoginCodeViaHttp,
+  mintLinkLoginCodeViaHttp,
   linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
   normalizeLinkLoginCodeInput,
@@ -20,6 +21,103 @@ import {
 const CODE = "ABCDE-FGHJK";
 const NORMALIZED = "ABCDEFGHJK";
 const PLATFORM = "https://platform.example.test";
+
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) Object.defineProperty(response, "status", { value: 0 });
+  return response;
+}
+
+describe("link-login redirect answers", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([302, 0])(
+    "maps HTTP %i from the code mint to network-error",
+    async (status) => {
+      fetchMock.mockResolvedValue(
+        responseWithStatus(status, {
+          code: CODE,
+          expires_in: 60,
+          expires_at: 1_800_000_060,
+        }),
+      );
+
+      expect(await mintLinkLoginCodeViaHttp(PLATFORM, "bearer", null)).toEqual({
+        kind: "network-error",
+      });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
+
+  it("keeps the valid code-mint response unchanged", async () => {
+    fetchMock.mockResolvedValue(
+      responseWithStatus(200, {
+        code: CODE,
+        expires_in: 60,
+        expires_at: 1_800_000_060,
+      }),
+    );
+
+    expect(await mintLinkLoginCodeViaHttp(PLATFORM, "bearer", null)).toEqual({
+      kind: "ok",
+      response: {
+        code: CODE,
+        expires_in: 60,
+        expires_at: 1_800_000_060,
+      },
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  });
+
+  it.each([302, 0])(
+    "maps HTTP %i from the token poll to network-error",
+    async (status) => {
+      fetchMock.mockResolvedValue(
+        responseWithStatus(status, {
+          token: "access-token",
+          refreshToken: "refresh-token",
+          familyId: "family-1",
+        }),
+      );
+
+      expect(await linkLoginTokenViaHttp(PLATFORM, "secret")).toEqual({
+        kind: "network-error",
+      });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
+
+  it("keeps the valid token-poll response unchanged", async () => {
+    fetchMock.mockResolvedValue(
+      responseWithStatus(200, {
+        token: "access-token",
+        refreshToken: "refresh-token",
+        familyId: "family-1",
+      }),
+    );
+
+    expect(await linkLoginTokenViaHttp(PLATFORM, "secret")).toEqual({
+      kind: "authorized",
+      response: {
+        token: "access-token",
+        refreshToken: "refresh-token",
+        familyId: "family-1",
+      },
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  });
+});
 
 describe("QR payload build/parse", () => {
   it("round-trips the https payload into the normalized code", () => {

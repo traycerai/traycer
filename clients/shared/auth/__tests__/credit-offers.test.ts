@@ -31,6 +31,14 @@ function respond(status: number, body: unknown): void {
   );
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) Object.defineProperty(response, "status", { value: 0 });
+  return response;
+}
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -51,10 +59,26 @@ describe("listCreditOffersViaHttp", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${AUTHN_BASE_URL}/api/user/credit-campaigns`);
     expect(init?.method).toBe("GET");
+    expect(init?.redirect).toBe("manual");
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       `Bearer ${BEARER}`,
     );
   });
+
+  it.each([302, 0])(
+    "treats HTTP %i as a network error without reading its body",
+    async (status) => {
+      const response = responseWithStatus(status, { campaigns: [CARD] });
+      const json = vi.spyOn(response, "json");
+      fetchMock.mockResolvedValue(response);
+
+      expect(
+        await listCreditOffersViaHttp(AUTHN_BASE_URL, BEARER, null),
+      ).toEqual({ kind: "network-error" });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+      expect(json).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { status: 401, kind: "unauthorized" },
@@ -95,11 +119,27 @@ describe("claimCreditOfferViaHttp", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${AUTHN_BASE_URL}/api/user/credit-campaigns/claim`);
     expect(init?.method).toBe("POST");
+    expect(init?.redirect).toBe("manual");
     expect(init?.body).toBe(JSON.stringify({ campaignId: CARD.id }));
     const headers = new Headers(init?.headers);
     expect(headers.get("Authorization")).toBe(`Bearer ${BEARER}`);
     expect(headers.get("Content-Type")).toBe("application/json");
   });
+
+  it.each([302, 0])(
+    "treats HTTP %i as a network error without reading its body",
+    async (status) => {
+      const response = responseWithStatus(status, { campaign: CARD });
+      const json = vi.spyOn(response, "json");
+      fetchMock.mockResolvedValue(response);
+
+      expect(
+        await claimCreditOfferViaHttp(AUTHN_BASE_URL, BEARER, CARD.id),
+      ).toEqual({ kind: "network-error" });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+      expect(json).not.toHaveBeenCalled();
+    },
+  );
 
   const CLAIMED: CreditOffer = {
     ...CARD,

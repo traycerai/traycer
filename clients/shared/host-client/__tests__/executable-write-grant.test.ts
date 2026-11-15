@@ -27,6 +27,19 @@ function json(status: number, value: unknown): Answer {
   return { status, body: JSON.stringify(value) };
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) {
+    Object.defineProperties(response, {
+      status: { value: 0 },
+      ok: { value: false },
+    });
+  }
+  return response;
+}
+
 /**
  * Stubs the global `fetch` with the answers in order (one per call), and
  * records what each call carried. A call past the last answer is a test bug.
@@ -95,6 +108,54 @@ describe("mintExecutableWriteGrantViaHttp", () => {
         body: JSON.stringify({ hostId: HOST_ID }),
       },
     ]);
+  });
+
+  it.each([302, 0])(
+    "treats HTTP %i on the environment read as answered and leaves its body unread",
+    async (status) => {
+      const response = responseWithStatus(status, {
+        environmentId: ENVIRONMENT_ID,
+      });
+      const text = vi.spyOn(response, "text");
+      const fetchMock = vi.fn<typeof fetch>(async () => response);
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await mintExecutableWriteGrantViaHttp(AUTHN, TOKEN, HOST_ID),
+      ).toEqual({
+        kind: "network-error",
+        detail: `authn answered HTTP ${status}`,
+      });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+      expect(text).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the valid 200 grant flow and sends both requests manually", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        responseWithStatus(200, { environmentId: ENVIRONMENT_ID }),
+      )
+      .mockResolvedValueOnce(
+        responseWithStatus(200, {
+          grant: "grant-token-1",
+          expiresInSeconds: 600,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await mintExecutableWriteGrantViaHttp(AUTHN, TOKEN, HOST_ID),
+    ).toEqual({
+      kind: "ok",
+      grant: "grant-token-1",
+      expiresInSeconds: 600,
+    });
+    expect(fetchMock.mock.calls).toHaveLength(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.redirect).toBe("manual");
+    }
   });
 
   it("joins the path onto a base URL that already ends in a slash", async () => {

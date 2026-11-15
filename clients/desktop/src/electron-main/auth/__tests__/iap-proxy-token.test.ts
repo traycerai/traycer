@@ -15,6 +15,7 @@ import {
   createCachedIapTokenProvider,
   resolveIapKeyFilePath,
 } from "../iap-proxy-token";
+import { createCachedGoogleToken } from "../google-service-account";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUDIENCE = "audience-fixture.apps.googleusercontent.example";
@@ -65,6 +66,19 @@ afterEach(() => {
 
 function tokenResponse(): Response {
   return new Response(JSON.stringify({ id_token: ID_TOKEN }), { status: 200 });
+}
+
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) {
+    Object.defineProperties(response, {
+      status: { value: 0 },
+      ok: { value: false },
+    });
+  }
+  return response;
 }
 
 function decodePart(part: string): Record<string, unknown> {
@@ -205,6 +219,51 @@ describe("createCachedIapTokenProvider", () => {
 
     expect(await pending).toEqual([ID_TOKEN, ID_TOKEN, ID_TOKEN]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createCachedGoogleToken redirect answers", () => {
+  it.each([302, 0])(
+    "returns no token and names the answered HTTP %i",
+    async (status) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        responseWithStatus(status, { access_token: "must-not-be-used" }),
+      );
+      const warn = vi.fn<(message: string) => void>();
+      const token = createCachedGoogleToken({
+        keyFilePath,
+        grant: { scope: "fixture-scope" },
+        tokenField: "access_token",
+        label: "Fixture token",
+        fetch: fetchMock,
+        now: () => 1_800_000_000_000,
+        warn,
+      });
+
+      await expect(token()).resolves.toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        `Fixture token unavailable: the token endpoint answered HTTP ${status}`,
+      );
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
+
+  it("keeps a successful token response unchanged and requests manually", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      responseWithStatus(200, { access_token: "access-token-fixture" }),
+    );
+    const token = createCachedGoogleToken({
+      keyFilePath,
+      grant: { scope: "fixture-scope" },
+      tokenField: "access_token",
+      label: "Fixture token",
+      fetch: fetchMock,
+      now: () => 1_800_000_000_000,
+      warn: () => {},
+    });
+
+    await expect(token()).resolves.toBe("access-token-fixture");
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
   });
 });
 

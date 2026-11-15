@@ -30,6 +30,14 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) Object.defineProperty(response, "status", { value: 0 });
+  return response;
+}
+
 function stubFetch(respond: () => Promise<Response>): Mock<typeof fetch> {
   const fetchMock = vi.fn<typeof fetch>(async () => respond());
   vi.stubGlobal("fetch", fetchMock);
@@ -57,7 +65,23 @@ describe("voiceSessionsMintViaHttp", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe(`Bearer ${BEARER}`);
     expect(headers.has("proxy-authorization")).toBe(false);
+    expect(init?.redirect).toBe("manual");
   });
+
+  it.each([302, 0])(
+    "treats an empty HTTP %i answer as a network error, not dormant",
+    async (status) => {
+      const fetchMock = stubFetch(async () => responseWithStatus(status, {}));
+
+      expect(
+        await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST),
+      ).toEqual({
+        kind: "network-error",
+        detail: `the voice route answered HTTP ${status}`,
+      });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
 
   it("sends the proxy token as Proxy-Authorization when one is passed", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, MINTED));

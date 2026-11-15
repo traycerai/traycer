@@ -43,6 +43,14 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) Object.defineProperty(response, "status", { value: 0 });
+  return response;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -66,10 +74,27 @@ describe("devices/sessions authn fetcher", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://authn.example.test/api/v3/user/sessions");
     expect(init?.method).toBe("GET");
+    expect(init?.redirect).toBe("manual");
     expect((init?.headers as Record<string, string>).Authorization).toBe(
       "Bearer jwt-abc",
     );
   });
+
+  it.each([302, 0])(
+    "answers network-error for HTTP %i before rebuilding the response",
+    async (status) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) =>
+          responseWithStatus(status, sessionListBody()),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        listUserSessionsViaHttp(AUTHN, "jwt-abc", null),
+      ).resolves.toEqual({ kind: "network-error" });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
 
   it("aborts the session-list request when the reader's signal aborts", async () => {
     // The in-process shells (browser/dev) own this request, so a cancelled

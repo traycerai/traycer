@@ -81,6 +81,19 @@ function manifestWithFile(path: string) {
   });
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) {
+    Object.defineProperties(response, {
+      status: { value: 0 },
+      ok: { value: false },
+    });
+  }
+  return response;
+}
+
 type Route = (url: string) => Promise<Response>;
 
 const warn = vi.fn<(message: string) => void>();
@@ -142,6 +155,31 @@ describe("createSoundtrackSource", () => {
 });
 
 describe("read", () => {
+  it.each([302, 0, 200])(
+    "handles a bucket HTTP %i answer and requests both credentials manually",
+    async (status) => {
+      routes({
+        token: grantsToken,
+        manifest: () =>
+          Promise.resolve(responseWithStatus(status, POOLED_AND_GROUPED)),
+      });
+
+      const result = await readerOf({}).read();
+
+      if (status === 200) {
+        expect(result.kind).toBe("ok");
+      } else {
+        expect(result).toEqual({ kind: "unavailable" });
+        expect(warn).toHaveBeenCalledWith(
+          `Soundtrack set unavailable: the bucket answered HTTP ${status}`,
+        );
+      }
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init?.redirect).toBe("manual");
+      }
+    },
+  );
+
   it("answers every stem file, pooled and grouped, as a signed url and leaves tracks and views alone", async () => {
     routes({ token: grantsToken, manifest: answers(POOLED_AND_GROUPED) });
 

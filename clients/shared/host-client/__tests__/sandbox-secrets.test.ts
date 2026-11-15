@@ -77,6 +77,14 @@ function textResponse(status: number, text: string): Response {
   return new Response(text, { status });
 }
 
+function responseWithStatus(status: number, body: unknown): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: status === 0 ? 200 : status,
+  });
+  if (status === 0) Object.defineProperty(response, "status", { value: 0 });
+  return response;
+}
+
 /** Stubs `fetch` with a responder that builds a fresh Response per call. */
 function stubFetch(respond: () => Response): Mock<typeof fetch> {
   const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(respond()));
@@ -110,6 +118,7 @@ describe("fetchSandboxGrantsViaHttp", () => {
           Accept: "application/json",
         },
         body: null,
+        redirect: "manual",
         signal: expect.any(AbortSignal),
       }),
     );
@@ -142,7 +151,7 @@ describe("fetchSandboxGrantsViaHttp", () => {
   });
 
   it("returns the parsed summary on a 200", async () => {
-    stubFetch(() => jsonResponse(200, SUMMARY_BODY));
+    const fetchMock = stubFetch(() => jsonResponse(200, SUMMARY_BODY));
 
     const result = await fetchSandboxGrantsViaHttp(
       BASE,
@@ -152,7 +161,25 @@ describe("fetchSandboxGrantsViaHttp", () => {
     );
 
     expect(result).toEqual({ kind: "ok", summary: SUMMARY_BODY });
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
   });
+
+  it.each([302, 0])(
+    "returns the broker's answered HTTP %i as a network error",
+    async (status) => {
+      const fetchMock = stubFetch(() =>
+        responseWithStatus(status, SUMMARY_BODY),
+      );
+
+      await expect(
+        fetchSandboxGrantsViaHttp(BASE, BEARER, ENV_ID, HOST_ID),
+      ).resolves.toEqual({
+        kind: "network-error",
+        detail: `the broker answered HTTP ${status}`,
+      });
+      expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    },
+  );
 
   it("fills the defaults of a sparse 200 and drops fields it does not know", async () => {
     stubFetch(() =>
@@ -611,6 +638,9 @@ describe("an environment id of null (Personal)", () => {
       `${BASE}/api/v3/environments/${PERSONAL_ENV_ID}/secrets/hosts/${HOST_ID}/grants`,
       expect.objectContaining({ method: "GET" }),
     );
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.redirect).toBe("manual");
+    }
   });
 
   it("reads environments/me first, then roots the decide call there", async () => {
@@ -707,6 +737,21 @@ describe("an environment id of null (Personal)", () => {
       kind: "network-error",
       detail: "the environment answer did not match the contract",
     });
+  });
+
+  it("maps a redirect from environments/me to the contract-mismatch answer", async () => {
+    const fetchMock = stubFetch(() =>
+      responseWithStatus(302, { environmentId: PERSONAL_ENV_ID }),
+    );
+
+    await expect(
+      fetchSandboxGrantsViaHttp(BASE, BEARER, null, HOST_ID),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the environment answer did not match the contract",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
   });
 
   it("returns a thrown environments/me fetch as a network error, without the second call", async () => {
