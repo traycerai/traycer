@@ -142,8 +142,6 @@ const mocks = vi.hoisted(() => {
       readCursors: undefined as BotReadCursorReadResponse | undefined,
       // Whether the host keeps read cursors at all.
       readCursorsKept: true,
-      // The next advance fails, as one to an offline host does.
-      failNextAdvance: false,
       // The person's notification levels by channel id; `undefined` = not read.
       levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
@@ -261,9 +259,7 @@ vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
   useBotReadCursorAdvanceMutation: () => ({
     mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
       mocks.advance(request);
-      if (!mocks.state.failNextAdvance) return Promise.resolve();
-      mocks.state.failNextAdvance = false;
-      return Promise.reject(new Error("the host is offline"));
+      return Promise.resolve();
     },
   }),
 }));
@@ -680,7 +676,6 @@ beforeEach(() => {
   mocks.state.follows = undefined;
   mocks.state.readCursors = undefined;
   mocks.state.readCursorsKept = true;
-  mocks.state.failNextAdvance = false;
   mocks.state.levels = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
@@ -1854,78 +1849,30 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
-  it("advances the channel's cursor to its newest row once, only while shown, and not again when the read catches up", () => {
+  // Retired: the channel used to advance its cursor to the metadata `latest`
+  // the moment it was presented (once, again for a landed row, again after a
+  // failed write). Presenting alone reads nothing now; the rows must be drawn
+  // and held in view (bot-channel-unread-banner.test.tsx, over the real
+  // transcript rows), so this stubbed-transcript rig only pins that it asks
+  // for no write on its own.
+  it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names", () => {
     mocks.state.paneVisible = false;
     mocks.state.readCursors = {
       cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": NEW_ROW },
     };
     const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
     rerender();
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
-
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-  });
-
-  it("advances again for a row that lands while the channel is shown", () => {
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.advance).not.toHaveBeenCalled();
-
     const landed = { messageId: "row-landed", seq: 3_000 };
     mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
+      cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": landed },
     };
     rerender();
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...landed,
-    });
-  });
 
-  it("advances again to the same row when an advance failed and the channel is presented again", async () => {
-    mocks.state.failNextAdvance = true;
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": OLD_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    // Let the rejected advance settle, so the view has forgotten it.
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    mocks.state.paneVisible = false;
-    rerender();
-    mocks.state.paneVisible = true;
-    rerender();
-
-    expect(mocks.advance).toHaveBeenCalledTimes(2);
-    expect(mocks.advance).toHaveBeenLastCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
   });
 
   it("says no new replies on a followed thread of a channel set to Nothing", () => {
@@ -1996,7 +1943,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     expect(marked("post-c")).toBe("false");
   });
 
-  it("clears a thread's new replies once the cursor catches up, and advances the thread that is open", () => {
+  it("clears a thread's new replies once the cursor catches up, and writes nothing for the thread that is open merely for being shown", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
     ];
@@ -2009,11 +1956,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     };
     mocks.postIds = ["post-a"];
     const { rerender } = mount({ openThreadPostId: "post-a" });
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "thread-a",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.readCursors = {
       cursors: { "thread-a": NEW_ROW },

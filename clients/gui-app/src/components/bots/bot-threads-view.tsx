@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -15,13 +16,14 @@ import type {
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { BotUnreadBanner } from "@/components/bots/bot-unread-banner";
+import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented-read";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
-import type { BotTranscriptMark } from "@/components/bots/bot-chat-transcript";
 import { BotThreadRowMenu } from "@/components/bots/bot-thread-follow";
 import {
   BotThreadCardBody,
@@ -42,11 +44,6 @@ import {
   type BotFollowedThread,
 } from "@/hooks/bots/use-bot-followed-threads";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import { useBotReadCursors } from "@/hooks/bots/use-bot-read-cursor";
-import {
-  useAdvanceWhilePresented,
-  usePresented,
-} from "@/hooks/bots/use-bot-read-while-presented";
 import {
   useBotAnswerReach,
   useBotImageReach,
@@ -64,7 +61,6 @@ import {
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-import { advanceTarget } from "@/lib/bots/bot-read-cursor";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
@@ -91,10 +87,9 @@ const FOLDED_TAIL = 2;
  * that replies in it (T137) - as Slack's Threads view does. The page is the
  * one scroller; a card grows to its thread.
  *
- * While any followed thread has new replies, a pill at the top says how many
- * and goes to the first of them. Once a card's newest reply has stayed in
- * the person's view, its new replies are read, as the thread's panel reads
- * them.
+ * The banner counts unread threads and navigates between their cards.
+ * Reading advances only through a contiguous range of hydrated replies
+ * whose full extent has stayed in view for the shared read-after policy.
  *
  * Where the tab draws no column, whose channel row is the way back, the header
  * goes back to the tab's channel itself: as the installed app's form says, and
@@ -110,6 +105,7 @@ export function BotThreadsView(props: {
 }): ReactNode {
   const { level2 } = props;
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const [bannerSlot, setBannerSlot] = useState<HTMLDivElement | null>(null);
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -134,22 +130,28 @@ export function BotThreadsView(props: {
           Threads you follow, across every bot.
         </p>
       </header>
+      <div ref={setBannerSlot} />
       <div
         ref={setScroller}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4"
         data-testid="bot-threads-scroll"
       >
-        <BotThreadsBody hostId={props.hostId} scroller={scroller} />
+        <BotThreadsBody
+          hostId={props.hostId}
+          scroller={scroller}
+          bannerSlot={bannerSlot}
+        />
       </div>
     </div>
   );
 }
 
 function BotThreadsBody(props: {
+  readonly bannerSlot: HTMLElement | null;
   readonly hostId: string;
   readonly scroller: HTMLElement | null;
 }): ReactNode {
-  const { hostId, scroller } = props;
+  const { hostId, scroller, bannerSlot } = props;
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
   const followed = useBotFollowedThreads(
@@ -189,6 +191,7 @@ function BotThreadsBody(props: {
     <div className="flex flex-col gap-3">
       {failure}
       <ThreadCards
+        bannerSlot={bannerSlot}
         hostId={hostId}
         threads={followed.threads}
         scroller={scroller}
@@ -198,11 +201,12 @@ function BotThreadsBody(props: {
 }
 
 function ThreadCards(props: {
+  readonly bannerSlot: HTMLElement | null;
   readonly hostId: string;
   readonly threads: ReadonlyArray<BotFollowedThread>;
   readonly scroller: HTMLElement | null;
 }): ReactNode {
-  const { hostId, threads, scroller } = props;
+  const { hostId, threads, scroller, bannerSlot } = props;
   const threadIds = useMemo(
     () => threads.map((entry) => entry.thread.threadId),
     [threads],
@@ -222,19 +226,50 @@ function ThreadCards(props: {
     enabled: threadIds.length > 0,
   });
   const unread = threads.filter((entry) => entry.newReplies);
+  const markRead = useBotMarkRepresentedRead(
+    unread.flatMap((entry) =>
+      entry.readTarget === null
+        ? []
+        : [
+            {
+              botId: entry.bot.botId,
+              conversationId: entry.thread.threadId,
+              ...entry.readTarget,
+            },
+          ],
+    ),
+  );
+  const unfold = useBotThreadFoldStore((state) => state.unfold);
   const goToNextUnread = (): void => {
     if (scroller === null) return;
     const card = nextUnreadCard(
       scroller,
       unread.map((entry) => entry.thread.threadId),
     );
-    card?.scrollIntoView({ block: "start", behavior: "smooth" });
+    if (card === null) return;
+    const threadId = card.dataset.threadId;
+    if (threadId !== undefined) unfold(threadId);
+    card.scrollIntoView({ block: "start", behavior: "smooth" });
   };
   return (
     <>
-      {unread.length === 0 ? null : (
-        <UnreadThreadsPill count={unread.length} onClick={goToNextUnread} />
-      )}
+      {bannerSlot === null || (unread.length === 0 && !markRead.failed)
+        ? null
+        : createPortal(
+            <BotUnreadBanner
+              label={
+                unread.length === 1
+                  ? "1 unread thread"
+                  : `${unread.length} unread threads`
+              }
+              navigateTestId="bot-threads-unread-pill"
+              onNavigate={goToNextUnread}
+              onMarkRead={markRead.markRead}
+              pending={markRead.pending}
+              failed={markRead.failed}
+            />,
+            bannerSlot,
+          )}
       <ul className="flex flex-col gap-3">
         {threads.map((entry) => {
           const { threadId } = entry.thread;
@@ -275,30 +310,6 @@ function nextUnreadCard(
     cards.find((card) => card.getBoundingClientRect().top - top > 1) ??
     cards.at(0) ??
     null
-  );
-}
-
-/**
- * Floats over the top of the page while any followed thread has new replies,
- * and goes to the next of them.
- */
-function UnreadThreadsPill(props: {
-  readonly count: number;
-  readonly onClick: () => void;
-}): ReactNode {
-  return (
-    <div className="pointer-events-none sticky top-0 z-10 flex h-0 justify-center">
-      <button
-        type="button"
-        data-testid="bot-threads-unread-pill"
-        onClick={props.onClick}
-        className="pointer-events-auto mt-2 flex h-8 items-center rounded-full bg-popover/95 px-3 text-ui-sm font-medium whitespace-nowrap text-popover-foreground shadow-md ring-1 ring-foreground/10 transition-[background-color,box-shadow] outline-none hover:bg-popover hover:shadow-lg focus-visible:ring-2 focus-visible:ring-ring/70"
-      >
-        {props.count === 1
-          ? "1 unread thread"
-          : `${props.count} unread threads`}
-      </button>
-    </div>
   );
 }
 
@@ -358,7 +369,6 @@ function ThreadCard(props: {
           originMessageId={anchor.messageId}
           members={directory.members}
           resolveMember={directory.resolve}
-          scroller={scroller}
           onShowPost={showPost}
         />
       ) : (
@@ -426,102 +436,6 @@ function useCardNear(
     return () => observer.disconnect();
   }, [card, near, observable, scroller]);
   return near;
-}
-
-/**
- * A card's reading, as the panel reads: the reply its read cursor would
- * advance to is marked under that reply's row once the row is drawn (`null`
- * while there is nothing to read), and the cursor advances once that mark
- * has stayed in the page's view. A mark seen for any other reply
- * acknowledges nothing.
- */
-function useCardRead(input: {
-  readonly botId: string;
-  readonly hostId: string;
-  readonly threadId: string;
-  readonly scroller: HTMLElement | null;
-}): BotTranscriptMark | null {
-  const { botId, hostId, threadId, scroller } = input;
-  const client = useTabHostClient();
-  const readCursors = useBotReadCursors(botId, hostId)?.data;
-  const targetId =
-    readCursors === undefined
-      ? null
-      : (advanceTarget(readCursors, threadId)?.messageId ?? null);
-  const [drawn, setDrawn] = useState<{
-    readonly node: HTMLElement;
-    readonly messageId: string;
-  } | null>(null);
-  const ref = useCallback(
-    (node: HTMLElement | null) =>
-      setDrawn(
-        node === null || targetId === null
-          ? null
-          : { node, messageId: targetId },
-      ),
-    [targetId],
-  );
-  const seen = useMarkSeen(drawn?.node ?? null, scroller);
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: threadId,
-    readCursors,
-    presented: usePresented(seen && drawn?.messageId === targetId),
-  });
-  return useMemo(
-    () => (targetId === null ? null : { messageId: targetId, ref }),
-    [ref, targetId],
-  );
-}
-
-/** How long a card's marked reply stays in view before it is read. */
-const READ_AFTER_MS = 1_000;
-
-/**
- * Whether `mark`, under the reply a card's reading would acknowledge, has
- * been in the page's view for `READ_AFTER_MS` and still is: a card's channel
- * line or post in view reads nothing, and neither does a glance while the
- * cards above it are still growing or a scroll past. Each reply's mark is a
- * node of its own, so each is held anew. Where nothing can observe, a mark
- * is seen once drawn.
- */
-function useMarkSeen(
-  mark: HTMLElement | null,
-  scroller: HTMLElement | null,
-): boolean {
-  const observable = typeof IntersectionObserver !== "undefined";
-  const [seenMark, setSeenMark] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    if (mark === null || scroller === null || !observable) return;
-    let timer: number | null = null;
-    const stop = (): void => {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = null;
-    };
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries.at(-1);
-        if (entry === undefined) return;
-        if (entry.isIntersecting) {
-          if (timer === null) {
-            timer = window.setTimeout(() => setSeenMark(mark), READ_AFTER_MS);
-          }
-          return;
-        }
-        stop();
-        setSeenMark(null);
-      },
-      { root: scroller },
-    );
-    observer.observe(mark);
-    return () => {
-      stop();
-      observer.disconnect();
-    };
-  }, [mark, observable, scroller]);
-  if (!observable) return mark !== null;
-  return mark !== null && seenMark === mark;
 }
 
 /**
@@ -749,8 +663,7 @@ function ReplyTime(props: { readonly at: number }): ReactNode {
  * The thread in full, under the card's channel line: the thread panel's own
  * body (`BotThreadCardBody`) - its post, its replies and its box - in the
  * bot's scope, folded in the middle while long and not yet shown in full.
- * Once the newest reply its read cursor names is drawn and has stayed in the
- * page's view (`scroller`), its replies are read, as the panel reads them.
+ * The transcript qualifies reading from its hydrated, observed rows, as the panel does.
  */
 function FullThread(props: {
   readonly hostId: string;
@@ -758,18 +671,10 @@ function FullThread(props: {
   readonly originMessageId: string;
   readonly members: ReadonlyArray<EnvironmentMember> | null;
   readonly resolveMember: BotMemberResolver;
-  readonly scroller: HTMLElement | null;
   readonly onShowPost: () => void;
 }): ReactNode {
-  const {
-    hostId,
-    entry,
-    originMessageId,
-    members,
-    resolveMember,
-    scroller,
-    onShowPost,
-  } = props;
+  const { hostId, entry, originMessageId, members, resolveMember, onShowPost } =
+    props;
   const { bot, thread } = entry;
   const { botId } = bot;
   const { threadId } = thread;
@@ -798,7 +703,6 @@ function FullThread(props: {
     boundHostId,
     boundHostTakes: threadAnchorKinds,
   });
-  const readMark = useCardRead({ botId, hostId, threadId, scroller });
   const unfolded = useBotThreadFoldStore((state) =>
     Object.hasOwn(state.unfolded, threadId),
   );
@@ -814,9 +718,8 @@ function FullThread(props: {
             onUnfold: () => unfold(threadId),
           },
       onShowPost,
-      readMark,
     }),
-    [onShowPost, readMark, threadId, unfold, unfolded],
+    [onShowPost, threadId, unfold, unfolded],
   );
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(

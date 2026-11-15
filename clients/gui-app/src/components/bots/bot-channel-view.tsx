@@ -1,3 +1,4 @@
+import { BotReadPresenceContext } from "@/components/bots/bot-read-presence-context";
 import {
   useCallback,
   useEffect,
@@ -47,10 +48,7 @@ import {
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
 import { useBotReadCursors } from "@/hooks/bots/use-bot-read-cursor";
-import {
-  useAdvanceWhilePresented,
-  usePresented,
-} from "@/hooks/bots/use-bot-read-while-presented";
+import { usePresented } from "@/hooks/bots/use-bot-read-while-presented";
 import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import {
   BotMemoryPanel,
@@ -396,7 +394,6 @@ export function BotChannelView(props: {
     unreadCountOf,
     threadAnchorKinds,
     follows,
-    readCursors,
     newRepliesOf,
   } = useChannelThreads({
     client,
@@ -796,18 +793,12 @@ export function BotChannelView(props: {
     threadList.isError,
     threadListShowsFailure,
   ]);
-  const presentedThreadId = useReadThreadWhilePresented({
-    client,
-    botId,
+  const presentedThreadId = usePresentedThread({
     thread: openThread,
-    readCursors,
     shown: threadOpen,
   });
-  const presentedChannelId = useReadChannelWhilePresented({
-    client,
-    botId,
+  const presentedChannelId = usePresentedChannel({
     channelId,
-    readCursors,
     threadOpen: railOpen,
     section: channelSection,
   });
@@ -897,21 +888,23 @@ export function BotChannelView(props: {
                   shown={search.showing}
                   on="channel"
                 />
-                <BotExchangeLinesContext value={exchangeLines.channel}>
-                  <BotChatTranscript
-                    botId={botId}
-                    chatId={channel.conversationId}
-                    hostId={hostId}
-                    title={botTitle}
-                    instanceId={`bot-channel:${botId}`}
-                    surface={surface}
-                    resolveMember={resolveMember}
-                    showConnecting
-                    header={null}
-                    landOn={landing}
-                    flow={null}
-                  />
-                </BotExchangeLinesContext>
+                <BotReadPresenceContext value={presentedChannelId !== null}>
+                  <BotExchangeLinesContext value={exchangeLines.channel}>
+                    <BotChatTranscript
+                      botId={botId}
+                      chatId={channel.conversationId}
+                      hostId={hostId}
+                      title={botTitle}
+                      instanceId={`bot-channel:${botId}`}
+                      surface={surface}
+                      resolveMember={resolveMember}
+                      showConnecting
+                      header={null}
+                      landOn={landing}
+                      flow={null}
+                    />
+                  </BotExchangeLinesContext>
+                </BotReadPresenceContext>
               </div>
               <BotReplyingStrip
                 botTitle={botTitle}
@@ -995,37 +988,40 @@ export function BotChannelView(props: {
                 />
               }
               render={(postId) => (
-                <BotExchangeLinesContext value={exchangeLines.thread}>
-                  <QuoteSinkContext value={quoteIntoThreadBox}>
-                    <BotThreadPanel
-                      key={postId}
-                      botId={botId}
-                      hostId={hostId}
-                      boundHostId={boundHostId}
-                      botTitle={botTitle}
-                      imageReach={imageReach}
-                      answerReach={answerReach}
-                      conversationId={channel.conversationId}
-                      originMessageId={postId}
-                      sent={open?.sent ?? null}
-                      thread={panelThread}
-                      tasks={tasks}
-                      anchorSenderLabel={anchorSenderLabel}
-                      resolveMember={resolveMember}
-                      landOn={
-                        threadLanding.landing ?? search.threadLandingOn(postId)
-                      }
-                      onClose={() => {
-                        threadLanding.spend();
-                        onOpenThread(null);
-                      }}
-                      onEditPost={editPostFromThread}
-                      onOpenTurn={onOpenTurn}
-                      onOpenSession={onOpenSession}
-                      quote={quoteFor(postId)}
-                    />
-                  </QuoteSinkContext>
-                </BotExchangeLinesContext>
+                <BotReadPresenceContext value={presentedThreadId !== null}>
+                  <BotExchangeLinesContext value={exchangeLines.thread}>
+                    <QuoteSinkContext value={quoteIntoThreadBox}>
+                      <BotThreadPanel
+                        key={postId}
+                        botId={botId}
+                        hostId={hostId}
+                        boundHostId={boundHostId}
+                        botTitle={botTitle}
+                        imageReach={imageReach}
+                        answerReach={answerReach}
+                        conversationId={channel.conversationId}
+                        originMessageId={postId}
+                        sent={open?.sent ?? null}
+                        thread={panelThread}
+                        tasks={tasks}
+                        anchorSenderLabel={anchorSenderLabel}
+                        resolveMember={resolveMember}
+                        landOn={
+                          threadLanding.landing ??
+                          search.threadLandingOn(postId)
+                        }
+                        onClose={() => {
+                          threadLanding.spend();
+                          onOpenThread(null);
+                        }}
+                        onEditPost={editPostFromThread}
+                        onOpenTurn={onOpenTurn}
+                        onOpenSession={onOpenSession}
+                        quote={quoteFor(postId)}
+                      />
+                    </QuoteSinkContext>
+                  </BotExchangeLinesContext>
+                </BotReadPresenceContext>
               )}
             />
             <ChannelExchangePane
@@ -1568,55 +1564,31 @@ function useDisplayed(element: HTMLElement | null): boolean {
 }
 
 /**
- * Advances the channel's read cursor while the person can see it: the channel
- * transcript presented in the pane on screen, in a window they are in, has been
- * read. The channel it presents, or `null`.
+ * Reports channel presence. The transcript separately qualifies actual reading.
  */
-function useReadChannelWhilePresented(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly botId: string;
+function usePresentedChannel(args: {
   readonly channelId: string | null;
-  readonly readCursors: BotReadCursorReadResponse | undefined;
   readonly threadOpen: boolean;
   /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
   readonly section: HTMLElement | null;
 }): string | null {
-  const { client, botId, channelId, threadOpen, section } = args;
+  const { channelId, threadOpen, section } = args;
   const displayed = useDisplayed(section);
   const presented = usePresented(!threadOpen || displayed);
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: channelId,
-    readCursors: args.readCursors,
-    presented,
-  });
   return presented ? channelId : null;
 }
 
 /**
- * Advances the open thread's read cursor while the person can see it: its panel
- * is shown in the pane on screen, in a window they are in. The thread it
- * presents, or `null`.
+ * Reports thread presence. Opening the panel alone acknowledges no messages.
  */
-function useReadThreadWhilePresented(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly botId: string;
+function usePresentedThread(args: {
   readonly thread: BotThreadSummary | null;
-  readonly readCursors: BotReadCursorReadResponse | undefined;
   /** The thread panel is rendered. */
   readonly shown: boolean;
 }): string | null {
-  const { client, botId, thread, shown } = args;
+  const { thread, shown } = args;
   const presented = usePresented(shown);
   const threadId = thread?.threadId ?? null;
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: threadId,
-    readCursors: args.readCursors,
-    presented,
-  });
   return presented ? threadId : null;
 }
 

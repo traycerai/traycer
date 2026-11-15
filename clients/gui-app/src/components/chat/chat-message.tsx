@@ -1,3 +1,4 @@
+import { BotReadObservedRow } from "@/components/bots/bot-transcript-reading";
 import { memo, useContext, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import type {
@@ -271,12 +272,14 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // transcript's.
   if (botPresentation !== null && message.role !== "system") {
     return (
-      <ChatBotMessage
-        message={message}
-        presentation={botPresentation}
-        hoverActions
-        timeLink={null}
-      />
+      <BotReadObservedRow message={message}>
+        <ChatBotMessage
+          message={message}
+          presentation={botPresentation}
+          hoverActions
+          timeLink={null}
+        />
+      </BotReadObservedRow>
     );
   }
   if (message.role === "assistant") {

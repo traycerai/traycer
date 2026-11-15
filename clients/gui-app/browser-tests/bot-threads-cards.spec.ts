@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 
@@ -13,6 +13,7 @@ import { fixture } from "./support/fixtures.ts";
 
 const SCROLL = '[data-testid="bot-threads-scroll"]';
 const PILL = '[data-testid="bot-threads-unread-pill"]';
+const BANNER = '[data-testid="bot-unread-banner"]';
 
 function card(threadId: string): string {
   return `[data-testid="bot-thread-card"][data-thread-id="${threadId}"]`;
@@ -27,6 +28,129 @@ async function open(page: Page, query: string): Promise<void> {
   await expect(
     page.getByText("Approve the release once ML8 is pinned?", { exact: true }),
   ).toBeVisible();
+}
+
+/**
+ * Where the unread banner stands against the page's scroller and the first
+ * card, and what a click at the cross's centre reaches. The banner keeps its
+ * own row above the scroller; `overlapsPaintedCard` is whether it covers any
+ * of the first card that is painted (the card's box clipped to the scroller,
+ * since a card scrolled out of the scroller's top edge is not painted there),
+ * and `clearOfCardBox` compares the unclipped box, which is only the claim at
+ * rest, when the card's header is on screen.
+ */
+async function bannerGeometry(page: Page): Promise<{
+  readonly aboveScroller: boolean;
+  readonly clearOfCardBox: boolean;
+  readonly overlapsPaintedCard: boolean;
+  readonly crossHit: boolean;
+  readonly top: number;
+}> {
+  return page.evaluate(
+    ({ banner, scroll }) => {
+      const bar = document.querySelector(banner);
+      const scroller = document.querySelector(scroll);
+      const cross = bar?.querySelector('[aria-label="Mark all read"]');
+      const first = document.querySelector('[data-testid="bot-thread-card"]');
+      if (!bar || !scroller || !cross || !first) throw new Error("no banner");
+      const barBox = bar.getBoundingClientRect();
+      const scrollBox = scroller.getBoundingClientRect();
+      const firstBox = first.getBoundingClientRect();
+      const crossBox = cross.getBoundingClientRect();
+      const paintedTop = Math.max(firstBox.top, scrollBox.top);
+      const paintedBottom = Math.min(firstBox.bottom, scrollBox.bottom);
+      const overlapHeight =
+        Math.min(barBox.bottom, paintedBottom) -
+        Math.max(barBox.top, paintedTop);
+      const overlapWidth =
+        Math.min(barBox.right, firstBox.right, scrollBox.right) -
+        Math.max(barBox.left, firstBox.left, scrollBox.left);
+      const hit = document.elementFromPoint(
+        crossBox.left + crossBox.width / 2,
+        crossBox.top + crossBox.height / 2,
+      );
+      return {
+        aboveScroller: barBox.bottom <= scrollBox.top + 1,
+        clearOfCardBox:
+          barBox.bottom <= firstBox.top + 1 ||
+          barBox.top >= firstBox.bottom - 1,
+        overlapsPaintedCard:
+          paintedBottom > paintedTop && overlapHeight > 1 && overlapWidth > 1,
+        crossHit: hit !== null && cross.contains(hit),
+        top: Math.round(barBox.top),
+      };
+    },
+    { banner: BANNER, scroll: SCROLL },
+  );
+}
+
+/**
+ * The banner's slot with no height of its own while the banner still paints:
+ * what the page would look like had the banner not reserved its row. The
+ * production DOM is used as it is; only the slot's inline style changes, and
+ * `restore` puts it back.
+ */
+async function collapseBannerSlot(page: Page): Promise<() => Promise<void>> {
+  await page.locator(BANNER).evaluate((bar) => {
+    const slot = bar.parentElement;
+    if (!(slot instanceof HTMLElement)) throw new Error("no banner slot");
+    slot.style.height = "0px";
+    slot.style.overflow = "visible";
+  });
+  return async () => {
+    await page.locator(BANNER).evaluate((bar) => {
+      const slot = bar.parentElement;
+      if (!(slot instanceof HTMLElement)) throw new Error("no banner slot");
+      slot.style.removeProperty("height");
+      slot.style.removeProperty("overflow");
+    });
+  };
+}
+
+async function expectBannerClearAtRestAndScrolled(
+  page: Page,
+  testInfo: TestInfo,
+): Promise<void> {
+  const atRest = await bannerGeometry(page);
+  await page.screenshot({ path: testInfo.outputPath("banner-at-rest.png") });
+  expect(atRest).toMatchObject({
+    aboveScroller: true,
+    clearOfCardBox: true,
+    overlapsPaintedCard: false,
+    crossHit: true,
+  });
+
+  // The check discriminates: with the slot's row taken away the same banner
+  // lies over the card, and the geometry says so.
+  const restore = await collapseBannerSlot(page);
+  expect(await bannerGeometry(page)).toMatchObject({
+    aboveScroller: false,
+    overlapsPaintedCard: true,
+  });
+  await restore();
+  expect(await bannerGeometry(page)).toMatchObject({
+    aboveScroller: true,
+    overlapsPaintedCard: false,
+  });
+
+  await page.locator(SCROLL).evaluate((el) => {
+    el.scrollTop = 300;
+  });
+  await expect
+    .poll(() => page.locator(SCROLL).evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(0);
+  const scrolled = await bannerGeometry(page);
+  await page.screenshot({ path: testInfo.outputPath("banner-scrolled.png") });
+  expect(scrolled).toMatchObject({
+    aboveScroller: true,
+    overlapsPaintedCard: false,
+    crossHit: true,
+  });
+  // The banner is not part of what scrolls.
+  expect(scrolled.top).toBe(atRest.top);
+
+  await page.getByRole("button", { name: "Mark all read" }).click();
+  await expect(page.locator(BANNER)).toHaveCount(0);
 }
 
 test.describe("desktop", () => {
@@ -105,6 +229,17 @@ test.describe("desktop", () => {
   });
 });
 
+test.describe("desktop banner", () => {
+  test.use({ viewport: { width: 900, height: 1000 } });
+
+  test("the unread banner keeps its own row above the cards, at rest and while the page scrolls, and its cross can be pressed", async ({
+    page,
+  }, testInfo) => {
+    await open(page, "hold=thread-policy");
+    await expectBannerClearAtRestAndScrolled(page, testInfo);
+  });
+});
+
 test.describe("a short page", () => {
   test.use({ viewport: { width: 900, height: 420 } });
 
@@ -163,5 +298,12 @@ test.describe("phone", () => {
     });
 
     expect(columns).toEqual({ overflow: false, lefts: 1 });
+  });
+
+  test("the unread banner keeps its own row above the cards, at rest and while the page scrolls, and its cross can be pressed", async ({
+    page,
+  }, testInfo) => {
+    await open(page, "hold=thread-policy&phone=true");
+    await expectBannerClearAtRestAndScrolled(page, testInfo);
   });
 });

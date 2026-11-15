@@ -61,6 +61,7 @@ export function chatSessionWithThreadRows(
     Pick<
       ChatSessionState,
       | "snapshotLoaded"
+      | "fatalClose"
       | "messages"
       | "events"
       | "transcriptRowContext"
@@ -87,6 +88,7 @@ export function chatSessionWithThreadRows(
     >
   >(() => ({
     snapshotLoaded: true,
+    fatalClose: null,
     messages: [...rows],
     events: [],
     transcriptRowContext: {},
