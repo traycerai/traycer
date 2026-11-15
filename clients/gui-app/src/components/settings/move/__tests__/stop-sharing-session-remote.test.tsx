@@ -8,7 +8,12 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import {
+  Profiler,
+  useState,
+  type ProfilerOnRenderCallback,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toaster, toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -73,7 +78,7 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 
 let authServiceForTest: AuthService | null = null;
 
@@ -537,12 +542,44 @@ async function renderSession(
     readonly showListAfterStop: boolean;
     readonly showToaster: boolean;
   },
+  onRender: ProfilerOnRenderCallback | null,
 ): Promise<void> {
   const harness = harnesses.find((harness) => harness.client === client);
   if (harness === undefined) throw new Error("expected a test query client");
   harness.session.start();
   await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
-  mountSession(client, harness.queryClient, options);
+  mountSession(client, harness.queryClient, options, onRender);
+}
+
+interface LeaveSheetCommit {
+  readonly mutationStatus: string | null;
+  readonly confirmDisabled: boolean;
+  readonly loading: boolean;
+  readonly staleProfileVisible: boolean;
+}
+
+function recordLeaveSheetCommits(
+  queryClient: QueryClient,
+  commits: LeaveSheetCommit[],
+): ProfilerOnRenderCallback {
+  return () => {
+    const stopMutation = queryClient
+      .getMutationCache()
+      .getAll()
+      .find(
+        (mutation) =>
+          mutation.options.mutationKey?.[0] ===
+          environmentMutationKeys.moveStop()[0],
+      );
+    const confirm = screen.queryByTestId("stop-sharing-confirm");
+    commits.push({
+      mutationStatus: stopMutation?.state.status ?? null,
+      confirmDisabled: confirm === null || confirm.hasAttribute("disabled"),
+      loading: screen.queryByTestId("stop-sharing-preview-loading") !== null,
+      staleProfileVisible:
+        screen.queryByTestId("personal-leave-codex-folder-one") !== null,
+    });
+  };
 }
 
 async function redialAtAdvertisedFloor(
@@ -563,14 +600,24 @@ function mountSession(
     readonly showListAfterStop: boolean;
     readonly showToaster: boolean;
   },
+  onRender: ProfilerOnRenderCallback | null,
 ): void {
+  const sessionView = (
+    <SessionView
+      client={client}
+      showListAfterStop={options.showListAfterStop}
+      showToaster={options.showToaster}
+    />
+  );
   render(
     <QueryClientProvider client={queryClient}>
-      <SessionView
-        client={client}
-        showListAfterStop={options.showListAfterStop}
-        showToaster={options.showToaster}
-      />
+      {onRender === null ? (
+        sessionView
+      ) : (
+        <Profiler id="leave-session" onRender={onRender}>
+          {sessionView}
+        </Profiler>
+      )}
     </QueryClientProvider>,
   );
 }
@@ -644,10 +691,14 @@ describe("StopSharingSession over the real remote session", () => {
         if (method === "providers.list") return successful(providerList([]));
         return failed("E_UNEXPECTED", `unexpected method: ${method}`);
       });
-      await renderSession(harness.client, {
-        showListAfterStop: false,
-        showToaster: false,
-      });
+      await renderSession(
+        harness.client,
+        {
+          showListAfterStop: false,
+          showToaster: false,
+        },
+        null,
+      );
 
       expect(await screen.findByTestId("stop-sharing-sheet")).toBeTruthy();
       expect(
@@ -714,10 +765,14 @@ describe("StopSharingSession over the real remote session", () => {
       major: 10,
       minor: 11,
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     expect(await screen.findByTestId("stop-sharing-sheet")).toBeTruthy();
     await screen.findByTestId("stop-sharing-managed-empty");
@@ -740,9 +795,16 @@ describe("StopSharingSession over the real remote session", () => {
   it("keeps Stop open after E_INVALID_ARGUMENT, refreshes the preview, then sends null mode on the same connection", async () => {
     let previews = 0;
     let stops = 0;
+    let responseDelayRelay: RemoteHarness["relay"] | null = null;
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview") {
         previews += 1;
+        if (previews === 2) {
+          if (responseDelayRelay === null) {
+            throw new Error("expected the relay before the refreshed preview");
+          }
+          responseDelayRelay.unaryResponseDelayMs = 5000;
+        }
         return successful(
           preview(
             previews === 1 ? [FOLDER("folder-one", "Work", "offered")] : null,
@@ -758,25 +820,57 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    responseDelayRelay = harness.relay;
+    const commits: LeaveSheetCommit[] = [];
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      recordLeaveSheetCommits(harness.queryClient, commits),
+    );
 
     await vi.waitFor(() =>
       expect(
         screen.getByTestId("personal-leave-codex-folder-one"),
       ).toBeTruthy(),
     );
+    vi.useFakeTimers();
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    await waitFor(() =>
-      expect(requestCount(harness.relay, "environment.move.stop")).toBe(1),
-    );
-    await waitFor(() =>
+    await vi.waitFor(() =>
       expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(
         2,
       ),
     );
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("stop-sharing-preview-loading")).toBeTruthy(),
+    );
+    await vi.waitFor(() =>
+      expect(
+        harness.queryClient
+          .getMutationCache()
+          .getAll()
+          .find(
+            (mutation) =>
+              mutation.options.mutationKey?.[0] ===
+              environmentMutationKeys.moveStop()[0],
+          )?.state.status,
+      ).toBe("error"),
+    );
+    const settledRefreshCommits = commits.filter(
+      (commit) => commit.mutationStatus === "error",
+    );
+    expect(settledRefreshCommits.length).toBeGreaterThan(0);
+    expect(
+      settledRefreshCommits.every(
+        (commit) =>
+          commit.loading &&
+          commit.confirmDisabled &&
+          !commit.staleProfileVisible,
+      ),
+    ).toBe(true);
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
     expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
     expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
     expect(
@@ -796,15 +890,26 @@ describe("StopSharingSession over the real remote session", () => {
         ],
       },
     ]);
-    await waitFor(() =>
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await vi.waitFor(() =>
       expect(
-        screen.queryByTestId("personal-leave-codex-folder-one"),
-      ).toBeNull(),
+        harness.relay.unaryResponses.filter(
+          (response) => response.method === "environment.move.stopPreview",
+        ),
+      ).toHaveLength(2),
     );
+    harness.relay.unaryResponseDelayMs = null;
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
+      expect(
+        screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+      ).toBe(false);
+    });
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    await screen.findByText("stop complete");
-    await waitFor(() =>
-      expect(requestCount(harness.relay, "environment.move.stop")).toBe(2),
+    await vi.waitFor(() =>
+      expect(screen.getByText("stop complete")).toBeTruthy(),
     );
     expect(
       harness.relay.unaryRequests
@@ -840,6 +945,94 @@ describe("StopSharingSession over the real remote session", () => {
       ),
     ).toEqual(new Set([0]));
     expect(harness.relay.openBearers).toHaveLength(1);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("shows the failed preview after a refused Stop refresh and sends no second Stop", async () => {
+    let previews = 0;
+    let responseDelayRelay: RemoteHarness["relay"] | null = null;
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") {
+        previews += 1;
+        if (previews === 2) {
+          if (responseDelayRelay === null) {
+            throw new Error("expected the relay before the refreshed preview");
+          }
+          responseDelayRelay.unaryResponseDelayMs = 5000;
+        }
+        return previews === 1
+          ? successful(preview([FOLDER("folder-one", "Work", "offered")]))
+          : failed("E_UNEXPECTED", "preview unavailable");
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") {
+        return failed("E_INVALID_ARGUMENT", "legacy request rejected");
+      }
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    responseDelayRelay = harness.relay;
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
+
+    await screen.findByTestId("personal-leave-codex-folder-one");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await vi.waitFor(() =>
+      expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(
+        2,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("stop-sharing-preview-loading")).toBeTruthy(),
+    );
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await vi.waitFor(() =>
+      expect(
+        harness.relay.unaryResponses.filter(
+          (response) => response.method === "environment.move.stopPreview",
+        ),
+      ).toHaveLength(2),
+    );
+    harness.relay.unaryResponseDelayMs = null;
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("stop-sharing-preview-failed")).toBeTruthy(),
+    );
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
+    expect(
+      harness.relay.unaryRequests
+        .filter((request) => request.method === "environment.move.stop")
+        .map((request) => request.params),
+    ).toEqual([
+      {
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "codex",
+            profileId: "folder-one",
+            signIn: { kind: "skip" },
+          },
+        ],
+      },
+    ]);
     expect(harness.relay.errors).toEqual([]);
   });
 
@@ -882,10 +1075,14 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: true,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: true,
+        showToaster: false,
+      },
+      null,
+    );
 
     expect(
       await screen.findByTestId("personal-leave-codex-folder-one"),
@@ -965,10 +1162,14 @@ describe("StopSharingSession over the real remote session", () => {
       if (method === "environment.move.stop") return successful(stopped());
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     expect(
       await screen.findByTestId("stop-sharing-managed-empty"),
@@ -1005,10 +1206,14 @@ describe("StopSharingSession over the real remote session", () => {
       providerProfile("account-two", "Two", ["folder-two"]),
       providerProfile("account-three", "Three", ["folder-two"]),
     ]);
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     expect(
       await screen.findByTestId("personal-leave-codex-folder-two"),
@@ -1039,10 +1244,14 @@ describe("StopSharingSession over the real remote session", () => {
       if (method === "providers.list") return successful(providerList([]));
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     await screen.findByTestId("personal-leave-accounts");
     const guidance = Array.from(
@@ -1093,10 +1302,14 @@ describe("StopSharingSession over the real remote session", () => {
       if (method === "environment.move.stop") return successful(stopped());
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     async function startRow(profileId: string): Promise<void> {
       fireEvent.click(
@@ -1173,10 +1386,14 @@ describe("StopSharingSession over the real remote session", () => {
         return successful({ cancelled: true });
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
@@ -1225,10 +1442,14 @@ describe("StopSharingSession over the real remote session", () => {
         });
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: true,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: true,
+      },
+      null,
+    );
 
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
@@ -1278,10 +1499,15 @@ describe("provider metadata retry after an initial read failure", () => {
       },
     });
     extraQueryClients.push(queryClient);
-    mountSession(client, queryClient, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    mountSession(
+      client,
+      queryClient,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
 
     await vi.waitFor(() =>
       expect(
@@ -1361,10 +1587,14 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         return failed("E_UNEXPECTED", `unexpected method: ${requestMethod}`);
       });
       cacheProvidersList(harness, []);
-      await renderSession(harness.client, {
-        showListAfterStop: false,
-        showToaster: false,
-      });
+      await renderSession(
+        harness.client,
+        {
+          showListAfterStop: false,
+          showToaster: false,
+        },
+        null,
+      );
       await screen.findByTestId("stop-sharing-managed-empty");
       const keepPreviewKey = hostQueryKeys.method<
         HostRpcRegistry,
@@ -1417,10 +1647,14 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
     cacheProvidersList(harness, []);
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
+    await renderSession(
+      harness.client,
+      {
+        showListAfterStop: false,
+        showToaster: false,
+      },
+      null,
+    );
     await screen.findByTestId("stop-sharing-managed-empty");
     harness.armFloorDowngrade("environment.move.stop", {
       major: 1,
