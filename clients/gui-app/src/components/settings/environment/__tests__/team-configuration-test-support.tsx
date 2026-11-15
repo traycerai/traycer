@@ -252,6 +252,14 @@ export const teamProfileRecordHttpBoundary: {
   calls: [],
 };
 
+export function teamProfileRecordReadCount(): number {
+  return teamProfileRecordHttpBoundary.calls.filter(
+    (call) =>
+      call.url.endsWith("/api/v3/environments/env-a/profile-records") &&
+      call.method === "GET",
+  ).length;
+}
+
 /**
  * The shared host client a page under test reads through `useHostClient()`.
  * Each test file points `@/lib/host`'s `useHostClient` here, so the queries,
