@@ -2055,7 +2055,7 @@ function BotChannelActions({
             count={props.activityCount}
             size="xs"
             testId="bot-channel-actions-activity-count"
-            corner="absolute -top-1 -right-1"
+            corner="absolute top-0 right-0"
             noun="active"
           />
         </Button>

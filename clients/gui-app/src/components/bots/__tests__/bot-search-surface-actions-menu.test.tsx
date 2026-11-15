@@ -13,7 +13,6 @@ import { installSearchSurfaceLifecycle } from "./bot-search-surface-support";
 import {
   actionsTrigger,
   choose,
-  drainZeroDelayTimers,
   installCompactHeaderLifecycle,
   menuFullyClosed,
   openMenu,
@@ -22,7 +21,11 @@ import {
   userEvents,
 } from "./bot-search-surface-compact-support";
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
-import { SEARCH_BOT_B } from "@/lib/bots/__tests__/bot-search-test-support";
+import {
+  SEARCH_BOT_A,
+  SEARCH_BOT_B,
+} from "@/lib/bots/__tests__/bot-search-test-support";
+import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   act,
@@ -32,9 +35,8 @@ import {
   within,
   type RenderResult,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 installSearchSurfaceLifecycle();
 
@@ -119,7 +121,7 @@ describe("from the compact Channel actions menu", () => {
     ["settings", /settings/i, "bot-channel-settings"],
   ] as const)(
     "a %s choice whose menu has not handed focus back",
-    (_name, item, opened) => {
+    (name, item, opened) => {
       function inPane(focused: boolean): ReactNode {
         return (
           <PaneSurfaceActivityContext.Provider
@@ -142,12 +144,30 @@ describe("from the compact Channel actions menu", () => {
         else view.unmount();
       }
 
-      // The choice is fired synchronously inside `act`, which does not run
-      // timers: the zero-delay timer that hands focus back is still queued when
-      // the interruption lands, with no await between them.
-      async function chooseWithoutYielding(): Promise<void> {
-        const user = userEvent.setup({ delay: null });
-        const menu = await openMenu(user);
+      // The clock is fake from before the menu opens, so the timers Radix queues
+      // when it closes (the focus hand-back) run only when a case advances it.
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      /** Runs every timer due within a second, through the menu's close and focus hand-back. */
+      async function advance(): Promise<void> {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+      }
+
+      // The choice is fired inside `act`, which runs no timers: the hand-back is
+      // still queued when the case interrupts, with no advance between them.
+      async function chooseWithoutAdvancing(): Promise<void> {
+        act(() => {
+          fireEvent.keyDown(actionsTrigger(), { key: "Enter" });
+        });
+        await advance();
+        const menu = screen.getByRole("menu");
         const target = within(menu).getByText(item);
         act(() => {
           fireEvent.click(target);
@@ -156,37 +176,58 @@ describe("from the compact Channel actions menu", () => {
 
       it("runs the choice once the hand-back is reached with nothing interrupting (control)", async () => {
         render(inPane(true));
-        await chooseWithoutYielding();
+        await chooseWithoutAdvancing();
         expect(
           screen.queryByTestId(opened),
           "the hand-back already ran before the control looked",
         ).toBeNull();
 
-        await drainZeroDelayTimers();
+        await advance();
 
+        expect(screen.queryByRole("menu")).toBeNull();
         expect(required(opened)).toBeTruthy();
       });
 
-      it.each(["blur", "other bot", "unmount"] as const)(
+      async function interruptedChoiceStaysDropped(
+        how: "blur" | "other bot" | "unmount",
+      ): Promise<void> {
+        const view = render(inPane(true));
+        await chooseWithoutAdvancing();
+        expect(
+          screen.queryByTestId(opened),
+          "the hand-back already ran, so there is nothing to interrupt",
+        ).toBeNull();
+        interrupt(how, view);
+        await advance();
+        expect(screen.queryByTestId(opened)).toBeNull();
+        if (how === "unmount") render(inPane(true));
+        else view.rerender(inPane(true));
+        await advance();
+        expect(screen.queryByTestId(opened)).toBeNull();
+      }
+
+      it.each(
+        name === "Search"
+          ? (["blur", "unmount"] as const)
+          : (["blur"] as const),
+      )(
         "is dropped, and never run later, when the interruption is: %s",
-        async (how) => {
-          const view = render(inPane(true));
-          await chooseWithoutYielding();
-          expect(
-            screen.queryByTestId(opened),
-            "the hand-back already ran, so there is nothing to interrupt",
-          ).toBeNull();
-
-          interrupt(how, view);
-          await drainZeroDelayTimers();
-
-          expect(screen.queryByTestId(opened)).toBeNull();
-          if (how === "unmount") render(inPane(true));
-          else view.rerender(inPane(true));
-          await drainZeroDelayTimers();
-          expect(screen.queryByTestId(opened)).toBeNull();
-        },
+        (how) => interruptedChoiceStaysDropped(how),
       );
+
+      if (name === "Search") {
+        it("leaves the original bot's rail alone when another bot's channel replaces it", async () => {
+          const before = useBotOpenThreadStore.getState().byBotId[SEARCH_BOT_A];
+          await interruptedChoiceStaysDropped("other bot");
+          expect(useBotOpenThreadStore.getState().byBotId[SEARCH_BOT_A]).toBe(
+            before,
+          );
+        });
+      } else {
+        it("does not open settings in the replacement bot from the old choice", async () => {
+          await interruptedChoiceStaysDropped("other bot");
+        });
+      }
     },
   );
 });

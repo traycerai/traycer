@@ -35,6 +35,7 @@ import type {
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
@@ -127,7 +128,26 @@ const BOT: BotRecord = {
 const SNAPSHOT: BotSubscribeServerFrame = {
   kind: "snapshot",
   bot: BOT,
-  tasks: [],
+  tasks: [
+    {
+      taskId: "fixture-task",
+      cadence: { kind: "every", seconds: 86400 },
+      lastCheckinAt: null,
+      lastCheckin: null,
+      nextAt: null,
+      state: "tracking",
+      endedReason: null,
+      createdByUserId: null,
+      spun: true,
+      label: null,
+      originRequestId: null,
+      createdByChatId: null,
+      inputNeeded: null,
+      pause: null,
+      stop: null,
+      runRequest: null,
+    },
+  ],
   openRequestCount: 0,
   conversationsRevision: null,
   boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
@@ -233,6 +253,13 @@ acquireHostStreamClient(
   },
   () => streamClient,
 );
+
+publishAgentActivity([
+  {
+    hostId: HOST_ID,
+    byEpic: { "fixture-task": { working: ["agent"], turn: ["agent"] } },
+  },
+]);
 
 const tracyRef = { kind: "tracy", id: "tracy" } as const;
 useTabsStore.setState({

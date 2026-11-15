@@ -67,3 +67,32 @@ for (const how of ["pointer", "keyboard"] as const) {
     });
   });
 }
+
+test("keeps the active-task badge inside the header with zero top inset", async ({
+  page,
+}) => {
+  await page.goto(fixture("bot-compact-actions-menu"));
+  const header = page.getByTestId("app-header");
+  const badge = page.getByTestId("bot-channel-actions-activity-count");
+  await expect(badge).toHaveText("1");
+  expect(
+    await page
+      .locator("#root")
+      .evaluate((root) => getComputedStyle(root).paddingTop),
+  ).toBe("0px");
+  const headerBox = await header.boundingBox();
+  const badgeBox = await badge.boundingBox();
+  expect(headerBox).not.toBeNull();
+  expect(badgeBox).not.toBeNull();
+  if (headerBox === null || badgeBox === null)
+    throw new Error("header and badge must have geometry");
+  expect(headerBox.height).toBe(40);
+  expect(badgeBox.x).toBeGreaterThanOrEqual(headerBox.x);
+  expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
+    headerBox.x + headerBox.width,
+  );
+  expect(badgeBox.y).toBeGreaterThanOrEqual(headerBox.y);
+  expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual(
+    headerBox.y + headerBox.height,
+  );
+});
