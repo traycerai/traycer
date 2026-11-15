@@ -23,6 +23,9 @@ import type { HostRpcRegistry } from "@/lib/host";
 const holder = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
 }));
+const authServiceStub = vi.hoisted(() => ({
+  recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+}));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: object | null) => readinessFor(client),
@@ -39,12 +42,17 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => holder.client,
 }));
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: () => authServiceStub };
+});
 
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
     useHostBinding: () => null,
+    useAuthService: () => authServiceStub,
   };
 });
 
