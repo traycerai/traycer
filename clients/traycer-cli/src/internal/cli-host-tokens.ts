@@ -13,7 +13,7 @@ import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/hos
 import {
   hostTokenRevalidator,
   type HostTokenAccess,
-  type HostTokenRevalidator,
+  type HostTokenSessionRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   createHostTokenSource,
@@ -54,7 +54,8 @@ export type CliHostTokenFailure = Exclude<
 
 /**
  * Told of every mint for a host that no wait can turn into a token: authn
- * refused this person for that host, or refused the sign-in and its refresh.
+ * refused this person for that host, or refused the sign-in and its refresh,
+ * or none is held.
  */
 export type CliMintRefusalListener = (
   hostId: string,
@@ -97,8 +98,12 @@ export interface CliHostTokens {
   mintFresh(hostId: string): Promise<CliHostBearer>;
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
-  /** A stream's recovery for `hostId`, read from the host's refusal. */
-  streamRecovery(hostId: string): HostTokenRevalidator;
+  /**
+   * A stream's recovery for `hostId`, read from the host's refusal. Its
+   * `admitted` is told of every admitted open, so a second refusal is final
+   * only between two admissions.
+   */
+  streamRecovery(hostId: string): HostTokenSessionRevalidator;
   /**
    * A long-lived stream's credential for `hostId`: the token on disk, or
    * `null` while one is minted, which the transport waits out. A mint that
@@ -111,8 +116,21 @@ export interface CliHostTokens {
    * stream's recovery makes among them, until the returned stop is called.
    */
   onMintRefused(listener: CliMintRefusalListener): () => void;
-  /** One fresh token for `hostId` after the sign-in was refreshed. */
-  renewAfterSignInRefresh(hostId: string): Promise<void>;
+  /**
+   * Whether authn has rejected the stored sign-in for good: it refused the
+   * sign-in's refresh, or refused a mint again right after a refresh it
+   * accepted. Until either, a refused mint is the sign-in recovering, and a
+   * refresh that could not reach authn judges nothing.
+   */
+  signInRejected(): boolean;
+  /** The stored sign-in's refresh ahead of its expiry, judged as above. */
+  refreshSignIn(): Promise<RevalidateOutcome>;
+  /**
+   * One fresh token for `hostId` after the sign-in was refreshed: `true` when
+   * one was minted. A mint refused for good goes to {@link onMintRefused}'s
+   * listeners like any other.
+   */
+  renewAfterSignInRefresh(hostId: string): Promise<boolean>;
 }
 
 function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
@@ -138,18 +156,39 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const stored = createSource((id) =>
     id === userId ? readLeaseBearer(signIn.lease) : null,
   );
+  // The one judge of a rejected sign-in, for every mint this process makes:
+  // a refresh authn refused, or a 401 on the first mint after a refresh it
+  // accepted. A token minted, or a refresh accepted, starts it again.
+  let refreshRefused = false;
+  let refreshedSinceLastMint = false;
+  let refusedAfterRefresh = false;
+  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
+    const outcome = await signIn.refresh();
+    if (outcome === "rejected") refreshRefused = true;
+    if (outcome === "rotated") {
+      refreshRefused = false;
+      refusedAfterRefresh = false;
+      refreshedSinceLastMint = true;
+    }
+    return outcome;
+  };
   // Every mint, a recovery's included, passes here, so a refusal for good is
   // reported wherever it was asked.
   const source: HostTokenAccess = {
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
       const outcome = await stored.obtain(id, hostId, fresh, signal);
+      if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
+        refusedAfterRefresh = true;
+      if (outcome.kind === "ok") refusedAfterRefresh = false;
+      refreshedSinceLastMint = false;
       if (isHostRefusal(outcome)) report(hostId, outcome);
       return outcome;
     },
   };
+  const signInRejected = (): boolean => refreshRefused || refusedAfterRefresh;
   const signInRecovery = {
-    revalidateForReconnect: (): Promise<RevalidateOutcome> => signIn.refresh(),
+    revalidateForReconnect: refreshSignIn,
   };
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
     identity: { userId },
@@ -167,8 +206,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const onState = (): void => undefined;
   // One per host: each remembers the token it minted after the host's last
   // refusal, which is what makes a second refusal final.
-  const recoveries = new Map<string, HostTokenRevalidator>();
-  const streamRecovery = (hostId: string): HostTokenRevalidator => {
+  const recoveries = new Map<string, HostTokenSessionRevalidator>();
+  const streamRecovery = (hostId: string): HostTokenSessionRevalidator => {
     let recovery = recoveries.get(hostId);
     if (recovery === undefined) {
       recovery = hostTokenRevalidator({
@@ -187,6 +226,29 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const streamBearers = new Map<string, BearerSourceProvider>();
   const minting = new Set<string>();
 
+  // authn refused the sign-in itself (401): it is refreshed once and the
+  // mint asked once more. Only a refresh authn refused, or a second 401,
+  // makes the sign-in rejected; a refresh that could not reach authn leaves
+  // it unjudged, which is authn unreachable, never a rejected sign-in.
+  const recoverRefusedSignIn = async (
+    hostId: string,
+    first: CliHostTokenFailure,
+  ): Promise<CliHostBearer> => {
+    const refreshed = await refreshSignIn();
+    if (refreshed === "network-error")
+      return answer(hostId, {
+        kind: "unavailable",
+        detail: "sign-in refresh unavailable",
+      });
+    if (refreshed === "rejected") {
+      report(hostId, first);
+      return answer(hostId, first);
+    }
+    const second = await source.obtain(userId, hostId, true, null);
+    if (second.kind === "sign-in-rejected") report(hostId, second);
+    return answer(hostId, second);
+  };
+
   const obtain = async (
     hostId: string,
     fresh: boolean,
@@ -194,13 +256,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     const first = await source.obtain(userId, hostId, fresh, null);
     if (first.kind === "no-sign-in") report(hostId, first);
     if (first.kind !== "sign-in-rejected") return answer(hostId, first);
-    // The step that refreshes an expired sign-in mints once more. A refresh
-    // that could not reach authn leaves the sign-in unjudged, so only one
-    // refused is final.
-    const refreshed = await signIn.refresh();
-    if (refreshed === "rejected") report(hostId, first);
-    if (refreshed !== "rotated") return answer(hostId, first);
-    return answer(hostId, await source.obtain(userId, hostId, true, null));
+    return recoverRefusedSignIn(hostId, first);
   };
 
   return {
@@ -248,14 +304,28 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       }
       return provider;
     },
+    signInRejected,
+    refreshSignIn,
     onMintRefused: (listener) => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
+    // Called once per refresh, so it mints once per refresh, and through the
+    // reporting source, so authn's refusal for good ends the stream's
+    // command as a refused mint anywhere else does. A 401 on the first mint
+    // after the refresh authn accepted is a rejected sign-in; one that
+    // another mint got to first is recovered as any 401 is.
     renewAfterSignInRefresh: async (hostId) => {
-      await stored.renew(userId, [hostId]);
+      const renewed = await source.obtain(userId, hostId, true, null);
+      if (renewed.kind === "no-sign-in") report(hostId, renewed);
+      if (renewed.kind !== "sign-in-rejected") return renewed.kind === "ok";
+      if (refusedAfterRefresh) {
+        report(hostId, renewed);
+        return false;
+      }
+      return (await recoverRefusedSignIn(hostId, renewed)).kind === "ok";
     },
   };
 }
@@ -269,8 +339,6 @@ export interface CliHostSession {
   /** The stored sign-in, for authn alone: never presented to a host. */
   readonly signInLease: BearerLease;
   readonly tokens: CliHostTokens;
-  /** Whether a refresh of the stored sign-in was refused during this hold. */
-  readonly signInRejected: () => boolean;
   dispose(): void;
 }
 
@@ -299,13 +367,10 @@ export async function openCliHostSession(
     lease,
     signal: null,
   });
-  let rejected = false;
-  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
-    const outcome = await revalidator.revalidateCurrentContext();
-    if (outcome === "rejected") rejected = true;
-    return outcome;
-  };
-  const tokens = createCliHostTokens({ lease, refresh: refreshSignIn });
+  const tokens = createCliHostTokens({
+    lease,
+    refresh: () => revalidator.revalidateCurrentContext(),
+  });
   const pending = fresh ? tokens.mintFresh(hostId) : tokens.bearerFor(hostId);
   const held = await pending.catch((error: unknown) => {
     store.dispose();
@@ -321,7 +386,6 @@ export async function openCliHostSession(
       bearer: held.bearer,
       signInLease: lease,
       tokens,
-      signInRejected: () => rejected,
       dispose: () => store.dispose(),
     },
   };

@@ -19,6 +19,14 @@ import type { CliHostTokenFailure } from "./cli-host-tokens";
 export const SIGNED_OUT_MESSAGE =
   "traycer: not signed in - run `traycer login` to authenticate.";
 
+/**
+ * authn rejected the stored sign-in for good: its refresh was refused, or a
+ * mint was refused again after a refresh. The CLI's existing words
+ * (`auth/link-phone-flow.ts`), never authn being unreachable.
+ */
+export const STORED_CREDENTIAL_REJECTED_MESSAGE =
+  "The stored credential was rejected. Run `traycer login` to re-authenticate.";
+
 /** The owner's ruling 2 of 14 Nov: an older host, never a login. */
 export const OLDER_HOST_MESSAGE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";
@@ -40,6 +48,15 @@ export function signedOutCliError(): CliError {
   });
 }
 
+export function storedCredentialRejectedCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.AUTH_REJECTED,
+    message: STORED_CREDENTIAL_REJECTED_MESSAGE,
+    details: null,
+    exitCode: 1,
+  });
+}
+
 export function olderHostCliError(): CliError {
   return cliError({
     code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
@@ -52,9 +69,9 @@ export function olderHostCliError(): CliError {
 /**
  * How a refusal by a host's door, once the call's one recovery is spent, is
  * told to the person:
- * - `signed-out`: a credential refusal after authn refused the stored sign-in
- *   during this call's recovery. This machine is signed out in fact, and only
- *   this case gives sign-in advice.
+ * - `sign-in-rejected`: a credential refusal after authn rejected the stored
+ *   sign-in during this call's recovery. Only this case, and a machine with
+ *   no sign-in at all, gives sign-in advice.
  * - `older-host`: no reason, on a non-retryable refusal of the token itself.
  * - `unworded`: every reason the owner has not worded. The command prints its
  *   own line for an unexpected host error, never sign-in advice and never the
@@ -63,13 +80,16 @@ export function olderHostCliError(): CliError {
  * `null`: not the door's refusal; the command's own arms decide. A reason
  * decides ahead of the code that carries it.
  */
-export type HostDoorRefusalKind = "signed-out" | "older-host" | "unworded";
+export type HostDoorRefusalKind =
+  | "sign-in-rejected"
+  | "older-host"
+  | "unworded";
 
 export function hostDoorRefusalKind(
   refusal: FatalErrorDetails,
   signInRejected: boolean,
 ): HostDoorRefusalKind | null {
-  if (signInRejected && isCredentialRefusal(refusal)) return "signed-out";
+  if (signInRejected && isCredentialRefusal(refusal)) return "sign-in-rejected";
   if (readDoorReason(refusal.doorReason) !== "absent") return "unworded";
   return hostDoorStateOfRefusal(refusal) === "older-host" ? "older-host" : null;
 }
@@ -89,8 +109,8 @@ export function hostDoorRefusalCliError<Generic extends Error>(
   generic: () => Generic,
 ): CliError | Generic | null {
   switch (hostDoorRefusalKind(refusal, signInRejected)) {
-    case "signed-out":
-      return signedOutCliError();
+    case "sign-in-rejected":
+      return storedCredentialRejectedCliError();
     case "older-host":
       return olderHostCliError();
     case "unworded":
@@ -112,9 +132,10 @@ export function hostTokenFailureCliError(
         details: null,
         exitCode: 1,
       });
-    // The sign-in itself was refused and its refresh too, or none is held:
-    // this machine is signed out in fact.
+    // authn refused the sign-in, and its refresh or the mint after it too.
     case "sign-in-rejected":
+      return storedCredentialRejectedCliError();
+    // No sign-in is held: this machine is signed out in fact.
     case "no-sign-in":
       return signedOutCliError();
     // The stored sign-in was replaced while this command ran: someone may

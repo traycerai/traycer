@@ -359,7 +359,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       session.tokens.unaryRecovery(endpoint.hostId),
       retryPolicy,
       dispatch,
-      session.signInRejected,
+      () => session.tokens.signInRejected(),
     );
   } finally {
     session.dispose();
