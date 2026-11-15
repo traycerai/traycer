@@ -22,7 +22,6 @@ interface HostBindingMock {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
     readonly findById: (hostId: string) => null;
     readonly list: () => Promise<readonly []>;
-    readonly findById: (hostId: string) => null;
     readonly onChange: (listener: () => void) => {
       readonly dispose: () => void;
     };
@@ -227,8 +226,6 @@ function bindingWith(fixture: OverviewHostFixture): HostBindingMock {
       getLocalEntry: () => null,
       findById: () => null,
       list: () => Promise.resolve([]),
-      // The empty listing answers no row for any host.
-      findById: () => null,
       onChange: () => ({ dispose: () => undefined }),
     },
   };
