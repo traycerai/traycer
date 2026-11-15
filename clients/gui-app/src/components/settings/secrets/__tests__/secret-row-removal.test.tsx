@@ -19,8 +19,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-// The computers holding a copy are covered by `secret-remove-preview-computers`;
-// here Remove's preview is read with none.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({

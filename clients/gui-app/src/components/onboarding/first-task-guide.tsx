@@ -19,15 +19,9 @@ import { readShortLandscape } from "@/hooks/ui/use-short-landscape";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
-import { heldReviewEntries } from "@/components/settings/move/held-from-review";
-import {
-  useThisComputer,
-  type ThisComputer,
-} from "@/components/settings/move/this-computer";
+import { useThisComputer } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
-import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
-import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -105,16 +99,11 @@ export function FirstTaskChatGuide(props: {
 }
 
 /**
- * The Start toast. While anything an earlier version shared from this
- * computer is on hold it reads `An earlier version shared this computer's
- * settings · Review` and opens the retrospective sheet, instead of the setup
- * reminder; it retires by itself once nothing is on hold.
- *
- * The move's invitation is asked once on a computer that runs its own
- * settings, worded as the Getting started card is: on a fresh install Home is
- * hidden, so this is where a new person first meets the move. Once answered,
- * the card is the only place it waits. A computer that runs a team's settings
- * (`team`) or has moved is never asked.
+ * The Start toast. The move's invitation is asked once on a computer that
+ * runs its own settings, worded as the Getting started card is: on a fresh
+ * install Home is hidden, so this is where a new person first meets the move.
+ * Once answered, the card is the only place it waits. A computer that runs a
+ * team's settings (`team`) or has moved is never asked.
  */
 function GettingStartedToast() {
   const computer = useThisComputer();
@@ -123,12 +112,10 @@ function GettingStartedToast() {
     (state) => state.moveInvitationAnswered,
   );
   const remindersOn = completedAt !== null;
-  const held = useHeldOnThisComputer(computer, remindersOn);
   const move = useThisComputersMove(computer, remindersOn);
-  // No toast until the review and the status answer, so none shows for a
-  // moment before another replaces it.
-  if (held === "pending" || move === "pending") return null;
-  if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
+  // No toast until the status answers, so none shows for a moment before
+  // another replaces it.
+  if (move === "pending") return null;
   const moveTarget =
     move === "not_moved" && !invitationAnswered && computer.hostId !== null
       ? { hostId: computer.hostId, hostName: computer.hostName }
@@ -262,64 +249,5 @@ function StartToast(props: {
       toast.dismiss(id);
     };
   }, [completedAt, remaining, dismissed, dismiss, hostId]);
-  return null;
-}
-
-/**
- * Whether anything this computer's earlier upload held waits on a choice:
- * `pending` while its review is still being read, `clear` with no local host,
- * a host without the method, a first read that failed, or nothing held.
- */
-function useHeldOnThisComputer(
-  computer: ThisComputer,
-  enabled: boolean,
-): "held" | "clear" | "pending" {
-  const review = useEnvironmentReviewRead(
-    computer.client,
-    computer.hostId,
-    enabled,
-  );
-  if (!enabled || computer.hostId === null) return "clear";
-  if (review.supported === false) return "clear";
-  // A re-read that fails keeps the last answer, as the status does.
-  if (review.data === null) return review.isError ? "clear" : "pending";
-  return heldReviewEntries(review.data.entries).length > 0 ? "held" : "clear";
-}
-
-const HELD_TOAST_ID = "traycer-held-on-this-computer";
-
-function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
-  const dismissed = useRetrospectiveSheetStore(
-    (state) => state.heldToastDismissed,
-  );
-  const dismiss = useRetrospectiveSheetStore((state) => state.dismissHeldToast);
-  const openSheet = useRetrospectiveSheetStore((state) => state.openSheet);
-  const { hostId, hostName } = props.computer;
-  useEffect(() => {
-    if (dismissed || hostId === null) return;
-    let mounted = true;
-    toast("An earlier version shared this computer's settings", {
-      id: HELD_TOAST_ID,
-      // The verb is the toast's own action - `… · Review` - so there is no
-      // line under it repeating the word it is already pressing.
-      description: null,
-      duration: Infinity,
-      closeButton: true,
-      onDismiss: () => {
-        if (mounted) dismiss();
-      },
-      action: {
-        label: "Review",
-        onClick: () => {
-          dismiss();
-          openSheet({ hostId, hostName });
-        },
-      },
-    });
-    return () => {
-      mounted = false;
-      toast.dismiss(HELD_TOAST_ID);
-    };
-  }, [dismissed, hostId, hostName, dismiss, openSheet]);
   return null;
 }

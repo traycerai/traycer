@@ -3,7 +3,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -21,8 +20,8 @@ import { useEnvironmentSecretsReplaceValueMutation } from "@/hooks/environment/t
 import type { HostRpcRegistry } from "@/lib/host";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 import {
-  SECRET_RESTART_LINE,
   SECRET_SCOPE_LINE,
+  secretCustodySentence,
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
@@ -148,13 +147,7 @@ export function ReplaceSecretValueDialog(props: {
             className="max-w-[72ch] text-ui-xs text-muted-foreground"
             data-testid="secret-replace-custody"
           >
-            {custodySentence(personal, name)}
-          </p>
-          <p
-            className="max-w-[72ch] text-ui-xs text-muted-foreground"
-            data-testid="secret-replace-restart"
-          >
-            {SECRET_RESTART_LINE}
+            {secretCustodySentence(personal, name)}
           </p>
           <Label htmlFor="replace-secret-value">New value</Label>
           <Input

@@ -54,11 +54,11 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => null,
-}));
-
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -86,6 +86,10 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
@@ -111,6 +115,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { queryKeys } from "@/lib/query-keys";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -164,9 +169,8 @@ interface Rendered {
   >;
 }
 
-function renderShellPage(options: {
-  /** `null`: the host's `environment.status` read never resolves. */
-  readonly status: EnvironmentStatusResponseV12 | null;
+type RenderShellPageOptions = {
+  readonly status: EnvironmentStatusResponseV12;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];
@@ -176,7 +180,12 @@ function renderShellPage(options: {
   readonly localOverrides: readonly LocalOverride[];
   /** What `environment.secrets.list` answers. */
   readonly secrets: readonly EnvironmentSecretV12[];
-}): Rendered {
+};
+
+function renderShellPage(
+  options: RenderShellPageOptions,
+  suppliedQueryClient: QueryClient | undefined,
+): Rendered {
   const cli = new MockTraycerCli();
   cli.shellConfig = { path: "/bin/zsh", args: ["-i", "-l"], synthesised: true };
   cli.envOverrides = [...options.existingVariables];
@@ -200,7 +209,6 @@ function renderShellPage(options: {
       "config.env.localOverride.clear": clear,
       "environment.status": () => {
         statusCalls += 1;
-        if (options.status === null) return new Promise<never>(() => {});
         return options.status;
       },
       "environment.localOverrides": () => ({
@@ -282,9 +290,11 @@ function renderShellPage(options: {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+  const queryClient =
+    suppliedQueryClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
@@ -339,77 +349,39 @@ async function addVariable(name: string, value: string): Promise<void> {
   fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 }
 
-const KEY_REFUSAL = "This looks like a key. Add it as a secret.";
-
 describe("a key-shaped variable on a Personal page (ready status)", () => {
-  it("refuses a credential-looking variable, stores nothing and shows no dialog", async () => {
-    const { cli, set } = renderShellPage(READY_HOST);
+  it("saves a credential-looking variable and shows no dialog", async () => {
+    const { set } = renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     await addVariable("API_TOKEN", API_KEY_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      KEY_REFUSAL,
-    );
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "API_TOKEN",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 
-  it("refuses a harmless name when the VALUE has a known token shape", async () => {
-    const { set } = renderShellPage(READY_HOST);
+  it("saves a harmless name when the value has a known token shape", async () => {
+    const { set } = renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     await addVariable("NOTES", API_KEY_VALUE);
 
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("'Add it as a secret.' opens Add a secret on the API key form with the name and value filled in, and stores nothing", async () => {
-    const { cli, runnerHost, set } = renderShellPage(READY_HOST);
-    await pageIsReady();
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(screen.queryByTestId("secret-kind-picker")).toBeNull();
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("API_TOKEN");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(API_KEY_VALUE);
-    // The add row closed: nothing is left staged.
-    expect(screen.queryByLabelText("New variable name")).toBeNull();
-    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
-    expect(runnerHost.openedExternalLinks).toEqual([]);
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
-  });
-
-  it("closing Add a secret drops the value and stores nothing", async () => {
-    const { cli, set } = renderShellPage(READY_HOST);
-    await pageIsReady();
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add it as a secret." }),
-    );
-    const dialog = await screen.findByTestId("add-secret-dialog");
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "NOTES",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
-    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
   it("stores a plain value without refusing it", async () => {
-    const { set } = renderShellPage(READY_HOST);
+    const { set } = renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     await addVariable("LOG_LEVEL", "debug");
 
@@ -422,58 +394,52 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("refuses an existing variable edited into a key, keeps the stored value and sends nothing", async () => {
-    const { cli, set } = renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "EDITOR", value: "vim" }],
-    });
+  it("saves an existing variable edited into a key", async () => {
+    const { set } = renderShellPage(
+      {
+        ...READY_HOST,
+        existingVariables: [{ key: "EDITOR", value: "vim" }],
+      },
+      undefined,
+    );
     await pageIsReady();
 
     const value = await screen.findByLabelText("Value for EDITOR");
     fireEvent.change(value, { target: { value: API_KEY_VALUE } });
     fireEvent.blur(value);
 
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([{ key: "EDITOR", value: "vim" }]);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-    expect(await screen.findByTestId("add-secret-dialog")).toBeTruthy();
-    expect(screen.getByDisplayValue("vim")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "EDITOR",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 });
 
 describe("a saved key-shaped variable on a Personal page", () => {
-  it("shows the saved variable masked with the key line, and its link carries the value into Add a secret leaving the variable saved", async () => {
-    const { cli, set } = renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
-    });
+  it("shows the saved variable masked and leaves it saved", async () => {
+    const { cli, set } = renderShellPage(
+      {
+        ...READY_HOST,
+        existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
+      },
+      undefined,
+    );
     await pageIsReady();
 
     const row = await screen.findByTestId("env-masked-row");
     expect(row.textContent).toContain("API_TOKEN");
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
+    );
     expect(screen.queryByLabelText("Value for API_TOKEN")).toBeNull();
     expect(screen.queryByDisplayValue(API_KEY_VALUE)).toBeNull();
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-    expect(within(row).getByTestId("env-key-refusal").textContent).toBe(
-      KEY_REFUSAL,
-    );
-
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("API_TOKEN");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(API_KEY_VALUE);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
     expect(set).not.toHaveBeenCalled();
     expect(cli.envOverrides).toEqual([
       { key: "API_TOKEN", value: API_KEY_VALUE },
@@ -481,10 +447,13 @@ describe("a saved key-shaped variable on a Personal page", () => {
   });
 
   it("removes the masked variable by its name", async () => {
-    const { cli } = renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
-    });
+    const { cli } = renderShellPage(
+      {
+        ...READY_HOST,
+        existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
+      },
+      undefined,
+    );
     await pageIsReady();
 
     fireEvent.click(
@@ -495,10 +464,13 @@ describe("a saved key-shaped variable on a Personal page", () => {
   });
 
   it("keeps an ordinary saved variable editable", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "EDITOR", value: "vim" }],
-    });
+    renderShellPage(
+      {
+        ...READY_HOST,
+        existingVariables: [{ key: "EDITOR", value: "vim" }],
+      },
+      undefined,
+    );
     await pageIsReady();
 
     expect(
@@ -511,10 +483,13 @@ describe("a saved key-shaped variable on a Personal page", () => {
 
 describe("a key-shaped variable when the page is not on a ready Personal host", () => {
   it("stores it on a host with no settings of the person's yet (not set up)", async () => {
-    const { set, statusCalls } = renderShellPage({
-      ...READY_HOST,
-      status: environmentStatusFixture({ principal: null }),
-    });
+    const { set, statusCalls } = renderShellPage(
+      {
+        ...READY_HOST,
+        status: environmentStatusFixture({ principal: null }),
+      },
+      undefined,
+    );
     await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
     // Let the answered status reach the page before the variable is committed.
     await act(async () => {
@@ -527,11 +502,14 @@ describe("a key-shaped variable when the page is not on a ready Personal host", 
   });
 
   it("still masks a saved key-shaped variable there, with no key line", async () => {
-    const { statusCalls } = renderShellPage({
-      ...READY_HOST,
-      status: environmentStatusFixture({ principal: null }),
-      existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
-    });
+    const { statusCalls } = renderShellPage(
+      {
+        ...READY_HOST,
+        status: environmentStatusFixture({ principal: null }),
+        existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
+      },
+      undefined,
+    );
     await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -543,23 +521,9 @@ describe("a key-shaped variable when the page is not on a ready Personal host", 
   });
 });
 
-describe("a key-shaped variable while the Personal host's status is not known yet", () => {
-  it("refuses it while the status read is still pending", async () => {
-    const { set, statusCalls } = renderShellPage({
-      ...READY_HOST,
-      status: null,
-    });
-    await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-  });
-});
-
 describe("the host environment group on a Personal page", () => {
   it("no longer points other operating systems at the dashboard", async () => {
-    renderShellPage(READY_HOST);
+    renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     expect(screen.queryByTestId("other-os-values-note")).toBeNull();
     expect(
@@ -569,19 +533,22 @@ describe("the host environment group on a Personal page", () => {
 
   // `pendingUploads` comes from the fake host.
   it("marks a row whose edit still waits for its receipt as Pending", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "EXISTING" })],
-        pendingUploads: [
-          pendingUploadFixture({ kind: "variable", key: "WAITING" }),
+    renderShellPage(
+      {
+        ...READY_HOST,
+        status: environmentStatusFixture({
+          items: [itemStatusFixture({ kind: "variable", key: "EXISTING" })],
+          pendingUploads: [
+            pendingUploadFixture({ kind: "variable", key: "WAITING" }),
+          ],
+        }),
+        existingVariables: [
+          { key: "WAITING", value: "1" },
+          { key: "SETTLED", value: "2" },
         ],
-      }),
-      existingVariables: [
-        { key: "WAITING", value: "1" },
-        { key: "SETTLED", value: "2" },
-      ],
-    });
+      },
+      undefined,
+    );
     const note = await screen.findByTestId("env-row-note");
     expect(note.textContent).toBe("Pending");
     expect(screen.getAllByTestId("env-row-note")).toHaveLength(1);
@@ -597,7 +564,7 @@ const PERSONAL_SUBTITLE =
 describe("the Variables and shells subtitle", () => {
   it("describes what Personal shares under the Personal pick", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-    renderShellPage(READY_HOST);
+    renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     expect(screen.getByText(PERSONAL_SUBTITLE)).toBeTruthy();
     expect(screen.queryByText(/How Traycer launches terminals/)).toBeNull();
@@ -607,7 +574,7 @@ describe("the Variables and shells subtitle", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: HOST_ID, hostName: "host-a" },
     });
-    renderShellPage(READY_HOST);
+    renderShellPage(READY_HOST, undefined);
     expect(
       await screen.findByText(
         "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.",
@@ -620,7 +587,7 @@ describe("the Variables and shells subtitle", () => {
 describe("the Variables empty state", () => {
   it("says what Personal's variables are under the Personal pick, with no Add sentence", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-    renderShellPage(READY_HOST);
+    renderShellPage(READY_HOST, undefined);
     await pageIsReady();
     expect(
       screen.getByText(
@@ -635,7 +602,7 @@ describe("the Variables empty state", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: HOST_ID, hostName: "host-a" },
     });
-    renderShellPage(READY_HOST);
+    renderShellPage(READY_HOST, undefined);
     expect(
       await screen.findByText("Variables are plain values every host gets."),
     ).toBeTruthy();
@@ -658,11 +625,14 @@ describe("a variable held for the person on a Personal page", () => {
   });
 
   it("keeps an editable row for a variable the review names, and its Review opens Secrets", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
-      review: [heldEntry("needs_grant", "SHELL_INIT", "entry-2")],
-    });
+    renderShellPage(
+      {
+        ...READY_HOST,
+        existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
+        review: [heldEntry("needs_grant", "SHELL_INIT", "entry-2")],
+      },
+      undefined,
+    );
 
     const banner = await screen.findByTestId("personal-review-row");
     expect(banner.textContent).toContain(
@@ -693,7 +663,7 @@ describe("a variable this computer keeps its own value for", () => {
   };
 
   it("reads what the host uses and offers Use everywhere", async () => {
-    renderShellPage(OWN_VALUE_HOST);
+    renderShellPage(OWN_VALUE_HOST, undefined);
     await pageIsReady();
 
     const note = await screen.findByTestId("env-row-own-value");
@@ -701,7 +671,7 @@ describe("a variable this computer keeps its own value for", () => {
   });
 
   it("saves the host's value for everyone, and stops the host keeping its own only after the save landed", async () => {
-    const { set, clear } = renderShellPage(OWN_VALUE_HOST);
+    const { set, clear } = renderShellPage(OWN_VALUE_HOST, undefined);
     let finishSave: () => void = () => {};
     set.mockImplementationOnce(async (request) => {
       await new Promise<void>((resolve) => {
@@ -731,22 +701,37 @@ describe("a variable this computer keeps its own value for", () => {
     });
   });
 
-  it("shows dots and no Use everywhere for a value that looks like a key", async () => {
-    renderShellPage({
-      ...OWN_VALUE_HOST,
-      localOverrides: [variableOverride("LOG_LEVEL", API_KEY_VALUE)],
-    });
+  it("shows dots and Use everywhere for a value that looks like a key, and the click saves that value", async () => {
+    const { set, clear } = renderShellPage(
+      {
+        ...OWN_VALUE_HOST,
+        localOverrides: [variableOverride("LOG_LEVEL", API_KEY_VALUE)],
+      },
+      undefined,
+    );
     await pageIsReady();
 
     const note = await screen.findByTestId("env-row-own-value");
-    expect(note.textContent).toBe("host-a uses: ••••••••");
-    expect(screen.queryByRole("button", { name: "Use everywhere" })).toBeNull();
+    expect(note.textContent).toBe("host-a uses: •••••••• · Use everywhere");
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "LOG_LEVEL",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
   });
 });
 
-describe("a variable a secret sets on the Personal page", () => {
-  const NAME = "ENV_E2E_SERVICE_TOKEN";
+describe("a variable name a cloud secret declares on Personal", () => {
+  const NAME = "APP_MODE";
   const secretSettingIt: EnvironmentSecretV12 = {
     ...RETIRED_SECRET_ROW_FIELDS,
     providerVariables: [...RETIRED_PROVIDER_VARIABLES],
@@ -765,27 +750,70 @@ describe("a variable a secret sets on the Personal page", () => {
     existingVariables: [{ key: NAME, value: API_KEY_VALUE }],
   };
 
-  it("reads the name as the secret's, with no value and no key refusal", async () => {
+  it("does not refuse a variable name declared by a cloud secret", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-    renderShellPage({ ...withKeyShapedValue, secrets: [secretSettingIt] });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const servingHostId = hostRpcServingTierHostId(
+      "environment.secrets.list",
+      HOST_ID,
+      readProcessHostRpcTierPlan(),
+      null,
+    );
+    const secretsListOptions = queryOptions({
+      queryKey: [
+        ...queryKeys.hostMethod(servingHostId, "environment.secrets.list", {
+          environmentId: "env-personal",
+        }),
+        "user-me",
+      ],
+      queryFn: () =>
+        Promise.resolve({ secrets: [] as EnvironmentSecretV12[], removed: [] }),
+    });
+    queryClient.setQueryData(secretsListOptions.queryKey, {
+      secrets: [secretSettingIt],
+      removed: [],
+    });
+    const { set } = renderShellPage(
+      {
+        ...READY_HOST,
+        secrets: [secretSettingIt],
+      },
+      queryClient,
+    );
     await pageIsReady();
 
-    const row = await screen.findByTestId("env-claimed-row");
-    expect(row.textContent).toBe(`${NAME} · from the secret ${NAME} · Secrets`);
-    expect(screen.queryByTestId("env-masked-row")).toBeNull();
+    await addVariable(NAME, "ordinary-value");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: NAME,
+      value: "ordinary-value",
+      executableWriteGrant: null,
+    });
+    expect(
+      (await screen.findByLabelText<HTMLInputElement>(`Value for ${NAME}`))
+        .value,
+    ).toBe("ordinary-value");
+    expect(
+      screen.getByLabelText<HTMLInputElement>(`Name for ${NAME}`).value,
+    ).toBe(NAME);
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
-    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+    expect(screen.queryByTestId("env-claimed-row")).toBeNull();
   });
 
-  it("control: with no secret claiming the name, the saved key-shaped value is masked and refused", async () => {
+  it("control: with no secret declaring the name, the saved key-shaped value is masked", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-    renderShellPage({ ...withKeyShapedValue, secrets: [] });
+    renderShellPage({ ...withKeyShapedValue, secrets: [] }, undefined);
     await pageIsReady();
 
     const row = await screen.findByTestId("env-masked-row");
-    expect(within(row).getByTestId("env-key-refusal").textContent).toBe(
-      KEY_REFUSAL,
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
     );
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
   });
 });

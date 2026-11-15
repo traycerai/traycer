@@ -1,5 +1,5 @@
 import { formatCount } from "@/lib/format-count";
-import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
+import { teamCustodySentence } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * The words of the MCP servers and Skills pages and of each provider's MCP
@@ -302,10 +302,14 @@ export function secretOptionLine(canPick: boolean): string {
     : "Add a secret. It is sent only to this server's address.";
 }
 
+/**
+ * Where an MCP server's token goes: Personal's computers receive it as a
+ * value; a team's sentence is the one every team value shares.
+ */
 export function custodySentence(personal: boolean, name: string): string {
   return personal
-    ? SECRET_CUSTODY_SENTENCE
-    : `Stored encrypted in Traycer's cloud. ${name}'s sandboxes and connected services use it without seeing it; no computer receives the value.`;
+    ? "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it."
+    : teamCustodySentence(name);
 }
 
 /**

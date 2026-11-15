@@ -16,20 +16,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-// The computers holding a copy are covered by `secret-remove-preview-computers`;
-// here Remove's preview is read with none.
-vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: () => ({
-      hosts: [],
-      state: "ready",
-      collisions: [],
-      retry: () => undefined,
-    }),
-  }),
-);
-
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -58,7 +44,6 @@ import {
   SECRET_REVOKED_LABEL,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
-import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -344,7 +329,7 @@ describe("the secrets list", () => {
         .getAllByRole("listitem")
         .map((step) => step.textContent),
     ).toEqual([
-      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+      "Remove it first: every sandbox stops using the old value.",
       "Rotate the credential at the service it belongs to.",
       "Replace the value here.",
       "Grant it again.",
@@ -421,9 +406,7 @@ describe("the secrets list", () => {
     renderPage(buildSecretsHost({ secrets: [] }));
 
     const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toBe(
-      "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.",
-    );
+    expect(empty.textContent).toBe(SECRETS_EMPTY_TEXT);
     expect(screen.queryByTestId("secret-row")).toBeNull();
     expect(screen.getByTestId("secrets-add")).toBeTruthy();
   });
@@ -611,7 +594,7 @@ describe("the add dialog's kind picker", () => {
     await openApiKeyForm();
 
     expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+      "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.",
     );
     expect(screen.getByTestId("add-secret-dialog").textContent).not.toMatch(
       /on the web|dashboard/i,
@@ -708,7 +691,7 @@ describe("saving a secret", () => {
     const confirmation = await screen.findByTestId("secret-save-confirmation");
     // The custody sentence and its disclosure, and nothing else before Save.
     expect(confirmation.textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.How Traycer handles this",
+      "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.How Traycer handles this",
     );
     expect(confirmation.textContent).not.toContain("plain value");
     expect(host.createRequests).toEqual([]);
@@ -926,7 +909,7 @@ describe("the add form's words", () => {
 
     fireEvent.click(screen.getByTestId("members-data-handling-trigger"));
     expect(screen.getByTestId("members-data-handling-notice").textContent).toBe(
-      dataHandlingNoticeText(),
+      "Traycer's cloud stores the value encrypted. Sandboxes running Personal or a team use the value without seeing it. Share a work credential only if you have the authority to share it. Removing a value stops access from then on. It cannot take back copies a computer already made, task data already published, or exports already shared. Where Traycer processes this data is not yet stated. How long backups keep this data is not yet stated.",
     );
 
     fireEvent.click(buttonOf("secret-form-continue"));

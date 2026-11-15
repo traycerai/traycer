@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 /**
  * A row's note: "Pending", or "dev-box uses: error · Use everywhere"
  * where this host keeps its own value. A value that looks like a key is
- * never shown, and it has no Use everywhere: Personal refuses it as a
- * variable.
+ * never shown.
  */
 export function PersonalRowNoteText(props: {
   readonly name: string;
@@ -25,20 +24,16 @@ export function PersonalRowNoteText(props: {
     <span data-testid="env-row-own-value">
       {note.hostName} uses:{" "}
       <span className="font-mono">{keyShaped ? "••••••••" : note.value}</span>
-      {keyShaped ? null : (
-        <>
-          {" · "}
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            disabled={props.disabled}
-            onClick={() => props.onUseEverywhere(props.name, note.value)}
-          >
-            Use everywhere
-          </Button>
-        </>
-      )}
+      {" · "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        disabled={props.disabled}
+        onClick={() => props.onUseEverywhere(props.name, note.value)}
+      >
+        Use everywhere
+      </Button>
     </span>
   );
 }

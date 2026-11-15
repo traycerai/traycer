@@ -4,17 +4,15 @@ import {
 } from "@traycer/protocol/utils/text/redaction";
 
 /**
- * The credential rule: whether a variable's value looks like a credential, so
- * the person decides "Make it a secret" or "Keep as a variable" before it is
- * stored or distributed.
+ * The credential rule: whether a value looks like a credential.
  *
- * ONE function, called by every surface that can put a value into the
- * environment: the host's migrator before anything leaves the host, the host's
- * Settings resolvers on a variable save, the dashboard's Variables page before
- * its PUT, and the desktop's Variables and shells page before its write. A save
- * and a migrated upload therefore never disagree about one value. It lives here
- * because `@traycer/protocol` is the one package all of them import; it is pure
- * and browser-safe (no Node imports), like the rest of it.
+ * It judges no variable a person adds: a variable is stored and delivered as
+ * typed. Its callers are the migrator's test for a literal credential in a
+ * hook or an MCP server (which keeps that entry on its computer), and the
+ * display that shows a saved value which looks like a key as dots: the
+ * desktop's variable rows and the move sheet. It lives here because
+ * `@traycer/protocol` is the one package all of them import; it is pure and
+ * browser-safe (no Node imports), like the rest of it.
  *
  * Two tests, in order:
  *
@@ -28,8 +26,8 @@ import {
  *    prefix (the redaction's token shapes), a URL carrying a password in its
  *    userinfo, or a long high-entropy run with no whitespace.
  *
- * It is a heuristic and says so where it matters: a value the rule does not
- * recognise is stored as a variable, and the person can move it to Secrets.
+ * It is a heuristic: a credential it does not recognise is shown and kept
+ * like any other value.
  */
 
 export interface CredentialRuleInput {

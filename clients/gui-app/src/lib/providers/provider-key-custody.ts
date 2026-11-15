@@ -52,6 +52,10 @@ export function recordKeyCustodyLine(
   return `Stored encrypted in Traycer's cloud. Computers running ${environment} receive the value, readable by their tools and agents${sandbox}`;
 }
 
+/** Under a key that becomes Personal's: where the value is stored and who reads it. */
+export const PROVIDER_KEY_CUSTODY_SENTENCE =
+  "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
+
 /**
  * Whether the host runs Personal, so its other computers and sandboxes are
  * worth naming as the ones the key does not reach. `false` on a Local pick,

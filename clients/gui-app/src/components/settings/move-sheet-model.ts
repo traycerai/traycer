@@ -63,24 +63,16 @@ export function moveReachSentence(
 
 /**
  * The custody sentence's recipient boundary: the computers that receive a
- * moved secret's value today, and every one that starts running Personal
- * later.
+ * moved provider key's value today, and every one that starts running
+ * Personal later.
  */
 export function moveRecipientSentence(hostNames: readonly string[]): string {
   const later =
-    "computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.";
+    "computer that starts running Personal later receives these keys as values its tools and agents can read.";
   if (hostNames.length === 0) {
     return `No other computer runs Personal yet. Any ${later}`;
   }
   return `Today that is ${namedOthers(hostNames)}, and any ${later}`;
-}
-
-/**
- * The disclosure when this move stores nothing as a secret but Personal
- * holds keys or secrets: they reach this computer once it runs Personal.
- */
-export function existingSecretsArriveSentence(hostName: string): string {
-  return `Nothing new is stored as a secret. Once ${hostName} runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.`;
 }
 
 /** What moving gives the computer, under the sheet's title. */

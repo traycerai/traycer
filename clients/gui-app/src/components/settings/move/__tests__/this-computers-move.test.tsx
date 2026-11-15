@@ -96,6 +96,18 @@ describe("useThisComputersMove", () => {
     );
   });
 
+  it("offers the move again while consent is awaited even when all planes moved", async () => {
+    await settlesTo(
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        planes: { records: "moved", broker: "moved", room: "moved" },
+        consent: null,
+        setup: { stage: "moving_settings", state: "awaiting_consent" },
+      }),
+      "not_moved",
+    );
+  });
+
   it("identifies a team-owned computer even when its planes are local", async () => {
     await settlesTo(
       environmentStatusFixture({

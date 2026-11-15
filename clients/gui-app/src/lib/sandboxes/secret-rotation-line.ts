@@ -8,13 +8,13 @@ import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secret
  * What a replaced value has done, in words: on the sandbox card per grant, and
  * on Settings ▸ Personal ▸ Secrets per secret.
  *
- * "Enforced" is said only on evidence: every worker class and every host that
- * owes an acknowledgement must carry a `rotation_ack` entry of a kind the
- * rotation wire defines (`session_closed`, `cache_cleared`, `probe_refused`).
- * A producer contained by expiry, or a host that applies the value when it
- * wakes, owes none. Until then the line reads "accepted, closing old
- * sessions", whatever the state says, so a missing or unknown proof never
- * reads as enforced.
+ * "Enforced" is said only on evidence: every worker class must carry a
+ * `rotation_ack` entry of a kind the rotation wire defines (`session_closed`,
+ * `cache_cleared`, `probe_refused`). A producer contained by expiry owes
+ * none. Until then the line reads "accepted, closing old sessions", whatever
+ * the state says, so a missing or unknown proof never reads as enforced. The
+ * value is enforced where it is used, by the workers; a host owes nothing,
+ * so a host producer an older answer still carries is not read.
  */
 
 export interface SecretRotationLine {
@@ -120,9 +120,9 @@ export function grantRotationLine(
 }
 
 export interface SecretRotationProducerLine {
-  /** A worker class, or one host producer; unique within one rotation. */
+  /** A worker class; unique within one rotation. */
   readonly key: string;
-  /** "postgres: 3 sessions closed", "3 sessions closed on dev-sandbox". */
+  /** "postgres: 3 sessions closed". */
   readonly text: string;
 }
 
@@ -132,7 +132,14 @@ export interface SecretRotationStatus {
 }
 
 type WorkerProducer = Extract<RotationProducer, { producer: "worker" }>;
-type HostProducer = Extract<RotationProducer, { producer: "host" }>;
+
+function workerProducers(
+  producers: readonly RotationProducer[],
+): WorkerProducer[] {
+  return producers.filter(
+    (producer): producer is WorkerProducer => producer.producer === "worker",
+  );
+}
 
 /**
  * One line per worker class, however many incarnations (pods) it runs: any
@@ -155,69 +162,32 @@ function workerClassLine(
     : `${workerClass}: ${proof}`;
 }
 
-function hostLine(
-  producer: HostProducer,
-  hostName: (hostId: string) => string,
-): string {
-  const name = hostName(producer.hostId);
-  if (producer.status === "applies_on_resume") {
-    return `applies when ${name} wakes`;
-  }
-  const proof = rotationProofPhrase(producer.evidence);
-  if (producer.status === "acknowledged" && proof !== null) {
-    return `${proof} on ${name}`;
-  }
-  return `not confirmed yet on ${name}`;
-}
-
-/**
- * The producers' lines in first-seen order: a worker class once, at its first
- * incarnation, and each host producer on its own.
- */
+/** The worker classes' lines in first-seen order, each class once. */
 function producerLines(
-  producers: readonly RotationProducer[],
-  hostName: (hostId: string) => string,
+  producers: readonly WorkerProducer[],
 ): SecretRotationProducerLine[] {
   const classes = new Map<string, WorkerProducer[]>();
   for (const producer of producers) {
-    if (producer.producer !== "worker") continue;
     const incarnations = classes.get(producer.workerClass) ?? [];
     incarnations.push(producer);
     classes.set(producer.workerClass, incarnations);
   }
-  const lines: SecretRotationProducerLine[] = [];
-  const shown = new Set<string>();
-  for (const producer of producers) {
-    if (producer.producer === "host") {
-      lines.push({
-        key: `host:${producer.hostId}:${producer.incarnation ?? ""}`,
-        text: hostLine(producer, hostName),
-      });
-    } else if (!shown.has(producer.workerClass)) {
-      shown.add(producer.workerClass);
-      lines.push({
-        key: `worker:${producer.workerClass}`,
-        text: workerClassLine(
-          producer.workerClass,
-          classes.get(producer.workerClass) ?? [],
-        ),
-      });
-    }
-  }
-  return lines;
+  return [...classes].map(([workerClass, incarnations]) => ({
+    key: `worker:${workerClass}`,
+    text: workerClassLine(workerClass, incarnations),
+  }));
 }
 
 /**
  * The Secrets page's status of a secret's current rotation, or `null` when it
- * has none. `hostName` names a host by its id, from the hosts this client
- * knows.
+ * has none.
  */
 export function secretRotationStatus(
   rotation: EnvironmentSecretsRotationResponse["rotation"],
-  hostName: (hostId: string) => string,
 ): SecretRotationStatus | null {
   if (rotation === null) return null;
-  const producers = producerLines(rotation.producers, hostName);
+  const workers = workerProducers(rotation.producers);
+  const producers = producerLines(workers);
   switch (rotation.state) {
     case "failed":
       return { headline: FAILED, producers };
@@ -231,7 +201,7 @@ export function secretRotationStatus(
       };
     case "enforced":
       return {
-        headline: rotation.producers.every(rotationProven)
+        headline: workers.every(rotationProven)
           ? { tone: "success", text: "New value enforced." }
           : ACCEPTED,
         producers,
@@ -249,6 +219,7 @@ export function secretRotationSettled(
   if (rotation === null) return true;
   if (rotation.state === "failed") return true;
   return (
-    rotation.state === "enforced" && rotation.producers.every(rotationProven)
+    rotation.state === "enforced" &&
+    workerProducers(rotation.producers).every(rotationProven)
   );
 }

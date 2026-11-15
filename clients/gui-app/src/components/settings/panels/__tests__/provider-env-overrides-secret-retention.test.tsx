@@ -119,12 +119,6 @@ vi.mock(
     }),
   }),
 );
-vi.mock("@/components/settings/personal/use-key-shaped-secret", () => ({
-  useKeyShapedSecret: () => ({ refusal: null }),
-}));
-vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
-  useSecretClaimedNames: () => new Map(),
-}));
 vi.mock("@/components/settings/environment/use-configuration-key", () => ({
   useConfigurationKey: () => "configuration-test",
 }));
@@ -603,7 +597,6 @@ for (const row of rows) {
         harness.queryClient,
         <ProviderEnvOverridesSection
           providerId="codex"
-          keyHome={null}
           overrides={[{ key: "MODEL_LABEL", value: "existing label" }]}
           envOverrideScope={
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES.envOverrideScope

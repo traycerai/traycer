@@ -1,4 +1,3 @@
-// The computers holding a copy are covered by `secret-remove-preview-computers`.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({

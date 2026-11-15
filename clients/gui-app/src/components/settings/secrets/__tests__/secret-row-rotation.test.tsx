@@ -18,20 +18,6 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
 
-// The computers holding a copy are covered by `secret-remove-preview-computers`;
-// here Remove's preview is read with none.
-vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: () => ({
-      hosts: [],
-      state: "ready",
-      collisions: [],
-      retry: () => undefined,
-    }),
-  }),
-);
-
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -49,6 +35,7 @@ import type {
   EnvironmentSecretsDestroyResponse,
   EnvironmentSecretsReplaceValueRequest,
   EnvironmentSecretsReplaceValueResponse,
+  EnvironmentSecretsRotationRequestV11,
   EnvironmentSecretsRotationResponse,
   EnvironmentSecretsUndoRequest,
   EnvironmentSecretsUndoResponse,
@@ -60,7 +47,7 @@ import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import {
-  SECRET_RESTART_LINE,
+  SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
@@ -99,7 +86,12 @@ interface RotationHostState {
 interface RotationHost {
   readonly state: RotationHostState;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly reads: { list: number; rotation: number; versions: number };
+  readonly reads: {
+    list: number;
+    rotation: number;
+    versions: number;
+    rotationRequests: EnvironmentSecretsRotationRequestV11[];
+  };
   readonly replaceRequests: EnvironmentSecretsReplaceValueRequest[];
   readonly undoRequests: EnvironmentSecretsUndoRequest[];
   readonly destroyRequests: EnvironmentSecretsDestroyRequest[];
@@ -197,12 +189,28 @@ function enforcedRotation(): LiveRotation {
         status: "acknowledged",
         evidence: [{ kind: "session_closed", count: 3 }],
       },
+    ],
+  };
+}
+
+function failedRotation(): LiveRotation {
+  return {
+    ...enforcingRotation(),
+    state: "failed",
+  };
+}
+
+function enforcedRotationWithOldHostProducer(): LiveRotation {
+  return {
+    ...enforcedRotation(),
+    producers: [
+      ...enforcedRotation().producers,
       {
         producer: "host",
-        hostId: "host-2",
+        hostId: "host-old-answer",
         incarnation: "proc-1",
-        status: "acknowledged",
-        evidence: [{ kind: "cache_cleared", count: 1 }],
+        status: "missing",
+        evidence: null,
       },
     ],
   };
@@ -228,7 +236,12 @@ function buildRotationHost(
     destroyAnswer: { outcome: "destroyed", destroyedAt: 1_791_000_000_000 },
     ...overrides,
   };
-  const reads = { list: 0, rotation: 0, versions: 0 };
+  const reads: RotationHost["reads"] = {
+    list: 0,
+    rotation: 0,
+    versions: 0,
+    rotationRequests: [],
+  };
   const replaceRequests: EnvironmentSecretsReplaceValueRequest[] = [];
   const undoRequests: EnvironmentSecretsUndoRequest[] = [];
   const destroyRequests: EnvironmentSecretsDestroyRequest[] = [];
@@ -259,8 +272,9 @@ function buildRotationHost(
         reads.list += 1;
         return { removed: [], secrets: [...state.secrets] };
       },
-      "environment.secrets.rotation": () => {
+      "environment.secrets.rotation": (request) => {
         reads.rotation += 1;
+        reads.rotationRequests.push(request);
         return { rotation: state.rotation, lastVerify: null };
       },
       "environment.secrets.versions": () => {
@@ -366,16 +380,14 @@ async function openVersions(): Promise<HTMLElement[]> {
 }
 
 describe("the Replace dialog's copy", () => {
-  it("says who holds the value and that running tools keep the old one", async () => {
+  it("says where a secret's value is used", async () => {
     renderPage(buildRotationHost({ rotation: enforcingRotation() }));
     await openReplaceDialog();
 
     expect(screen.getByTestId("secret-replace-custody").textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+      SECRET_CUSTODY_SENTENCE,
     );
-    expect(screen.getByTestId("secret-replace-restart").textContent).toBe(
-      SECRET_RESTART_LINE,
-    );
+    expect(screen.queryByTestId("secret-replace-restart")).toBeNull();
   });
 });
 
@@ -389,7 +401,7 @@ describe("Remove", () => {
     const first = dayMonth(Date.UTC(2026, 9, 1, 12));
     await waitFor(() => {
       expect(dialog.textContent).toContain(
-        `Added by you on ${first}. Version 3. Tools already running keep it until they restart.`,
+        `Added by you on ${first}. Version 3.`,
       );
     });
     expect(dialog.textContent).not.toMatch(/unknown|Came from|Held on/);
@@ -431,7 +443,7 @@ describe("Replace", () => {
     );
   });
 
-  it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
+  it("sends the typed value against the listed version, then shows worker rotation status", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     renderPage(host);
 
@@ -452,17 +464,19 @@ describe("Replace", () => {
     expect(headline.textContent).toBe(
       "New value accepted, closing old sessions.",
     );
-    expect(screen.getByTestId("secret-restart-line").textContent).toBe(
-      SECRET_RESTART_LINE,
-    );
+    expect(screen.queryByTestId("secret-restart-line")).toBeNull();
     expect(
       screen
         .getAllByTestId("secret-rotation-producer")
         .map((line) => line.textContent),
     ).toEqual(["https: not confirmed yet"]);
+    expect(host.reads.rotationRequests).toContainEqual({
+      secretId: "sec-1",
+      environmentId: PERSONAL_ENV,
+    });
   });
 
-  it("says nothing of a restart before a value has been replaced", async () => {
+  it("shows no rotation status before a value has been replaced", async () => {
     renderPage(buildRotationHost({}));
 
     await screen.findByTestId("secret-row");
@@ -471,7 +485,7 @@ describe("Replace", () => {
     expect(screen.queryByTestId("secret-rotation-status")).toBeNull();
   });
 
-  it("reads enforced with each producer's proof once the host says every one has proved it", async () => {
+  it("reads enforced once each worker class has proved the old value out of use", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     const queryClient = renderPage(host);
     await typeAndReplace();
@@ -491,7 +505,52 @@ describe("Replace", () => {
       screen
         .getAllByTestId("secret-rotation-producer")
         .map((line) => line.textContent),
-    ).toEqual(["https: 3 sessions closed", "cached keys dropped on dev-box"]);
+    ).toEqual(["https: 3 sessions closed"]);
+  });
+
+  it("shows a failed replacement with its worker line after the real rotation read", async () => {
+    const host = buildRotationHost({ rotation: failedRotation() });
+    renderPage(host);
+    await typeAndReplace();
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+
+    expect(
+      (await screen.findByTestId("secret-rotation-headline")).textContent,
+    ).toBe("Replacing the value failed. The old value may still be in use.");
+    expect(
+      screen
+        .getAllByTestId("secret-rotation-producer")
+        .map((line) => line.textContent),
+    ).toEqual(["https: not confirmed yet"]);
+  });
+
+  it("shows an old host producer on neither the Personal row nor its polling state", async () => {
+    const host = buildRotationHost({
+      rotation: enforcedRotationWithOldHostProducer(),
+    });
+    const queryClient = renderPage(host);
+    await typeAndReplace();
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+
+    expect(
+      (await screen.findByTestId("secret-rotation-headline")).textContent,
+    ).toBe("New value enforced.");
+    expect(
+      screen
+        .getAllByTestId("secret-rotation-producer")
+        .map((line) => line.textContent),
+    ).toEqual(["https: 3 sessions closed"]);
+    const rotationQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.secrets.rotation"));
+    expect(Reflect.get(rotationQuery?.options ?? {}, "refetchInterval")).toBe(
+      false,
+    );
   });
 
   it("keeps saying accepted when the host reports enforced but a producer proved nothing", async () => {
@@ -641,7 +700,7 @@ describe("a secret's versions", () => {
     expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
     const steps = within(recovery).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
-      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+      "Remove it first: every sandbox stops using the old value.",
       "Rotate the credential at the service it belongs to.",
       "Replace the value here.",
       "Grant it again.",

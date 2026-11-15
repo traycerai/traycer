@@ -16,9 +16,9 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
 /**
  * The environment sheets, mounted once for the whole app rather than inside
  * Settings: the retrospective sheet has to open by itself on the first launch
- * after the update, whatever the window shows, and both it and the move sheet
- * are opened from outside Settings too (the Start toast, the retrospective
- * sheet's `Move to Personal`).
+ * after the update, whatever the window shows, and the move sheet is opened
+ * from outside Settings too (the Start toast's move invitation, the
+ * retrospective sheet's `Move to Personal`).
  */
 export function EnvironmentSheetsHost(): ReactNode {
   return (

@@ -4,14 +4,13 @@
  * travels by.
  */
 
-import { namedHosts } from "@/components/settings/environment/status-chip-model";
 import {
   formatSettingsDate,
   onSettingsDate,
 } from "@/lib/settings/settings-date";
 
 export const SECRETS_EMPTY_TEXT =
-  "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.";
+  "Values and logins your agents use on sandboxes, without seeing them.";
 
 /** A team's Secrets text, as its subtitle and as its empty state. */
 export function teamSecretsDescription(name: string): string {
@@ -64,7 +63,7 @@ export function secretRowDetail(input: {
 
 /** On a team's host, in place of the list's actions. */
 export const TEAM_SECRETS_LINE =
-  "Team secrets are brokered only; a tool that needs a plain value needs a personal sandbox.";
+  "Team secrets are used on the team's sandboxes, without being seen.";
 
 export const SECRET_REVOKED_LABEL = "Revoked";
 
@@ -76,15 +75,21 @@ export const SECRET_SCOPE_LINE =
   "This changes the copy stored here. If the same credential is stored anywhere else, that copy needs its own replacement.";
 
 /**
- * On every secret and key Add and Replace: where the value is stored and
- * who can read it. Personal's sentence; a team's is owned separately.
+ * On a secret's Add and Replace: where Personal's value is stored and who
+ * uses it. An MCP token and a provider key each have their own sentence.
  */
 export const SECRET_CUSTODY_SENTENCE =
-  "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
+  "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.";
 
-/** After a replacement, and on Replace itself: what a running tool keeps. */
-export const SECRET_RESTART_LINE =
-  "Tools already running keep the old value until they restart.";
+/** A team's sentence where a value is added: no computer receives it. */
+export function teamCustodySentence(name: string): string {
+  return `Stored encrypted in Traycer's cloud. ${name}'s sandboxes and connected services use it without seeing it; no computer receives the value.`;
+}
+
+/** A secret's Add and Replace: Personal's sentence, or the team's. */
+export function secretCustodySentence(personal: boolean, name: string): string {
+  return personal ? SECRET_CUSTODY_SENTENCE : teamCustodySentence(name);
+}
 
 export const SECRET_REPLACE_STALE =
   "Changed somewhere else just now. Look again before you replace it.";
@@ -96,30 +101,23 @@ export const SECRET_SAVED_OFFLINE =
 export const SECRET_RECOVERY_TITLE = "If this secret leaked";
 
 export const SECRET_RECOVERY_STEPS: readonly string[] = [
-  "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+  "Remove it first: every sandbox stops using the old value.",
   "Rotate the credential at the service it belongs to.",
   "Replace the value here.",
   "Grant it again.",
 ];
 
 /**
- * Remove's confirmation: "Added by you on 24 Oct. Version 1. On dev-box and
- * laptop. Tools already running keep it until they restart." Each of the
- * first three clauses only when it is known; nothing is ever "unknown".
- * `computers` are the ones holding a copy, named as the page chip names them.
+ * Remove's confirmation: "Added by you on 24 Oct. Version 1." Each clause
+ * only when it is known; nothing is ever "unknown".
  */
 export function secretRemovePreview(input: {
   readonly added: string | null;
   readonly version: number | null;
-  readonly computers: readonly string[];
 }): string {
   const clauses: string[] = [];
   if (input.added !== null) clauses.push(`${input.added}.`);
   if (input.version !== null) clauses.push(`Version ${input.version}.`);
-  if (input.computers.length > 0) {
-    clauses.push(`On ${namedHosts(input.computers, "computers")}.`);
-  }
-  clauses.push("Tools already running keep it until they restart.");
   return clauses.join(" ");
 }
 
