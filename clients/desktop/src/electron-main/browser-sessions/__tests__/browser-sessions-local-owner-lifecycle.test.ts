@@ -152,21 +152,19 @@ function createLocalOwnerHarness(): LocalOwnerHarness {
   };
 }
 
-async function settle(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 async function openLiveLocalStream(harness: LocalOwnerHarness): Promise<{
   readonly client: FakeStreamClient;
   readonly session: FakeStreamClient["sessions"][number];
 }> {
+  const clientIndex = localWsClients.clients.length;
   harness.registry.open(WINDOW_ID, OPEN_REQUEST);
-  await settle();
-  const client = localWsClients.clients.at(-1);
+  await vi.waitFor(() =>
+    expect(localWsClients.clients).toHaveLength(clientIndex + 1),
+  );
+  const client = localWsClients.clients[clientIndex];
   if (client === undefined)
     throw new Error("the local transport was not opened");
+  await vi.waitFor(() => expect(client.sessions).toHaveLength(1));
   const session = client.sessions[0];
   if (session === undefined)
     throw new Error("the browser.sessions stream was not subscribed");
@@ -203,10 +201,10 @@ describe("local browser.sessions ownership changes", () => {
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toBeNull();
 
     resolveListing(harness, PERSONAL_OWNER, 0);
-    await settle();
-
-    expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
-      PERSONAL_OWNER,
+    await vi.waitFor(() =>
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
+        PERSONAL_OWNER,
+      ),
     );
     expect(harness.openTransport).toHaveBeenCalledTimes(1);
     expect(harness.openedTransports).toHaveLength(1);
@@ -227,8 +225,10 @@ describe("local browser.sessions ownership changes", () => {
     const { client, session } = await openLiveLocalStream(harness);
 
     resolveListing(harness, TEAM_OWNER, 0);
-    await settle();
-
+    await vi.waitFor(() => {
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+      expect(client.isClosed()).toBe(true);
+    });
     expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
     expect(harness.openTransport).toHaveBeenCalledTimes(1);
     expect(harness.openedTransports).toHaveLength(1);
@@ -238,17 +238,20 @@ describe("local browser.sessions ownership changes", () => {
     // The next real registry open resolves the now-known team owner. The
     // production jar selector refuses it before a second socket is born.
     harness.registry.open(WINDOW_ID, OPEN_REQUEST);
-    await settle();
-    expect(harness.openTransport).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() =>
+      expect(harness.openTransport).toHaveBeenCalledTimes(2),
+    );
     expect(harness.openedTransports).toHaveLength(1);
     expect(localWsClients.clients).toHaveLength(1);
-    expect(
-      harness.emitted.some(
-        ({ envelope }) =>
-          envelope.event.kind === "status" &&
-          envelope.event.lifecycle === "failed",
-      ),
-    ).toBe(true);
+    await vi.waitFor(() =>
+      expect(
+        harness.emitted.some(
+          ({ envelope }) =>
+            envelope.event.kind === "status" &&
+            envelope.event.lifecycle === "failed",
+        ),
+      ).toBe(true),
+    );
   });
 
   it("retires a personal stream when its owner changes to team", async () => {
@@ -257,9 +260,10 @@ describe("local browser.sessions ownership changes", () => {
 
     await harness.directory.resolve(LOCAL_HOST_ID);
     resolveListing(harness, PERSONAL_OWNER, 0);
-    await settle();
-    expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
-      PERSONAL_OWNER,
+    await vi.waitFor(() =>
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(
+        PERSONAL_OWNER,
+      ),
     );
 
     const { client, session } = await openLiveLocalStream(harness);
@@ -269,12 +273,12 @@ describe("local browser.sessions ownership changes", () => {
     await harness.directory.resolve(LOCAL_HOST_ID);
     expect(harness.pendingListings).toHaveLength(2);
     resolveListing(harness, TEAM_OWNER, 1);
-    await settle();
-
-    expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+    await vi.waitFor(() => {
+      expect(harness.directory.peek(LOCAL_HOST_ID)?.owner).toEqual(TEAM_OWNER);
+      expect(client.isClosed()).toBe(true);
+    });
     expect(harness.openTransport).toHaveBeenCalledTimes(1);
     expect(harness.openedTransports).toHaveLength(1);
-    expect(client.isClosed()).toBe(true);
     expect(session.closed).toBe(true);
   });
 
@@ -318,7 +322,7 @@ describe("local browser.sessions ownership changes", () => {
     const nextClient = appHarness.nextClient();
     registry.open(WINDOW_ID, { ...OPEN_REQUEST, hostId: remoteHostId });
     const client = await nextClient;
-    await settle();
+    await vi.waitFor(() => expect(client.sessions).toHaveLength(1));
     const session = client.sessions[0];
     if (session === undefined)
       throw new Error("the remote browser.sessions stream was not subscribed");
@@ -328,9 +332,7 @@ describe("local browser.sessions ownership changes", () => {
     owner = { kind: "user", id: "user-2" };
     directory.invalidate(remoteHostId);
     await directory.resolve(remoteHostId);
-    await settle();
-
-    expect(appHarness.closedTransports).toEqual([0]);
+    await vi.waitFor(() => expect(appHarness.closedTransports).toEqual([0]));
     expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
   });
 });

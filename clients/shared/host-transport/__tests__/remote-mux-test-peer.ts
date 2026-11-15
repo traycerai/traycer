@@ -101,7 +101,7 @@ export class RemoteMuxTestPeer {
   openAckCapabilities: readonly string[] = [];
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: RelayConnection[] = [];
-  private firstOpenRefusal: FatalErrorDetails | null = null;
+  private readonly openRefusals: FatalErrorDetails[] = [];
 
   get hostPublicKey(): string {
     return Buffer.from(this.hostKeys.publicKey).toString("hex");
@@ -112,7 +112,11 @@ export class RemoteMuxTestPeer {
   }
 
   refuseFirstOpen(details: FatalErrorDetails): void {
-    this.firstOpenRefusal = details;
+    this.refuseNextOpens([details]);
+  }
+
+  refuseNextOpens(details: readonly FatalErrorDetails[]): void {
+    this.openRefusals.push(...details);
   }
 
   readonly factory: IStreamWebSocketFactory = {
@@ -189,9 +193,8 @@ export class RemoteMuxTestPeer {
     if (message.type !== MuxFrameType.OPEN) return;
     const open = message.json ?? {};
     this.opens.push(open);
-    if (this.opens.length === 1 && this.firstOpenRefusal !== null) {
-      const refusal = this.firstOpenRefusal;
-      this.firstOpenRefusal = null;
+    const refusal = this.openRefusals.shift();
+    if (refusal !== undefined) {
       await this.sendMessage(connection, {
         type: MuxFrameType.FATAL,
         streamId: SESSION_CONTROL_STREAM_ID,

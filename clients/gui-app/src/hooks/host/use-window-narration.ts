@@ -2,6 +2,7 @@ import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useMemo, useState } from "react";
 import {
   deriveWindowNarration,
+  doorCoverHostOf,
   findLease,
   isServingLease,
   type WindowNarrationState,
@@ -13,6 +14,11 @@ import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-author
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+
+export interface WindowNarrationReading {
+  readonly narration: WindowNarrationState;
+  readonly doorCoverHostId: string | null;
+}
 
 /**
  * The window narrator's verdict for THIS window.
@@ -27,8 +33,12 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * MOUNT ONCE PER WINDOW. The served latch below is component state, so a
  * second mount would carry a second, independently-armed latch - two answers
  * to "has this window ever worked". `WindowHostModalHost` is the only caller.
+ *
+ * `doorCoverHostId` is the host whose door cover the narration draws, read
+ * from the same input in the same mount, so the toast's question "is that
+ * host's cover on screen" has one answer with the narration's.
  */
-export function useWindowNarration(): WindowNarrationState {
+export function useWindowNarration(): WindowNarrationReading {
   const attached = useSelectionAuthorityAttached();
   const effectiveHostId = useEffectiveHostId();
   // Scalar selector: no `useShallow` needed, unlike a derived array/object.
@@ -78,29 +88,31 @@ export function useWindowNarration(): WindowNarrationState {
     setHasBeenServed(true);
   }
 
-  return useMemo(
-    () =>
-      deriveWindowNarration({
-        attached,
-        effectiveHostId,
-        targetHostId,
-        leases,
-        hasBeenServed,
-        localHostExpected,
-        discoveryConcluded,
-        localHostId,
-        doorState,
-      }),
-    [
+  return useMemo(() => {
+    const input = {
       attached,
-      discoveryConcluded,
       effectiveHostId,
-      hasBeenServed,
+      targetHostId,
       leases,
+      hasBeenServed,
       localHostExpected,
+      discoveryConcluded,
       localHostId,
       doorState,
-      targetHostId,
-    ],
-  );
+    };
+    return {
+      narration: deriveWindowNarration(input),
+      doorCoverHostId: doorCoverHostOf(input),
+    };
+  }, [
+    attached,
+    discoveryConcluded,
+    effectiveHostId,
+    hasBeenServed,
+    leases,
+    localHostExpected,
+    localHostId,
+    doorState,
+    targetHostId,
+  ]);
 }

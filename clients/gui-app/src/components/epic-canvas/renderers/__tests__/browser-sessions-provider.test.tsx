@@ -33,6 +33,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -63,8 +64,9 @@ const hookState = vi.hoisted(() => ({
     kind: "local" as const,
     websocketUrl: null as string | null,
     version: "test-version",
-    status: "available" as const,
-  },
+    transportDialability: "dialable" as const,
+    owner: null as HostOwnerPrincipal | null,
+  } satisfies HostDirectoryEntry,
   hostClient: {
     getRequestContext: () => ({ credentials: null }),
     getRequestContextUserId: () => "user-test",

@@ -67,11 +67,27 @@ describe("main resolves the browser.sessions host itself", () => {
       listRegisteredHosts,
       now: () => now,
     });
+    let resolveOwnerPublication!: () => void;
+    const ownerPublished = new Promise<void>((resolve) => {
+      resolveOwnerPublication = resolve;
+    });
+    directory.subscribe(() => {
+      const publishedOwner = directory.peek("host-1")?.owner;
+      if (
+        publishedOwner?.kind === "user" &&
+        publishedOwner.id === owner.id
+      ) {
+        resolveOwnerPublication();
+      }
+    });
 
     const entry = await directory.resolve("host-1");
 
     expect(entry?.kind).toBe("local");
-    await expect.poll(() => directory.peek("host-1")?.owner).toEqual(owner);
+    expect(entry?.owner).toBeNull();
+    await ownerPublished;
+    expect(entry?.owner).toBeNull();
+    expect(directory.peek("host-1")?.owner).toEqual(owner);
     expect(entry?.websocketUrl).toBe("ws://127.0.0.1:1111");
     expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
 
@@ -112,20 +128,10 @@ describe("main resolves the browser.sessions host itself", () => {
       resolveRefresh();
     });
 
-    let entrySettled = false;
-    const entryPromise = directory.resolve("host-1").then((entry) => {
-      entrySettled = true;
-      return entry;
-    });
-    await Promise.resolve();
-    const returnedBeforeRefresh = entrySettled;
-    const refreshWasStillPending = !refreshPublished;
+    const entry = await directory.resolve("host-1");
 
     expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
-    expect(returnedBeforeRefresh).toBe(true);
-    expect(refreshWasStillPending).toBe(true);
-
-    const entry = await entryPromise;
+    expect(refreshPublished).toBe(false);
     expect(entry).toMatchObject({
       kind: "local",
       owner: null,

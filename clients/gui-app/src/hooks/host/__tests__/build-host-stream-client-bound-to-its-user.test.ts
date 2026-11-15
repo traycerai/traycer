@@ -64,10 +64,15 @@ describe("buildHostStreamClient for a local host", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, mockLocalHostEntry.hostId, {
-      token: HOST_TOKEN_A,
-      expiresAtMs: Date.now() + 60 * 60 * 1000,
-    });
+    await source.adopt(
+      USER_A,
+      mockLocalHostEntry.hostId,
+      {
+        token: HOST_TOKEN_A,
+        expiresAtMs: Date.now() + 60 * 60 * 1000,
+      },
+      source.era(USER_A),
+    );
     return source;
   }
 
