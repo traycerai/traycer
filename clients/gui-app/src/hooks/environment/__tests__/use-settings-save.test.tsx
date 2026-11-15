@@ -397,6 +397,7 @@ function makeSaveHarness(overrides: {
   readonly localHostId?: string | null;
   readonly proposals?: EnvironmentProposalsResponse;
   readonly reviewAnswer?: EnvironmentTransportAnswer;
+  readonly shellConfig?: ConfigShellGetResponseV11;
 }): SaveHarness {
   const listeners = new Set<() => void>();
   const state: MutableAuthnState = {
@@ -411,7 +412,7 @@ function makeSaveHarness(overrides: {
     ownSettings: overrides.ownSettings ?? false,
     failSave: false,
     localHostId: overrides.localHostId ?? null,
-    shellConfig: {
+    shellConfig: overrides.shellConfig ?? {
       path: "/bin/zsh",
       args: ["-l"],
       synthesised: false,
@@ -711,6 +712,25 @@ function makeSaveHarness(overrides: {
   };
   activeHarnesses.push(harness);
   return harness;
+}
+
+interface ShellCallbacks {
+  readonly onSuccess: () => void;
+  readonly onError: (error: unknown) => void;
+}
+
+/** One shell command of the controller, run until its callbacks answer. */
+async function runShellCommand(
+  invoke: (callbacks: ShellCallbacks) => void,
+): Promise<void> {
+  const finished = deferred<void>();
+  await act(async () => {
+    invoke({
+      onSuccess: () => finished.resolve(undefined),
+      onError: finished.reject,
+    });
+    await finished.promise;
+  });
 }
 
 function setRequest(value: string) {
@@ -1535,28 +1555,16 @@ describe("settings-save callers", () => {
     );
     await waitFor(() => expect(result.current.config?.path).toBe("/bin/zsh"));
 
-    const run = async (
-      invoke: (callbacks: {
-        readonly onSuccess: () => void;
-        readonly onError: (error: unknown) => void;
-      }) => void,
-    ) => {
-      const finished = deferred<void>();
-      await act(async () => {
-        invoke({
-          onSuccess: () => finished.resolve(undefined),
-          onError: finished.reject,
-        });
-        await finished.promise;
-      });
-    };
-
-    await run((callbacks) =>
+    await runShellCommand((callbacks) =>
       result.current.setShell({ path: "/bin/bash", args: null }, callbacks),
     );
-    await run((callbacks) => result.current.addShell("/bin/fish", callbacks));
-    await run((callbacks) => result.current.removeShell("/bin/zsh", callbacks));
-    await run((callbacks) =>
+    await runShellCommand((callbacks) =>
+      result.current.addShell("/bin/fish", callbacks),
+    );
+    await runShellCommand((callbacks) =>
+      result.current.removeShell("/bin/zsh", callbacks),
+    );
+    await runShellCommand((callbacks) =>
       result.current.revertShellArgs("/bin/zsh", callbacks),
     );
 
@@ -1612,6 +1620,142 @@ describe("settings-save callers", () => {
     expect(harness.recordsAtSend[3]?.valueDigest).toBe(
       await settingValueDigest(zshDefault),
     );
+  });
+
+  describe("a shell save that states nothing", () => {
+    const entries = [{ path: "/bin/bash", args: ["-x"] }];
+    const followingSystemDefault: ConfigShellGetResponseV11 = {
+      path: "/bin/zsh",
+      args: ["-l"],
+      synthesised: true,
+      entries,
+    };
+    const otherShellSelected: ConfigShellGetResponseV11 = {
+      path: "/bin/zsh",
+      args: ["-l"],
+      synthesised: false,
+      entries,
+    };
+
+    async function saveShell(
+      shellConfig: ConfigShellGetResponseV11,
+      invoke: (
+        controller: ReturnType<typeof useRpcShellConfigController>,
+        callbacks: ShellCallbacks,
+      ) => void,
+    ) {
+      const harness = makeSaveHarness({
+        localHostId: HOST_ID,
+        shellConfig,
+        rowsByKind: {
+          shell: [
+            itemRow(
+              { kind: "shell", key: "shell" },
+              "macos",
+              { path: "/bin/zsh", args: ["-l"] },
+              3,
+            ),
+          ],
+        },
+      });
+      const { result } = renderHook(
+        () =>
+          useRpcShellConfigController({ enabled: true, pickProgramFile: null }),
+        { wrapper: harness.wrapper },
+      );
+      await waitFor(() =>
+        expect(result.current.config?.synthesised).toBe(
+          shellConfig.synthesised,
+        ),
+      );
+      await runShellCommand((callbacks) => invoke(result.current, callbacks));
+      return harness;
+    }
+
+    async function settled(harness: SaveHarness): Promise<void> {
+      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+      await waitFor(() =>
+        expect(useSettingsSaveMemoryStore.getState().inFlight).toEqual({}),
+      );
+    }
+
+    function expectLocalOnly(harness: SaveHarness, method: string): void {
+      expect(harness.saveRequests).toEqual([method]);
+      expect(harness.savePayloads[0]?.request).toMatchObject({
+        selection: { kind: "not_stated" },
+      });
+      expect(harness.recordsAtSend).toEqual([null]);
+      expect(records()).toEqual([]);
+      expect(harness.hostRequests).not.toContain("environment.proposals");
+    }
+
+    it("sends new arguments for a computer that follows the system default as local only", async () => {
+      const harness = await saveShell(followingSystemDefault, (c, cb) =>
+        c.setShell({ path: null, args: ["-x"] }, cb),
+      );
+      await settled(harness);
+
+      expectLocalOnly(harness, "config.shell.set");
+      expect(harness.savePayloads[0]?.request).toMatchObject({
+        path: null,
+        args: ["-x"],
+      });
+    });
+
+    it("states the selected shell for new arguments on a computer that has one", async () => {
+      const harness = await saveShell(otherShellSelected, (c, cb) =>
+        c.setShell({ path: null, args: ["-x"] }, cb),
+      );
+
+      expect(harness.savePayloads[0]?.request).toMatchObject({
+        selection: { kind: "shell", path: "/bin/zsh", args: ["-x"] },
+      });
+      expect(harness.recordsAtSend[0]).not.toBeNull();
+    });
+
+    it.each([
+      ["following the system default", followingSystemDefault, "/bin/zsh"],
+      ["with another shell selected", otherShellSelected, "/bin/bash"],
+    ])(
+      "removes a shell that is not selected as local only on a computer %s",
+      async (_label, shellConfig, path) => {
+        const harness = await saveShell(shellConfig, (c, cb) =>
+          c.removeShell(path, cb),
+        );
+        await settled(harness);
+
+        expectLocalOnly(harness, "config.shell.remove");
+      },
+    );
+
+    it.each([
+      ["following the system default", followingSystemDefault, "/bin/zsh"],
+      ["with another shell selected", otherShellSelected, "/bin/bash"],
+    ])(
+      "reverts the arguments of a shell that is not selected as local only on a computer %s",
+      async (_label, shellConfig, path) => {
+        const harness = await saveShell(shellConfig, (c, cb) =>
+          c.revertShellArgs(path, cb),
+        );
+        await settled(harness);
+
+        expectLocalOnly(harness, "config.shell.revertArgs");
+      },
+    );
+
+    it("reads proposals after removing the selected shell, so the quiet cases above are not a missing read", async () => {
+      const harness = await saveShell(otherShellSelected, (c, cb) =>
+        c.removeShell("/bin/zsh", cb),
+      );
+
+      expect(harness.savePayloads[0]?.request).toMatchObject({
+        selection: { kind: "system_default" },
+      });
+      expect(harness.recordsAtSend[0]).not.toBeNull();
+      await waitFor(() =>
+        expect(harness.hostRequests).toContain("environment.proposals"),
+      );
+    });
   });
 
   it("remembers the policy stated by pack policy callers", async () => {
