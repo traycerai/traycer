@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -24,6 +24,13 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+  setTeamEnvironmentCloudOverride,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   moveInvitationIsOutstanding,
@@ -36,6 +43,13 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
 
 interface ToastButton {
   readonly label: string;
@@ -128,7 +142,9 @@ async function expectMoveInvitation(): Promise<ToastOptions> {
 }
 
 // The host directory is the boundary: which computer this is. Its reads stay
-// real, over a fake host.
+// real, over a fake host. Personal's holds and the environment list are the
+// app's own reads from authn on the person's sign-in, served by the fake authn
+// the page harness mounts.
 const thisComputer = vi.hoisted((): { current: ThisComputer } => ({
   current: { hostId: null, hostName: "this computer", client: null },
 }));
@@ -145,23 +161,101 @@ function renderGuide(): RenderResult {
   return mountGuide().view;
 }
 
+/** What authn's review answers as Personal's holds; set by `computerHolding`. */
+const authnHolds = vi.hoisted(
+  (): { current: readonly Record<string, unknown>[] } => ({ current: [] }),
+);
+
+/** The review entry as authn lists it: a hold for an executable entry, else a link to make. */
+function authnReviewEntry(
+  entry: EnvironmentReviewEntryV12,
+): Record<string, unknown> {
+  if (entry.reason !== "executable_entry") {
+    return {
+      type: "needs_link",
+      key: entry.key,
+      harnessId: "harness-1",
+      name: "Harness",
+      hostId: null,
+      hostName: "Old laptop",
+    };
+  }
+  return {
+    type: "held",
+    heldId: entry.entryId,
+    revision: 1,
+    kind: entry.kind,
+    key: entry.key,
+    os: null,
+    hostId: "old",
+    sharingGeneration: null,
+    hostName: "Old laptop",
+    heldAt: entry.heldAt,
+    op: "put",
+    value:
+      entry.kind === "mcp_server"
+        ? {
+            definition: { transport: "stdio", command: "run-server", args: [] },
+          }
+        : { value: "setting" },
+    live: null,
+  };
+}
+
+function mountAuthn(): TeamPageHarness {
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+  });
+  const cloud = harness.auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        request.method === "GET" &&
+        new URL(request.url).pathname.endsWith("/review")
+      ) {
+        return {
+          status: 200,
+          text: JSON.stringify({
+            review: { hosts: [], needsYou: authnHolds.current },
+          }),
+        };
+      }
+      return cloud.transport(request);
+    },
+  });
+  return harness;
+}
+
 function mountGuide(): {
   readonly view: RenderResult;
   readonly queryClient: QueryClient;
 } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const harness = mountAuthn();
   const view = render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <FirstTaskLandingGuide
         enabled
         rootRef={{ current: null }}
         workspaceFolders={null}
       />
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
-  return { view, queryClient };
+  return { view, queryClient: harness.queryClient };
 }
 
 function mountGuideWithLifecycleBridge(): {
@@ -185,24 +279,26 @@ function mountGuideWithLifecycleBridge(): {
     );
   }
 
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const harness = mountAuthn();
   const view = render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <LifecycleGuide />
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
   return { view, hideGuide: () => setGuideVisible(false) };
 }
 
-/** This computer, with a fake host answering `environment.review` with `entries`. */
+/**
+ * This computer, whose review authn lists as `entries`; its own host answers
+ * `environment.review` with the record of the sheet alone.
+ */
 function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
+  authnHolds.current = entries.map(authnReviewEntry);
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
       "environment.review": () => ({
-        entries: [...entries],
+        entries: [],
         shownAt: null,
         acknowledgedAt: null,
         evidence: { version: null, at: null },
@@ -312,6 +408,8 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // which outlives any one mount by design.
     retireOnboardingReminder();
     resetNegotiatedManifests();
+    resetTeamPageHarness();
+    authnHolds.current = [];
     thisComputer.current = {
       hostId: null,
       hostName: "this computer",
@@ -387,7 +485,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
   });
 
   it("keeps the setup reminder when nothing is on hold", async () => {
-    computerHolding([held({ reason: "needs_grant" })]);
+    computerHolding([]);
     renderGuide();
 
     await waitFor(() =>

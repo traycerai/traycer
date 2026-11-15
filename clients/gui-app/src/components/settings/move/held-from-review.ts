@@ -21,17 +21,10 @@ const OS_LABELS: Readonly<Record<EnvironmentOs, string | null>> = {
   windows: "Windows",
 };
 
-/** Executable entries held for the person; grant-needed writes stay on the page notices. */
-export function heldReviewEntries(
-  entries: readonly ReviewHeldEntry[],
-): readonly ReviewHeldEntry[] {
-  return entries.filter((entry) => entry.reason === "executable_entry");
-}
-
 export function heldRowsFromReview(
   entries: readonly ReviewHeldEntry[],
 ): readonly HeldRow[] {
-  return heldReviewEntries(entries).map((entry) => {
+  return entries.map((entry) => {
     const line = heldCommandLine(entry);
     return {
       heldId: entry.entryId,
@@ -47,7 +40,8 @@ export function heldRowsFromReview(
  * and the Overview's banner read: the name it goes by, what it does
  * (`(MCP server) runs <command>`), and who gets it once approved. `acts` is
  * false when the clause names the kind alone (a host below
- * `environment.review@1.2`, or a row the host could not describe).
+ * `environment.review@1.2`, or a row the host could not describe). `reach`
+ * is empty for a removal and for a kind that runs nothing.
  */
 export interface HeldCommandLine {
   readonly name: string;
@@ -87,24 +81,15 @@ export function heldCommandLine(entry: ReviewHeldEntry): HeldCommandLine {
     case "env_override":
       return variableLine(entry, facts);
     default:
-      // No held entry is a hook today; a host that holds one names its event.
-      if (facts.event !== null) {
-        return {
-          name: entry.key,
-          clause:
-            facts.command === null
-              ? "(hook)"
-              : `(hook) runs ${facts.command} on ${facts.event}`,
-          acts: facts.command !== null,
-          reach: RUNS_EVERYWHERE,
-        };
-      }
-      // A kind newer than this line set: named as the host spells it.
-      return runsLine(
-        entry.key,
-        entry.kind.replaceAll("_", " "),
-        facts.command,
-      );
+      // Any other kind (a profile, a policy, browser access, the guide, or a
+      // kind newer than this line set) runs nothing: named as the host spells
+      // it, with no reach, as a removal is.
+      return {
+        name: entry.key,
+        clause: `(${entry.kind.replaceAll("_", " ")})`,
+        acts: false,
+        reach: "",
+      };
   }
 }
 
@@ -201,7 +186,7 @@ export function heldItemsGroupedByHost(
 ): readonly HeldItemsGroup[] {
   const order: string[] = [];
   const groups = new Map<string, ReviewHeldEntry[]>();
-  for (const entry of heldReviewEntries(entries)) {
+  for (const entry of entries) {
     const key = entry.hostId ?? "";
     const existing = groups.get(key);
     if (existing === undefined) {

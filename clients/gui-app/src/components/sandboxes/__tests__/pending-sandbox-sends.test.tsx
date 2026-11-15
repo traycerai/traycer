@@ -2212,6 +2212,7 @@ describe("a send recovered without its message going back to a task", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: { target: NEW_TARGET, clientRequestId: null },
+      namedHostId: null,
       durability: "saved",
     });
     const composerSurface = composerSurfaceKey(null);
@@ -4917,6 +4918,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     return sandboxSummaryFixture({
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
+      environmentId: "env-team",
       state,
       environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,

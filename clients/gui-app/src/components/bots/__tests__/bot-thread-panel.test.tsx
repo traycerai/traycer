@@ -85,9 +85,15 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   hostClientLocating,
+  memberPost,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import {
   sessionTargetOfTurn,
   type BotTurnOpen,
@@ -544,7 +550,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 onClose={vi.fn()}
                 onEditPost={onEditPost}
                 onOpenTurn={onOpenTurn}
-                onOpenSession={vi.fn()}
                 landOn={panelLanding}
                 quote={null}
               />
@@ -1488,14 +1493,38 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(screen.queryByTestId("bot-thread-replies")).toBeNull();
   });
 
-  it("heads the thread with its name, the bot's picture and the bot's title, without a hash", () => {
+  it("heads the thread with its name and the bot's title, without a hash or a picture", () => {
     mountPanel(listed("user-teammate"), []);
 
     const channel = screen.getByTestId("bot-thread-channel");
     expect(within(channel).getByText("Release Bot")).toBeTruthy();
     expect(channel.textContent).not.toContain("#");
-    expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
+    expect(within(channel).queryByTestId("bot-avatar")).toBeNull();
     expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
+  });
+
+  it("still draws the bot's picture in the replying strip while the bot replies in the thread", () => {
+    mountPanel(listed("user-teammate"), []);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: {
+            [THREAD_ID]: {
+              state: "replying",
+              startedAt: 1_000,
+              step: null,
+              requestId: "req-1",
+              reason: null,
+            },
+          },
+        },
+      });
+    });
+
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByTestId("bot-avatar")).toBeTruthy();
   });
 
   it("rule 8: has no Activity button on a listed thread", () => {
@@ -2227,32 +2256,29 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   });
 });
 
-describe("<BotThreadPanel /> the thread's tasks", () => {
-  function task(
-    taskId: string,
-    overrides: Partial<BotTaskEntry>,
-  ): BotTaskEntry {
-    return {
-      taskId,
-      cadence: { kind: "on-completion" },
-      lastCheckinAt: null,
-      lastCheckin: null,
-      nextAt: null,
-      state: "tracking",
-      endedReason: null,
-      createdByUserId: null,
-      spun: true,
-      label: null,
-      originRequestId: null,
-      createdByChatId: THREAD_ID,
-      inputNeeded: null,
-      pause: null,
-      stop: null,
-      runRequest: null,
-      ...overrides,
-    };
-  }
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "on-completion" },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: THREAD_ID,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
+    ...overrides,
+  };
+}
 
+describe("<BotThreadPanel /> the thread's tasks", () => {
   it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
     // The thread hangs off a member's post, whose row id its request names.
     const postId = conversationRequestMessageId("req-1");
@@ -2365,6 +2391,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
   it("becomes one row while its box has the focus, keeps the draft and the focused field, and restores with the keyboard down", async () => {
     const user = userEvent.setup();
+    panelTasks = [task("task-watch", { originRequestId: "req-1" })];
     mountPanel(listed("user-teammate"), [botReply(null)]);
     const box = boxInput("Reply in the thread");
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
@@ -2378,7 +2405,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
     await user.click(box);
     typeInto(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-session")).toBe(false);
+    expect(shown("bot-thread-tasks")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
     expect(boxInput("Reply in the thread")).toBe(box);
@@ -2387,7 +2414,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-session")).toBe(true);
+    expect(shown("bot-thread-tasks")).toBe(true);
   });
 });
 
@@ -2556,5 +2583,34 @@ describe("<BotThreadPanel /> a reply that names the post the thread opens on", (
     for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
       expect(opening.classList.contains(token)).toBe(true);
     }
+  });
+});
+
+describe("<BotThreadPanel /> a member's quote above a plain line, stored in two paragraphs", () => {
+  function quoteThenPlainLine(messageId: string): Message {
+    return memberPost({
+      messageId,
+      requestId: `req-${messageId}`,
+      lines: [QUOTE_LINE, PLAIN_LINE],
+      timestamp: 1_000,
+      resolvedBy: null,
+    });
+  }
+
+  it("keeps the plain line out of the quote in a member's reply", () => {
+    mountPanel(listed("user-teammate"), [quoteThenPlainLine("reply-1")]);
+
+    const row = within(screen.getByTestId("bot-thread-replies"))
+      .getByText("implementation not confirmed started.", { exact: false })
+      .closest<HTMLElement>('[data-testid="bot-member-row"]');
+    if (row === null) throw new Error("the reply is not drawn as a member row");
+    expectPlainLineOutsideQuote(row);
+  });
+
+  it("keeps the plain line out of the quote in the post the thread opens on", () => {
+    channelMessages = [quoteThenPlainLine("anchor-1")];
+    mountPanel(listed("user-teammate"), []);
+
+    expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
   });
 });

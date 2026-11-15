@@ -22,6 +22,8 @@ import {
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
@@ -41,6 +43,7 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
+const SAVED_KINDS = ["agent_memory"] as const;
 
 interface ConfirmationSnapshot<T> {
   readonly response: T;
@@ -155,7 +158,7 @@ function hostRowStatus(input: {
   readonly progress: AgentMemoryWriteProgress;
 }): string {
   if (input.readFailed)
-    return "Couldn't read this host's memories setting. Check the host connection and reopen Settings.";
+    return "Couldn't read this host's common memory setting. Check the host connection and reopen Settings.";
   switch (input.progress.kind) {
     case "queued":
       return "Waiting to reach your configuration. This computer will send the change when it is online.";
@@ -179,6 +182,8 @@ function hostRowStatus(input: {
  */
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const queryClient = useQueryClient();
   const entryHash = useHostQueryEntryHash({
     cacheKeyIdentity: undefined,
@@ -188,8 +193,18 @@ function AgentMemoriesRow(): ReactNode {
   });
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_MEMORIES_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: (answer) => answer.state !== "local_only",
+    },
     mutationKey: configMutationKeys.agentMemoriesSet(),
-    errorMessage: "Couldn't update memories",
+    errorMessage: "Couldn't change the common memory setting",
     // The observer owns sequential confirmation reads. Mark this exact entry
     // stale without launching a parallel fetch; reopening before confirmation
     // must re-read even inside the normal cache freshness window.
@@ -427,6 +442,22 @@ function AgentMemoriesRow(): ReactNode {
         },
         onSuccess: (response) => {
           if (!live()) return;
+          // Saved on a computer bound to no configuration, in force here like
+          // `applied`. A row that read a configuration ends as for a host
+          // rebound since the read, without taking the answer as its read.
+          if (response.state === "local_only") {
+            if (environmentId !== null) {
+              finish({ kind: "settled" });
+              return;
+            }
+            latestRead = {
+              enabled: response.enabled,
+              revision: null,
+              environmentId: null,
+            };
+            finishAfterRead({ kind: "settled" });
+            return;
+          }
           if (
             environmentId !== null &&
             response.environmentId !== environmentId

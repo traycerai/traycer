@@ -1,8 +1,10 @@
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -36,6 +38,19 @@ import {
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { sandboxMutationKeys } from "@/lib/query-keys";
+import {
+  fatalDoorRefusal,
+  signInForUnaryTest,
+  unaryDoorHarness,
+} from "@/lib/__tests__/fixtures/unary-door-harness";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { toast } from "sonner";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
 
 const HOST_ID = "host-sbx-1";
 
@@ -52,6 +67,13 @@ const mocks = vi.hoisted(() => ({
   /** `IRunnerHost.sandboxControlUnavailableReason`; `null` reaches the control plane. */
   unavailableReason: null as string | null,
 }));
+
+vi.mock("sonner", () => {
+  const base = vi.fn();
+  return {
+    toast: Object.assign(base, { error: vi.fn(), success: vi.fn() }),
+  };
+});
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-sbx-1",
@@ -811,5 +833,149 @@ describe("<SandboxTileStateFrame />", () => {
       ).toBeNull();
       expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
     });
+  });
+});
+
+describe("<SandboxTileStateFrame /> on a computer that refuses this account", () => {
+  function setWindowHost(hostId: string): void {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: hostId,
+      targetHostId: hostId,
+      effectiveHostId: hostId,
+      leases: [{ hostId, status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
+  }
+
+  function tileButtons(): readonly (string | null)[] {
+    return within(screen.getByTestId("tile-door-cover"))
+      .queryAllByRole("button")
+      .map((button) => button.textContent);
+  }
+
+  beforeEach(() => {
+    mocks.entry = hostListItemToDirectoryEntry(
+      registryItem("personal"),
+      "wss://relay.example.test",
+    );
+    setWindowHost("window-host");
+  });
+  afterEach(() => {
+    useSelectionAuthorityStore.getState().reset();
+    useHostDoorStateStore.setState({ byHost: new Map() });
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it("covers the tile with message 3's words and Retry, keeps the body mounted and inert, and Retry reconnects to that computer", () => {
+    noteHostDoorState({
+      hostId: HOST_ID,
+      kind: "keys-unavailable",
+      detail: null,
+    });
+    renderFrame(false);
+    const body = screen.getByTestId("tile-body");
+
+    const cover = screen.getByTestId("tile-door-cover");
+    expect(
+      within(cover).getByText(
+        "This computer needs to connect once before it can verify access",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(cover).getByText("Check its connection, then retry."),
+    ).toBeTruthy();
+    expect(tileButtons()).toEqual(["Retry"]);
+    expect(bodyWrapper().hasAttribute("inert")).toBe(true);
+
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(HOST_ID, rebuildNow);
+    fireEvent.click(within(cover).getByRole("button", { name: "Retry" }));
+    stopHearing();
+    expect(rebuildNow).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useHostDoorStateStore.setState({ byHost: new Map() });
+    });
+    expect(screen.queryByTestId("tile-door-cover")).toBeNull();
+    expect(screen.getByTestId("tile-body")).toBe(body);
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+  });
+
+  it("offers Switch account, and nothing else, on message 8", () => {
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-a-member", detail: null });
+    renderFrame(false);
+
+    expect(tileButtons()).toEqual(["Switch account"]);
+  });
+
+  it("offers no button on message 7", () => {
+    noteHostDoorState({
+      hostId: HOST_ID,
+      kind: "membership-removed",
+      detail: null,
+    });
+    renderFrame(false);
+
+    expect(
+      within(screen.getByTestId("tile-door-cover")).getByText(
+        "You no longer have access to this team's computer",
+      ),
+    ).toBeTruthy();
+    expect(tileButtons()).toEqual([]);
+  });
+
+  it("leaves the tile to the window's own cover when its computer is the window's", () => {
+    setWindowHost(HOST_ID);
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-a-member", detail: null });
+    renderFrame(false);
+
+    expect(screen.queryByTestId("tile-door-cover")).toBeNull();
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps B's credential refusal quiet while B's tile cover is drawn", async () => {
+    signInForUnaryTest();
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-admitted", detail: null });
+    renderFrame(false);
+    expect(screen.getByTestId("tile-door-cover")).toBeTruthy();
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(true);
+
+    const harness = await unaryDoorHarness({
+      hostId: HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(2);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("says B's caller line when its refusal state has no drawn cover", async () => {
+    signInForUnaryTest();
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(false);
+    const harness = await unaryDoorHarness({
+      hostId: HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(2);
+    expect(useHostDoorStateStore.getState().byHost.get(HOST_ID)).toMatchObject({
+      kind: "not-admitted",
+    });
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(false);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't update this task.",
+      expect.objectContaining({ id: "host-error:UNAUTHORIZED:UNAUTHORIZED" }),
+    );
   });
 });

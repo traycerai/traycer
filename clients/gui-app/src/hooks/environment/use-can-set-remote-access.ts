@@ -1,7 +1,10 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -18,7 +21,7 @@ export function useCanSetRemoteAccess(
   const needsTeamRole =
     enabled && supported === true && principal?.kind === "team";
   const read = useEnvironmentHostReadQuery(client, hostId, needsTeamRole);
-  const environments = useEnvironmentListQuery(client, needsTeamRole);
+  const environments = useEnvironmentListQuery(needsTeamRole);
   if (!enabled || supported !== true) return false;
   if (principal?.kind !== "team") return true;
   const binding = read.kind === "binding" ? settledData(read.query) : null;
@@ -33,7 +36,9 @@ export function useCanSetRemoteAccess(
       environment.ownerKind === "organization" &&
       environment.environmentId === environmentId,
   );
-  return team !== undefined && configurationRoleOf(team) !== null;
+  return (
+    team !== undefined && mayChangeConfiguration(configurationRoleOf(team))
+  );
 }
 
 /** A read's answer once it has one and is not re-reading, else `null`. */

@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { undoNotice } from "@traycer-clients/shared/environment/environment-review";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  undoNotice,
+  type UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentWriteOutcome } from "@traycer/protocol/host/environment-schemas";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   invalidateEnvironmentReads,
@@ -10,7 +11,6 @@ import {
 } from "@/hooks/environment/use-environment-cloud";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
-import type { HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
@@ -31,17 +31,11 @@ const UNDO_READS = [
  * person's sign-in. A change made since answers `stale`, which the row draws
  * with today's refusal line.
  */
-export function useEnvironmentUndoMutation(
-  client: HostClient<HostRpcRegistry> | null,
-) {
+export function useEnvironmentUndoMutation() {
   const queryClient = useQueryClient();
   const cloud = useEnvironmentCloud();
-  const { environmentId } = usePersonalEnvironment(client, true);
-  return useMutation<
-    EnvironmentWriteOutcome,
-    HostRpcError,
-    { readonly noticeId: string }
-  >({
+  const { environmentId } = usePersonalEnvironment(true);
+  return useMutation<UndoOutcome, HostRpcError, { readonly noticeId: string }>({
     mutationKey: environmentMutationKeys.undo(),
     mutationFn: ({ noticeId }) =>
       withHostQueryErrorBoundary(METHOD, async () => {

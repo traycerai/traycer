@@ -272,6 +272,9 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
               },
             ],
           },
+    error: null,
+    isError: false,
+    refetch: () => Promise.resolve(),
   }),
 }));
 

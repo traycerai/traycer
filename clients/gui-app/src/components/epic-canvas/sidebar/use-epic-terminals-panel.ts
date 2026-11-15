@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * The Terminals surface's data + action layer, independent of its chrome.
  *
@@ -450,6 +451,7 @@ export function useEpicTerminalRowActions(args: {
   const label = terminalSessionLabel(session, taskHome);
 
   const submitRename = (next: string): boolean => {
+    if (showHostUpdateNeededForGesture(hostId)) return false;
     // A refusal has to reach the caller. `canRename` is a CONJUNCTION, and
     // BOTH conjuncts can go false while an editor is already open:
     //   - `renameMode` becomes "disabled" when the host stops being mutable
@@ -491,6 +493,7 @@ export function useEpicTerminalRowActions(args: {
   // immediate and mount-independent. `findOpenTileInTab` returns null when
   // no tab is open for this session, so a list-only session just gets killed.
   const requestClose = (): void => {
+    if (showHostUpdateNeededForGesture(hostId)) return;
     if (hasUnsupportedFutureRef) return;
     if (durable) {
       if (

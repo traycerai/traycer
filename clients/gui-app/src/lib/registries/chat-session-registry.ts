@@ -10,12 +10,17 @@ import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-st
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
+import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import {
   isLocalHostBootingEntry,
   remoteAwareOwnerIdentityKey,
@@ -398,10 +403,13 @@ function useChatSessionHandleInContainer(input: {
   // shape, and any host whose lease says `restarting-expected`, a hold the
   // lease's own bounds end. Everything else that nulls `transportKey` still
   // releases: identity loss, a missing entry, and a confirmed refusal with no
-  // restart episode vouching for the host.
+  // restart episode vouching for the host. The version floor applies before
+  // both restart graces: an older host cannot own a session.
   const sessionAllowed =
     servingSettled &&
     ownerIdentityKey !== null &&
+    (hostEntry === null ||
+      !hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)) &&
     (transportKey !== null ||
       isLocalHostBootingEntry(hostEntry) ||
       lease?.status === "restarting-expected");
@@ -514,9 +522,11 @@ function useChatSessionHandleInContainer(input: {
       };
     };
 
-    const onAuthError = (): void => {
+    // Decided on the host the stream is opened on, never the chat's own: a
+    // chat at rest is served by the pool, which presents the sign-in.
+    const onAuthError = signInRecoveryForStream(servingHostId, () => {
       void authServiceRef.current.revalidateCurrentContext();
-    };
+    });
 
     // A `code: "auth"` error frame means the tab's provider CLI signed out. The
     // host has already poisoned its auth cache, so a PLAIN invalidate (not a

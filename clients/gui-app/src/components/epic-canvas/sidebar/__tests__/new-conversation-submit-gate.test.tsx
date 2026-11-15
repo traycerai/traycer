@@ -410,10 +410,8 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   });
   return {
     ...actual,
-    useComposerPaste: stubPasteResult,
-    // The modal actually calls this one (the hash-only paste adapter), not
-    // `useComposerPaste` above - the real hook running underneath left
-    // `testState.ingesting`/`resolvingPaths` toggling nothing.
+    // The modal's paste hook, stubbed so `testState.ingesting`/`resolvingPaths`
+    // drive its pending gates.
     useComposerHashPaste: (
       ...args: Parameters<typeof actual.useComposerHashPaste>
     ) => {

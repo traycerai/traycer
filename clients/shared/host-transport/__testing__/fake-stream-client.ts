@@ -7,6 +7,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamContinuity,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -135,6 +136,11 @@ export class FakeStreamSession implements IStreamSession {
       null,
       null,
     );
+  }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.status = "closed";
+    this.statusHandler?.("closed", reason, null, null);
   }
 
   /**

@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   ProvidersFallbackPolicyGetResponse,
@@ -13,6 +14,10 @@ import {
   providersMutationKeys,
 } from "@/lib/query-keys";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+
+const SAVED_KINDS = ["fallback_policy"] as const;
 
 interface FallbackPolicySaveContext {
   readonly hostId: string | null;
@@ -41,6 +46,8 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
   const client = useHostClient();
   const queryClient = useQueryClient();
   const requesterHostId = useRequesterHostId(client);
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostMutation<
     HostRpcRegistry,
     "providers.fallbackPolicy.set",
@@ -49,6 +56,16 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
     client,
     method: "providers.fallbackPolicy.set",
     mapVariables: (variables) => variables,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "providers.fallbackPolicy.set", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     options: {
       mutationKey: providersMutationKeys.setFallbackPolicy(),
       // Shared with the restore and reset hooks beside this one - see

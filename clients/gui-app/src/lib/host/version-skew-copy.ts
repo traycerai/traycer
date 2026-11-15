@@ -1,5 +1,6 @@
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostVersionNeedsUpdate } from "@traycer-clients/shared/host-client/minimum-host-version";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { appLogger } from "@/lib/logger";
 
@@ -26,6 +27,11 @@ export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
   action: "Update now",
   direction: "host-outdated",
 };
+
+export const REMOTE_HOST_UPDATE_DESCRIPTION =
+  "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.";
+
+export const HOST_UPDATE_PENDING_LABEL = "Update pending";
 
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;
@@ -105,7 +111,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
 }
 
 /**
- * Whether the two DTO versions ALONE prove the host is older than this app.
+ * Whether the host version proves it is below the caller's minimum.
  *
  * The question a surface asks when it has no handshake verdict to go on - a
  * stalled load rather than a refused one - and deliberately not answerable by
@@ -123,8 +129,8 @@ export function hostIsBehindClient(input: {
   readonly clientAppVersion: string | null;
 }): boolean {
   return (
-    compareAppVersions(input.hostAppVersion, input.clientAppVersion) ===
-    "host-behind"
+    input.clientAppVersion !== null &&
+    hostVersionNeedsUpdate(input.hostAppVersion, input.clientAppVersion)
   );
 }
 

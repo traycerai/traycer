@@ -8,6 +8,7 @@
  * drawn alone for the cases that hold it out.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   HOST_A,
@@ -39,7 +40,6 @@ function PanelOnly(): ReactNode {
         <BotSearchPanel
           botId={SEARCH_BOT_A}
           botTitle="Release Bot"
-          hostId={TAB_HOST}
           environmentId="env-team"
           onClose={() => undefined}
         />

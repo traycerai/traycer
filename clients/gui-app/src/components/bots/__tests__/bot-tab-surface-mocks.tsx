@@ -162,7 +162,7 @@ export const mocks = {
       isFetchedAfterMount: true,
       isFetching: false,
     },
-    membersSupport: null as boolean | null,
+    membersReadAvailable: true,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
     // Whether a bot.thread.list answer is held: true serves `threads` as that
@@ -185,7 +185,6 @@ export const mocks = {
 export const hostSupportsMethodMock = {
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
-    if (method === "environment.members") return mocks.state.membersSupport;
     if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
     return mocks.state.support;
   },
@@ -200,6 +199,8 @@ export const hostSupportsMethodMock = {
 // the titles of the stream's tasks, and Home's task list.
 const taskContextsRead = () => ({
   tasksById: mocks.taskContexts,
+  resolutionsById: new Map(),
+  pendingTaskIds: new Set<string>(),
   isPending: mocks.taskReads.contextsPending,
   error: null,
 });
@@ -320,17 +321,17 @@ export const hostEnvironmentBindingsMock = {
 // one teammate it knows by name.
 export const environmentMembersMock = {
   useEnvironmentMemberDirectory: (
-    _client: unknown,
     environmentId: string | null,
     enabled: boolean,
   ) => {
     mocks.membersQueries.push({ environmentId, enabled });
+    const readable = enabled && mocks.state.membersReadAvailable;
     return {
       resolve: (userId: string) =>
-        enabled && userId === "user-teammate"
+        readable && userId === "user-teammate"
           ? { displayName: "Tess Teammate", avatarUrl: null }
           : null,
-      members: enabled
+      members: readable
         ? [
             {
               userId: "user-teammate",

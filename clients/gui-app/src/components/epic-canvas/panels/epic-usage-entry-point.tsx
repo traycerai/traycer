@@ -92,6 +92,7 @@ function EpicUsageEntryPointBody(props: {
         client={client}
         open={open}
         onOpenChange={setOpen}
+        chatTitles={null}
       />
     </>
   );

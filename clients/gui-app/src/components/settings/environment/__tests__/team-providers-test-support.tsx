@@ -106,7 +106,7 @@ export const cursorKey = {
   secretId: "secret-cursor",
   name: "CURSOR_API_KEY",
   kind: "provider" as const,
-  protocol: null,
+  protocol: "https",
   destinations: [],
   ...RETIRED_SECRET_ROW_FIELDS,
   providerVariables: [...RETIRED_PROVIDER_VARIABLES],

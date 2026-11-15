@@ -131,7 +131,6 @@ import {
   type BotOpenMemory,
   type BotOpenSearch,
   type BotOpenThread,
-  type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -316,8 +315,6 @@ export function BotChannelView(props: {
   readonly onOpenThread: (open: BotOpenThread | null) => void;
   /** Opens a reply's turn: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
-  /** Opens one of the bot's sessions in place of the channel: the open thread's, from its panel. */
-  readonly onOpenSession: BotSessionOpen;
   /** A message the channel, or the thread open beside it, lands on as it opens; `null` keeps where it opens. */
   readonly landOn: BotChannelLanding | null;
   /** The bot's memory open beside the channel in the thread's place; `null` for none. */
@@ -356,7 +353,6 @@ export function BotChannelView(props: {
     openThread: open,
     onOpenThread,
     onOpenTurn,
-    onOpenSession,
     openMemory,
     onOpenMemory,
     environmentId,
@@ -979,7 +975,6 @@ export function BotChannelView(props: {
                 <BotSearchPanel
                   botId={botId}
                   botTitle={botTitle}
-                  hostId={hostId}
                   environmentId={environmentId}
                   onClose={() => closeBotSearch(botId)}
                 />
@@ -1022,7 +1017,6 @@ export function BotChannelView(props: {
                       }}
                       onEditPost={editPostFromThread}
                       onOpenTurn={onOpenTurn}
-                      onOpenSession={onOpenSession}
                       quote={quoteFor(postId)}
                     />
                   </QuoteSinkContext>

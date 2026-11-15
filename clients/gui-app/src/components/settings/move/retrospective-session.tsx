@@ -36,7 +36,6 @@ import {
   useEnvironmentStatusRead,
   type EnvironmentRead,
 } from "@/hooks/environment/use-environment-reads";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
@@ -75,17 +74,10 @@ export function RetrospectiveSession(props: {
     props.stopHostId,
     props.open && props.stopHostId !== null,
   );
-  const appliedOn = useAppliedOnHosts(
-    props.client,
-    props.reviewHostId,
-    props.open,
-  );
+  const appliedOn = useAppliedOnHosts(props.open);
   const record = useEnvironmentReviewRecordMutation(props.client);
   const entries = review.data?.entries ?? [];
-  const heldApply = useEnvironmentReviewHeldApplyMutation(
-    props.client,
-    entries,
-  );
+  const heldApply = useEnvironmentReviewHeldApplyMutation(entries);
   const recordMutate = record.mutate;
   const queryClient = useQueryClient();
   const retryReview = (): void => {
@@ -266,28 +258,15 @@ function inventoryReady(
   );
 }
 
-function useAppliedOnHosts(
-  client: HostClient<HostRpcRegistry>,
-  reviewHostId: string | null,
-  open: boolean,
-): readonly string[] {
-  const listSupported = useHostMethodSupport(reviewHostId, "environment.list");
-  const environments = useEnvironmentListQuery(
-    client,
-    open && listSupported === true,
-  );
+function useAppliedOnHosts(open: boolean): readonly string[] {
+  const environments = useEnvironmentListQuery(open);
   const personalEnvironmentId =
     environments.data?.environments.find(
       (environment) => environment.ownerKind === "user",
     )?.environmentId ?? null;
-  const hostListSupported = useHostMethodSupport(
-    reviewHostId,
-    "environment.host.list",
-  );
   const hostLists = useEnvironmentHostLists(
-    client,
     personalEnvironmentId === null ? [] : [personalEnvironmentId],
-    open && personalEnvironmentId !== null && hostListSupported === true,
+    open && personalEnvironmentId !== null,
   );
   if (personalEnvironmentId === null) return [];
   return appliedOnHostNames(

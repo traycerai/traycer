@@ -217,6 +217,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/lib/simulator-view/simulator-input-encoding.ts": 2,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
+  // `${item.kind}:${item.key}` builds a row key for an environment
+  // configuration item; the `.key` there is a field, not a keyboard key.
+  "shared/environment/configuration-hosts.ts": 1,
   // The mac/non-mac history-modifier check, kept separate from every
   // registered chord matcher above: it reads the character so it can
   // recognise the SAME convention (Cmd/Ctrl+Z, Ctrl+Y) regardless of which

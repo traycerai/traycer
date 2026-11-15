@@ -96,10 +96,6 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicTreeNode: (id: string) => ({ title: `Chat ${id}` }),
-}));
-
 // html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
 // the hook's own capture step is stubbed here so these tests exercise the
 // dialog's wiring (which node it resolves, what it hands off) rather than
@@ -313,6 +309,7 @@ function renderDialog(
       client={client}
       open
       onOpenChange={onOpenChange}
+      chatTitles={new Map([["chat-1", "Chat chat-1"]])}
     />,
     { wrapper },
   );

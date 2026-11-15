@@ -1,13 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
-import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -17,6 +8,8 @@ import {
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
+  mayChangeConfiguration,
+  personalReadOnlyOnTeamComputer,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
@@ -40,20 +33,7 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
-
-/** A row arriving and a same-user admission change both update transport policy. */
-function subscribeConfigurationTransport(onChange: () => void): () => void {
-  const unsubscribeHost = subscribeAnyHostRowChanged(onChange);
-  const unsubscribeAdmission = useLocalTeamAdmissionStore.subscribe(onChange);
-  const unsubscribeAuth = useAuthStore.subscribe(onChange);
-  return () => {
-    unsubscribeHost();
-    unsubscribeAdmission();
-    unsubscribeAuth();
-  };
-}
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 
 /** The team is gone from the person's memberships: they were removed from it. */
 function noLongerInLine(teamName: string): string {
@@ -138,31 +118,10 @@ export function ConfigurationSourceBoundary(props: {
 }): ReactNode {
   const { target } = props;
   const viewerId = useCloudChatViewerId();
-  const client = useHostClient();
-  const readTransportReadOnly = useCallback(() => {
-    const entry = client.getActiveHost();
-    if (entry === null) return false;
-    if (isRemoteHostDirectoryEntry(entry)) {
-      return entry.sandbox === null && entry.owner?.kind === "team";
-    }
-    if (entry.kind !== "local") return false;
-    const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
-    const admission = useLocalTeamAdmissionStore
-      .getState()
-      .byHost.get(entry.hostId);
-    return (
-      admission?.userId === userId &&
-      (admission.state === "admitted" ||
-        admission.state === "required" ||
-        admission.state === "unavailable")
-    );
-  }, [client]);
-  const transportReadOnly = useSyncExternalStore(
-    subscribeConfigurationTransport,
-    readTransportReadOnly,
-    readTransportReadOnly,
-  );
-  const list = useEnvironmentListQuery(client, true);
+  // Until the registry answers, Personal stays read-only as on a team's
+  // computer.
+  const onTeamComputer = useWindowHostOwnership() !== "not-team";
+  const list = useEnvironmentListQuery(true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"
       ? entry.environmentId === target.environmentId &&
@@ -171,16 +130,20 @@ export function ConfigurationSourceBoundary(props: {
   );
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
+    const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
     return {
       kind: "pool",
-      configuration: descriptor.ownerKind === "user" ? "personal" : "team",
+      configuration,
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
       effectiveRole: configurationRoleOf(descriptor),
-      transportReadOnly,
+      transportReadOnly: personalReadOnlyOnTeamComputer(
+        configuration,
+        onTeamComputer,
+      ),
     };
-  }, [descriptor, transportReadOnly]);
+  }, [descriptor, onTeamComputer]);
   useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
@@ -240,7 +203,8 @@ export function ConfigurationSourceBoundary(props: {
       value={source}
     >
       {source.kind === "pool" &&
-      (source.effectiveRole === null || source.transportReadOnly) ? (
+      (!mayChangeConfiguration(source.effectiveRole) ||
+        source.transportReadOnly) ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
           {seeButNotChangeLine(descriptor.label)}
         </p>

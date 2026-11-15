@@ -3,7 +3,6 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-query";
-import { useOptionalHostClient } from "@/lib/host";
 
 const NO_TEAM: readonly string[] = [];
 
@@ -20,10 +19,7 @@ export function useTeamBillingAdminOf(
   teamIds: readonly string[],
 ): (teamId: string) => boolean {
   const { byTeamId } = useTeamEnvironmentIds(teamIds);
-  const environments = useEnvironmentListQuery(
-    useOptionalHostClient(),
-    byTeamId.size > 0,
-  );
+  const environments = useEnvironmentListQuery(byTeamId.size > 0);
   const descriptors = environments.isError
     ? undefined
     : environments.data?.environments;
@@ -42,7 +38,7 @@ export function useTeamBillingAdminOf(
  * `environmentId`, read as {@link useTeamBillingAdminOf} reads it.
  */
 export function useEnvironmentBillingAdmin(environmentId: string): boolean {
-  const environments = useEnvironmentListQuery(useOptionalHostClient(), true);
+  const environments = useEnvironmentListQuery(true);
   return adminOf(
     environments.isError ? undefined : environments.data?.environments,
     environmentId,

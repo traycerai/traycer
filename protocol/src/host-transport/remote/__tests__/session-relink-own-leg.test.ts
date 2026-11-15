@@ -43,7 +43,9 @@ import {
   QosClass,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
+  sessionOpenPayloadSchema,
   type ResumePayload,
+  type SessionOpenPayload,
 } from "../../mux";
 import {
   encodeResumeFrame,
@@ -255,6 +257,7 @@ class FakeRelay {
   readonly dialTimes: number[] = [];
   readonly clientFrames: ClientFrameRecord[] = [];
   readonly resumes: ResumePayload[] = [];
+  readonly openPayloads: SessionOpenPayload[] = [];
   readonly requestStreamIds: number[] = [];
   readonly pendingRequests: PendingRequest[] = [];
   readonly subscribedStreams: number[] = [];
@@ -393,8 +396,16 @@ class FakeRelay {
     });
   }
 
-  /** A host-sent session FATAL on stream 0, sealed in order like any host frame. */
-  async sendSessionFatal(code: string, retryable: boolean): Promise<void> {
+  /**
+   * A host-sent session FATAL on stream 0, sealed in order like any host
+   * frame. `doorReason` rides in the details where the host puts it; `null`
+   * is a host that names no reason.
+   */
+  async sendSessionFatal(
+    code: string,
+    retryable: boolean,
+    doorReason: string | null,
+  ): Promise<void> {
     await this.sendMux(this.host(), {
       type: MuxFrameType.FATAL,
       streamId: SESSION_CONTROL_STREAM_ID,
@@ -406,6 +417,7 @@ class FakeRelay {
           incompatibleMethods: null,
           upgradeGuidance: null,
           retryable,
+          ...(doorReason === null ? {} : { doorReason }),
         },
       },
       binary: null,
@@ -542,6 +554,7 @@ class FakeRelay {
       message.streamId === SESSION_CONTROL_STREAM_ID &&
       message.type === MuxFrameType.OPEN
     ) {
+      this.openPayloads.push(sessionOpenPayloadSchema.parse(json));
       await this.sendMux(session, {
         type: MuxFrameType.OPEN_ACK,
         streamId: SESSION_CONTROL_STREAM_ID,
@@ -668,16 +681,22 @@ function buildEvidence(relay: FakeRelay): EvidenceSpies {
   };
 }
 
-function hostAuth(revalidate: FixtureConfig["revalidate"]): RemoteSessionAuth {
+function hostAuth(
+  revalidate: FixtureConfig["revalidate"],
+  readBearer: () => string,
+): RemoteSessionAuth {
   return {
     missingOpenAuthCause: "missing-host-credential",
-    readOpenAuth: () => ({
-      bearer: "relink-bearer",
-      authz: null,
-      fingerprint: "relink-bearer",
-    }),
-    readCredentialUpdateBearer: () => "relink-bearer",
-    currentFingerprint: () => "relink-bearer",
+    readOpenAuth: (attachGrant) => {
+      const bearer = readBearer();
+      return {
+        bearer,
+        authz: { v: 1, grant: attachGrant.grant },
+        fingerprint: `${bearer}:${attachGrant.grant}`,
+      };
+    },
+    readCredentialUpdateBearer: readBearer,
+    currentFingerprint: readBearer,
     revalidateForReconnect: revalidate,
   };
 }
@@ -706,6 +725,7 @@ interface Fixture {
   readonly statuses: StatusEvent[];
   readonly readinessLost: Mock<() => void>;
   readonly recovered: Mock<() => void>;
+  readonly setOpenBearer: (bearer: string) => void;
 }
 
 const opened: Session[] = [];
@@ -756,12 +776,13 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     }),
   );
   let nextRequestId = 0;
+  let openBearer = "relink-bearer";
   const session: Session = new RemoteSession({
     hostId: HOST_ID,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.publicKey,
     grantProvider: grants,
-    auth: hostAuth(config.revalidate),
+    auth: hostAuth(config.revalidate, () => openBearer),
     clock: null,
     rpcRegistry,
     streamRegistry,
@@ -805,6 +826,9 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     statuses,
     readinessLost,
     recovered,
+    setOpenBearer: (bearer) => {
+      openBearer = bearer;
+    },
   };
 }
 
@@ -1371,7 +1395,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture(LIVE);
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint.promise);
@@ -1719,7 +1743,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
     }> {
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2139,7 +2163,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture(LIVE);
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2164,7 +2188,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture({ ...LIVE, revalidate });
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("UNAUTHORIZED", false);
+      await relay.sendSessionFatal("UNAUTHORIZED", false, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2237,6 +2261,111 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs).toHaveLength(2);
       expect(relay.legs[1]?.claim).toBeNull();
       expect(relay.sessions).toHaveLength(2);
+    });
+  });
+
+  describe("a host closes a session over its owner and the door's reason decides the redial", () => {
+    it("not_admitted from a person-owned host (UNAUTHORIZED) then rotated: the same session is ready again and presents the newly read host-only token", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rotated"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+      fixture.setOpenBearer("reopened-host-only-token");
+      fixture.grants.mockImplementationOnce(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "reopened-grant-jws", expiresInSeconds: 300 },
+        }),
+      );
+
+      await relay.sendSessionFatal("UNAUTHORIZED", false, "not_admitted");
+      await advanceUntil(() => relay.openPayloads.length === 2, 30_000);
+      await advanceUntil(() => session.isReady(), 30_000);
+      await relay.host().queue;
+      await settleNoise();
+
+      expect(session.isReady()).toBe(true);
+      expect(session.isClosed()).toBe(false);
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(relay.openPayloads.map(({ bearer }) => bearer)).toEqual([
+        "relink-bearer",
+        "reopened-host-only-token",
+      ]);
+      expect(relay.openPayloads[0]?.authz).toEqual({
+        v: 1,
+        grant: "grant-jws",
+      });
+      expect(relay.openPayloads[1]?.authz).toEqual({
+        v: 1,
+        grant: "reopened-grant-jws",
+      });
+      expect(fixture.session).toBe(session);
+    });
+
+    it("not_admitted from a team-owned host (TEAM_MEMBERSHIP_REQUIRED) then rejected: one close, no second open", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rejected"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+
+      await relay.sendSessionFatal(
+        "TEAM_MEMBERSHIP_REQUIRED",
+        false,
+        "not_admitted",
+      );
+      await advanceUntil(() => session.isClosed(), 30_000);
+      await until(() => onClosed.mock.calls.length === 1);
+      await step(60_000);
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(session.isClosed()).toBe(true);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(session.terminalFatal()?.code).toBe("TEAM_MEMBERSHIP_REQUIRED");
+      expect(session.terminalFatal()?.doorReason).toBe("not_admitted");
+      expect(relay.openPayloads).toHaveLength(1);
+      expect(relay.legs).toHaveLength(1);
+    });
+
+    it("host_claimed: a terminal close without a revalidation or a second open", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rotated"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+
+      await relay.sendSessionFatal("UNAUTHORIZED", false, "host_claimed");
+      await advanceUntil(() => session.isClosed(), 30_000);
+      await until(() => onClosed.mock.calls.length === 1);
+      await step(60_000);
+
+      expect(revalidate).not.toHaveBeenCalled();
+      expect(session.isClosed()).toBe(true);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(session.terminalFatal()?.code).toBe("UNAUTHORIZED");
+      expect(session.terminalFatal()?.doorReason).toBe("host_claimed");
+      expect(relay.openPayloads).toHaveLength(1);
+      expect(relay.legs).toHaveLength(1);
     });
   });
 

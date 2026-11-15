@@ -1590,6 +1590,7 @@ describe("a returned sandbox on the open landing draft", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     useLandingDraftStore.getState().setDraftReturnedSandbox(DRAFT_ID, RETURNED);
@@ -1652,6 +1653,7 @@ describe("a returned sandbox on the open landing draft", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     drafts.setDraftReturnedSandbox("draft-other", otherDraft);
@@ -1696,6 +1698,7 @@ describe("a returned sandbox on the open landing draft", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     function ShownDraft(props: { readonly draftId: string }): null {

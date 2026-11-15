@@ -105,6 +105,10 @@ vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
 }));
 
+vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({
+  WindowHostModalHost: () => null,
+}));
+
 vi.mock("@/components/layout/bridges/menu-command-listener", () => ({
   MenuCommandListener: () => null,
 }));
@@ -150,6 +154,11 @@ vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
 // has no QueryClientProvider, so stub it like the shell bridges above.
 vi.mock("@/providers/team-removal-tile-closer", () => ({
   TeamRemovalTileCloser: () => null,
+}));
+// The window's claimed-computer cover reads the claims query; this harness
+// has no QueryClientProvider, so stub it like the shell pieces above.
+vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({
+  WindowHostModalHost: () => null,
 }));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({

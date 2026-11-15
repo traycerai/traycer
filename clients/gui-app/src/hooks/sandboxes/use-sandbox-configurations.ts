@@ -3,7 +3,6 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { sandboxCreateTeams } from "@/components/hosts/sandbox-create-model";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useOptionalHostClient } from "@/lib/host";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-query";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
@@ -45,7 +44,7 @@ export function useSandboxConfigurations(): SandboxConfigurations {
   const complete = teamsKnown && environments.complete;
   // The environment list another surface has read (the team Admin read):
   // only what is already cached, never a read of its own.
-  const list = useEnvironmentListQuery(useOptionalHostClient(), false);
+  const list = useEnvironmentListQuery(false);
   const personalEnvironmentId = list.isError
     ? null
     : (list.data?.environments.find(

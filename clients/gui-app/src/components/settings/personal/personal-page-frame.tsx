@@ -17,6 +17,7 @@ import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-head
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   personalPageItemKinds,
   personalPageStatusLine,
@@ -83,7 +84,7 @@ function useWindowHostEnvironmentState(
   // on a host without them, or on a team's host.
   const personal =
     state.kind === "ready" && state.status.principal?.kind === "personal";
-  const notices = useEnvironmentNoticesRead(scope.client, personal);
+  const notices = useEnvironmentNoticesRead(personal);
   const review = useEnvironmentReviewRead(scope.client, scope.hostId, personal);
   return {
     state,
@@ -253,6 +254,35 @@ function useWindowHostRunsPersonal(): boolean | null {
 
 /** A page whose source is a host's own: Personal on its host, or a Local row. */
 function HostPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
+  const computerPage = SETTINGS_SECTIONS.some(
+    (section) =>
+      section.id === props.section &&
+      (section.group === "personal" || section.group === "host"),
+  );
+  const content = <HostPageContents {...props} />;
+  return pick.kind === "local" && computerPage ? (
+    <LocalComputerPageGate>{content}</LocalComputerPageGate>
+  ) : (
+    content
+  );
+}
+
+function LocalComputerPageGate(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const scope = usePersonalHostScope();
+  return (
+    <HostMinimumVersionGate host={scope.host}>
+      {props.children}
+    </HostMinimumVersionGate>
+  );
+}
+
+function HostPageContents(props: {
   readonly section: SettingsSectionId;
   readonly children: ReactNode;
 }): ReactNode {

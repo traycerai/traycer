@@ -4,6 +4,7 @@ import {
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
@@ -894,6 +895,10 @@ export class AuthService {
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
     this.tokenStore = new AuthTokenStore(options.runnerHost.tokenStore);
+    // A host-only token is minted only with a sign-in authn has confirmed.
+    options.runnerHost.hostTokens.bindSignIn((userId) =>
+      this.currentProfile?.userId === userId ? this.cloudBearer() : null,
+    );
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
     });
@@ -3181,6 +3186,13 @@ export class AuthService {
     )
       throw new SupersededAuthEraError();
     return result;
+  }
+
+  /** The signed-in person's environments, from traycer-server's directory. */
+  async listEnvironments(): Promise<EnvironmentDirectoryResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listEnvironments(bearer);
   }
 
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {

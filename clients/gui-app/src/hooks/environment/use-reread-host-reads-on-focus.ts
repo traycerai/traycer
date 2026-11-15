@@ -5,6 +5,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient, type Query } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { ENVIRONMENT_CLOUD_QUERY_SCOPE } from "@/hooks/environment/use-environment-cloud";
 import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
 import { HOST_METHOD_POLL_TABLE } from "@/lib/host-rpc-policy/host-method-policy-table";
 
@@ -17,7 +18,12 @@ const UNPOLLED: ReadonlySet<string> = new Set(
     .map(([method]) => method),
 );
 
-/** A read made through `hostId`, cached under the tier that serves it. */
+/**
+ * A read made through `hostId`, cached under the tier that serves it, or one
+ * the app makes itself on authn (a named environment's secrets, its history,
+ * the environment list, the review list, the notices), cached under authn's
+ * scope where the pool's answer was before those reads moved.
+ */
 function rereadsOnFocus(
   query: Query,
   hostId: string,
@@ -25,7 +31,10 @@ function rereadsOnFocus(
 ): boolean {
   const [scope, host, method] = query.queryKey;
   if (scope !== "host" || typeof method !== "string") return false;
-  if (host !== hostRpcServingTierHostId(method, hostId, plan, null))
+  if (
+    host !== ENVIRONMENT_CLOUD_QUERY_SCOPE &&
+    host !== hostRpcServingTierHostId(method, hostId, plan, null)
+  )
     return false;
   if (DELTA_FED.has(method)) return true;
   return query.getObserversCount() > 0 && UNPOLLED.has(method);

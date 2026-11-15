@@ -1,5 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -7,15 +15,18 @@ import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useConfigurationMcpServersQuery } from "@/hooks/environment/team/use-mcp-servers";
 import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
+import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { negotiateMethods } from "./mcp-skills-test-support";
 import {
+  configurationItem,
   mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -32,11 +43,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     await import("@/components/settings/host-scope/host-scope-fixture");
   const scope = hostScopeFixture({ host: null });
   const useHostScope = () => scope;
-  return { useHostScope, useHostScopeFor: useHostScope, WINDOW_HOST_SELECTION };
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION,
+  };
 });
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -68,11 +85,17 @@ const acme: EnvironmentDescriptorV11 = {
   providerHandle: "handle-a",
 };
 
-/** A page child that only reads Personal's servers, as the MCP servers page does. */
-function PersonalMcpServerReader(): ReactNode {
-  useConfigurationMcpServersQuery();
-  return null;
-}
+const personal: EnvironmentDescriptorV11 = {
+  environmentId: "env-personal",
+  ownerKind: "user",
+  ownerId: "user-me",
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
 
 /** Reads `config.env.list` the way the Shell panel's variables table does. */
 function HostVariablesReader(): ReactNode {
@@ -107,18 +130,6 @@ function HostShellReader(): ReactNode {
   return null;
 }
 
-const personal: EnvironmentDescriptorV11 = {
-  environmentId: "env-personal",
-  ownerKind: "user",
-  ownerId: "user-me",
-  roomId: "room-personal",
-  label: "Personal",
-  effectiveRole: "owner",
-  kind: "personal",
-  hostCount: 1,
-  providerHandle: null,
-};
-
 function mountFrame(
   pick: EnvironmentPick,
   handlers: Parameters<typeof mountTeamPage>[1],
@@ -128,6 +139,14 @@ function mountFrame(
     useSettingsEnvironmentPickStore.setState({ pick });
   });
   const harness = mountTeamPage({ kind: "host" }, handlers);
+  // The account's teams as the app has them at sign-in: the environment list
+  // joins the viewer's role and the team's handle from them as its first read
+  // starts.
+  useAuthStore.setState({
+    shareableTeams: [
+      { teamId: acme.ownerId, slug: "handle-a", avatarUrl: null },
+    ],
+  });
   harness.queryClient.setDefaultOptions({
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
     mutations: { retry: false },
@@ -174,23 +193,70 @@ describe("a team page under PersonalPageFrame", () => {
     });
   });
 
-  it("rereads Personal's MCP servers when the window regains focus, on a page the cloud always serves", async () => {
-    negotiateMethods({
-      "environment.configuration.mcpServers.list": { major: 1, minor: 0 },
+  it("rereads a team's variable items from authn when the window regains focus", async () => {
+    let items = [
+      configurationItem({
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        value: { value: "production" },
+        revision: 3,
+      }),
+    ];
+    const harness = mountFrame(
+      { kind: "team", environmentId: "env-a" },
+      {
+        "environment.list": () => ({ environments: [acme] }),
+        "environment.host.list": () => ({ hosts: [] }),
+        "environment.configuration.items": () => ({ items }),
+      },
+      { section: "shell", element: <TeamVariablesAndShells /> },
+    );
+    const field = await screen.findByLabelText("Value for NODE_ENV");
+    expect(field).toHaveProperty("value", "production");
+    const before = harness.paramsOf("environment.configuration.items").length;
+    items = [
+      configurationItem({
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        value: { value: "staging" },
+        revision: 4,
+      }),
+    ];
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
     });
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(before);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "value",
+        "staging",
+      );
+    });
+  });
+
+  it("rereads Personal's MCP servers from authn when the window regains focus", async () => {
     const harness = mountFrame(
       { kind: "personal" },
       {
-        "environment.list": () => ({ environments: [personal, acme] }),
+        "environment.list": () => ({ environments: [personal] }),
         "environment.host.list": () => ({ hosts: [] }),
         "environment.configuration.mcpServers.list": () => ({ servers: [] }),
       },
-      { section: "mcp-servers", element: <PersonalMcpServerReader /> },
+      { section: "mcp-servers", element: <EnvironmentMcpServersPage /> },
     );
+
     await waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.mcpServers.list"),
-      ).toEqual([{ environmentId: "env-personal" }]);
+      ).toHaveLength(1);
     });
 
     act(() => {
@@ -201,6 +267,97 @@ describe("a team page under PersonalPageFrame", () => {
       expect(
         harness.paramsOf("environment.configuration.mcpServers.list"),
       ).toHaveLength(2);
+    });
+  });
+
+  it("re-reads a team item after an out-of-date save, and the next edit uses that revision", async () => {
+    let current = configurationItem({
+      kind: "variable",
+      key: "NODE_ENV",
+      os: "any",
+      value: { value: "production" },
+      revision: 3,
+    });
+    let puts = 0;
+    const harness = mountFrame(
+      { kind: "team", environmentId: "env-a" },
+      {
+        "environment.list": () => ({ environments: [acme] }),
+        "environment.host.list": () => ({ hosts: [] }),
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = configurationItem({
+              kind: "variable",
+              key: "NODE_ENV",
+              os: "any",
+              value: { value: "staging" },
+              revision: 4,
+            });
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = configurationItem({
+            kind: "variable",
+            key: "NODE_ENV",
+            os: "any",
+            value: { value: "development!" },
+            revision: 5,
+          });
+          return { outcome: "saved", revision: 5 };
+        },
+      },
+      { section: "shell", element: <TeamVariablesAndShells /> },
+    );
+    const user = userEvent.setup();
+    const field = await screen.findByLabelText("Value for NODE_ENV");
+    await user.clear(field);
+    await user.type(field, "development");
+    const readsBeforeConflict = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforeConflict);
+    });
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        value: { value: "development" },
+        revision: 3,
+      },
+    ]);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "value",
+        "development",
+      );
+    });
+
+    await user.type(screen.getByLabelText("Value for NODE_ENV"), "!");
+    fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(2);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({
+      revision: 4,
+      value: { value: "development!" },
     });
   });
 
@@ -257,7 +414,12 @@ describe("a team page under PersonalPageFrame", () => {
         "environment.host.list": () => ({ hosts: [] }),
         "config.shell.get": () => {
           served += 1;
-          return { path: "/bin/zsh", args: [], synthesised: false };
+          return {
+            path: "/bin/zsh",
+            args: [],
+            synthesised: false,
+            entries: [],
+          };
         },
       },
       { section: "secrets", element: <HostShellReader /> },

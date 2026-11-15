@@ -1,5 +1,9 @@
 import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "../environment-directory";
+import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
 } from "../host-ownership";
@@ -183,6 +187,12 @@ import {
   type UpdateHostVersionPolicyFetchResult,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "../../auth/host-token-source";
+import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
 import {
   deregisterHostViaHttp,
   type DeregisterHostFetchResult,
@@ -747,6 +757,15 @@ export class MockRunnerHost implements IRunnerHost {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+    );
+  }
+
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
@@ -1150,6 +1169,14 @@ export class MockRunnerHost implements IRunnerHost {
       this.secureStorageEntries.delete(key);
     },
   };
+
+  readonly hostTokens: HostTokenSource = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: (hostId, signInToken, signal) =>
+      mintHostTokenViaHttp(this.authnBaseUrl, hostId, signInToken, signal),
+    signIn: null,
+    now: Date.now,
+  });
 
   readonly tokenStore: ITokenStore = {
     getSignInStorageLow: async () => false,

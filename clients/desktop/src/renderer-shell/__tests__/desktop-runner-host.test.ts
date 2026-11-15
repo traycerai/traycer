@@ -144,6 +144,7 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -277,6 +278,14 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    hostTokens: {
+      era: (_userId: string) => 0,
+      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
+      adopt: async () => ({ era: 0 }),
+      forgetUser: async () => ({ era: 0 }),
+      subscribe: () => ({ dispose: () => undefined }),
+    },
     listUserSessions: async () => ({ kind: "network-error" as const }),
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),

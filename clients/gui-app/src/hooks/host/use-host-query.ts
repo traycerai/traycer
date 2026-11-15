@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type MutationFunctionContext,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
@@ -26,9 +28,21 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import {
+  withHostQueryErrorBoundary,
+  withHostMutationErrorBoundary,
+} from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import type {
+  EnvironmentCloud,
+  EnvironmentCloudSource,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  sendFollowedSave,
+  type PendingSettingsSave,
+} from "@/lib/environment/settings-save-follow";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
@@ -316,44 +330,56 @@ export function useHostQueryWithResponseMap<
   // Coordinator control flow deliberately remains TanStack cancellation.
   const request = ({ signal }: QueryFunctionContext): Promise<TData> =>
     withHostQueryErrorBoundary(method, async () => {
-      if (client === null) {
-        return Promise.reject<TData>(hostClientUnavailableError(method));
-      }
-      args.preflight?.();
-      // The payload, which is `params` unless a caller derives one per
-      // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
-      // that fence remains the last thing captured before the request leaves.
-      const buildRequest = args.buildRequest;
-      const payload =
-        buildRequest === undefined ? params : buildRequest(params);
-      const requirement = args.requiredHostMethodVersion?.() ?? null;
-      const requestContext = args.captureRequestContext?.();
-      const responseTimeoutMs = args.responseTimeoutMs;
-      let response: ResponseOfMethod<Registry, Method>;
-      if (responseTimeoutMs !== undefined) {
-        response = await client.requestWithOptions(method, payload, {
-          responseTimeoutMs,
-          idempotencyKey: null,
-          requiredHostMethodVersion: requirement,
+      try {
+        if (client === null) {
+          throw hostClientUnavailableError(method);
+        }
+        args.preflight?.();
+        // The payload, which is `params` unless a caller derives one per
+        // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
+        // that fence remains the last thing captured before the request leaves.
+        const buildRequest = args.buildRequest;
+        const payload =
+          buildRequest === undefined ? params : buildRequest(params);
+        const requirement = args.requiredHostMethodVersion?.() ?? null;
+        const requestContext = args.captureRequestContext?.();
+        const responseTimeoutMs = args.responseTimeoutMs;
+        let response: ResponseOfMethod<Registry, Method>;
+        if (responseTimeoutMs !== undefined) {
+          response = await client.requestWithOptions(method, payload, {
+            responseTimeoutMs,
+            idempotencyKey: null,
+            requiredHostMethodVersion: requirement,
+            signal,
+          });
+        } else if (requirement !== null) {
+          response = await client.requestWithSignalRequiringHostMethodVersion(
+            method,
+            payload,
+            signal,
+            requirement,
+          );
+        } else {
+          response = await client.requestWithSignal(method, payload, signal);
+        }
+        return await mapResponse({
+          response,
+          queryClient,
+          queryKey,
+          requestContext,
           signal,
         });
-      } else if (requirement !== null) {
-        response = await client.requestWithSignalRequiringHostMethodVersion(
-          method,
-          payload,
-          signal,
-          requirement,
-        );
-      } else {
-        response = await client.requestWithSignal(method, payload, signal);
+      } catch (error) {
+        if (error instanceof HostBelowMinimumError) {
+          // Throwing a silent cancellation alone leaves an initial fetch in
+          // flight, where the recovery sweep deliberately does not reach it.
+          void queryClient.cancelQueries(
+            { queryKey, exact: true },
+            { revert: true, silent: true },
+          );
+        }
+        throw error;
       }
-      return mapResponse({
-        response,
-        queryClient,
-        queryKey,
-        requestContext,
-        signal,
-      });
     });
 
   return useQuery<TData, HostRpcError, TData>(
@@ -429,6 +455,14 @@ export interface UseHostMutationOptions<
         request: RequestOfMethod<Registry, Method>,
         client: HostRequester<Registry>,
       ) => Promise<RequestOfMethod<Registry, Method>>)
+    | undefined;
+  /**
+   * A save made in a host's settings: called with the request just before it
+   * is sent, on the client it is sent on, so the app remembers what the save
+   * will propose (`useSettingsSave`). Told whether the host answered.
+   */
+  readonly followSettingsSave?:
+    | SettingsSaveFollow<Registry, Method>
     | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
@@ -512,6 +546,43 @@ export interface UseHostMutationOptions<
 }
 
 /**
+ * {@link SettingsSaveFollow.follow}; `pressedOn` is the
+ * sign-in the person acted on, as `useSettingsSave`'s preparation takes it.
+ */
+type FollowSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = (
+  request: RequestOfMethod<Registry, Method>,
+  client: HostRequester<Registry>,
+  pressedOn: EnvironmentCloud | null,
+) => Promise<PendingSettingsSave>;
+
+/**
+ * {@link UseHostMutationOptions.followSettingsSave}: `source` is the window's
+ * session service (`useEnvironmentCloud()`), asked for the sign-in as the
+ * person acts. The caller passes it in, so this module reaches no hook module.
+ */
+export interface SettingsSaveFollow<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly source: EnvironmentCloudSource | null;
+  readonly follow: FollowSettingsSave<Registry, Method>;
+  /** Whether the host's answer proposes the save (`sendFollowedSave`). */
+  readonly proposes: (response: ResponseOfMethod<Registry, Method>) => boolean;
+}
+
+/** A followed save as the person pressed it: the render's follow, on the sign-in then. */
+interface PressedSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly follow: FollowSettingsSave<Registry, Method>;
+  readonly pressedOn: EnvironmentCloud | null;
+}
+
+/**
  * Thin typed wrapper over TanStack `useMutation` that dispatches the
  * caller's params straight into `HostClient.request`.
  */
@@ -528,7 +599,38 @@ export function useHostMutation<
   TVariables,
   TContext
 > {
-  const baseOptions = args.options ?? {};
+  // TanStack gives a pending mutation each newer render's options and runs
+  // its function with them, so a save made before an account switch, and
+  // started after it, would be followed by the next account's editor.
+  // `onMutate` runs as the person acts, with the options of the render they
+  // acted in, and keeps that render's follow and the sign-in current then for
+  // the function, which TanStack hands the same context. A followed save with
+  // no press recorded is not sent.
+  const [pressedIn] = useState(
+    () =>
+      new WeakMap<
+        MutationFunctionContext,
+        PressedSettingsSave<Registry, Method>
+      >(),
+  );
+  const follow = args.followSettingsSave;
+  const { onMutate } = args.options ?? {};
+  const baseOptions =
+    follow === undefined || onMutate === undefined
+      ? (args.options ?? {})
+      : {
+          ...args.options,
+          onMutate: (
+            variables: TVariables,
+            context: MutationFunctionContext,
+          ) => {
+            pressedIn.set(context, {
+              follow: follow.follow,
+              pressedOn: follow.source === null ? null : follow.source(),
+            });
+            return onMutate(variables, context);
+          },
+        };
   return useMutation<
     ResponseOfMethod<Registry, Method>,
     HostRpcError,
@@ -538,8 +640,8 @@ export function useHostMutation<
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
-    mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+    mutationFn: (variables, mutationContext) =>
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)
@@ -591,7 +693,17 @@ export function useHostMutation<
                 dispatch().catch((cause: unknown) => {
                   throw mapDispatchError(cause);
                 });
-        const dispatched = await mappedDispatch();
+        const pressed = pressedIn.get(mutationContext);
+        const dispatched =
+          follow === undefined
+            ? await mappedDispatch()
+            : await sendFollowedSave(
+                pressed === undefined
+                  ? { kind: "abandoned", method: args.method }
+                  : await pressed.follow(params, client, pressed.pressedOn),
+                mappedDispatch,
+                follow.proposes,
+              );
         // Between the dispatch and `onResponse`, so a substituted response is
         // what every arm below sees - including the caller's `onSuccess` and
         // whatever `mutateAsync` resolves with.
@@ -655,7 +767,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)

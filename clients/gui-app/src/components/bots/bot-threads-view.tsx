@@ -1,3 +1,6 @@
+import { createPortal } from "react-dom";
+import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
   useCallback,
   useEffect,
@@ -57,7 +60,6 @@ import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -69,7 +71,6 @@ import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { cn } from "@/lib/utils";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
@@ -82,6 +83,8 @@ const NO_TASKS: ReadonlyArray<BotTaskEntry> = [];
 const MESSAGES_IN_FULL = 6;
 /** The replies a folded card shows under its fold: the newest. */
 const FOLDED_TAIL = 2;
+
+function stayOnThreads(): void {}
 
 /**
  * Threads, in place of a bot's channel (Tracy Bots, decisions 149 and 184):
@@ -102,6 +105,7 @@ const FOLDED_TAIL = 2;
  */
 export function BotThreadsView(props: {
   readonly hostId: string;
+  readonly channelId: string | null;
   /** The tab's channel, which the back control names. */
   readonly channelTitle: string;
   readonly onBack: () => void;
@@ -110,30 +114,68 @@ export function BotThreadsView(props: {
 }): ReactNode {
   const { level2 } = props;
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const mobilePicker = level2 === "menu" || level2 === "bar";
+  const botHeaderSlot = useMobileBotHeaderSlot();
+  const titleTarget = mobilePicker ? (botHeaderSlot?.target ?? null) : null;
+  const threadsTitle = (
+    <div className="flex min-w-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-touch"
+        aria-label={`Back to ${props.channelTitle}`}
+        data-testid="bot-threads-back"
+        onClick={props.onBack}
+      >
+        <ArrowLeft aria-hidden="true" />
+      </Button>
+      <BotChannelTitle
+        level2={level2}
+        title="Threads"
+        activeBotId={props.channelId}
+        hostId={props.hostId}
+        threadsView={{
+          shown: true,
+          onShow: stayOnThreads,
+          onLeave: props.onBack,
+        }}
+      />
+    </div>
+  );
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-testid="bot-threads-view"
     >
-      <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
-        {level2 !== null && typeof level2 === "object" ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={cn("self-start", level2 === null && "@3xl:hidden")}
-            data-testid="bot-threads-back"
-            onClick={props.onBack}
-          >
-            <ArrowLeft aria-hidden="true" />
-            {`Back to ${props.channelTitle}`}
-          </Button>
-        )}
-        <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
-        <p className="text-ui-xs text-muted-foreground">
-          Threads you follow, across every bot.
-        </p>
-      </header>
+      {mobilePicker && titleTarget === null ? (
+        <header className="flex shrink-0 items-center px-4 py-2">
+          {threadsTitle}
+        </header>
+      ) : null}
+      {mobilePicker && titleTarget !== null
+        ? createPortal(threadsTitle, titleTarget)
+        : null}
+      {!mobilePicker ? (
+        <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
+          {level2 !== null && typeof level2 === "object" ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-start @3xl:hidden"
+              data-testid="bot-threads-back"
+              onClick={props.onBack}
+            >
+              <ArrowLeft aria-hidden="true" />
+              {`Back to ${props.channelTitle}`}
+            </Button>
+          )}
+          <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
+          <p className="text-ui-xs text-muted-foreground">
+            Threads you follow, across every bot.
+          </p>
+        </header>
+      ) : null}
       <div
         ref={setScroller}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4"
@@ -318,14 +360,7 @@ function ThreadCard(props: {
 }): ReactNode {
   const { hostId, entry, scroller, unreadCount } = props;
   const { bot, thread } = entry;
-  const client = useTabHostClient();
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
-  const directory = useEnvironmentMemberDirectory(
-    client,
-    bot.environmentId,
-    membersSupported,
-  );
+  const directory = useEnvironmentMemberDirectory(bot.environmentId, true);
   const [card, setCard] = useState<HTMLElement | null>(null);
   const near = useCardNear(card, scroller);
   const anchor = thread.anchor;
@@ -909,7 +944,7 @@ function ThreadCardScope(props: {
 }): ReactNode {
   const { bot, hostId, tasks, surfaceActions, members, resolveMember } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (candidate) => candidate.environmentId === bot.environmentId,

@@ -14,6 +14,10 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 interface TestBinding extends HostRuntimeBinding<HostRpcRegistry> {
   readonly runnerHost: MockRunnerHost;
+  readonly hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }>;
 }
 
 /**
@@ -42,8 +46,12 @@ function buildBinding(): TestBinding {
     onRegistryPollTick: null,
   });
   let requestSeq = 0;
+  const hostTokenRenewals: TestBinding["hostTokenRenewals"] = [];
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -63,6 +71,7 @@ function buildBinding(): TestBinding {
   });
   return {
     runnerHost,
+    hostTokenRenewals,
     runtime,
     hostClient: runtime.hostClient,
     directory,

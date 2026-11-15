@@ -1,13 +1,32 @@
-import type { Query, UseMutationResult } from "@tanstack/react-query";
+import { useState } from "react";
+import type {
+  MutationFunctionContext,
+  Query,
+  UseMutationResult,
+} from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProvidersMcpMutateAction,
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
-import { useHostClient } from "@/lib/host";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSettingsSave,
+  type PrepareSettingsSave,
+} from "@/hooks/environment/use-settings-save";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+} from "@/lib/environment/settings-save-follow";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
   mapNativeMutateToMcpMutate,
@@ -17,6 +36,8 @@ import {
 import { providersMutationKeys } from "@/lib/query-keys";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+
+const SAVED_KINDS = ["mcp_server"] as const;
 
 // Count only mutation completions, including writes that structural sharing
 // makes referentially identical. Keep this out of shared list data and let the
@@ -91,8 +112,25 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant.
+  // What this installs can run on the host, so it carries the grant; the host
+  // no longer reads it on a remove or a tool toggle, which are sent without.
   const grant = useExecutableWriteGrant();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  // The save is prepared by the editor of the render the person acted in,
+  // on the sign-in current as they act, which `onMutate` sees and the
+  // function, run with a newer render's options, does not (see
+  // `useHostMutation`).
+  const cloudSource = useEnvironmentCloud();
+  const [pressedIn] = useState(
+    () =>
+      new WeakMap<
+        MutationFunctionContext,
+        {
+          readonly prepare: PrepareSettingsSave;
+          readonly pressedOn: EnvironmentCloud | null;
+        }
+      >(),
+  );
   return useMutation<
     McpMutateResult,
     HostRpcError,
@@ -102,8 +140,15 @@ export function useProvidersMcpMutate(): UseMutationResult<
     // Settings mounts this hook under a host-keyed subtree with a pinned
     // requester. Keep the observer attached while that host's readiness changes.
     mutationKey: providersMutationKeys.mcpMutate(),
-    onMutate: () => ({ hostId: client.getActiveHostId() }),
-    mutationFn: async (variables) => {
+    onMutate: (_variables, context) => {
+      pressedIn.set(context, {
+        prepare: prepareSave,
+        pressedOn: cloudSource === null ? null : cloudSource(),
+      });
+      return { hostId: client.getActiveHostId() };
+    },
+    mutationFn: async (variables, context) => {
+      const pressed = pressedIn.get(context);
       const hostId = client.getActiveHostId();
       const listParams = {
         providerId: variables.providerId,
@@ -123,22 +168,36 @@ export function useProvidersMcpMutate(): UseMutationResult<
         listParams,
         listData: queryClient.getQueryData<McpListData>(listKey),
       };
-      const response = await client.request(
-        "providers.nativeMutate",
-        await grant(
-          {
-            providerId: variables.providerId,
-            executableWriteGrant: null,
-            expectedEnvironmentId: null,
-            mutation: {
-              kind: "mcp",
-              scope: variables.scope,
-              workspaceRoot: variables.workspaceRoot,
-              mutation: variables.mutation,
-            },
-          },
-          client,
-        ),
+      const request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.nativeMutate"
+      > = {
+        providerId: variables.providerId,
+        executableWriteGrant: null,
+        expectedEnvironmentId: null,
+        mutation: {
+          kind: "mcp",
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+          mutation: variables.mutation,
+        },
+      };
+      const sent =
+        variables.mutation.action === "remove" ||
+        variables.mutation.action === "toggleTool"
+          ? request
+          : await grant(request, client);
+      const save: SettingsSave = {
+        method: "providers.nativeMutate",
+        request: sent,
+      };
+      // A save with no press recorded is not sent.
+      const response = await sendFollowedSave(
+        pressed === undefined
+          ? { kind: "abandoned", method: save.method }
+          : await pressed.prepare(save, hostId, pressed.pressedOn),
+        () => client.request("providers.nativeMutate", sent),
+        everyAnswerProposes,
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },

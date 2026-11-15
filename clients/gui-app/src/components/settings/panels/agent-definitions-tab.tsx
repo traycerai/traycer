@@ -7,7 +7,6 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -15,6 +14,8 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import {
@@ -31,6 +32,8 @@ import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+
+const SAVED_KINDS = ["agent_definition"] as const;
 
 const LIST = "environment.agentDefinitions.list";
 
@@ -65,15 +68,24 @@ export function AgentDefinitionsTab(): ReactNode {
 
 function useAgentDefinitionWrites() {
   const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const queryClient = useQueryClient();
   // A write that authn holds shows in the review the app reads from authn.
   const rereadReview = () =>
     void invalidateEnvironmentReads(queryClient, ["environment.review"]);
-  // An agent definition is content an agent runs, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
   const put = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.put",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "environment.agentDefinitions.put", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: (answer) => answer.outcome !== "local_only",
+    },
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
@@ -82,6 +94,16 @@ function useAgentDefinitionWrites() {
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.delete",
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "environment.agentDefinitions.delete", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: (answer) => answer.outcome !== "local_only",
+    },
     mutationKey: environmentMutationKeys.agentDefinitionsDelete(),
     errorMessage: "Couldn't delete the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],

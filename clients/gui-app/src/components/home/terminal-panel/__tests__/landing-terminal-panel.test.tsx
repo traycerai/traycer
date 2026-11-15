@@ -477,6 +477,10 @@ import {
   readStagedSandbox,
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
@@ -829,6 +833,7 @@ describe("<LandingTerminalPanel />", () => {
     resetTerminalFocusRegistryForTests();
     runStagedSandbox.mockClear();
     useStagedSandboxStore.setState({ bySurface: {} });
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useSurfaceHostSelectionStore.getState().resetForTests();
     mocks.activeHostId = null;
     mocks.placementHostId = null;
@@ -2078,6 +2083,48 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
     expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+  });
+
+  it("leaves the window's staged sandbox alone when the draft was opened for one host: Terminal never takes it", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useLandingDraftStore.getState().installLandingDraft({
+      id: TEST_LANDING_PAGE_ID,
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      namedHostId: "host-a",
+      durability: "in-memory",
+    });
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      sendTaken: false,
+    });
+    expect(readStagedSandbox(COMPOSER_SURFACE)?.openTerminal).not.toBe(true);
   });
 
   it("asks for the terminal on a staged sandbox that is up with settings that did not apply, starting nothing", async () => {

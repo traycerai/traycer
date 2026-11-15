@@ -5,11 +5,17 @@ import {
   render as rtlRender,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock, MockInstance } from "vitest";
 import { useState, type ReactNode } from "react";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -1590,6 +1596,52 @@ describe("<UserMessageBody /> agent messages", () => {
         renderTeamBotSender(ONE_TEAM_MAIN_BOT_DIRECTORY);
 
         expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      });
+    });
+
+    describe("the sender's picture in the card's header", () => {
+      function senderHeader(): HTMLElement {
+        const header = screen.getByText("Received message").parentElement;
+        if (header === null) throw new Error("the card has no header");
+        return header;
+      }
+
+      function resolveSender(bot: { botId: string; title: string } | null) {
+        peerMocks.byId[CROSS_ID] = {
+          epicId: "epic-2",
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Cross Task Sender",
+          surface: "gui",
+          bot,
+        };
+        render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+      }
+
+      it("is the robot glyph for an agent sender", () => {
+        resolveSender(null);
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("agent");
+        expect(picture.querySelector("svg.lucide-bot")).not.toBeNull();
+        expect(renderedMascotPaths(picture)).toEqual([]);
+      });
+
+      it("is the bot's own 16px mascot for a bot sender, not the robot glyph", () => {
+        resolveSender({ botId: "bot-1", title: "Release bot" });
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("bot");
+        expect(renderedMascotPaths(picture)).toEqual(
+          mascotPathsAt("bot-1", false, 16),
+        );
+        expect(drawsRobotGlyph(picture)).toBe(false);
+      });
+
+      it("replaces the inbox icon the header carried", () => {
+        resolveSender(null);
+
+        expect(senderHeader().querySelector("svg.lucide-inbox")).toBeNull();
       });
     });
 
