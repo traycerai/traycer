@@ -97,11 +97,12 @@ import type {
   ProvidersPreviewProfileMoveRequest,
   ProvidersPreviewProfileMoveResponse,
 } from "@traycer/protocol/host/profile-move-schemas";
-import type {
-  ProviderLoginProfileOutcome,
-  ProviderMutationCliStateV21,
-  ProviderCliState,
-  ProviderProfile,
+import {
+  PROVIDER_PROFILE_ACCENT_COLORS,
+  type ProviderLoginProfileOutcome,
+  type ProviderMutationCliStateV21,
+  type ProviderCliState,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   getNegotiatedHostMethods,
@@ -109,7 +110,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -119,6 +120,7 @@ import {
   within,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   afterAll,
   afterEach,
@@ -133,22 +135,34 @@ import {
   profile,
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
+import { createProfileRecordAuthFixture } from "@/components/providers/__tests__/profile-record-auth-fixture";
+import { RecordEnvironmentIdReadout } from "@/components/providers/__tests__/profile-pin-edit-dialog-test-consumers";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
 import { SwitchAccountMoveDialog } from "@/components/providers/switch-account-move-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
+import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-observation";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const HOST_ID = "switch-computer";
 const SOURCE_ID = "source-profile";
 const SOURCE_LABEL = "Work";
 const DESTINATION_ID = "destination-profile";
 const DESTINATION_LABEL = "New account";
+const SUBMITTED_DESTINATION_LABEL = "Typed draft";
+const SAVED_DESTINATION_LABEL = "Named account";
 const BOT_ID = "bot_01HZX5Y8K3M2N4P6Q7R8S9T0V1";
 const PROFILE_LIST_KEY = hostQueryKeys.method<
   HostRpcRegistry,
@@ -162,6 +176,10 @@ type ListResponse = ResponseOfMethod<HostRpcRegistry, "providers.list">;
 type StartRequest = RequestOfMethod<HostRpcRegistry, "providers.startLogin">;
 type StartResponse = ResponseOfMethod<HostRpcRegistry, "providers.startLogin">;
 type AwaitResponse = ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">;
+type SetEnabledRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.setEnabled"
+>;
 type SetEnabledResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.setEnabled"
@@ -177,6 +195,8 @@ interface SwitchHarnessInput {
   readonly commitResults: ProvidersCommitProfileMoveResponse["results"];
   readonly supportedMoves: boolean;
   readonly failFirstCommit: boolean;
+  readonly composer: ReactNode | null;
+  readonly managedProfileInitiallyOpen: boolean;
 }
 
 interface SwitchHarness {
@@ -184,8 +204,16 @@ interface SwitchHarness {
   readonly selected: Mock<(profileId: string | null) => void>;
   readonly queryClient: QueryClient;
   readonly startRequests: StartRequest[];
+  readonly setEnabledRequests: SetEnabledRequest[];
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
   readonly commitRequests: ProvidersCommitProfileMoveRequest[];
+  openManage(): void;
+}
+
+interface SwitchHarnessSceneProps {
+  readonly input: SwitchHarnessInput;
+  readonly selected: Mock<(profileId: string | null) => void>;
+  readonly onManageReady: (openManage: (() => void) | null) => void;
 }
 
 interface MoveDialogInput {
@@ -208,7 +236,9 @@ afterEach(() => {
   cleanup();
   authServiceForTest?.dispose();
   authServiceForTest = null;
+  vi.unstubAllGlobals();
   useProviderProfileAddFlowStore.getState().close();
+  useComposerDraftStore.setState({ drafts: {} });
   clientMock.current = null;
   toastFallbacks.values.length = 0;
   resetNegotiatedManifests();
@@ -301,8 +331,9 @@ function ManagedProfileEntry(props: {
   readonly profiles: readonly ProviderProfile[];
   readonly startInReauth: boolean;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const [open, setOpen] = useState(true);
   return (
     <ProfileEditDialog
       state={props.state}
@@ -312,8 +343,8 @@ function ManagedProfileEntry(props: {
       oauthUnavailableHint={null}
       startInReauth={props.startInReauth}
       isLocalHost
-      open={open}
-      onOpenChange={setOpen}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
       remainingProfilesAfterRemoval={[]}
       onSelectedProfileIdChange={props.onSelectedProfileIdChange}
       profileEnablementAvailable
@@ -323,7 +354,48 @@ function ManagedProfileEntry(props: {
   );
 }
 
-function registerSwitchMethods(supportedMoves: boolean): void {
+function SwitchHarnessScene(props: SwitchHarnessSceneProps): ReactNode {
+  const { onManageReady } = props;
+  const [managedProfileOpen, setManagedProfileOpen] = useState(
+    props.input.managedProfileInitiallyOpen,
+  );
+  useLayoutEffect(() => {
+    onManageReady(() => setManagedProfileOpen(true));
+    return () => {
+      onManageReady(null);
+    };
+  }, [onManageReady]);
+  const source = props.input.before.find((row) => row.profileId === SOURCE_ID);
+  if (source === undefined) throw new Error("The source profile is missing");
+  return (
+    <>
+      {props.input.composer}
+      <ManagedProfileEntry
+        state={provider("claude-code", [...props.input.before])}
+        profile={source}
+        profiles={props.input.before}
+        startInReauth={props.input.entry === "reauth"}
+        onSelectedProfileIdChange={props.selected}
+        open={managedProfileOpen}
+        onOpenChange={setManagedProfileOpen}
+      />
+      <ProviderProfileAddFlowHost />
+    </>
+  );
+}
+
+function registerSwitchMethods(
+  supportedMoves: boolean,
+  recordEnvironment: boolean,
+): void {
+  const environmentMethods: Readonly<
+    Record<string, { readonly major: number; readonly minor: number }>
+  > = recordEnvironment
+    ? {
+        "environment.status": { major: 1, minor: 2 },
+        "environment.host.read": { major: 1, minor: 1 },
+      }
+    : {};
   if (supportedMoves) {
     recordNegotiatedHostManifest(HOST_ID, {
       "providers.list": { major: 1, minor: 12 },
@@ -331,22 +403,48 @@ function registerSwitchMethods(supportedMoves: boolean): void {
       "providers.awaitLogin": { major: 2, minor: 4 },
       "providers.previewProfileMove": { major: 1, minor: 0 },
       "providers.commitProfileMove": { major: 1, minor: 0 },
+      ...environmentMethods,
     });
     return;
   }
   recordNegotiatedHostManifest(HOST_ID, {
     "providers.list": { major: 1, minor: 11 },
     "providers.startLogin": { major: 1, minor: 4 },
+    ...environmentMethods,
   });
 }
 
 function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
+  return renderSwitchHarnessWithOptions(input, false, null, false);
+}
+
+function renderSwitchHarnessForProfileRecord(
+  input: SwitchHarnessInput,
+  authService: AuthService,
+  failFirstRecolor: boolean,
+): SwitchHarness {
+  return renderSwitchHarnessWithOptions(
+    input,
+    true,
+    authService,
+    failFirstRecolor,
+  );
+}
+
+function renderSwitchHarnessWithOptions(
+  input: SwitchHarnessInput,
+  recordEnvironment: boolean,
+  authService: AuthService | null,
+  failFirstRecolor: boolean,
+): SwitchHarness {
   const calls: string[] = [];
   const startRequests: StartRequest[] = [];
+  const setEnabledRequests: SetEnabledRequest[] = [];
   const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
   const commitRequests: ProvidersCommitProfileMoveRequest[] = [];
   let awaited = false;
   let commitCount = 0;
+  let recolorCount = 0;
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
@@ -371,8 +469,13 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
         calls.push("providers.cancelLogin");
         return { cancelled: true };
       },
-      "providers.setEnabled": () => {
+      "providers.setEnabled": (params) => {
         calls.push("providers.setEnabled");
+        setEnabledRequests.push(params);
+        recolorCount += 1;
+        if (failFirstRecolor && recolorCount === 1) {
+          throw new Error("recolor failed");
+        }
         return setEnabledBody();
       },
       "providers.previewProfileMove": (params) => {
@@ -380,6 +483,33 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
         previewRequests.push(params);
         return input.preview;
       },
+      ...(recordEnvironment
+        ? {
+            "environment.status": () => {
+              calls.push("environment.status");
+              return environmentStatusFixture({
+                principal: { kind: "personal" },
+              });
+            },
+            "environment.host.read": () => {
+              calls.push("environment.host.read");
+              return {
+                hostId: HOST_ID,
+                environment: {
+                  environmentId: "environment-profile-fixture",
+                  ownerKind: "user",
+                  ownerId: "test-owner",
+                  roomId: "test-room",
+                  label: "Personal",
+                },
+                explicit: false,
+                enrolledByUserId: null,
+                canUnbind: false,
+                sharingGeneration: null,
+              };
+            },
+          }
+        : {}),
       "providers.commitProfileMove": (params) => {
         calls.push("providers.commitProfileMove");
         commitRequests.push(params);
@@ -397,7 +527,11 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     },
   });
   clientMock.current = client;
-  registerSwitchMethods(input.supportedMoves);
+  registerSwitchMethods(input.supportedMoves, recordEnvironment);
+  if (authService !== null) {
+    authServiceForTest?.dispose();
+    authServiceForTest = authService;
+  }
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -409,19 +543,21 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     listBody(input.offers, input.before),
   );
   const selected = vi.fn<(profileId: string | null) => void>();
-  const source = input.before.find((row) => row.profileId === SOURCE_ID);
-  if (source === undefined) throw new Error("The source profile is missing");
+  let openManageDialog: (() => void) | null = null;
+  const onManageReady = (openManage: (() => void) | null): void => {
+    openManageDialog = openManage;
+  };
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ManagedProfileEntry
-          state={provider("claude-code", [...input.before])}
-          profile={source}
-          profiles={input.before}
-          startInReauth={input.entry === "reauth"}
-          onSelectedProfileIdChange={selected}
+        <SwitchHarnessScene
+          input={input}
+          selected={selected}
+          onManageReady={onManageReady}
         />
-        <ProviderProfileAddFlowHost />
+        {recordEnvironment ? (
+          <RecordEnvironmentIdReadout client={client} />
+        ) : null}
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -430,8 +566,14 @@ function renderSwitchHarness(input: SwitchHarnessInput): SwitchHarness {
     selected,
     queryClient,
     startRequests,
+    setEnabledRequests,
     previewRequests,
     commitRequests,
+    openManage: () => {
+      if (openManageDialog === null)
+        throw new Error("Manage dialog is not mounted");
+      openManageDialog();
+    },
   };
 }
 
@@ -467,7 +609,7 @@ function renderMoveDialog(input: MoveDialogInput): MoveDialogHarness {
     },
   });
   clientMock.current = client;
-  registerSwitchMethods(input.supportedMoves);
+  registerSwitchMethods(input.supportedMoves, false);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -577,10 +719,84 @@ function successfulSwitchInput(
     commitResults,
     supportedMoves: true,
     failFirstCommit: false,
+    composer: null,
+    managedProfileInitiallyOpen: true,
   };
 }
 
 describe("Switch account moves only previewed work", () => {
+  it("preserves typed composer text through the integrated switch move flow", async () => {
+    const user = userEvent.setup();
+    const target = agentTarget(
+      "epic-composer-draft",
+      "agent-composer-draft",
+      "Waiting agent",
+      "idle",
+    );
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [target],
+    };
+    const results: ProvidersCommitProfileMoveResponse["results"] = [
+      {
+        outcome: "moved",
+        target: agentRef(target.epicId, target.agentId),
+        row: target,
+      },
+    ];
+    const chatId = target.agentId;
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRef: ComposerDraftSelectionRef = { current: null };
+    const composer = (
+      <ComposerDraftEditorHarness
+        chatId={chatId}
+        epicId={target.epicId}
+        hostId={HOST_ID}
+        editorRef={editorRef}
+        selectionRef={selectionRef}
+      />
+    );
+    const harness = renderSwitchHarness({
+      ...successfulSwitchInput(preview, results),
+      composer,
+      managedProfileInitiallyOpen: false,
+    });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "test" }),
+      "unsent switch move line",
+    );
+    const observe = () =>
+      observeComposerDraft(
+        chatId,
+        editorRef,
+        screen.getByTestId("composer-editor"),
+      );
+    const before = observe();
+    expect(before.editorJSON).toBe(before.draftJSON);
+    expect(before.visibleText).toBe("unsent switch move line");
+
+    act(() => harness.openManage());
+    await screen.findByRole("dialog", { name: "Edit profile" });
+    await loginIntoSwitchDialog();
+    await screen.findByText("Move work from Work?");
+    await screen.findByRole("button", { name: "Move 1" });
+    const during = observe();
+    expect(during).toEqual(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+    await screen.findByText("Moved 1 to New account.");
+    const after = observe();
+    expect(after).toEqual(before);
+    expect(harness.previewRequests).toHaveLength(1);
+    expect(harness.commitRequests).toHaveLength(1);
+    expect(harness.commitRequests[0]?.targets).toEqual([
+      agentRef(target.epicId, target.agentId),
+    ]);
+  });
+
   it("opens global Add from Manage, waits for the answer, and sends only preview refs for agents and bots", async () => {
     const idle = agentTarget("epic-idle", "agent-idle", "Idle agent", "idle");
     const running = agentTarget(
@@ -789,6 +1005,156 @@ describe("Switch account moves only previewed work", () => {
     expect(harness.calls).not.toContain("providers.setEnabled");
   });
 
+  it("keeps the saved name through recolor retry into the switch move question", async () => {
+    const sharedEmail = "shared-profile@example.test";
+    const source = {
+      ...account(SOURCE_ID, SOURCE_LABEL),
+      identity: { email: sharedEmail, tier: "Pro", accountUuid: null },
+      aliases: ["source-record-alias"],
+    };
+    const destination = {
+      ...account(DESTINATION_ID, DESTINATION_LABEL),
+      identity: { email: sharedEmail, tier: "Team", accountUuid: null },
+      aliases: ["destination-record-alias"],
+      accentColor: PROVIDER_PROFILE_ACCENT_COLORS[1],
+    };
+    const pickedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
+    const target = agentTarget(
+      "epic-named-destination",
+      "agent-named-destination",
+      "Destination agent",
+      "idle",
+    );
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [target],
+    };
+    const results: ProvidersCommitProfileMoveResponse["results"] = [
+      {
+        outcome: "moved",
+        target: agentRef(target.epicId, target.agentId),
+        row: target,
+      },
+    ];
+    const recordNameUrl = `http://localhost:5005/api/v3/environments/environment-profile-fixture/profile-records/${DESTINATION_ID}/name`;
+    const auth = await createProfileRecordAuthFixture((request) => {
+      if (request.url !== recordNameUrl) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            profileId: DESTINATION_ID,
+            harnessId: "claude",
+            recordRevision: "18",
+            name: SAVED_DESTINATION_LABEL,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    });
+    const harness = renderSwitchHarnessForProfileRecord(
+      {
+        offers: true,
+        entry: "manage",
+        before: [source],
+        after: [source, destination],
+        outcome: { kind: "signed-in", profileId: DESTINATION_ID },
+        preview,
+        commitResults: results,
+        supportedMoves: true,
+        failFirstCommit: false,
+        composer: null,
+        managedProfileInitiallyOpen: true,
+      },
+      auth.service,
+      true,
+    );
+
+    await loginIntoSwitchDialog();
+    expect(
+      await screen.findByText(
+        `${SOURCE_LABEL} already uses this email. Name this profile so you can tell them apart.`,
+      ),
+    ).toBeTruthy();
+    expect(await screen.findByText("environment-profile-fixture")).toBeTruthy();
+    const listReadsBeforeName = harness.calls.filter(
+      (method) => method === "providers.list",
+    ).length;
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: SUBMITTED_DESTINATION_LABEL },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${pickedColor}` }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect(
+      await screen.findByText(
+        "The account was signed in, but the profile color could not be saved.",
+      ),
+    ).toBeTruthy();
+    expect(auth.requests).toEqual([
+      {
+        url: recordNameUrl,
+        method: "POST",
+        body: JSON.stringify({
+          harnessId: "claude",
+          name: SUBMITTED_DESTINATION_LABEL,
+        }),
+      },
+    ]);
+    expect(
+      harness.calls.filter((method) => method === "providers.list").length,
+    ).toBeGreaterThan(listReadsBeforeName);
+    expect(harness.setEnabledRequests).toHaveLength(1);
+    expect(harness.setEnabledRequests[0]?.profileAction).toEqual({
+      type: "recolor",
+      profileId: DESTINATION_ID,
+      accentColor: pickedColor,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Move work from Work?")).toBeTruthy();
+    expect(
+      await screen.findByText(`Signed in as ${SAVED_DESTINATION_LABEL}`),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `1 agents and bots use ${SOURCE_LABEL}. Move them to ${SAVED_DESTINATION_LABEL}, or leave them where they are.`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(new RegExp(DESTINATION_LABEL))).toBeNull();
+    expect(
+      screen.queryByText(new RegExp(SUBMITTED_DESTINATION_LABEL)),
+    ).toBeNull();
+    expect(harness.previewRequests[0]).toEqual({
+      extent: "fleet",
+      mode: "switch",
+      source: { providerId: "claude-code", profileId: SOURCE_ID },
+    });
+    expect(harness.setEnabledRequests).toHaveLength(2);
+    expect(harness.setEnabledRequests[1]?.profileAction).toEqual({
+      type: "recolor",
+      profileId: DESTINATION_ID,
+      accentColor: pickedColor,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move 1" }));
+
+    expect(
+      await screen.findByText(`Moved 1 to ${SAVED_DESTINATION_LABEL}.`),
+    ).toBeTruthy();
+    expect(harness.commitRequests[0]?.destinationProfileId).toBe(
+      DESTINATION_ID,
+    );
+    expect(harness.calls).not.toContain("providers.renameProfile");
+    expect(harness.calls).not.toContain("providers.answerProfileName");
+  });
+
   it("selects an existing destination record instead of creating a third row", async () => {
     const source = account(SOURCE_ID, SOURCE_LABEL);
     const destination = account(DESTINATION_ID, DESTINATION_LABEL);
@@ -806,6 +1172,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     await loginIntoSwitchDialog();
@@ -833,6 +1201,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     await loginIntoSwitchDialog();
@@ -859,6 +1229,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: true,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     expect(
@@ -1111,6 +1483,8 @@ describe("Switch account moves only previewed work", () => {
       commitResults: [],
       supportedMoves: false,
       failFirstCommit: false,
+      composer: null,
+      managedProfileInitiallyOpen: true,
     });
 
     expect(

@@ -97,6 +97,17 @@ const EXPECTED_POOL_ONLY = [
 ].sort();
 
 describe("host RPC routing table", () => {
+  it("does not route retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
+  });
+
   it("routes every released unary and stream name and every registry key", () => {
     const names = [
       ...releasedMethodNames,

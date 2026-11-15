@@ -2,21 +2,55 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProfileRecordClient } from "@traycer-clients/shared/host-client/profile-record-actions";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { toast } from "sonner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
-const fixture = vi.hoisted(() => ({ offersSignIns: false }));
+const fixture = vi.hoisted(() => ({
+  offersSignIns: false,
+  bindingAnswer: "bound" as
+    | "bound"
+    | "own_settings"
+    | "pending"
+    | "failed"
+    | "empty",
+  bindingRefetch: vi.fn(),
+  auth: {
+    signOutProfileRecord: vi.fn<ProfileRecordClient["signOutProfileRecord"]>(),
+    removeProfileRecord: vi.fn<ProfileRecordClient["removeProfileRecord"]>(),
+  },
+  client: null as HostClient<HostRpcRegistry> | null,
+  localRemove: vi.fn(),
+  openChanges: [] as boolean[],
+  selectedProfileIds: [] as Array<string | null>,
+  remainingProfiles: [] as ProviderProfile[],
+}));
 
-// Same rationale as the sibling panel suites: the dialog pulls in
-// mutation/host hooks unconditionally, so those are stubbed to keep this test
-// scoped to a QueryClient with no bound host. The gate under test reads only
-// `profile.kind`, so none of these participate in it.
+// The dialog's unrelated local-profile mutations remain stubbed. Record
+// actions run through the real consumer hook with fakes at the AuthService and
+// per-computer binding-query boundaries.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => fixture.client,
+    useAuthService: () => fixture.auth,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -26,15 +60,49 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     data: fixture.offersSignIns ? { offersSignIns: true } : undefined,
   }),
 }));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+  useHostMethodSupport: () => true,
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => ({ major: 1, minor: 0 }),
+}));
+vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
+  useEnvironmentHostReadQuery: () => {
+    if (fixture.bindingAnswer === "own_settings")
+      return { kind: "own_settings" };
+    if (fixture.bindingAnswer === "pending") return { kind: "pending" };
+    if (fixture.bindingAnswer === "failed") {
+      return { kind: "failed", retry: vi.fn() };
+    }
+    return {
+      kind: "binding",
+      query: {
+        data:
+          fixture.bindingAnswer === "bound"
+            ? { environment: { environmentId: "bound-environment" } }
+            : undefined,
+        refetch: fixture.bindingRefetch,
+      },
+    };
+  },
+}));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({
-    mutate: vi.fn(),
+    mutate: fixture.localRemove,
     isPending: false,
     error: null,
   }),
 }));
 vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
   useRenameProviderProfile: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
@@ -129,9 +197,13 @@ function renderDialog(profile: ProviderProfile) {
           startInReauth={false}
           isLocalHost
           open
-          onOpenChange={() => undefined}
-          remainingProfilesAfterRemoval={[]}
-          onSelectedProfileIdChange={() => undefined}
+          onOpenChange={(nextOpen) => {
+            fixture.openChanges.push(nextOpen);
+          }}
+          remainingProfilesAfterRemoval={fixture.remainingProfiles}
+          onSelectedProfileIdChange={(profileId) => {
+            fixture.selectedProfileIds.push(profileId);
+          }}
           profileEnablementAvailable
           profileEnablementPending={() => false}
           onSetProfileEnabled={() => undefined}
@@ -139,6 +211,39 @@ function renderDialog(profile: ProviderProfile) {
       </TooltipProvider>
     </QueryClientProvider>,
   );
+}
+
+function installClient() {
+  let requestId = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => {
+      requestId += 1;
+      return `req-profile-remove-${String(requestId)}`;
+    },
+    handlers: {},
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "synthetic-profile-remove-test",
+    }),
+  );
+  fixture.client = spine.createRequester(mockLocalHostEntry);
+  return messenger;
+}
+
+function storedToastTitles(): unknown[] {
+  return toast
+    .getToasts()
+    .flatMap((entry) => ("title" in entry ? [entry.title] : []));
 }
 
 function renderDialogFor(kind: ProviderProfile["kind"]) {
@@ -157,13 +262,34 @@ function renderDialogFor(kind: ProviderProfile["kind"]) {
  * removal for everything.
  */
 describe("<ProfileEditDialog /> remove gate by profile kind", () => {
-  afterEach(() => {
-    cleanup();
+  beforeEach(() => {
     fixture.offersSignIns = false;
+    fixture.bindingAnswer = "bound";
+    fixture.bindingRefetch.mockReset();
+    fixture.auth.signOutProfileRecord.mockReset().mockResolvedValue({
+      kind: "ok",
+      profileId: "profile-managed",
+      harnessId: "opencode",
+      recordRevision: "record-rev-1",
+    });
+    fixture.auth.removeProfileRecord.mockReset().mockResolvedValue({
+      kind: "ok",
+      profileId: "profile-managed",
+      harnessId: "opencode",
+      recordRevision: "record-rev-1",
+    });
+    fixture.client = null;
+    fixture.localRemove.mockReset();
+    fixture.openChanges = [];
+    fixture.selectedProfileIds = [];
+    fixture.remainingProfiles = [];
   });
 
   afterEach(() => {
     cleanup();
+    toast.dismiss();
+    fixture.offersSignIns = false;
+    fixture.client = null;
   });
 
   const cases = [
@@ -256,6 +382,58 @@ describe("<ProfileEditDialog /> remove gate by profile kind", () => {
       ),
     ).toBeTruthy();
   });
+
+  it("removes the sole enabled record through its binding environment, then selects the remaining profile", async () => {
+    fixture.offersSignIns = true;
+    fixture.remainingProfiles = [
+      { ...profileOfKind("managed"), profileId: "remaining-profile" },
+    ];
+    const messenger = installClient();
+    renderDialog({ ...profileOfKind("managed"), aliases: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
+    expect(screen.getByText("Remove Work account?")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() =>
+      expect(fixture.auth.removeProfileRecord).toHaveBeenCalledTimes(1),
+    );
+    expect(fixture.auth.removeProfileRecord).toHaveBeenCalledWith(
+      "bound-environment",
+      "opencode",
+      "profile-managed",
+      null,
+    );
+    expect(fixture.localRemove).not.toHaveBeenCalled();
+    expect(messenger.calls).toEqual([]);
+    expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(fixture.selectedProfileIds).toEqual(["remaining-profile"]),
+    );
+    expect(fixture.openChanges).toEqual([false]);
+  });
+
+  it.each(["own_settings", "pending", "failed", "empty"] as const)(
+    "fails closed with existing copy when the record binding is %s",
+    async (bindingAnswer) => {
+      fixture.offersSignIns = true;
+      fixture.bindingAnswer = bindingAnswer;
+      const messenger = installClient();
+      renderDialog({ ...profileOfKind("managed"), aliases: [] });
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
+      fireEvent.click(screen.getByTestId("confirm-action"));
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain("Couldn't remove profile."),
+      );
+      expect(fixture.auth.removeProfileRecord).not.toHaveBeenCalled();
+      expect(fixture.localRemove).not.toHaveBeenCalled();
+      expect(fixture.bindingRefetch).not.toHaveBeenCalled();
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.selectedProfileIds).toEqual([]);
+    },
+  );
 });
 
 function renderDialogWithOauthGate(

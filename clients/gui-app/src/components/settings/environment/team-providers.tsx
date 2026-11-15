@@ -29,7 +29,7 @@ import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { cn } from "@/lib/utils";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
-import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import { TeamProviderWriteFeedback } from "./configuration-write-feedback";
 import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
@@ -220,7 +220,7 @@ function TeamProvidersView(props: {
       description="Sign-ins, keys and tools for each coding agent."
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
-      <ConfigurationWriteFeedback issue={issue} />
+      <TeamProviderWriteFeedback issue={issue} />
       {readPending ? <MutedAgentSpinner /> : null}
       {readFailed ? (
         <ConfigurationReadFailed page="providers" onRetry={onRetry} />

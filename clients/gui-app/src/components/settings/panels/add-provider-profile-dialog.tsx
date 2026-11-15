@@ -10,6 +10,7 @@ import {
   Link2,
   LogIn,
 } from "lucide-react";
+import type { ProfileRecordActionFailure } from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -60,6 +61,7 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useNameProfileRecordForClient } from "@/hooks/providers/use-name-profile-record-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -241,15 +243,10 @@ function ProviderProfileSignInDialog({
   );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
-  // Set once naming is committed (a rename RPC succeeded, or none was needed
-  // because the label was left at its default) for a given profileId - marks
-  // the transition from the naming step into the ordinary finalize/recolor
-  // path below, so a later recolor failure/retry never re-shows naming. State
-  // (not a ref) because it feeds the naming-step derivation below, which runs
-  // during render.
-  const [namingCommittedFor, setNamingCommittedFor] = useState<string | null>(
-    null,
-  );
+  // Keep the committed name through recolor completion and retry, which still
+  // receive the profile snapshot from before naming.
+  const [namingCommittedProfile, setNamingCommittedProfile] =
+    useState<ProviderProfile | null>(null);
   const startLogin = useProvidersStartLoginForClient(client);
   const awaitLogin = useProvidersDestinationAwaitLoginForClient(
     {
@@ -263,7 +260,6 @@ function ProviderProfileSignInDialog({
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
-  const renameProfile = useRenameProviderProfileForClient(client);
   const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const hostBlock = providerHostBlock(state, "sign-in-and-enable");
   const macosBlock = hostBlock?.kind === "macos" ? hostBlock : null;
@@ -298,6 +294,8 @@ function ProviderProfileSignInDialog({
     target,
     client,
   );
+  const { mutation: renameProfile, recordFailure: namingRecordFailure } =
+    useAddProfileRename(client, state.providerId, flow.state, offersSignIns);
   const targetTerminal = destinationResult(flow.state);
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
@@ -315,9 +313,12 @@ function ProviderProfileSignInDialog({
   // the split-by-organization case now possible now that same-email,
   // different-org sign-ins mint distinct profiles instead of deduping. Holds
   // the dialog open on the resolved identity so the user can tell the two
-  // apart before the default label sticks. Cleared once `namingCommittedFor`
-  // is set (see `commitNaming`), so a later recolor retry never re-shows it.
-  const naming = resolveNamingStep(flow.state, namingCommittedFor);
+  // apart before the default label sticks. Once naming is committed, a later
+  // recolor retry never re-shows it.
+  const naming = resolveNamingStep(
+    flow.state,
+    namingCommittedProfile?.profileId ?? null,
+  );
 
   const complete = (profile: ProviderProfile): void => {
     onFailedAttempt(null);
@@ -344,7 +345,7 @@ function ProviderProfileSignInDialog({
   const commitNaming = (profile: ProviderProfile): void => {
     if (trimmedLabel.length === 0) return;
     if (trimmedLabel === profile.label) {
-      setNamingCommittedFor(profile.profileId);
+      setNamingCommittedProfile(profile);
       // Claim the attempt before finalizing directly - otherwise the render
       // this triggers flips `naming` to null, and the effect below (which
       // has no dependency array) sees an unclaimed `finalizeAttemptRef` and
@@ -360,10 +361,14 @@ function ProviderProfileSignInDialog({
         label: trimmedLabel,
       },
       {
-        onSuccess: () => {
-          setNamingCommittedFor(profile.profileId);
+        onSuccess: (result) => {
+          const renamedProfile = {
+            ...profile,
+            label: typeof result === "string" ? result : trimmedLabel,
+          };
+          setNamingCommittedProfile(renamedProfile);
           finalizeAttemptRef.current = profile.profileId;
-          finalizeProfile(profile);
+          finalizeProfile(renamedProfile);
         },
       },
     );
@@ -412,7 +417,11 @@ function ProviderProfileSignInDialog({
 
   const retryFinalize = (): void => {
     if (flow.state.kind !== "identity") return;
-    finalizeProfile(flow.state.profile);
+    const profile =
+      namingCommittedProfile?.profileId === flow.state.profileId
+        ? namingCommittedProfile
+        : flow.state.profile;
+    finalizeProfile(profile);
   };
 
   const duplicateProfile =
@@ -478,6 +487,7 @@ function ProviderProfileSignInDialog({
               duplicateProfile={duplicateProfile}
               naming={naming}
               namingError={renameProfile.error}
+              namingRecordFailure={namingRecordFailure}
               emailRevealed={emailRevealed}
               setEmailRevealed={setEmailRevealed}
               linkDisabled={linkHeldOff({
@@ -647,6 +657,8 @@ function dialogShowsCloseButton(
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "waiting-for-profile" ||
+    (flowState.kind === "target-outcome" &&
+      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }
@@ -684,6 +696,7 @@ function AddProfileAccountSection({
   duplicateProfile,
   naming,
   namingError,
+  namingRecordFailure,
   emailRevealed,
   setEmailRevealed,
   linkDisabled,
@@ -708,6 +721,7 @@ function AddProfileAccountSection({
   readonly duplicateProfile: ProviderProfile | null;
   readonly naming: NamingStepState | null;
   readonly namingError: Error | null;
+  readonly namingRecordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
   readonly linkDisabled: boolean;
@@ -806,6 +820,7 @@ function AddProfileAccountSection({
         profile={naming.profile}
         collisionProfile={naming.collisionProfile}
         error={namingError}
+        recordFailure={namingRecordFailure}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
       />
@@ -918,7 +933,7 @@ function SignInCard({
 }
 
 /** A profile's name and dot with its provider, as the dialog's body. */
-function ProfileAccountRow({
+export function ProfileAccountRow({
   providerId,
   profile,
 }: {
@@ -1110,12 +1125,14 @@ function AddProfileNamingStep({
   profile,
   collisionProfile,
   error,
+  recordFailure,
   emailRevealed,
   setEmailRevealed,
 }: {
   readonly profile: ProviderProfile;
   readonly collisionProfile: ProviderProfile;
   readonly error: Error | null;
+  readonly recordFailure: ProfileRecordActionFailure | null;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
 }): ReactNode {
@@ -1134,7 +1151,11 @@ function AddProfileNamingStep({
       {error !== null ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-xs text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>Couldn&apos;t save the name. Try again.</span>
+          <span>
+            {recordFailure === null
+              ? "Couldn't save the name. Try again."
+              : recordFailure.message}
+          </span>
         </div>
       ) : null}
     </div>
@@ -1417,7 +1438,7 @@ export function AddProfileIdentityStep({
   );
 }
 
-function AddProfileFailureStep({
+export function AddProfileFailureStep({
   providerId,
   message,
   refusal,
@@ -1533,6 +1554,30 @@ function resolveDialogLockState({
   return {
     finalizing,
     dismissalLocked: commitPending || finalizing || identityCompletionPending,
+  };
+}
+
+/** Only a named sign-in outcome makes the naming step a record action. */
+function useAddProfileRename(
+  client: HostClient<HostRpcRegistry> | null,
+  providerId: ProviderCliState["providerId"],
+  flowState: ProviderProfileLoginFlowState,
+  offersSignIns: boolean,
+) {
+  const local = useRenameProviderProfileForClient(client);
+  const recordProfileId =
+    offersSignIns && flowState.kind === "identity"
+      ? flowState.recordProfileId
+      : null;
+  const record = useNameProfileRecordForClient(
+    client,
+    providerId,
+    recordProfileId !== null,
+  );
+  return {
+    mutation: recordProfileId === null ? local : record,
+    recordFailure:
+      recordProfileId === null ? null : (record.error?.failure ?? null),
   };
 }
 
