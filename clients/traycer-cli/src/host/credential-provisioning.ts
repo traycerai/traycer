@@ -342,6 +342,7 @@ export async function provisionInstalledHostCredential(
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.revalidateCurrentContext(),
+      signal: probeAbort.signal,
     });
     // A mint authn refuses for good (a computer with no row answers a bare
     // 404) can never become a token, so the probe ends at once rather than

@@ -200,6 +200,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   const hostTokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.revalidateCurrentContext(),
+    signal: null,
   });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
