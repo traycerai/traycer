@@ -19,20 +19,19 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
-  // One read per trigger: `read` is never reused, so a trigger always
-  // fetches and never answers from an earlier read's cache.
+  // One team's claimed computers (`AuthService.listClaimedComputers`), the
+  // reader's answer as it is: a claimed computer's cover and the team's own
+  // screens share the entry.
   claimedComputers: (
     auth: object | null,
     userId: string | null,
     environmentId: string,
-    read: number,
   ): readonly unknown[] => [
     "auth",
     "claimed-computers",
     auth,
     userId,
     environmentId,
-    read,
   ],
   environmentInvitations: (
     authService: object | null,
