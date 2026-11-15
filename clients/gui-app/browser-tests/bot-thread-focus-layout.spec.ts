@@ -88,8 +88,14 @@ for (const device of DEVICES) {
         expect(post?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(composer.top);
       });
 
-      test("what the row gives up is not painted", async ({ page }) => {
+      test("the panel takes the focus layout, and its Tasks are not painted", async ({
+        page,
+      }) => {
         await openFocused(page, search);
+        await expect(page.locator(PANEL)).toHaveAttribute(
+          "data-focus-layout",
+          "",
+        );
         await expect(page.locator(TASKS)).toBeHidden();
       });
 
@@ -157,7 +163,7 @@ test.describe("the iPad Pro 11's keyboard", () => {
     page,
   }) => {
     await openFocused(page, "?thread=zero&post=long&keyboard=428&top=32");
-    await expect(page.locator(TASKS)).toBeHidden();
+    await expect(page.locator(PANEL)).toHaveAttribute("data-focus-layout", "");
   });
 
   test("would leave 406 with no status bar, which keeps the full box", async ({
@@ -172,6 +178,6 @@ test.describe("the iPad Pro 11's keyboard", () => {
       "data-box-form",
       "full",
     );
-    await expect(page.locator(TASKS)).toBeVisible();
+    await expect(page.locator(PANEL)).not.toHaveAttribute("data-focus-layout");
   });
 });
