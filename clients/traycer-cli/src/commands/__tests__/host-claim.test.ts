@@ -117,6 +117,7 @@ function makeClaimCommand(yes: boolean) {
 }
 
 beforeEach(() => {
+  savedStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   vi.resetAllMocks();
   vi.stubGlobal(
     "fetch",
@@ -191,7 +192,6 @@ afterEach(() => {
 });
 
 function setStdinIsTTY(value: boolean): void {
-  savedStdinIsTTY ??= Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
 }
 
