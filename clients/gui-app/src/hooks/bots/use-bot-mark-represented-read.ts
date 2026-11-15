@@ -3,10 +3,13 @@ import type { BotReadCursorAdvanceRequest } from "@traycer/protocol/host/bot/sch
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useBotReadCursorAdvanceMutation } from "@/hooks/bots/use-bot-read-cursor";
+import {
+  useBotReadCursorAdvanceMutation,
+  type BotReadCursorAdvanceVariables,
+} from "@/hooks/bots/use-bot-read-cursor";
 
 type BatchState = { readonly pending: boolean; readonly failed: boolean };
-type AdvanceRead = (target: BotReadCursorAdvanceRequest) => Promise<unknown>;
+type AdvanceRead = (target: BotReadCursorAdvanceVariables) => Promise<unknown>;
 const IDLE: BatchState = { pending: false, failed: false };
 
 /** Failed positions belong to the same requester lifetime as their first click. */
@@ -66,7 +69,7 @@ class RepresentedReadBatch {
     for (const target of captured) {
       if (!this.isCurrent(signal)) return;
       try {
-        await advance(target);
+        await advance({ ...target, signal });
       } catch {
         if (!this.isCurrent(signal)) return;
         failed.push(target);

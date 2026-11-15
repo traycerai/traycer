@@ -324,10 +324,39 @@ function unreadRange(
   return index < 0 ? null : rows.slice(index + 1);
 }
 
+/** A persisted turn can paint several slices with steer rows between them. */
+function positionsAtLastSlice(
+  rows: readonly TranscriptListRow[],
+  positions: ReadonlyMap<string, BotReadPosition>,
+  target: BotReadPosition | null,
+): ReadonlyMap<string, BotReadPosition | null> {
+  const lastRows = new Map<string, string>();
+  const result = new Map<string, BotReadPosition | null>();
+  for (const row of rows) {
+    if (row.kind !== "hydrated") continue;
+    const ids = row.model.turnMessageIds ?? [];
+    for (const id of ids) {
+      lastRows.set(id, row.key);
+      if (positions.has(id)) result.set(row.key, null);
+    }
+    if (row.model.persistentMessageId !== null)
+      lastRows.set(row.model.persistentMessageId, row.key);
+  }
+  if (target === null) return result;
+  for (const [id, key] of lastRows) {
+    const position = positions.get(id);
+    if (position === undefined || position.seq > target.seq) continue;
+    const held = result.get(key);
+    if (held === undefined || held === null || held.seq < position.seq)
+      result.set(key, position);
+  }
+  return result;
+}
+
 function qualifiedPrefix(
   range: readonly TranscriptListRow[],
   seen: ReadonlyMap<string, ChatMessage>,
-  positions: ReadonlyMap<string, BotReadPosition>,
+  positions: ReadonlyMap<string, BotReadPosition | null>,
   boundary: {
     readonly cursor: BotReadPosition | null;
     readonly target: BotReadPosition;
@@ -339,9 +368,9 @@ function qualifiedPrefix(
   for (const row of range) {
     if (row.kind === "placeholder" || seen.get(row.model.id) !== row.model)
       break;
-    const id = row.model.persistentMessageId;
-    const position = id === null ? undefined : positions.get(id);
-    if (position === undefined || position.seq > target.seq) break;
+    const position = positions.get(row.key);
+    if (position === undefined) break;
+    if (position === null) continue;
     if (position.seq > (cursor?.seq ?? -Infinity))
       qualified = { position, rowKey: row.key, ordinal: row.ordinal, epoch };
     if (position.messageId === target.messageId) break;
@@ -355,7 +384,7 @@ function observedTurnExtension(
   target: BotReadPosition,
   seen: ReadonlyMap<string, ChatMessage>,
   context: {
-    readonly positions: ReadonlyMap<string, BotReadPosition>;
+    readonly positions: ReadonlyMap<string, BotReadPosition | null>;
     readonly epoch: string;
   },
 ): ReadAnchor | null {
@@ -366,8 +395,13 @@ function observedTurnExtension(
     seen.get(row.model.id) !== row.model
   )
     return null;
-  const position = positions.get(target.messageId);
-  if (position === undefined || position.seq !== target.seq) return null;
+  const position = positions.get(row.key);
+  if (
+    position === undefined ||
+    position === null ||
+    position.seq !== target.seq
+  )
+    return null;
   return { position, rowKey: row.key, ordinal: row.ordinal, epoch };
 }
 
@@ -410,20 +444,23 @@ function useQualifiedRange(args: {
   const cursorRow =
     cursor === null
       ? undefined
-      : rows.findLast((row) => carries(row, cursor.messageId));
+      : rows.find((row) => carries(row, cursor.messageId));
   const current = currentAnchor(cursor, cursorRow, anchors, epoch);
   const range = unreadRange(rows, cursor, current);
+  const endPositions = positionsAtLastSlice(rows, positions, target);
   let qualified: ReadAnchor | null = null;
   if (presented && target !== null) {
     if (range !== null)
-      qualified = qualifiedPrefix(range, seen, positions, {
+      qualified = qualifiedPrefix(range, seen, endPositions, {
         cursor,
         target,
         epoch,
       });
     qualified =
-      observedTurnExtension(cursorRow, target, seen, { positions, epoch }) ??
-      qualified;
+      observedTurnExtension(cursorRow, target, seen, {
+        positions: endPositions,
+        epoch,
+      }) ?? qualified;
   }
   const next =
     qualified ?? (anchors.next?.epoch === epoch ? anchors.next : null);

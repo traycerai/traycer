@@ -37,6 +37,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -1854,22 +1855,39 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   // and held in view (bot-channel-unread-banner.test.tsx, over the real
   // transcript rows), so this stubbed-transcript rig only pins that it asks
   // for no write on its own.
-  it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names", () => {
+  it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names, however long it stays", async () => {
+    // A write held back by a dwell would arrive after the render: the clock
+    // runs past it after EACH change of what is presented or of the newest row.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const pass = async (ms: number): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
     mocks.state.paneVisible = false;
     mocks.state.readCursors = {
       cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": NEW_ROW },
     };
     const { rerender } = mount({ openThreadPostId: null });
+    await pass(1_500);
+    expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
     rerender();
+    await pass(1_500);
+    expect(mocks.advance).not.toHaveBeenCalled();
+
     const landed = { messageId: "row-landed", seq: 3_000 };
     mocks.state.readCursors = {
       cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": landed },
     };
     rerender();
+    await pass(1_500);
 
     expect(mocks.advance).not.toHaveBeenCalled();
   });

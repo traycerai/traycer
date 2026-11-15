@@ -1,8 +1,7 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import {
   useQueryClient,
   type QueryKey,
-  type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type {
@@ -21,6 +20,8 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { channelBold } from "@/lib/bots/bot-read-cursor";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+
+import { currentBotLifetime, useBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const READ_METHOD = "bot.readCursor.read" as const;
 
@@ -67,54 +68,108 @@ export function isReadCursorReadOf(queryKey: QueryKey, botId: string): boolean {
   );
 }
 
-/**
- * Moves the person's cursor on one conversation forward. Every cached read
- * of the bot takes the cursor the cloud kept, so the bold clears at once,
- * and a read in flight is cancelled first, so its older answer cannot land
- * over it; the cloud never moves a cursor back, and neither does the cache.
- */
+/** A batch may supply its own requester/component retirement signal. */
+export type BotReadCursorAdvanceVariables =
+  | BotReadCursorAdvanceRequest
+  | (BotReadCursorAdvanceRequest & { readonly signal: AbortSignal | null });
+interface CapturedAdvance {
+  readonly request: BotReadCursorAdvanceRequest;
+  readonly signal: AbortSignal | null;
+  readonly viewer: string;
+  readonly lifetime: number;
+}
+function advanceIsCurrent(variables: CapturedAdvance): boolean {
+  return (
+    variables.lifetime === currentBotLifetime() &&
+    variables.signal?.aborted !== true
+  );
+}
+
+/** Cursor writes and cache updates belong to the viewer who initiated them. */
 export function useBotReadCursorAdvanceMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotReadCursorAdvanceResponse,
-  HostRpcError,
-  BotReadCursorAdvanceRequest
-> {
+): {
+  readonly mutate: (variables: BotReadCursorAdvanceVariables) => void;
+  readonly mutateAsync: (
+    variables: BotReadCursorAdvanceVariables,
+  ) => Promise<BotReadCursorAdvanceResponse>;
+  readonly isPending: boolean;
+  readonly isSuccess: boolean;
+} {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.readCursor.advance">({
+  const viewer = useCloudChatViewerId();
+  const lifetime = useBotLifetime();
+  const mutation = useHostMutation<
+    HostRpcRegistry,
+    "bot.readCursor.advance",
+    unknown,
+    CapturedAdvance
+  >({
     client,
     method: "bot.readCursor.advance",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => variables.request,
+    signalFor: (variables) => {
+      if (!advanceIsCurrent(variables))
+        throw new DOMException("Read action retired", "AbortError");
+      return variables.signal ?? undefined;
+    },
     options: {
       mutationKey: botMutationKeys.advanceReadCursor(),
       onSuccess: async ({ cursor }, variables) => {
+        if (!advanceIsCurrent(variables)) return;
+        const { request } = variables;
         const filter = {
           predicate: (query: { readonly queryKey: QueryKey }) =>
-            isReadCursorReadOf(query.queryKey, variables.botId),
+            isReadCursorReadOf(query.queryKey, request.botId) &&
+            query.queryKey.at(-1) === variables.viewer,
         };
-        // A read already in flight may have been answered before this
-        // advance landed, and would put the cursor back where it was.
         await queryClient.cancelQueries(filter);
+        if (!advanceIsCurrent(variables)) return;
         queryClient.setQueriesData<BotReadCursorReadResponse>(
           filter,
           (cached) => {
             if (cached === undefined) return cached;
-            const held = Object.hasOwn(cached.cursors, variables.conversationId)
-              ? cached.cursors[variables.conversationId]
+            const held = Object.hasOwn(cached.cursors, request.conversationId)
+              ? cached.cursors[request.conversationId]
               : null;
             if (held !== null && held.seq >= cursor.seq) return cached;
             return {
               ...cached,
-              cursors: {
-                ...cached.cursors,
-                [variables.conversationId]: cursor,
-              },
+              cursors: { ...cached.cursors, [request.conversationId]: cursor },
             };
           },
         );
       },
     },
   });
+  const capture = useCallback(
+    (variables: BotReadCursorAdvanceVariables): CapturedAdvance => ({
+      request: {
+        botId: variables.botId,
+        conversationId: variables.conversationId,
+        messageId: variables.messageId,
+        seq: variables.seq,
+      },
+      signal: "signal" in variables ? variables.signal : null,
+      viewer,
+      lifetime,
+    }),
+    [viewer, lifetime],
+  );
+  const { mutate, mutateAsync } = mutation;
+  return {
+    mutate: useCallback(
+      (variables: BotReadCursorAdvanceVariables) => mutate(capture(variables)),
+      [capture, mutate],
+    ),
+    mutateAsync: useCallback(
+      (variables: BotReadCursorAdvanceVariables) =>
+        mutateAsync(capture(variables)),
+      [capture, mutateAsync],
+    ),
+    isPending: mutation.isPending,
+    isSuccess: mutation.isSuccess,
+  };
 }
 
 /** Whether the tab's host reads and advances the person's read cursors. */

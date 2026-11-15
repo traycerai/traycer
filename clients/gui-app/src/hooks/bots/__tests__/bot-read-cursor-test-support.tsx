@@ -1,8 +1,13 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   hostRpcRegistry,
@@ -13,6 +18,37 @@ import type {
   BotReadCursorReadResponse,
   BotReadPosition,
 } from "@traycer/protocol/host/bot/schemas";
+
+/**
+ * Resolves when the first advance mutation the view started reaches a
+ * terminal state (settled, refused or aborted): an event of the mutation
+ * cache, not the hook's own flag, which is reset when the batch is retired.
+ * Call it before the step that ends the write.
+ */
+export function firstAdvanceSettles(
+  fixture: ReadCursorHostFixture,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const cache = fixture.queryClient.getMutationCache();
+    const unsubscribe = cache.subscribe((event) => {
+      if (event.type !== "updated") return;
+      const { status } = event.mutation.state;
+      if (status === "idle" || status === "pending") return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+/** A signed-in request context for `userId`, as the host client sends under it. */
+export function requestContextOf(userId: string) {
+  const base = createAuthenticatedUserFixture(undefined);
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: `tok-${userId}`,
+    user: { ...base, user: { ...base.user, id: userId } },
+  });
+}
 
 /**
  * A host that keeps one person's read cursors and each conversation's newest
@@ -41,6 +77,22 @@ export interface ReadCursorHostFixture {
   readonly heldAdvance: { promise: Promise<void> | null };
   /** While true, an advance reaches the host and is refused. */
   readonly refuseAdvances: { value: boolean };
+  /**
+   * The mutation cache's own `onMutate`, which TanStack awaits after a
+   * mutation is pending and before its function runs: `waiters` are called as
+   * a mutation arrives there, and it waits on `promise` while that is set.
+   */
+  readonly heldMutate: {
+    promise: Promise<void> | null;
+    readonly waiters: Array<() => void>;
+  } /**
+   * The mutation cache's own `onSuccess`, which TanStack awaits before the
+   * mutation's own `onSuccess`: held on the same terms as `heldMutate`.
+   */;
+  readonly heldSuccess: {
+    promise: Promise<void> | null;
+    readonly waiters: Array<() => void>;
+  };
 }
 
 export function createReadCursorHostFixture(initial: {
@@ -54,9 +106,27 @@ export function createReadCursorHostFixture(initial: {
   const advanceUsers: Array<string | null> = [];
   const heldAdvance: ReadCursorHostFixture["heldAdvance"] = { promise: null };
   const refuseAdvances = { value: false };
+  const heldMutate: ReadCursorHostFixture["heldMutate"] = {
+    promise: null,
+    waiters: [],
+  };
+  const heldSuccess: ReadCursorHostFixture["heldSuccess"] = {
+    promise: null,
+    waiters: [],
+  };
   const advances: BotReadCursorAdvanceRequest[] = [];
   const advanceAnswers = new Map<string, BotReadPosition>();
   const queryClient = new QueryClient({
+    mutationCache: new MutationCache({
+      onMutate: async () => {
+        for (const waiter of heldMutate.waiters.splice(0)) waiter();
+        if (heldMutate.promise !== null) await heldMutate.promise;
+      },
+      onSuccess: async () => {
+        for (const waiter of heldSuccess.waiters.splice(0)) waiter();
+        if (heldSuccess.promise !== null) await heldSuccess.promise;
+      },
+    }),
     defaultOptions: {
       queries: { retry: false, staleTime: 0, gcTime: Infinity },
       mutations: { retry: false },
@@ -116,5 +186,7 @@ export function createReadCursorHostFixture(initial: {
     advanceUsers,
     heldAdvance,
     refuseAdvances,
+    heldMutate,
+    heldSuccess,
   };
 }

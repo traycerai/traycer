@@ -481,6 +481,31 @@ function readingState(
   };
 }
 
+/** Ordinals only identify rows within the session baseline that produced them. */
+function useUnreadOrdinal(
+  epoch: number,
+  session: number,
+): {
+  readonly ordinal: number | null;
+  readonly seek: (ordinal: number | null) => void;
+} {
+  const [pending, setPending] = useState<{
+    readonly ordinal: number;
+    readonly epoch: number;
+    readonly session: number;
+  } | null>(null);
+  const current =
+    pending !== null && pending.epoch === epoch && pending.session === session;
+  if (pending !== null && !current) setPending(null);
+  const seek = useCallback(
+    (ordinal: number | null) => {
+      setPending(ordinal === null ? null : { ordinal, epoch, session });
+    },
+    [epoch, session],
+  );
+  return { ordinal: current ? pending.ordinal : null, seek };
+}
+
 function BotChatTranscriptBody(props: {
   readonly minimapEnabled: boolean;
   readonly handle: ChatSessionStoreHandle;
@@ -549,7 +574,10 @@ function BotChatTranscriptBody(props: {
   }>({ request: null, issued: 0 });
   const scrollRequest = scroll.request;
   const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
-  const [seekOrdinal, setSeekOrdinal] = useState<number | null>(null);
+  const { ordinal: seekOrdinal, seek: setSeekOrdinal } = useUnreadOrdinal(
+    state.transcriptBaselineEpoch,
+    handle.sessionGeneration,
+  );
   const issueScroll = useCallback(
     (target: { readonly rowId: string; readonly blockId: string | null }) => {
       setScroll((previous) => ({
@@ -575,7 +603,7 @@ function BotChatTranscriptBody(props: {
       }
       setPendingJump(jump);
     },
-    [issueScroll, messages],
+    [issueScroll, messages, setSeekOrdinal],
   );
   const land = useCallback(
     (landing: BotTranscriptLanding) =>

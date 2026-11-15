@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { BotReadCursorAdvanceRequest } from "@traycer/protocol/host/bot/schemas";
 import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented-read";
 import {
   createReadCursorHostFixture,
+  firstAdvanceSettles,
+  requestContextOf,
   type ReadCursorHostFixture,
 } from "./bot-read-cursor-test-support";
 
@@ -41,16 +41,6 @@ const THREAD_TWO: BotReadCursorAdvanceRequest = {
 };
 const TARGETS = [THREAD_ONE, THREAD_TWO];
 
-/** A signed-in context for `userId`. */
-function contextOf(userId: string) {
-  const base = createAuthenticatedUserFixture(undefined);
-  return createRequestContextFixture({
-    origin: "renderer",
-    bearerToken: `tok-${userId}`,
-    user: { ...base, user: { ...base.user, id: userId } },
-  });
-}
-
 function mount(targets: readonly BotReadCursorAdvanceRequest[]) {
   const fixture = mocks.fixture;
   if (fixture === null) throw new Error("no host");
@@ -70,29 +60,26 @@ function holdAdvances(fixture: ReadCursorHostFixture): () => void {
   return release;
 }
 
-/**
- * Resolves when the first advance mutation the view started reaches a
- * terminal state (settled, refused or aborted): an event of the mutation
- * cache, not the hook's own flag, which is reset when the batch is retired.
- * Call it before the step that ends the write.
- */
-function firstAdvanceSettles(fixture: ReadCursorHostFixture): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const cache = fixture.queryClient.getMutationCache();
-    const unsubscribe = cache.subscribe((event) => {
-      if (event.type !== "updated") return;
-      const { status } = event.mutation.state;
-      if (status === "idle" || status === "pending") return;
-      unsubscribe();
-      resolve();
-    });
-  });
-}
-
 /** The write's terminal state reached, with what React and the cache queued after it flushed. */
 async function continuationRuns(settled: Promise<void>): Promise<void> {
   await act(async () => {
     await settled;
+  });
+}
+
+/** Holds every mutation at its `onMutate`, before its function runs; the way out is returned. */
+function holdMutations(fixture: ReadCursorHostFixture): () => void {
+  let release = (): void => undefined;
+  fixture.heldMutate.promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
+
+/** Resolves once a mutation has reached that hold. Call it before the click. */
+function mutationReachesHold(fixture: ReadCursorHostFixture): Promise<void> {
+  return new Promise<void>((resolve) => {
+    fixture.heldMutate.waiters.push(resolve);
   });
 }
 
@@ -103,7 +90,7 @@ function mutationsStarted(fixture: ReadCursorHostFixture): number {
 
 beforeEach(() => {
   mocks.fixture = createReadCursorHostFixture({ cursors: {}, latest: {} });
-  mocks.fixture.spine.setRequestContext(contextOf("user-a"));
+  mocks.fixture.spine.setRequestContext(requestContextOf("user-a"));
 });
 
 afterEach(() => {
@@ -128,7 +115,7 @@ describe("the cross's batch and the identity that clicked it", () => {
     // The person on this window changes while the first write is held.
     const settled = firstAdvanceSettles(fixture);
     act(() => {
-      fixture.spine.setRequestContext(contextOf("user-b"));
+      fixture.spine.setRequestContext(requestContextOf("user-b"));
     });
     await continuationRuns(settled);
     release();
@@ -153,10 +140,10 @@ describe("the cross's batch and the identity that clicked it", () => {
 
     const settled = firstAdvanceSettles(fixture);
     act(() => {
-      fixture.spine.setRequestContext(contextOf("user-b"));
+      fixture.spine.setRequestContext(requestContextOf("user-b"));
     });
     act(() => {
-      fixture.spine.setRequestContext(contextOf("user-a"));
+      fixture.spine.setRequestContext(requestContextOf("user-a"));
     });
     await continuationRuns(settled);
     release();
@@ -212,7 +199,7 @@ describe("the cross's batch and the identity that clicked it", () => {
       cursors: {},
       latest: {},
     });
-    replacement.spine.setRequestContext(contextOf("user-a"));
+    replacement.spine.setRequestContext(requestContextOf("user-a"));
     mocks.fixture = replacement;
     rerender({ targets: TARGETS });
     const settled = firstAdvanceSettles(fixture);
@@ -222,6 +209,64 @@ describe("the cross's batch and the identity that clicked it", () => {
     expect(fixture.advances).toEqual([THREAD_ONE]);
     expect(replacement.advances).toEqual([]);
     expect(mutationsStarted(fixture)).toBe(1);
+  });
+
+  describe("a click retired before its first write is sent", () => {
+    /** Clicks, holds the first mutation before its function runs, retires, releases. */
+    async function retireBeforeDispatch(
+      retire: (fixture: ReadCursorHostFixture, unmount: () => void) => void,
+    ): Promise<ReadCursorHostFixture> {
+      const fixture = mocks.fixture;
+      if (fixture === null) throw new Error("no host");
+      const release = holdMutations(fixture);
+      const reached = mutationReachesHold(fixture);
+      const { result, unmount } = mount(TARGETS);
+
+      act(() => {
+        result.current.markRead();
+      });
+      await reached;
+      expect(fixture.advances).toEqual([]);
+
+      const settled = firstAdvanceSettles(fixture);
+      act(() => {
+        retire(fixture, unmount);
+      });
+      release();
+      await continuationRuns(settled);
+      return fixture;
+    }
+
+    it("sends no write when the identity changes", async () => {
+      const fixture = await retireBeforeDispatch((host) => {
+        host.spine.setRequestContext(requestContextOf("user-b"));
+      });
+
+      expect(fixture.advances).toEqual([]);
+      expect(fixture.advanceUsers).toEqual([]);
+      expect(mutationsStarted(fixture)).toBe(1);
+    });
+
+    it("sends no write when the identity changes and returns", async () => {
+      const fixture = await retireBeforeDispatch((host) => {
+        host.spine.setRequestContext(requestContextOf("user-b"));
+        host.spine.setRequestContext(requestContextOf("user-a"));
+      });
+
+      expect(fixture.advances).toEqual([]);
+      expect(fixture.advanceUsers).toEqual([]);
+      expect(mutationsStarted(fixture)).toBe(1);
+    });
+
+    it("sends no write when the view unmounts", async () => {
+      const fixture = await retireBeforeDispatch((_host, unmount) => {
+        unmount();
+      });
+
+      expect(fixture.advances).toEqual([]);
+      expect(fixture.advanceUsers).toEqual([]);
+      expect(mutationsStarted(fixture)).toBe(1);
+    });
   });
 
   it("does not bring a failed batch back after the identity changes and returns", async () => {
@@ -239,10 +284,10 @@ describe("the cross's batch and the identity that clicked it", () => {
     expect(fixture.advances).toEqual([THREAD_ONE, THREAD_TWO]);
 
     act(() => {
-      fixture.spine.setRequestContext(contextOf("user-b"));
+      fixture.spine.setRequestContext(requestContextOf("user-b"));
     });
     act(() => {
-      fixture.spine.setRequestContext(contextOf("user-a"));
+      fixture.spine.setRequestContext(requestContextOf("user-a"));
     });
     // Back as the first person, whose view now counts nothing unread.
     fixture.refuseAdvances.value = false;

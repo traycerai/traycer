@@ -42,6 +42,8 @@ import {
   botReply,
   hostClientLocating,
   scriptedSession,
+  sessionPrompt,
+  textDoc,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import { MountedChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -158,13 +160,26 @@ vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => {
       ),
     }),
     useBotReadCursorAdvanceMutation: () => ({
-      mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
+      // The view's batch hands over its request with a retirement signal of
+      // its own; the real hook sends only the request, so that is what the
+      // host is recorded as getting.
+      mutateAsync: (
+        variables: BotReadCursorAdvanceRequest & {
+          readonly signal?: AbortSignal | null;
+        },
+      ): Promise<void> => {
+        const { botId, conversationId, messageId, seq } = variables;
+        const request: BotReadCursorAdvanceRequest = {
+          botId,
+          conversationId,
+          messageId,
+          seq,
+        };
         mocks.advances.push(request);
         if (mocks.failNextAdvance) {
           mocks.failNextAdvance = false;
           return Promise.reject(new Error("the host is offline"));
         }
-        const { messageId, seq } = request;
         setRead({
           cursors: {
             ...mocks.read.value.cursors,
@@ -333,6 +348,15 @@ function showRowPart(at: number, box: DOMRect, visible: DOMRect): void {
 /** The ids the transcript gives the rows written at these times. */
 function rowsAt(...timestamps: number[]): ReadonlySet<string> {
   return new Set(timestamps.map((at) => `assistant:ts:${String(at)}`));
+}
+
+/** The ids of the drawn rows whose text holds `text`, whatever the transcript keyed them by. */
+function rowsHolding(text: string): ReadonlySet<string> {
+  return new Set(
+    [...document.querySelectorAll("[data-bot-read-row]")]
+      .filter((row) => row.textContent.includes(text))
+      .map((row) => row.getAttribute("data-bot-read-row") ?? ""),
+  );
 }
 
 /** Only the rows with these ids come into view; `null` is every row. */
@@ -659,6 +683,190 @@ describe("the channel's unread banner and automatic reading", () => {
       screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
     ).toBe("assistant:ts:2000");
     expect(mocks.advances).toEqual([]);
+  });
+
+  it("drops the ordinal it captured when the transcript is rebased with a row inserted before it, and a fresh press lands on the current first unread row", async () => {
+    const session = scriptedSession(CHANNEL_ID, []);
+    mocks.sessions = { [CHANNEL_ID]: session.handle };
+    const request = vi.fn<(ordinal: number | null) => void>();
+    /** One window entry: the row at `ordinal`, written at `at` ms, with its message id. */
+    interface Entry {
+      readonly ordinal: number;
+      readonly at: number;
+    }
+    const install = (
+      epoch: number,
+      rowCount: number,
+      entries: readonly Entry[],
+    ): void => {
+      const rows = entries.map(({ at }) =>
+        botReply({
+          messageId: `row-${String(at / 1_000)}`,
+          text: `update ${String(at)}`,
+          timestamp: at,
+        }),
+      );
+      act(() => {
+        session.store.setState({
+          requestTranscriptOrdinal: request,
+          transcriptBaselineEpoch: epoch,
+          transcriptDerived: {
+            latestAssistantUsage: null,
+            pinnedTodo: null,
+            pinnedTaskTodoItems: [],
+            latestForkableAssistantMessageId: null,
+            restorableSetupInterruption: null,
+            interviewAnswerability: [],
+            latestAssistantAuthFailureTurnKey: null,
+            setupCardWindows: [],
+          },
+          messages: rows,
+          transcriptWindow: {
+            ...session.store.getState().transcriptWindow,
+            rowCount,
+            spans: entries.map(({ ordinal, at }, index) => ({
+              fromOrdinal: ordinal,
+              rowIds: [`assistant:ts:${String(at)}`],
+              rowContext: {},
+              messageIds: [rows[index].messageId],
+              eventIds: [],
+              contextBytes: 0,
+            })),
+          },
+        });
+      });
+    };
+    const scrolledTo: string[] = [];
+    const watcher = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.target instanceof Element)
+          scrolledTo.push(record.target.getAttribute("data-scroll-to") ?? "");
+      }
+    });
+    onTestFinished(() => watcher.disconnect());
+    watcher.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["data-scroll-to"],
+      subtree: true,
+    });
+    behind(NEWEST);
+    render(<MountedChannel />);
+    // Four rows; the first unread one (ordinal 1, written at 2000) has no body.
+    install(0, 4, [
+      { ordinal: 0, at: 1_000 },
+      { ordinal: 2, at: 3_000 },
+      { ordinal: 3, at: 4_000 },
+    ]);
+
+    fireEvent.click(
+      within(banner()).getByRole("button", { name: /Unread messages/ }),
+    );
+    expect(request).toHaveBeenLastCalledWith(1);
+
+    // The transcript is rebased: an older row now stands at ordinal 0, so the
+    // row the cursor is on is at ordinal 1 and the first unread one at 2.
+    install(1, 5, [
+      { ordinal: 0, at: 500 },
+      { ordinal: 1, at: 1_000 },
+      { ordinal: 2, at: 2_000 },
+      { ordinal: 3, at: 3_000 },
+      { ordinal: 4, at: 4_000 },
+    ]);
+    await pass(0);
+    scrolledTo.push(
+      ...watcher
+        .takeRecords()
+        .map((record) =>
+          record.target instanceof Element
+            ? (record.target.getAttribute("data-scroll-to") ?? "")
+            : "",
+        ),
+    );
+
+    // The captured ordinal is dropped, not carried over to the new window: it
+    // never lands on what stands at ordinal 1 now (the row already read), and
+    // nothing is scrolled to on the person's behalf.
+    expect(scrolledTo).not.toContain("assistant:ts:1000");
+    expect(request).toHaveBeenLastCalledWith(null);
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+
+    // A fresh press of the banner goes to the first unread row of the window as it is.
+    fireEvent.click(
+      within(banner()).getByRole("button", { name: /Unread messages/ }),
+    );
+    await pass(0);
+
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("assistant:ts:2000");
+    expect(scrolledTo).not.toContain("assistant:ts:1000");
+    expect(mocks.advances).toEqual([]);
+  });
+
+  it("does not read across a steer the person has not been shown when a later slice of the same turn is held in view, and reads on once the steer is shown too", async () => {
+    // One turn written in two records with the person's steer between them,
+    // as a safe-point steer persists (rendered-messages.test.tsx: "renders
+    // persisted steered user messages at the steer point").
+    const before = {
+      ...botReply({
+        messageId: "turn-a1",
+        text: "Before steer",
+        timestamp: 1_000,
+      }),
+      turnId: "turn-1",
+    };
+    const steer = sessionPrompt("steer-1", 2_000);
+    const afterBase = botReply({
+      messageId: "turn-a2",
+      text: "After steer",
+      timestamp: 3_000,
+    });
+    const after = {
+      ...afterBase,
+      turnId: "turn-1",
+      blocks: [
+        {
+          type: "steer" as const,
+          blockId: "steer:queue-1",
+          status: "completed" as const,
+          timestamp: 2_000,
+          queueItemId: "queue-1",
+          messageId: "steer-1",
+          mode: "safe_point" as const,
+          sender: null,
+          content: textDoc(["A prompt the host wrote for the bot"]),
+        },
+        ...afterBase.blocks,
+      ],
+    };
+    mocks.sessions = {
+      [CHANNEL_ID]: scriptedSession(CHANNEL_ID, [before, steer, after]).handle,
+    };
+    setRead({
+      cursors: { [CHANNEL_ID]: { messageId: "turn-a1", seq: 1_000 } },
+      latest: { [CHANNEL_ID]: { messageId: "turn-a2", seq: 3_000 } },
+    });
+    render(<MountedChannel />);
+
+    // The later slice is held in view; the steer before it never was.
+    showRows(rowsHolding("After steer"));
+    await pass(5_000);
+    expect(mocks.advances).toEqual([]);
+    expect(screen.getByTestId("bot-unread-banner")).toBeTruthy();
+
+    // Shown too, the steer and the slice after it are one unbroken prefix.
+    showRows(rowsHolding("A prompt the host wrote for the bot"));
+    await pass(1_000);
+    expect(mocks.advances).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CHANNEL_ID,
+        messageId: "turn-a2",
+        seq: 3_000,
+      },
+    ]);
   });
 
   it("does not count a hold in which the row moved without any threshold being crossed, and reads it from a fresh hold", async () => {

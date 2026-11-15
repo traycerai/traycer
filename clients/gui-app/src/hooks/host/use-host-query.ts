@@ -509,6 +509,10 @@ export interface UseHostMutationOptions<
    * the identity, and omitting the option is the same thing.
    */
   readonly mapDispatchError?: (cause: unknown) => unknown;
+  /** Cancellation is read at the actual dispatch, including redispatch. */
+  readonly signalFor?:
+    | ((variables: TVariables) => AbortSignal | undefined)
+    | null;
 }
 
 /**
@@ -558,6 +562,8 @@ export function useHostMutation<
         const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
         // A keyed dispatch carries both retry identity and version floor.
         const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+          const signal = args.signalFor?.(variables) ?? undefined;
+          signal?.throwIfAborted();
           if (idempotencyKey !== null) {
             return client.requestWithOptions(args.method, params, {
               idempotencyKey,
@@ -567,17 +573,19 @@ export function useHostMutation<
               // does not declare for the method.
               responseTimeoutMs: null,
               requiredHostMethodVersion: requirement,
-              signal: undefined,
+              signal,
             });
           }
           if (requirement !== null)
             return client.requestWithSignalRequiringHostMethodVersion(
               args.method,
               params,
-              undefined,
+              signal,
               requirement,
             );
-          return client.request(args.method, params);
+          return signal === undefined
+            ? client.request(args.method, params)
+            : client.requestWithSignal(args.method, params, signal);
         };
         const mapDispatchError = args.mapDispatchError;
         // `.catch` directly on the dispatch, never chained after a `.then`: a
