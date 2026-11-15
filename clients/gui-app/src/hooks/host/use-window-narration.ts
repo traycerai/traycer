@@ -13,6 +13,7 @@ import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export interface WindowNarrationReading {
@@ -63,6 +64,7 @@ export function useWindowNarration(): WindowNarrationReading {
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
   const doorState = useHostDoorState(effectiveHostId ?? targetHostId);
+  const hostClaim = useHostClaim(effectiveHostId ?? targetHostId, doorState);
   // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
@@ -99,6 +101,7 @@ export function useWindowNarration(): WindowNarrationReading {
       discoveryConcluded,
       localHostId,
       doorState,
+      hostClaim,
     };
     return {
       narration: deriveWindowNarration(input),
@@ -113,6 +116,7 @@ export function useWindowNarration(): WindowNarrationReading {
     localHostExpected,
     localHostId,
     doorState,
+    hostClaim,
     targetHostId,
   ]);
 }
