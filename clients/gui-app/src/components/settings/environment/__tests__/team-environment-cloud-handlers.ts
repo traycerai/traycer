@@ -278,7 +278,10 @@ export function createTeamEnvironmentCloudHandlers(
         );
       }
       case "members": {
-        const response = await invoke("environment.members", { environmentId });
+        const response = await invoke("environment.members", {
+          environmentId,
+          cursor: null,
+        });
         if (response === undefined) return null;
         return jsonEnvironmentAnswer({
           members: response.members.map((member) => ({

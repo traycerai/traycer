@@ -240,22 +240,16 @@ describe("TeamPlans", () => {
 
   it.each([
     {
-      name: "refuses a held binding version a 1.0 host cannot compare, sending nothing",
+      name: "sends the held binding version through cloud when the host only supports 1.0",
       bindingVersion: 7,
       negotiatedMinor: 0,
-      sent: null,
+      sent: { expectedBindingVersion: 7 },
     },
     {
-      name: "still sends the 1.0 unlink when no binding version is held",
+      name: "sends a null binding version through cloud when none is held",
       bindingVersion: undefined,
       negotiatedMinor: 0,
       sent: { expectedBindingVersion: null },
-    },
-    {
-      name: "sends the held binding version to a 1.1 host",
-      bindingVersion: 7,
-      negotiatedMinor: 1,
-      sent: { expectedBindingVersion: 7 },
     },
   ])("$name", async ({ bindingVersion, negotiatedMinor, sent }) => {
     const harness = mountTeamPageNegotiating(
@@ -293,13 +287,6 @@ describe("TeamPlans", () => {
       within(dialog).getByRole("button", { name: "Unlink" }),
     );
 
-    if (sent === null) {
-      await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledTimes(1);
-      });
-      expect(harness.paramsOf("environment.plans.unlink")).toEqual([]);
-      return;
-    }
     await waitFor(() => {
       expect(harness.paramsOf("environment.plans.unlink")).toEqual([
         { environmentId: "env-a", profileId: "prof-1", ...sent },
