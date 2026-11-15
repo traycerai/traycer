@@ -232,6 +232,15 @@ export type LinkLoginSignInResult =
 const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
 
 /**
+ * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
+ * write sent later can tell an ended sign-in from a refreshed token.
+ */
+export interface ChosenSignIn {
+  readonly identityGeneration: number;
+  readonly userId: string | null;
+}
+
+/**
  * Thrown when a read is asked for on behalf of a credential era that is no
  * longer the live one — the request would go out under a bearer from a
  * different era than the answer is meant for.
@@ -241,15 +250,6 @@ const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
  * the same way, which is the correct one: no answer, retain what you have,
  * and let the refresh the new era triggers for itself provide the real one.
  */
-/**
- * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
- * write sent later can tell an ended sign-in from a refreshed token.
- */
-export interface ChosenSignIn {
-  readonly identityGeneration: number;
-  readonly userId: string | null;
-}
-
 export class SupersededAuthEraError extends Error {
   constructor() {
     super("Refusing a read issued for a superseded credential era");
