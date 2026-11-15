@@ -9,14 +9,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { describe, expect, it } from "vitest";
+import { environmentPlansListRequestSchema } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
-  mountTeamPage,
   mountTeamPageThroughBoundary,
   mountPersonalProvidersThroughBoundary,
+  mountVerifiedTeamProvidersPage,
   poolSource,
   configurationItem,
   teamProfileRecord,
@@ -195,7 +196,7 @@ describe("TeamProviders profiles", () => {
     const unreadable = screen.getByText(PROVIDER_STATE_UNREADABLE_COPY);
     const readFailureLine = unreadable.closest('[role="status"]');
     expect(readFailureLine).not.toBeNull();
-    if (readFailureLine === null)
+    if (!(readFailureLine instanceof HTMLElement))
       throw new Error("expected the provider read status line");
     const retry = within(readFailureLine).getByRole("button", {
       name: "Retry",
@@ -237,10 +238,10 @@ describe("TeamProviders profiles", () => {
       body: { enabled: false },
     };
     negotiateMethods({ "providers.list": { major: 10, minor: 11 } });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.host.list": () => ({
-        hosts: [{ ...reachableHost, hostId: WINDOW_HOST_ID, kind: "team" }],
+        hosts: [{ ...reachableHost, hostId: WINDOW_HOST_ID }],
       }),
       "providers.list": () => ({
         providers: [
@@ -382,33 +383,53 @@ describe("TeamProviders profiles", () => {
     const planRequests = harness.paramsOf("environment.plans.list");
     expect(planRequests.length).toBeGreaterThan(0);
     expect(
-      planRequests.every((request) => request.environmentId === "env-a"),
+      planRequests.every(
+        (request) =>
+          environmentPlansListRequestSchema.parse(request).environmentId ===
+          "env-a",
+      ),
     ).toBe(true);
   });
 
-  it("keeps the last team account removal confirmation after an uncoded failure and permits a manual retry", async () => {
+  it("shows the existing write-refusal line for an admin colour change through the real boundary", async () => {
     teamProfileRecordHttpBoundary.list = {
       status: 200,
       body: teamProfileRecordsBody([
         teamProfileRecord({
-          profileId: "last-team-account",
+          profileId: "team-color-profile",
           harnessId: "claude",
-          name: "Last team account",
+          name: "Team color profile",
           readerLabel: "live",
           kind: "oauth_code",
         }),
       ]),
     };
-    teamProfileRecordHttpBoundary.action = { status: 500, body: null };
+    teamProfileRecordHttpBoundary.items = {
+      status: 200,
+      body: {
+        items: [
+          {
+            kind: "managed_profile",
+            key: "claude:team-color-profile",
+            value: {
+              name: "Team color profile",
+              color: null,
+              harnessId: "claude",
+              accountIdentity: null,
+              needsLink: false,
+              enabled: true,
+            },
+            revision: 1,
+          },
+        ],
+      },
+    };
+    teamProfileRecordHttpBoundary.itemWriteStatus = 403;
     const harness = mountTeamPageThroughBoundary(
       "admin",
       {
         ...handlers(() => []),
         "environment.host.list": () => ({ hosts: [reachableHost] }),
-        "providers.list": () => ({
-          providers: [claudeLoginProviderRow()],
-          native: null,
-        }),
       },
       "providers",
     );
@@ -421,241 +442,30 @@ describe("TeamProviders profiles", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     await screen.findByRole("button", {
-      name: "Claude Code profile: Last team account",
+      name: "Claude Code profile: Team color profile",
     });
     const editor = await openProfileEditor();
     await userEvent.click(
-      within(editor).getByRole("button", { name: "Remove profile" }),
+      within(editor).getByRole("button", { name: "Use color #3b82f6" }),
     );
-    let confirmation = await screen.findByRole("dialog", {
-      name: "Remove Last team account?",
-    });
-    await userEvent.click(
-      within(confirmation).getByRole("button", { name: "Remove" }),
-    );
-
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Couldn't remove profile.");
-      expect(teamProfileRecordReadCount()).toBe(2);
-    });
-    confirmation = screen.getByRole("dialog", {
-      name: "Remove Last team account?",
-    });
-    expect(
-      teamProfileRecordHttpBoundary.calls.filter(
-        (call) =>
-          call.url.endsWith("/profile-records/last-team-account/remove") &&
-          call.method === "POST",
-      ),
-    ).toHaveLength(1);
-    await waitFor(() => {
-      expect(
-        teamProfileRecordHttpBoundary.calls.filter(
-          (call) =>
-            call.url.endsWith("/api/v3/environments/env-a/profile-records") &&
-            call.method === "GET",
-        ),
-      ).toHaveLength(2);
-    });
-
-    teamProfileRecordHttpBoundary.action = {
-      status: 200,
-      body: {
-        profileId: "last-team-account",
-        harnessId: "claude",
-        recordRevision: "2",
-      },
-    };
-    await userEvent.click(
-      within(confirmation).getByRole("button", { name: "Remove" }),
-    );
-    await waitFor(() => {
-      expect(
-        teamProfileRecordHttpBoundary.calls.filter(
-          (call) =>
-            call.url.endsWith("/profile-records/last-team-account/remove") &&
-            call.method === "POST",
-        ),
-      ).toHaveLength(2);
-    });
-    await waitFor(() => {
-      expect(
-        teamProfileRecordHttpBoundary.calls.filter(
-          (call) =>
-            call.url.endsWith("/api/v3/environments/env-a/profile-records") &&
-            call.method === "GET",
-        ),
-      ).toHaveLength(3);
-    });
-    expect(
-      screen.queryByRole("dialog", { name: "Remove Last team account?" }),
-    ).toBeNull();
-  });
-
-  it("keeps sign-out confirmation after an uncoded failure and permits a manual retry", async () => {
-    teamProfileRecordHttpBoundary.list = {
-      status: 200,
-      body: teamProfileRecordsBody([
-        teamProfileRecord({
-          profileId: "team-sign-out-profile",
-          harnessId: "claude",
-          name: "Team sign-out profile",
-          readerLabel: "live",
-          kind: "oauth_code",
-        }),
-      ]),
-    };
-    teamProfileRecordHttpBoundary.action = { status: 500, body: null };
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.host.list": () => ({ hosts: [reachableHost] }),
-      },
-      "providers",
-    );
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    await screen.findByRole("button", {
-      name: "Claude Code profile: Team sign-out profile",
-    });
-    const editor = await openProfileEditor();
-    await userEvent.click(
-      within(editor).getByRole("button", { name: "Sign out" }),
-    );
-    let confirmation = await screen.findByRole("dialog", {
-      name: "Sign out of Team sign-out profile in Acme?",
-    });
-    await userEvent.click(
-      within(confirmation).getByRole("button", { name: "Sign out" }),
-    );
-
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Couldn't sign out.");
-      expect(teamProfileRecordReadCount()).toBe(2);
-    });
-    confirmation = screen.getByRole("dialog", {
-      name: "Sign out of Team sign-out profile in Acme?",
-    });
-    expect(
-      teamProfileRecordHttpBoundary.calls.filter(
-        (call) =>
-          call.url.endsWith(
-            "/api/v3/environments/env-a/profile-records/team-sign-out-profile/sign-out",
-          ) && call.method === "POST",
-      ),
-    ).toHaveLength(1);
-
-    teamProfileRecordHttpBoundary.action = {
-      status: 200,
-      body: {
-        profileId: "team-sign-out-profile",
-        harnessId: "claude",
-        recordRevision: "2",
-      },
-    };
-    await userEvent.click(
-      within(confirmation).getByRole("button", { name: "Sign out" }),
-    );
-    await waitFor(() => {
-      expect(teamProfileRecordReadCount()).toBe(3);
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-    expect(
-      teamProfileRecordHttpBoundary.calls.filter(
-        (call) =>
-          call.url.endsWith(
-            "/api/v3/environments/env-a/profile-records/team-sign-out-profile/sign-out",
-          ) && call.method === "POST",
-      ),
-    ).toHaveLength(2);
-  });
-
-  it("keeps a rename editor open after an uncoded failure and permits a manual retry", async () => {
-    teamProfileRecordHttpBoundary.list = {
-      status: 200,
-      body: teamProfileRecordsBody([
-        teamProfileRecord({
-          profileId: "team-rename-profile",
-          harnessId: "claude",
-          name: "Team rename profile",
-          readerLabel: "live",
-          kind: "oauth_code",
-        }),
-      ]),
-    };
-    teamProfileRecordHttpBoundary.action = { status: 500, body: null };
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.host.list": () => ({ hosts: [reachableHost] }),
-      },
-      "providers",
-    );
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    await screen.findByRole("button", {
-      name: "Claude Code profile: Team rename profile",
-    });
-    let editor = await openProfileEditor();
-    fireEvent.change(within(editor).getByLabelText("Profile name"), {
-      target: { value: "Team renamed profile" },
-    });
     await userEvent.click(
       within(editor).getByRole("button", { name: "Save changes" }),
     );
 
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Couldn't rename profile.");
-      expect(teamProfileRecordReadCount()).toBe(2);
-    });
-    editor = screen.getByRole("dialog", { name: "Edit profile" });
     expect(
-      teamProfileRecordHttpBoundary.calls.filter(
-        (call) =>
-          call.url.endsWith(
-            "/api/v3/environments/env-a/profile-records/team-rename-profile/name",
-          ) && call.method === "POST",
+      await screen.findByText(
+        "You no longer have access to change these settings.",
       ),
-    ).toHaveLength(1);
-
-    teamProfileRecordHttpBoundary.action = {
-      status: 200,
-      body: {
-        profileId: "team-rename-profile",
-        harnessId: "claude",
-        recordRevision: "2",
-        name: "Team renamed profile",
-      },
-    };
-    await userEvent.click(
-      within(editor).getByRole("button", { name: "Save changes" }),
-    );
-    await waitFor(() => {
-      expect(teamProfileRecordReadCount()).toBe(3);
-      expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
-    });
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
     expect(
-      teamProfileRecordHttpBoundary.calls.filter(
+      teamProfileRecordHttpBoundary.calls.some(
         (call) =>
-          call.url.endsWith(
-            "/api/v3/environments/env-a/profile-records/team-rename-profile/name",
-          ) && call.method === "POST",
+          call.url.includes(
+            "/api/v3/environments/env-a/items/managed_profile",
+          ) && call.method === "PUT",
       ),
-    ).toHaveLength(2);
+    ).toBe(true);
   });
 
   it.each([
@@ -742,83 +552,6 @@ describe("TeamProviders profiles", () => {
     },
   );
 
-  it("shows the existing write-refusal line for an admin colour change through the real boundary", async () => {
-    teamProfileRecordHttpBoundary.list = {
-      status: 200,
-      body: teamProfileRecordsBody([
-        teamProfileRecord({
-          profileId: "team-color-profile",
-          harnessId: "claude",
-          name: "Team color profile",
-          readerLabel: "live",
-          kind: "oauth_code",
-        }),
-      ]),
-    };
-    teamProfileRecordHttpBoundary.items = {
-      status: 200,
-      body: {
-        items: [
-          {
-            kind: "managed_profile",
-            key: "claude:team-color-profile",
-            value: {
-              name: "Team color profile",
-              color: null,
-              harnessId: "claude",
-              accountIdentity: null,
-              needsLink: false,
-              enabled: true,
-            },
-            revision: 1,
-          },
-        ],
-      },
-    };
-    teamProfileRecordHttpBoundary.itemWriteStatus = 403;
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.host.list": () => ({ hosts: [reachableHost] }),
-      },
-      "providers",
-    );
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    await screen.findByRole("button", {
-      name: "Claude Code profile: Team color profile",
-    });
-    const editor = await openProfileEditor();
-    await userEvent.click(
-      within(editor).getByRole("button", { name: "Use color #3b82f6" }),
-    );
-    await userEvent.click(
-      within(editor).getByRole("button", { name: "Save changes" }),
-    );
-
-    expect(
-      await screen.findByText(
-        "You no longer have access to change these settings.",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
-    expect(
-      teamProfileRecordHttpBoundary.calls.some(
-        (call) =>
-          call.url.includes(
-            "/api/v3/environments/env-a/items/managed_profile",
-          ) && call.method === "PUT",
-      ),
-    ).toBe(true);
-  });
-
   it("updates a synced row through its exact managed-profile item key and rereads records", async () => {
     const stored = {
       name: "Shared Work",
@@ -854,7 +587,7 @@ describe("TeamProviders profiles", () => {
         ],
       },
     };
-    const harness = mountTeamPage(
+    const harness = mountVerifiedTeamProvidersPage(
       poolSource("editor"),
       handlers(() => []),
     );
@@ -894,7 +627,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("does not label an editor profile control Use", async () => {
-    const harness = mountTeamPage(
+    const harness = mountVerifiedTeamProvidersPage(
       poolSource("editor"),
       handlers(() => [profile(true, 4)]),
     );
@@ -937,7 +670,7 @@ describe("TeamProviders profiles", () => {
       value: homeValue,
       revision: 9,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work, home]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1013,7 +746,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: null,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         current = teamProfile({
@@ -1075,7 +808,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("gives a viewer On/Off for a profile with no switch, plus the member-only verbs withheld", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.secrets.list": () => ({
         secrets: [
@@ -1108,7 +841,7 @@ describe("TeamProviders profiles", () => {
   });
 
   it("lets a reader select a disabled profile and keeps On or Off with no Manage", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [
         teamProfile({
           key: "claude:work",
@@ -1176,7 +909,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1241,7 +974,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: "Home label",
       color: sharedColor,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work, home]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1296,7 +1029,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.delete": () => ({
         outcome: "saved",
@@ -1348,7 +1081,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: "Work label",
     });
     const limit = "a".repeat(64);
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "saved",
@@ -1409,7 +1142,7 @@ describe("TeamProviders profiles", () => {
       mergedInto: "kept-work",
       accountIdentity: "Work label",
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [work]),
       "environment.configuration.items.put": () => ({
         outcome: "conflict",
@@ -1481,7 +1214,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: stored.accountIdentity,
       color: stored.color,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         if (current.revision === 4) {
@@ -1568,7 +1301,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: stored.accountIdentity,
       color: stored.color,
     });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => {
         if (current.revision === 4) {

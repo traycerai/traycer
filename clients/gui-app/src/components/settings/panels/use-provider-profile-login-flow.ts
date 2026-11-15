@@ -10,8 +10,8 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
-  AwaitLoginVariables,
   AwaitLoginAnswer,
+  AwaitLoginVariables,
 } from "@/hooks/providers/use-providers-await-login-mutation";
 import {
   providerProfileSchema,
@@ -129,6 +129,7 @@ export type ProviderProfileLoginFlowState =
   | {
       readonly kind: "identity";
       readonly profileId: string;
+      readonly recordProfileId: string | null;
       readonly profile: ProviderProfile;
       readonly profiles: readonly ProviderProfile[];
       readonly existingProfileId: string | null;
@@ -312,6 +313,7 @@ type AwaitLoginResolution =
   | {
       readonly kind: "authenticated";
       readonly payload: {
+        readonly recordProfileId: null;
         readonly profile: ProviderProfile;
         readonly profiles: readonly ProviderProfile[];
         readonly existingProfileId: string | null;
@@ -383,7 +385,7 @@ export function classifyProfileAwaitResult(
   if (profile !== null && profile.auth.status === "authenticated") {
     return {
       kind: "authenticated",
-      payload: { profile, profiles, existingProfileId },
+      payload: { profile, profiles, existingProfileId, recordProfileId: null },
     };
   }
   if (result.codeRejected) return { kind: "codeRejected" };
@@ -396,6 +398,26 @@ export function classifyProfileAwaitResult(
     return { kind: "authPending" };
   }
   return { kind: "notAuthenticated" };
+}
+
+function classifyAwaitResultForAttempt(
+  result: AwaitLoginResult,
+  attempt: {
+    readonly target: ProviderLoginTarget | null;
+    readonly mode: ProviderProfileLoginFlowMode;
+    readonly existingProfileId: string | null;
+    readonly nextProfileId: string | null;
+    readonly awaitProfileId: string | null;
+  },
+): AwaitLoginResolution {
+  const { target, mode, existingProfileId, nextProfileId, awaitProfileId } =
+    attempt;
+  return target === null && mode === "reauth" && existingProfileId === null
+    ? classifyAmbientAwaitResult(result)
+    : classifyProfileAwaitResult(
+        result,
+        target === null ? nextProfileId : awaitProfileId,
+      );
 }
 
 /**
@@ -736,6 +758,7 @@ export function useProviderDestinationLoginFlow(
   // arbiter after success already latched) and needs it without a second
   // copy of `result` in scope.
   const successPayloadRef = useRef<{
+    readonly recordProfileId: string | null;
     readonly profile: ProviderProfile;
     readonly profiles: readonly ProviderProfile[];
     readonly existingProfileId: string | null;
@@ -1067,6 +1090,7 @@ export function useProviderDestinationLoginFlow(
         setState({
           kind: "identity",
           profileId: payload.profile.profileId,
+          recordProfileId: payload.recordProfileId,
           profile: payload.profile,
           profiles: payload.profiles,
           existingProfileId: payload.existingProfileId,
@@ -1109,6 +1133,7 @@ export function useProviderDestinationLoginFlow(
       if (outcome.kind === "signed-in") {
         awaitOutcomeRef.current = "authenticated";
         successPayloadRef.current = {
+          recordProfileId: outcome.profile.profileId,
           profile: outcome.profile,
           profiles: outcome.profiles,
           existingProfileId: null,
@@ -1353,12 +1378,12 @@ export function useProviderDestinationLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
-            const receivedOutcome = result.profileOutcome ?? null;
-            if (target !== null && receivedOutcome !== null) {
+            const profileOutcome = result.profileOutcome ?? null;
+            if (target !== null && profileOutcome !== null) {
               setState({
                 ...result,
                 kind: "target-outcome",
-                profileOutcome: receivedOutcome,
+                profileOutcome,
                 admissionId: nextProfileId,
               });
               return;
@@ -1367,7 +1392,7 @@ export function useProviderDestinationLoginFlow(
               target !== null || profileOutcomes === null
                 ? null
                 : resolveProfileOutcome(
-                    receivedOutcome,
+                    profileOutcome,
                     mode,
                     () =>
                       (result.state?.profiles ?? []).map((profile) =>
@@ -1394,8 +1419,7 @@ export function useProviderDestinationLoginFlow(
               awaitOnce();
               return;
             }
-            const resolution = classifyFlowAwaitResult({
-              result,
+            const resolution = classifyAwaitResultForAttempt(result, {
               target,
               mode,
               existingProfileId,
@@ -1857,24 +1881,4 @@ function loginHandle(
   return target === null && mode === "reauth"
     ? existingProfileId
     : returnedProfileId;
-}
-
-function classifyFlowAwaitResult(input: {
-  readonly result: AwaitLoginResult;
-  readonly target: ProviderLoginTarget | null;
-  readonly mode: ProviderProfileLoginFlowMode;
-  readonly existingProfileId: string | null;
-  readonly nextProfileId: string | null;
-  readonly awaitProfileId: string | null;
-}): AwaitLoginResolution {
-  if (
-    input.target === null &&
-    input.mode === "reauth" &&
-    input.existingProfileId === null
-  )
-    return classifyAmbientAwaitResult(input.result);
-  return classifyProfileAwaitResult(
-    input.result,
-    input.target === null ? input.nextProfileId : input.awaitProfileId,
-  );
 }

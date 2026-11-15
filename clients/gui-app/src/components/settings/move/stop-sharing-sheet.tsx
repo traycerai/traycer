@@ -6,7 +6,7 @@
  * `changedRows` is non-null after the host refused a stop because the preview
  * changed: the rows that appeared since, which need a choice.
  */
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   stopChoiceEntries,
   stopRemovedRows,
@@ -54,6 +54,7 @@ export function StopSharingSheet(props: {
   readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
+  readonly personalAccounts: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onStop: (choices: readonly StopChoiceEntry[]) => void;
 }): ReactNode {
@@ -67,6 +68,7 @@ export function StopSharingSheet(props: {
           changedRows={props.changedRows}
           previewStatus={props.previewStatus}
           confirmPending={props.confirmPending}
+          personalAccounts={props.personalAccounts}
           onOpenChange={props.onOpenChange}
           onStop={props.onStop}
         />
@@ -82,6 +84,7 @@ function StopSharingBody(props: {
   readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
+  readonly personalAccounts: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onStop: (choices: readonly StopChoiceEntry[]) => void;
 }): ReactNode {
@@ -89,7 +92,10 @@ function StopSharingBody(props: {
   const previewReady = props.previewStatus === "ready";
   const confirmEnabled =
     previewReady && stopSharingConfirmEnabled(props.needsChoice, choices);
-  const removed = stopRemovedRows(props.managed, props.needsChoice);
+  const removed = useMemo(
+    () => stopRemovedRows(props.managed, props.needsChoice),
+    [props.managed, props.needsChoice],
+  );
 
   return (
     <DialogContent
@@ -138,7 +144,9 @@ function StopSharingBody(props: {
                 )}
               </p>
             ) : null}
-            {removed.length === 0 && props.needsChoice.length === 0 ? (
+            {removed.length === 0 &&
+            props.needsChoice.length === 0 &&
+            props.personalAccounts === null ? (
               <p
                 className="text-ui-sm text-muted-foreground"
                 data-testid="stop-sharing-managed-empty"
@@ -219,6 +227,7 @@ function StopSharingBody(props: {
                 </ul>
               </section>
             ) : null}
+            {props.personalAccounts}
           </>
         ) : null}
       </div>

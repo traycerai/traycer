@@ -2,9 +2,16 @@ import {
   createContext,
   useContext,
   useCallback,
+  useEffect,
+  useRef,
   useSyncExternalStore,
 } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
@@ -33,6 +40,43 @@ export const TeamProviderRecordsContext =
 
 export function useTeamProviderRecords(): TeamProviderRecords | null {
   return useContext(TeamProviderRecordsContext);
+}
+
+/** One press reads the existing query and keeps that answer for this dialog. */
+export function useTeamProviderSignInRead(
+  environmentId: string,
+  enabled: boolean,
+) {
+  const records = useTeamProviderRecords();
+  const queries = useQueryClient();
+  const viewerId = useCloudChatViewerId();
+  const queryKey = authQueryKeys.environmentProfileRecords(
+    environmentId,
+    viewerId,
+  );
+  const read = useMutation({
+    mutationKey: queryKey,
+    retry: false,
+    mutationFn: async (): Promise<EnvironmentProfileRecords | null> => {
+      if (records === null) return null;
+      try {
+        if ((await records.reread()) === null) return null;
+        return (
+          queries.getQueryData<EnvironmentProfileRecords>(queryKey) ?? null
+        );
+      } catch {
+        return null;
+      }
+    },
+  });
+  const requested = useRef(false);
+  const reread = read.mutate;
+  useEffect(() => {
+    if (!enabled || requested.current) return;
+    requested.current = true;
+    reread();
+  }, [enabled, reread]);
+  return read;
 }
 
 /** Every team row comes from the app's session, including on a team's own computer. */

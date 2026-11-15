@@ -131,6 +131,9 @@ describe("host RPC routing table", () => {
       ...Object.keys(hostStreamRpcRegistry),
     ];
     const unrouted = names.filter((name) => hostRpcRouteOf(name) === null);
+    expect([...clientUnary, ...protocolRetained].sort()).toEqual(
+      Object.keys(hostRpcRegistry).sort(),
+    );
     expect(protocolRetained).toEqual(
       EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS,
     );

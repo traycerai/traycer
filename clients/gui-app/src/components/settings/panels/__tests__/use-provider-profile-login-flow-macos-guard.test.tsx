@@ -19,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type { AwaitLoginTestAnswer } from "./provider-profile-login-flow-test-support";
 import {
   providerHostBlockLabel,
   type ProviderHostBlock,
@@ -41,10 +42,7 @@ type StartLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.startLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
+type AwaitLoginResponse = AwaitLoginTestAnswer;
 type CancelLoginRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
