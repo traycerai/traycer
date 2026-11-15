@@ -244,15 +244,6 @@ export class SupersededAuthEraError extends Error {
 }
 
 /**
- * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
- * write sent later can tell an ended sign-in from a refreshed token.
- */
-export interface ChosenSignIn {
-  readonly identityGeneration: number;
-  readonly userId: string | null;
-}
-
-/**
  * Thrown by {@link AuthService.fetchAuthenticatedUser} when the check it ran
  * was overtaken: its answer is about a credential that is no longer the live
  * one (an account switch, an adoption) or it stood down for an interactive
@@ -2126,20 +2117,6 @@ export class AuthService {
   }
 
   /**
-   * Whether the sign-in a write was chosen under is still the live one. A
-   * same-user token refresh has not ended it. The user check covers a switch
-   * projected from another window, which leaves the identity generation where
-   * it was; the profile is committed with the bearer (`commitLiveCredential`),
-   * so it names the bearer's owner.
-   */
-  private isChosenSignInLive(chosenBy: ChosenSignIn): boolean {
-    return (
-      this.isIdentityCurrent(chosenBy.identityGeneration) &&
-      (this.currentProfile?.userId ?? null) === chosenBy.userId
-    );
-  }
-
-  /**
    * Re-read the file and confirm it still carries `token` before an AUTOMATIC
    * path adopts it into a signed-in UI.
    *
@@ -3223,40 +3200,18 @@ export class AuthService {
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.listTeamComputers(bearer, environmentId);
   }
-  /** The sign-in a write is chosen under, read at the press. */
-  chosenSignIn(): ChosenSignIn {
-    return {
-      identityGeneration: this.identityGeneration,
-      userId: this.currentProfile?.userId ?? null,
-    };
-  }
-
-  /**
-   * Mints with the bearer of the sign-in that pressed. Query waits between
-   * the press and the call, so a sign-in that has ended since throws
-   * {@link SupersededAuthEraError} instead of minting as someone else.
-   */
   async mintTeamComputerInstallToken(
     environmentId: string,
-    chosenBy: ChosenSignIn,
   ): Promise<TeamComputerInstallTokenResult> {
-    if (!this.isChosenSignInLive(chosenBy)) throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
   }
 
-  /**
-   * Claims with the bearer of the sign-in that pressed; one that has ended
-   * since throws {@link SupersededAuthEraError}, so the computer never
-   * becomes the next account's.
-   */
   async releaseTeamComputer(
     hostId: string,
     environmentId: string,
-    chosenBy: ChosenSignIn,
   ): Promise<TeamComputerReleaseResult> {
-    if (!this.isChosenSignInLive(chosenBy)) throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) throw new Error("Sign in to claim this computer.");
     return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
@@ -3591,16 +3546,9 @@ export class AuthService {
     );
   }
 
-  /**
-   * Accepts with the bearer of the sign-in that pressed; one that has ended
-   * since throws {@link SupersededAuthEraError}, so another account invited to
-   * the same team is never made to join it.
-   */
   async acceptEnvironmentInvitation(
     environmentId: string,
-    chosenBy: ChosenSignIn,
   ): Promise<EnvironmentInvitationsAcceptResponse> {
-    if (!this.isChosenSignInLive(chosenBy)) throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) throw new Error("Sign in to accept this invitation.");
     return acceptEnvironmentInvitation(

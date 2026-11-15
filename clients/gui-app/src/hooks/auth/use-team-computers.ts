@@ -9,11 +9,6 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { TeamComputerFailure } from "@traycer-clients/shared/host-client/team-computers";
-import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
-import {
-  SupersededAuthEraError,
-  type ChosenSignIn,
-} from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import {
   authMutationKeys,
@@ -82,35 +77,18 @@ export function useTeamComputerClaim(
   return useMutation({
     mutationKey: authMutationKeys.claimTeamComputer(environmentId),
     retry: false,
-    // `chosenBy` is read at the press. Query awaits before this runs, and a
-    // pending mutation takes each later render's options, so this closure may
-    // be the next account's: the claim refuses in AuthService instead.
-    mutationFn: async (press: {
-      readonly hostId: string;
-      readonly chosenBy: ChosenSignIn | null;
-    }) => {
-      const { hostId, chosenBy } = press;
-      const claimant = chosenBy?.userId ?? null;
-      if (auth === null || chosenBy === null || claimant === null)
+    mutationFn: async (hostId: string) => {
+      if (
+        auth === null ||
+        userId === null ||
+        useAuthStore.getState().contextMetadata?.userId !== userId
+      )
         throw new Error("Sign in to claim this computer.");
-      let result: TeamComputerReleaseResult;
-      try {
-        result = await auth.releaseTeamComputer(
-          hostId,
-          environmentId,
-          chosenBy,
-        );
-      } catch (error) {
-        if (error instanceof SupersededAuthEraError)
-          throw new Error(
-            "The signed-in account changed. Nothing was claimed.",
-          );
-        throw error;
-      }
+      const result = await auth.releaseTeamComputer(hostId, environmentId);
       if (result.kind === "ok") {
         noteHostMembershipChanged(hostId);
         // This person made the claim: it is not a teammate's to tell them.
-        noteOwnClaim(claimant, { environmentId, hostId });
+        noteOwnClaim(userId, { environmentId, hostId });
         return;
       }
       if (result.kind === "not-computer")
@@ -126,7 +104,7 @@ export function useTeamComputerClaim(
       );
     },
     onSuccess: onClaimed,
-    onSettled: (_data, _error, { hostId }) => {
+    onSettled: (_data, _error, hostId) => {
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.teamComputers(auth, userId, environmentId),
       });

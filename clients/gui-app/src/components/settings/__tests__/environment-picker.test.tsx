@@ -85,12 +85,12 @@ vi.mock("@/hooks/environment/use-environment-invitations", () => ({
   useEnvironmentInvitationAcceptMutation: () => ({
     isPending: false,
     mutate: (
-      variables: { request: { environmentId: string } },
+      variables: { environmentId: string },
       options: {
         onSuccess: (response: { outcome: "accepted" | "not_found" }) => void;
       },
     ) => {
-      reads.accepted.push(variables.request.environmentId);
+      reads.accepted.push(variables.environmentId);
       options.onSuccess({ outcome: reads.acceptOutcome });
     },
   }),
