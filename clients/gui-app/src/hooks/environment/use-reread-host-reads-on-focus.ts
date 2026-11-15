@@ -5,7 +5,11 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient, type Query } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import {
+  DELTA_FED_READS,
+  SECRET_READS,
+} from "@/lib/environment/delta-fed-reads";
 import { HOST_METHOD_POLL_TABLE } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const DELTA_FED: ReadonlySet<string> = new Set(DELTA_FED_READS);
@@ -36,8 +40,10 @@ function rereadsOnFocus(
  * delta-fed reads, and every read its page renders that never polls. A Local
  * row is a computer's own settings, and no status reports their revision, so
  * a change made on that computer outside this window (another window, the
- * CLI, an agent) reaches an open page only this way. The window's own `focus`
- * event, as `useRereadConfigurationOnFocus` uses. `null` listens to nothing.
+ * CLI, an agent) reaches an open page only this way. Its secrets are read
+ * from authn, under the environment that computer runs, and are re-read with
+ * them. The window's own `focus` event, as `useRereadConfigurationOnFocus`
+ * uses. `null` listens to nothing.
  */
 export function useRereadHostReadsOnFocus(hostId: string | null): void {
   const queryClient = useQueryClient();
@@ -48,6 +54,7 @@ export function useRereadHostReadsOnFocus(hostId: string | null): void {
       void queryClient.invalidateQueries({
         predicate: (query) => rereadsOnFocus(query, hostId, plan),
       });
+      void invalidateEnvironmentReads(queryClient, SECRET_READS);
     };
     window.addEventListener("focus", listener);
     return () => {

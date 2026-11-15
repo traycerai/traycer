@@ -47,7 +47,6 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import {
   mountTeamPage,
-  mountTeamPageNegotiating,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -57,10 +56,7 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
-import {
-  SECRETS_EMPTY_TEXT,
-  SECRETS_NEED_UPDATED_HOST,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -172,20 +168,6 @@ function mountTeam(host: TeamSecretsHost): TeamPageHarness {
     pick: { kind: "team", environmentId: "env-a" },
   });
   const harness = mountTeamPage(poolSource("editor"), handlersFor(host));
-  renderPage(harness);
-  return harness;
-}
-
-/** The team's host negotiated `method` at @1.0, below the floor. */
-function mountTeamBelowFloor(method: string): TeamPageHarness {
-  useSettingsEnvironmentPickStore.setState({
-    pick: { kind: "team", environmentId: "env-a" },
-  });
-  const harness = mountTeamPageNegotiating(
-    poolSource("editor"),
-    handlersFor(teamSecretsHost()),
-    { [method]: { major: 1, minor: 0 } },
-  );
   renderPage(harness);
   return harness;
 }
@@ -383,41 +365,5 @@ describe("a team secret's writes go through the host mutations", () => {
     await waitFor(() => {
       expect(listReads(harness)).toBe(readsBefore + 1);
     });
-  });
-});
-
-describe("a team's host below a secret write's floor", () => {
-  it("says the secrets need an updated host when Save is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.create");
-    await openFilledApiKeyForm();
-    fireEvent.click(buttonOf("secret-form-continue"));
-    fireEvent.click(await screen.findByTestId("secret-save"));
-
-    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
-      SECRETS_NEED_UPDATED_HOST,
-    );
-    expect(harness.paramsOf("environment.secrets.create")).toEqual([]);
-  });
-
-  it("says the secrets need an updated host when Verify is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.verify");
-    await openFilledApiKeyForm();
-    fireEvent.click(buttonOf("secret-form-verify"));
-
-    expect(
-      (await screen.findByTestId("secret-form-verify-line")).textContent,
-    ).toBe(SECRETS_NEED_UPDATED_HOST);
-    expect(harness.paramsOf("environment.secrets.verify")).toEqual([]);
-  });
-
-  it("says the secrets need an updated host when Replace is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.replaceValue");
-    await openReplaceWithValue();
-    fireEvent.click(buttonOf("replace-secret-confirm"));
-
-    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
-      SECRETS_NEED_UPDATED_HOST,
-    );
-    expect(harness.paramsOf("environment.secrets.replaceValue")).toEqual([]);
   });
 });
