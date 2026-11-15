@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import {
   afterEach,
   beforeEach,
@@ -1979,6 +1979,28 @@ describe("RoutingDestinationPicker", () => {
       return { promise, resolve };
     }
 
+    function observeWriteAndPickerContinuation(
+      queryClient: QueryClient,
+    ): Promise<void> {
+      return new Promise<void>((resolve) => {
+        let unsubscribe = (): void => undefined;
+        unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+          if (
+            event.type !== "updated" ||
+            event.mutation.state.status !== "success" ||
+            event.mutation.options.mutationKey?.[0] !== "bot.updateRunSettings"
+          ) {
+            return;
+          }
+          unsubscribe();
+          // MutationCache reports success before mutateAsync's promise
+          // continuation runs. Two queued microtasks place the test after the
+          // picker's attached .then handler has either retried or returned.
+          queueMicrotask(() => queueMicrotask(() => resolve()));
+        });
+      });
+    }
+
     function identityResponse(userId: string): Response {
       return new Response(
         JSON.stringify({
@@ -2274,6 +2296,20 @@ describe("RoutingDestinationPicker", () => {
             profile: FAILED_PROFILE,
           }),
         });
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
 
         await completeDeviceSignIn(
           held.auth,
@@ -2281,9 +2317,13 @@ describe("RoutingDestinationPicker", () => {
           "token-user-b",
           "user-b",
         );
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
         held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
 
-        await waitFor(() => expect(kit.mutations).toEqual([]));
+        expect(kit.mutations).toEqual([]);
         expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
           held.botSnapshot,
         );
@@ -2299,6 +2339,20 @@ describe("RoutingDestinationPicker", () => {
       const held = await prepareHeldRealWrite();
       try {
         expect(held.requests).toHaveLength(1);
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
         await held.auth.signOut();
         await completeDeviceSignIn(
           held.auth,
@@ -2306,9 +2360,13 @@ describe("RoutingDestinationPicker", () => {
           "token-user-a-again",
           "user-a",
         );
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
         held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
 
-        await waitFor(() => expect(kit.mutations).toEqual([]));
+        expect(kit.mutations).toEqual([]);
         expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
           held.botSnapshot,
         );
@@ -2336,15 +2394,31 @@ describe("RoutingDestinationPicker", () => {
           );
         });
         expect(held.auth.getIdentityGeneration()).toBe(identityGeneration);
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
 
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
         held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
 
-        await waitFor(() => {
-          expect(kit.mutations).toHaveLength(1);
-          expect(kit.mutations[0]).toMatchObject({
-            method: "chat.fallback.runManualRung",
-            variables: { epicId: held.botId, rung: "retry" },
-          });
+        expect(kit.mutations).toHaveLength(1);
+        expect(kit.mutations[0]).toMatchObject({
+          method: "chat.fallback.runManualRung",
+          variables: { epicId: held.botId, rung: "retry" },
         });
         expect(
           held.queryClient.getQueryData<BotSubscriptionSnapshot>(
