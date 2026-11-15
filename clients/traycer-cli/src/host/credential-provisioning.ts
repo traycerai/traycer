@@ -1,4 +1,5 @@
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
   createCliHostTokens,
   type CliHostTokenFailure,
@@ -806,15 +807,21 @@ export async function provisionInstalledHostCredential(
 
 /**
  * A host-only token authn refused for good: a rejected or missing sign-in
- * needs `traycer login`; every other refusal (a computer with no row, not a
- * member, a frozen sandbox) means the handoff did not complete.
+ * needs `traycer login`; a person who is not a member of the computer's team
+ * reads the membership refusal a door gives them; every other refusal (a
+ * computer with no row, a frozen sandbox) means the handoff did not complete.
  */
 function mintRefusalOutcome(
   failure: CliHostTokenFailure,
 ): HostCredentialProvisionOutcome {
-  return failure.kind === "sign-in-rejected" || failure.kind === "no-sign-in"
-    ? { kind: "unauthorized" }
-    : { kind: "mint-unavailable" };
+  if (failure.kind === "sign-in-rejected" || failure.kind === "no-sign-in")
+    return { kind: "unauthorized" };
+  if (failure.kind === "not-a-member")
+    return {
+      kind: "error",
+      message: hostTokenFailureCliError(failure).message,
+    };
+  return { kind: "mint-unavailable" };
 }
 
 /**
