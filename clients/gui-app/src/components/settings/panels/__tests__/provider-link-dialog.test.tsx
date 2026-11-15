@@ -2,12 +2,19 @@
 // boundary (the way `providers-settings-panel.test.tsx` does), with ONE stable
 // scripted client: the poll effect depends on `client`.
 const clientMock = vi.hoisted((): { current: unknown } => ({ current: null }));
+// Personal's id is the app's own read: the binding's `auth` lists the
+// environments and opens the cloud calls that join them.
+const authMock = vi.hoisted((): { current: unknown } => ({ current: null }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useHostBinding: () => ({ auth: authMock.current }),
+  };
 });
 
-// Personal's id is read from `environment.list` under the signed-in viewer.
+// Personal's id is read under the signed-in viewer.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -33,6 +40,7 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   ProvidersLinkCompleteRequestV11,
   ProvidersLinkCompleteResponse,
@@ -40,6 +48,10 @@ import type {
   ProvidersLinkResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+} from "../../../../../__tests__/create-fake-runner-host";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import {
@@ -47,11 +59,12 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { OpenLink } from "@/lib/links/open-link";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 
 const listMock = vi.hoisted(() => vi.fn<() => void>());
-// While set, `environment.list` does not answer until it resolves.
+// While set, the environment list does not answer until it resolves.
 const listGate = vi.hoisted((): { current: Promise<void> | null } => ({
   current: null,
 }));
@@ -149,28 +162,31 @@ beforeEach(() => {
   linkMock.complete.mockReset();
   openLinkMock.mockReset();
   openLinkMock.mockResolvedValue(undefined);
+  const personalEnvironment: EnvironmentDescriptorV11 = {
+    environmentId: PERSONAL_ENV_ID,
+    ownerKind: "user",
+    ownerId: "user-me",
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner",
+    kind: "personal",
+    hostCount: 0,
+    providerHandle: null,
+  };
+  authMock.current = createFakeEnvironmentCloudAuth({
+    listEnvironments: async () => {
+      listMock();
+      await listGate.current;
+      return { kind: "ok", list: { environments: [personalEnvironment] } };
+    },
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => [personalEnvironment],
+    }),
+  });
+  useAuthStore.setState({ status: "signed-in" });
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.list": async () => {
-        listMock();
-        await listGate.current;
-        return {
-          environments: [
-            {
-              environmentId: PERSONAL_ENV_ID,
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 0,
-              providerHandle: null,
-            },
-          ],
-        };
-      },
       "providers.link": linkMock.link,
       "providers.linkComplete": linkMock.complete,
     },
@@ -182,6 +198,8 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   clientMock.current = null;
+  authMock.current = null;
+  useAuthStore.setState({ status: "signed-out" });
   useProviderLinkDialogStore.setState({ target: null });
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });

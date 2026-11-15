@@ -27,6 +27,7 @@ import {
   SIGN_IN_AGAIN_MESSAGE,
   type EnvironmentCloud,
 } from "./environment-cloud";
+import { authnMemberRoleSchema } from "./authn-environment-schemas";
 
 const hostReportsSchema = z.object({
   hosts: z.array(z.object({ purgePending: z.boolean() })),
@@ -34,7 +35,7 @@ const hostReportsSchema = z.object({
 
 const viewerRoleSchema = z.object({
   viewer: z.object({
-    effectiveRole: z.enum(["admin", "editor", "viewer"]),
+    effectiveRole: authnMemberRoleSchema,
   }),
 });
 

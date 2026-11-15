@@ -440,6 +440,14 @@ export function acquireHostConnection(hostId: string): HostConnectionLease {
   };
 }
 
+/**
+ * Fires `hostId`'s armed reopens now (see `HostReconnectEngine.reopenNow`).
+ * Nothing happens for a host this process holds no connection to.
+ */
+export function reopenHostConnectionNow(hostId: string): void {
+  records.get(hostId)?.reconnect.reopenNow();
+}
+
 /** Test-only: live consumer references held for `hostId`. */
 export function hostConnectionRefCountForTest(hostId: string): number {
   return records.get(hostId)?.refCount ?? 0;
@@ -487,7 +495,7 @@ export function hostDirectoryEntryEquals(
     // A host with a populated cache and nobody holding it is exactly the case
     // this module cannot see.
     remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
-    remoteOwnerKeyOf(a) === remoteOwnerKeyOf(b) &&
+    hostOwnerKeyOf(a) === hostOwnerKeyOf(b) &&
     remoteAppVersionOf(a) === remoteAppVersionOf(b) &&
     remoteUpdateStateOf(a) === remoteUpdateStateOf(b) &&
     // A sandbox's lifecycle moves with its connectivity mostly, not always (a
@@ -509,8 +517,8 @@ function remoteUpdateStateOf(entry: HostDirectoryEntry): string | null {
     : null;
 }
 
-function remoteOwnerKeyOf(entry: HostDirectoryEntry): string | null {
-  if (!isRemoteHostDirectoryEntry(entry) || entry.owner == null) return null;
+function hostOwnerKeyOf(entry: HostDirectoryEntry): string | null {
+  if (entry.owner == null) return null;
   const owner = entry.owner;
   return JSON.stringify([
     owner.kind,

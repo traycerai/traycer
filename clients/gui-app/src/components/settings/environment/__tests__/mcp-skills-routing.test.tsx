@@ -25,6 +25,7 @@ import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   requireViewingHostClient,
   resetTeamPageHarness,
@@ -37,10 +38,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => ({
-    hostId: mockLocalHostEntry.hostId,
-    hostClient: requireTeamHostClient(),
-  }),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -76,6 +74,10 @@ const handlers = {
   "environment.configuration.mcpServers.delete": () => ({
     outcome: "saved" as const,
     reason: null,
+  }),
+  "environment.configuration.items.delete": () => ({
+    outcome: "saved" as const,
+    revision: null,
   }),
   "environment.configuration.mcpServers.setEnabled": () => ({
     outcome: "saved" as const,
@@ -126,7 +128,7 @@ function negotiateEverywhere(): void {
 }
 
 describe("MCP servers and Skills on a build with a server pool", () => {
-  it("reads and writes MCP servers through the pool", async () => {
+  it("reads and writes MCP servers through authn, on no computer", async () => {
     negotiateEverywhere();
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), handlers);
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
@@ -145,17 +147,26 @@ describe("MCP servers and Skills on a build with a server pool", () => {
 
     await waitFor(() => {
       expect(
-        hostIdsOf(harness, "environment.configuration.mcpServers.setEnabled"),
-      ).toEqual([POOL_HOST_ID]);
-    });
-    await waitFor(() => {
-      expect(
-        hostIdsOf(harness, "environment.configuration.mcpServers.delete"),
-      ).toEqual([POOL_HOST_ID]);
+        harness.paramsOf("environment.configuration.mcpServers.delete"),
+      ).toEqual([{ environmentId: "env-a", serverId: "srv-1" }]);
     });
     expect(
-      new Set(hostIdsOf(harness, "environment.configuration.mcpServers.list")),
-    ).toEqual(new Set([POOL_HOST_ID]));
+      harness.paramsOf("environment.configuration.items.delete"),
+    ).toMatchObject([{ key: "github" }, { key: "github" }]);
+    expect(
+      new Set(
+        harness
+          .paramsOf("environment.configuration.mcpServers.list")
+          .map((params) => JSON.stringify(params)),
+      ),
+    ).toEqual(new Set([JSON.stringify({ environmentId: "env-a" })]));
+    for (const method of [
+      "environment.configuration.mcpServers.list",
+      "environment.configuration.mcpServers.setEnabled",
+      "environment.configuration.mcpServers.delete",
+    ]) {
+      expect(hostIdsOf(harness, method)).toEqual([]);
+    }
   });
 
   it("reads and writes Skills through the pool", async () => {

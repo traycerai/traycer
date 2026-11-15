@@ -113,8 +113,9 @@ export interface SettingsSaveCoordinator {
     applied: () => void,
   ) => Promise<SettingsSaveBeginning>;
   /**
-   * The save's send is over: `hostAnswered` when the host answered it, false
-   * when it failed or nothing answered. An answered save's host is
+   * The save's send is over: `hostAnswered` when the host's answer proposed
+   * it, false when it was not proposed: it failed, nothing answered it, or
+   * the answer proposes nothing to a configuration. A proposed save's host is
    * reconciled, which finds its proposal in `environment.proposals`; no save
    * answer carries one.
    */
@@ -277,7 +278,12 @@ export function createSettingsSaveCoordinator(
   const reconcileOnce = async (hostId: string): Promise<void> => {
     const account = ports.accountId();
     if (account === null) return;
-    const sameAccount = (): boolean => ports.accountId() === account;
+    // The run's cloud is the sign-in it began on; once that sign-in ends, the
+    // run stops even where the account is the same.
+    const cloud = ports.cloud();
+    const sameAccount = (): boolean =>
+      ports.accountId() === account &&
+      (cloud === null || cloud.onOriginSignIn());
     forgetExpired();
     dropUnremembered();
     const mine = Object.entries(store().records).filter(
@@ -302,10 +308,8 @@ export function createSettingsSaveCoordinator(
     for (const { id } of sorted.forget) {
       forget(id);
     }
-    if (sorted.proposed.size === 0) return;
+    if (sorted.proposed.size === 0 || cloud === null) return;
 
-    const cloud = ports.cloud();
-    if (cloud === null) return;
     for (const [environmentId, saves] of sorted.proposed) {
       if (!(await applyProposed(cloud, environmentId, saves, sameAccount))) {
         return;

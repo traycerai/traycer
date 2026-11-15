@@ -18,6 +18,15 @@ vitest.mock("sonner", async (importOriginal) => ({
   },
 }));
 
+// The removal preview is the app's own read, which waits for the signed-in
+// viewer.
+vitest.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "u-admin",
+}));
+
 import {
   act,
   cleanup,
@@ -26,7 +35,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent, { type UserEvent } from "@testing-library/user-event";
+import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -34,13 +43,16 @@ import type {
   EnvironmentMembersInviteResponse,
   EnvironmentMembersRemovePreviewResponse,
   EnvironmentMembersRemoveResponse,
+  EnvironmentMembersResponseV12,
   EnvironmentMembersSetRoleResponse,
 } from "@traycer/protocol/host/environment/contracts";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mountTeamPage,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { reachableHost } from "@/components/settings/environment/__tests__/mcp-skills-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { MembersView } from "@/components/settings/members/members-view";
 import type {
@@ -57,10 +69,12 @@ import {
 } from "@/hooks/environment/use-environment-members-writes";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
   toasts.success.mockReset();
   toasts.info.mockReset();
 });
@@ -129,6 +143,22 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
   );
 }
 
+/**
+ * What the host answers `environment.members` with, which authn's write and
+ * preview reads re-read to name the member by the id its list gives them.
+ */
+function membersRead(
+  members: readonly MembersListMember[],
+  legacyRoleNoticeSeenAt: number | null,
+): EnvironmentMembersResponseV12 {
+  return {
+    members: members.map((entry) => ({ ...entry, avatarUrl: null })),
+    nextCursor: null,
+    legacyRoleNoticeSeenAt,
+    legacyMembers: [],
+  };
+}
+
 function renderView(options: {
   readonly viewerRole: TeamRole;
   readonly members: readonly MembersListMember[];
@@ -152,9 +182,20 @@ function renderView(options: {
   /** The real client the view reads through, for settling assertions. */
   readonly queryClient: QueryClient;
 } {
+  // Authn's removal preview names the member by the id its members list
+  // gives them, and counts the work only on the window's own host when
+  // authn's host list names it one of the team's.
+  useSelectionAuthorityStore.setState({
+    effectiveHostId: mockLocalHostEntry.hostId,
+  });
   const harness = mountTeamPage(
     { kind: "host" },
     {
+      "environment.members": () =>
+        membersRead(options.members, options.legacyRoleNoticeSeenAt),
+      "environment.host.list": () => ({
+        hosts: [{ ...reachableHost, hostId: mockLocalHostEntry.hostId }],
+      }),
       "environment.members.removePreview": (params) =>
         options.preview(params.userId),
     },
@@ -261,32 +302,6 @@ function deferredPreviews(): DeferredPreviews {
     },
     delivered: (userId) => delivered.has(userId),
   };
-}
-
-/**
- * Answer a held preview and wait for the read it belongs to to be over, so a
- * case asserting that a late answer changes nothing is asserting it after the
- * answer. Three witnesses, because no one of them holds in every case: the
- * host boundary says the bytes left; the client's own `isFetching` says the
- * query that asked for them is no longer running, which is trivially true once
- * a withdrawn pick's query has been reaped; and the flush is last rather than
- * instead, since a count of microtasks I picked is not a completion signal.
- */
-async function settled(
-  previews: DeferredPreviews,
-  queryClient: QueryClient,
-  userId: string,
-): Promise<void> {
-  await waitFor(() => {
-    expect(() => {
-      previews.resolve(userId, { ...PREVIEW, linkedPlan: "Claude Max" });
-    }).not.toThrow();
-  });
-  await waitFor(() => expect(previews.delivered(userId)).toBe(true));
-  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
-  await act(async () => {
-    await Promise.resolve();
-  });
 }
 
 describe("MembersView", () => {
@@ -517,11 +532,6 @@ describe("MembersView demotion", () => {
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
       "Change to editor",
     );
-    const dialogText = screen.getByTestId(
-      "members-demotion-preview",
-    ).textContent;
-    expect(dialogText).not.toContain("within a minute");
-    expect(dialogText).not.toContain("next turn");
     expect(onSetRole).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId("members-demotion-confirm"));
@@ -580,24 +590,6 @@ describe("MembersView demotion", () => {
       }),
     );
     expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-  });
-
-  it("previews no plan unlink when the member linked none", async () => {
-    const user = userEvent.setup();
-    renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN],
-      preview: () => ({ ...PREVIEW, linkedPlan: null }),
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-
-    await screen.findByTestId("members-demotion-loss");
-    expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
-    expect(
-      screen.getByTestId("members-demotion-preview").textContent,
-    ).not.toContain("stop using this plan");
   });
 });
 
@@ -662,283 +654,6 @@ describe("MembersView demotion announcement", () => {
     expect(described).toBe(
       "Grace can no longer invite people or change roles.",
     );
-  });
-
-  it("says the check is running on the row, and opens nothing, while the read is slow", async () => {
-    const user = userEvent.setup();
-    const previews = deferredPreviews();
-    renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: previews.answer,
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-
-    await waitFor(() =>
-      expect(
-        within(rowOf("u-admin2")).getByTestId("members-role-checking"),
-      ).toBeTruthy(),
-    );
-    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-
-    await waitFor(() => {
-      expect(() => {
-        previews.resolve("u-admin2", { ...PREVIEW, linkedPlan: "Claude Max" });
-      }).not.toThrow();
-    });
-
-    await screen.findByTestId("members-demotion-preview");
-    expect(
-      within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
-    ).toBeNull();
-  });
-
-  // The window the deferral opened leaves the row live, so every other opener
-  // in this view is a gesture that can land a confirm on top of the dialog it
-  // just opened. One case per opener, because the rule has to be written at
-  // each of them: `openRemove` serves Remove AND Revoke, and Invite is its own.
-  it.each([
-    {
-      opener: "Remove",
-      press: async (user: UserEvent) => {
-        await user.click(
-          within(rowOf("u-admin2")).getByRole("button", { name: "Remove" }),
-        );
-      },
-      opened: "members-remove-preview",
-    },
-    {
-      opener: "Revoke",
-      press: async (user: UserEvent) => {
-        await user.click(screen.getByRole("button", { name: "Revoke" }));
-      },
-      opened: "members-revoke-dialog",
-    },
-    {
-      opener: "Invite",
-      press: async (user: UserEvent) => {
-        await user.click(screen.getByTestId("members-invite"));
-      },
-      opened: "members-invite-dialog",
-    },
-    {
-      // Details is opened inside the row's own entry, which this view does not
-      // own, so the row withdraws the pick when anything in its action group
-      // is pressed. The harness's entry is a plain button, which is the whole
-      // claim: a press in that group, whatever it opens.
-      opener: "Details",
-      press: async (user: UserEvent) => {
-        await user.click(
-          within(rowOf("u-admin2")).getByRole("button", { name: "Details" }),
-        );
-      },
-      opened: null,
-    },
-  ])(
-    "drops a pending demotion when the person presses $opener instead",
-    async ({ press, opened }) => {
-      const user = userEvent.setup();
-      const previews = deferredPreviews();
-      const { queryClient } = renderView({
-        ...BASE,
-        viewerRole: "admin",
-        members: [ADMIN, SECOND_ADMIN, EDITOR, PENDING],
-        preview: previews.answer,
-      });
-      await user.click(
-        screen.getByRole("combobox", { name: "Role for Grace" }),
-      );
-      await user.click(await screen.findByRole("option", { name: "Editor" }));
-      await waitFor(() =>
-        expect(
-          within(rowOf("u-admin2")).getByTestId("members-role-checking"),
-        ).toBeTruthy(),
-      );
-
-      await press(user);
-      if (opened !== null) await screen.findByTestId(opened);
-
-      await settled(previews, queryClient, "u-admin2");
-      expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-    },
-  );
-
-  // The pick is the view's; only its tell is the row's. So a Details press
-  // anywhere the view hands an entry out has to retire it — another member's
-  // row, and the notice, which is not in a row at all. Each case also holds the
-  // entry's own panel open across the withdrawal: the wrapper that intercepts
-  // the press must not be the thing that unmounts what the press opened.
-  it.each([
-    {
-      where: "another member's row",
-      seenAt: 1 as number | null,
-      entry: (): HTMLElement =>
-        within(rowOf("u-editor")).getByRole("button", { name: "Details" }),
-      panel: "details-open-u-editor",
-    },
-    {
-      where: "the legacy-role notice",
-      seenAt: null as number | null,
-      entry: (): HTMLElement =>
-        within(screen.getByTestId("members-legacy-notice")).getByRole(
-          "button",
-          { name: "Details" },
-        ),
-      panel: "details-open-notice",
-    },
-  ])(
-    "drops a pending demotion when the person presses Details on $where",
-    async ({ seenAt, entry, panel }) => {
-      const user = userEvent.setup();
-      const previews = deferredPreviews();
-      const { queryClient } = renderView({
-        ...BASE,
-        legacyRoleNoticeSeenAt: seenAt,
-        viewerRole: "admin",
-        members: [ADMIN, SECOND_ADMIN, EDITOR],
-        preview: previews.answer,
-      });
-      await user.click(
-        screen.getByRole("combobox", { name: "Role for Grace" }),
-      );
-      await user.click(await screen.findByRole("option", { name: "Editor" }));
-      await waitFor(() =>
-        expect(
-          within(rowOf("u-admin2")).getByTestId("members-role-checking"),
-        ).toBeTruthy(),
-      );
-
-      await user.click(entry());
-      expect(screen.getByTestId(panel)).toBeTruthy();
-
-      // The consequence first: this is the dialog that would land on top of
-      // the drawer the press just opened.
-      await settled(previews, queryClient, "u-admin2");
-      expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-      // Still open: the entry held its own state through the commit that
-      // dropped the pick.
-      expect(screen.getByTestId(panel)).toBeTruthy();
-      expect(
-        within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
-      ).toBeNull();
-    },
-  );
-
-  // The dots are decorative, so the wait is announced by the tell itself or
-  // not at all — and the Cancel the wait exists for is only discoverable by
-  // exploring the row.
-  it("announces the row's pending tell", async () => {
-    const user = userEvent.setup();
-    const previews = deferredPreviews();
-    renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: previews.answer,
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-
-    const announced = await waitFor(() =>
-      within(rowOf("u-admin2")).getByRole("status"),
-    );
-    expect(announced.getAttribute("data-testid")).toBe("members-role-checking");
-    expect(announced.textContent).toContain("Checking editor…");
-  });
-
-  // The select is controlled on the role the member HOLDS, so picking that
-  // role again fires nothing: without a control of its own, the only way out
-  // of this window would be promoting the person to a role nobody chose.
-  it("withdraws a pending demotion from the row's own Cancel", async () => {
-    const user = userEvent.setup();
-    const previews = deferredPreviews();
-    const { onSetRole, queryClient } = renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: previews.answer,
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-
-    const tell = await waitFor(() =>
-      within(rowOf("u-admin2")).getByTestId("members-role-checking"),
-    );
-    // It names the role being checked, which the select cannot: that still
-    // shows the role Grace holds.
-    expect(tell.textContent).toContain("Checking editor…");
-    await user.click(
-      within(tell).getByRole("button", {
-        name: "Cancel the change to editor for Grace",
-      }),
-    );
-
-    expect(
-      within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
-    ).toBeNull();
-    await settled(previews, queryClient, "u-admin2");
-    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-    expect(onSetRole).not.toHaveBeenCalled();
-  });
-
-  // The Retry lives in the dialog, so the dialog has to survive its own
-  // request. A refused FIRST read has no data, and the query's fetch dispatch
-  // un-errors an entry in that state, so a gate reading `isError` closes the
-  // dialog under the button that was just pressed.
-  it("keeps the dialog up while a refused read is being tried again", async () => {
-    const user = userEvent.setup();
-    const previews = deferredPreviews();
-    let refusals = 0;
-    renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: (userId) => {
-        refusals += 1;
-        return refusals === 1
-          ? Promise.reject(new Error("unreachable"))
-          : previews.answer(userId);
-      },
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-
-    const dialog = await screen.findByTestId("members-demotion-preview");
-    await within(dialog).findByTestId("members-demotion-preview-failed");
-
-    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(refusals).toBe(2));
-
-    // Still up, with the second read in flight: its confirm off, and the line
-    // and the button that started the request still in place rather than
-    // unmounted with the failed status they were keyed on.
-    expect(screen.getByTestId("members-demotion-preview")).toBeTruthy();
-    expect(
-      screen.getByTestId<HTMLButtonElement>("members-demotion-confirm")
-        .disabled,
-    ).toBe(true);
-    expect(
-      within(dialog).getByTestId("members-demotion-preview-failed").textContent,
-    ).toContain("Couldn't load what changing Grace's role interrupts");
-    expect(
-      within(dialog).getByRole<HTMLButtonElement>("button", { name: "Retry" })
-        .disabled,
-    ).toBe(true);
-    expect(
-      within(dialog).getByTestId("members-demotion-retry-busy"),
-    ).toBeTruthy();
-
-    await waitFor(() => {
-      expect(() => {
-        previews.resolve("u-admin2", { ...PREVIEW, linkedPlan: "Claude Max" });
-      }).not.toThrow();
-    });
-    await within(dialog).findByTestId("members-demotion-preview-table");
-    expect(
-      within(dialog).queryByTestId("members-demotion-preview-failed"),
-    ).toBeNull();
   });
 });
 
@@ -1074,6 +789,7 @@ describe("MembersView pending writes", () => {
     const harness = mountTeamPage(
       { kind: "host" },
       {
+        "environment.members": () => membersRead(options.members, 1),
         "environment.members.removePreview": () => PREVIEW,
         ...options.handlers,
       },

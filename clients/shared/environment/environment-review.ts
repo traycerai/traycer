@@ -352,8 +352,12 @@ function changedByOf(
 }
 
 /**
- * The environment's notices as the page lists them, each with Undo: every
- * change of the last 30 days that displaced a value Undo can restore.
+ * The environment's notices as the page lists them: every change of the last
+ * 30 days that displaced a value Undo can restore, listed while no later
+ * change on its key superseded it. Listing needs `read` on the environment
+ * and its Undo needs `write`, so `undoAvailable` says only that nothing
+ * superseded the change, not that this reader may undo it. The one page that
+ * draws notices is Personal's, whose reader always has `write`.
  */
 export async function readNotices(
   cloud: EnvironmentCloud,
@@ -381,12 +385,18 @@ export async function readNotices(
       source: row.source,
       from: changedByOf(row.hostId, row.hostName),
       writtenAt: row.writtenAt,
-      // Listed only while no later change on its key superseded it.
+      // Nothing superseded it; whether this reader may undo it is their role's.
       undoAvailable: true,
     });
   }
   return notices;
 }
+
+/** What an Undo answers: authn applies it at once, so it is never `pending`. */
+export type UndoOutcome = Exclude<
+  EnvironmentWriteOutcome,
+  { readonly outcome: "pending" }
+>;
 
 /**
  * Undo of one notice (`POST …/changes/:revision/undo`), answered as the
@@ -399,7 +409,7 @@ export async function undoNotice(
   cloud: EnvironmentCloud,
   environmentId: string,
   noticeId: string,
-): Promise<EnvironmentWriteOutcome> {
+): Promise<UndoOutcome> {
   let address: z.infer<typeof noticeAddressSchema> | null = null;
   try {
     const parsed = noticeAddressSchema.safeParse(JSON.parse(noticeId));

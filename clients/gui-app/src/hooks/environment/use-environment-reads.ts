@@ -23,6 +23,7 @@ import {
 } from "@/hooks/environment/use-environment-cloud";
 import {
   CONFIGURATION_READS,
+  REVISION_MOVED_READS,
   configurationReadMatches,
 } from "@/hooks/environment/environment-host-list-key";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -32,6 +33,16 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
+
+/**
+ * Personal's reads that a new revision on the host running it moves: what a
+ * move of the configuration's revision re-reads (a secret's rotation
+ * included) and what focus re-reads.
+ */
+const PERSONAL_REVISION_READS = [
+  ...REVISION_MOVED_READS,
+  ...CONFIGURATION_READS,
+];
 
 /*
  * A host's own environment reads, through the client the caller names: the
@@ -141,7 +152,7 @@ function useRereadOnRevision(
           configurationReadMatches(
             query.queryKey,
             personalEnvironmentId,
-            CONFIGURATION_READS,
+            PERSONAL_REVISION_READS,
           )) ||
         aboutThisHost(query.queryKey, hostId),
     };

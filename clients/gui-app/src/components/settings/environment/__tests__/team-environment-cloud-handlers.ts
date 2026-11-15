@@ -354,7 +354,10 @@ export function createTeamEnvironmentCloudHandlers(
           })),
           viewer: {
             effectiveRole: viewerRole(environmentId),
-            legacyRoleNoticeSeenAt: response.legacyRoleNoticeSeenAt,
+            legacyRoleNoticeSeenAt:
+              response.legacyRoleNoticeSeenAt === null
+                ? null
+                : new Date(response.legacyRoleNoticeSeenAt).toISOString(),
             legacyMembers: response.legacyMembers,
           },
         });

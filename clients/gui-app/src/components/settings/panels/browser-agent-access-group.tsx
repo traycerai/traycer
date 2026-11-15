@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
@@ -21,6 +22,7 @@ import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-b
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
@@ -100,6 +102,7 @@ function HostBrowserAccessRow(props: {
 function AgentBrowserAccessRow(): ReactNode {
   const client = useHostClient();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -112,11 +115,16 @@ function AgentBrowserAccessRow(): ReactNode {
     mutationKey: configMutationKeys.browserSet(),
     errorMessage: "Couldn't update agent browser access",
     invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
-    followSettingsSave: (request, sentOn) =>
-      prepareSave(
-        { method: AGENT_BROWSER_ACCESS_SET, request },
-        sentOn.getActiveHostId(),
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_BROWSER_ACCESS_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
   });
 
   return (

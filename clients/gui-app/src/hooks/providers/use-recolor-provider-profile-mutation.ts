@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -15,6 +16,7 @@ import {
   useSettingsItemExists,
   useSettingsSave,
 } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
   confirmEnvironmentProfile,
   PROFILE_SAVE_KINDS,
@@ -61,6 +63,7 @@ export function useRecolorProviderProfileForClient(
 ): RecolorProviderProfileMutationResult {
   const queryClient = useQueryClient();
   const prepareSave = useSettingsSave(client, PROFILE_SAVE_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const environmentProfileExists = useSettingsItemExists(
     client,
     "managed_profile",
@@ -77,11 +80,16 @@ export function useRecolorProviderProfileForClient(
       providerProfileSaveRequest({ type: "recolor", ...variables }),
     prepareRequest: (request) =>
       confirmEnvironmentProfile(request, environmentProfileExists),
-    followSettingsSave: (request, sentOn) =>
-      prepareSave(
-        { method: "providers.setEnabled", request },
-        sentOn.getActiveHostId(),
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "providers.setEnabled", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     options: {
       mutationKey: providersMutationKeys.recolorProfile(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),

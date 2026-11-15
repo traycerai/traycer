@@ -91,6 +91,14 @@ import {
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
 import {
+  fetchEnvironmentPerson,
+  type EnvironmentPersonResult,
+} from "@traycer-clients/shared/auth/environment-people";
+import {
+  fetchClaimedComputers,
+  type ClaimedComputersResult,
+} from "@traycer-clients/shared/auth/claimed-computers";
+import {
   claimCreditOfferViaHttp,
   listCreditOffersViaHttp,
   type ClaimCreditOfferFetchResult,
@@ -891,6 +899,10 @@ export class AuthService {
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
     this.tokenStore = new AuthTokenStore(options.runnerHost.tokenStore);
+    // A host-only token is minted only with a sign-in authn has confirmed.
+    options.runnerHost.hostTokens.bindSignIn((userId) =>
+      this.currentProfile?.userId === userId ? this.cloudBearer() : null,
+    );
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
     });
@@ -3510,6 +3522,21 @@ export class AuthService {
     return this.runnerHost.setSlackAppDms(bearer, request);
   }
 
+  /** The team computers a member claimed away from this team, kept 30 days. */
+  async listClaimedComputers(
+    environmentId: string,
+    signal: AbortSignal | null,
+  ): Promise<ClaimedComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return fetchClaimedComputers(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      signal,
+    );
+  }
+
   /** Explicit invitation access when the serving tier predates the host methods. */
   async listEnvironmentInvitations(
     signal: AbortSignal | null,
@@ -3532,6 +3559,27 @@ export class AuthService {
       this.runnerHost.authnBaseUrl,
       bearer,
       environmentId,
+    );
+  }
+
+  /**
+   * Someone who is or was a member of `environmentId`, from authn: the name
+   * and picture of a member who has left, whom the member directory no
+   * longer lists.
+   */
+  async readEnvironmentPerson(
+    environmentId: string,
+    userId: string,
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentPersonResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to read team members.");
+    return fetchEnvironmentPerson(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      userId,
+      signal,
     );
   }
 

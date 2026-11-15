@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import type { CreditOffer } from "@traycer/protocol/auth/credit-offers";
 import {
   claimCreditOfferViaHttp,
@@ -300,4 +301,57 @@ describe("a claim on a fetch that ignores its signal", () => {
     expect(settled).toBe(true);
     expect(await pending).toEqual({ kind: "ok", offer: null });
   });
+});
+
+describe("a redirect answered to a credit offers request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the list as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      fetchMock.mockResolvedValue(answer({ campaigns: [CARD] }));
+
+      expect(
+        await listCreditOffersViaHttp(AUTHN_BASE_URL, BEARER, null),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a claim as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      fetchMock.mockResolvedValue(answer({ campaign: CARD }));
+
+      expect(
+        await claimCreditOfferViaHttp(AUTHN_BASE_URL, BEARER, CARD.id),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
 });

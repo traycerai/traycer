@@ -131,6 +131,13 @@ describe("TeamRows", () => {
         ],
       }),
     );
+    useAuthStore.setState({
+      shareableTeams: [
+        { teamId: "team-admin", slug: "handle-admin", avatarUrl: null },
+        { teamId: "team-editor", slug: "handle-editor", avatarUrl: null },
+        { teamId: "team-viewer", slug: "handle-viewer", avatarUrl: null },
+      ],
+    });
     const onPick = vi.fn();
     render(<PickerHarness onPick={onPick} />, { wrapper: Wrapper });
 

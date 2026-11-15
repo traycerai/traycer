@@ -251,9 +251,9 @@ function useCurrentValue(
 }
 
 /**
- * A "needs you" row. A held command's `Review` opens the retrospective sheet
- * for the host this page reads, where its Approve and Discard are; any other
- * row's opens Secrets.
+ * A "needs you" row: a hold. Its `Review` opens the retrospective sheet for
+ * the host this page reads, where its Approve and Discard are; with no host
+ * to read, Secrets.
  */
 function ReviewRow(props: {
   readonly entry: ReviewHeldEntry;
@@ -273,7 +273,7 @@ function ReviewRow(props: {
         variant="outline"
         data-testid="personal-review-link"
         onClick={() => {
-          if (props.entry.reason === "executable_entry" && hostId !== null) {
+          if (hostId !== null) {
             openRetrospective({ hostId, hostName: props.hostName });
             return;
           }

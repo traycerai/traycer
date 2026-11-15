@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -7,6 +8,7 @@ import type {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
 
@@ -22,15 +24,21 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
   { readonly hostId: string | null }
 > {
   const prepareSave = useSettingsSave(useHostClient(), SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostScopedMutation({
     method: "providers.deleteEnvOverride",
     mutationKey: providersMutationKeys.deleteEnvOverride(),
     errorMessage: "Couldn't remove the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
-    followSettingsSave: (request, client) =>
-      prepareSave(
-        { method: "providers.deleteEnvOverride", request },
-        client.getActiveHostId(),
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, client, pressedOn) =>
+        prepareSave(
+          { method: "providers.deleteEnvOverride", request },
+          client.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
   });
 }

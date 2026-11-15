@@ -173,7 +173,9 @@ function mount(): TeamPageHarness {
 
 /** The row's status line; request failures use the shared host notice. */
 async function line(): Promise<string> {
-  const row = await screen.findByText("Agents use shared memories");
+  const row = await screen.findByText(
+    "Let agents use and update common memory",
+  );
   const text = row.closest("div")?.parentElement?.textContent ?? null;
   if (text === null) throw new Error("no row text");
   return text;
@@ -421,8 +423,11 @@ describe("Memories ▸ the host row's write", () => {
         state === "queued"
           ? queuedAnswer(UPLOAD)
           : {
-              ...savedAnswer({ enabled: true, revision: 6 }),
+              enabled: true,
               state,
+              revision: 6,
+              environmentId: ENV,
+              uploadId: null,
             };
       script.reads = [read(false, 5), read(true, 6)];
       script.statuses = [
@@ -1616,5 +1621,62 @@ describe("Memories ▸ the host row's write", () => {
     );
     await vi.advanceTimersByTimeAsync(20_000);
     expect(harness.paramsOf("environment.status")).toEqual([]);
+  });
+
+  describe("a save the host answers local_only, on a computer bound to no configuration", () => {
+    const localOnly = (enabled: boolean): ConfigAgentMemoriesSetResponse => ({
+      state: "local_only",
+      enabled,
+    });
+    const cachedReads = (
+      harness: TeamPageHarness,
+    ): (ConfigAgentMemoriesResponse | undefined)[] =>
+      harness.queryClient
+        .getQueryCache()
+        .getAll()
+        .filter(
+          (entry) =>
+            JSON.stringify(entry.queryKey).includes(
+              "config.agentMemories.get",
+            ) && entry.state.data !== undefined,
+        )
+        .map((entry) => entry.state.data as ConfigAgentMemoriesResponse);
+
+    it("takes the answer as the read of a row that read no configuration, settled, with no environment or revision of its own", async () => {
+      script.reads = [{ enabled: false, revision: null, environmentId: null }];
+      script.set = () => localOnly(true);
+      const harness = mount();
+      await flipOn();
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", { name: SWITCH_NAME })
+            .getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      expect(await line()).toContain("Running agents pick this up");
+      expect(cachedReads(harness)).toEqual([
+        { enabled: true, revision: null, environmentId: null },
+      ]);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("ends a row that read a configuration settled, without taking the answer as its read", async () => {
+      script.reads = [read(false, 5)];
+      script.set = () => localOnly(true);
+      const harness = mount();
+      await flipOn();
+
+      await waitFor(async () =>
+        expect(await line()).toContain("Running agents pick this up"),
+      );
+      expect(
+        screen
+          .getByRole("switch", { name: SWITCH_NAME })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(cachedReads(harness)).toEqual([read(false, 5)]);
+    });
   });
 });

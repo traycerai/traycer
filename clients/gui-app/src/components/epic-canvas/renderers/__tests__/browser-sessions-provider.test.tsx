@@ -31,7 +31,13 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -46,6 +52,7 @@ import {
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -61,8 +68,9 @@ const hookState = vi.hoisted(() => ({
     kind: "local" as const,
     websocketUrl: null as string | null,
     version: "test-version",
-    status: "available" as const,
-  },
+    transportDialability: "dialable" as const,
+    owner: null as HostOwnerPrincipal | null,
+  } satisfies HostDirectoryEntry,
   hostClient: {
     getRequestContext: () => ({ credentials: null }),
     getRequestContextUserId: () => "user-test",
@@ -70,6 +78,7 @@ const hookState = vi.hoisted(() => ({
   transportKey: "authenticated-host-test",
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
   localHostId: "host-test" as string | null,
+  browserView: null as BrowserViewBridge | null,
 }));
 
 const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
@@ -114,12 +123,28 @@ vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
   ) => userId,
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+// Nulls where the real key does: no row, no endpoint, no user, or a row below
+// the version floor.
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   hostStreamTransportKeyFor: (
     hostEntry: HostDirectoryEntry | null,
     userId: string | null,
   ) =>
-    hostEntry?.websocketUrl === null || hostEntry === null || userId === null
+    hostEntry === null ||
+    hostEntry.websocketUrl === null ||
+    userId === null ||
+    hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)
       ? null
       : hookState.transportKey,
 }));
@@ -163,7 +188,7 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ browserView: null }),
+  useRunnerHost: () => ({ browserView: hookState.browserView }),
 }));
 
 /** What a host serving the live `browser.sessions` line negotiates. */
@@ -395,6 +420,9 @@ function Probe(): ReactNode {
         {sessions.inventoryReady ? "ready" : "loading"}
       </span>
       <span data-testid="count">{sessions.items.length}</span>
+      <span data-testid="can-materialize-electron">
+        {sessions.canMaterializeElectron ? "yes" : "no"}
+      </span>
       <span data-testid="close-tab-status">{closeTabStatus}</span>
       <ul>
         {sessions.items.map((session) => (
@@ -479,6 +507,7 @@ function installTransport(dropUntilLive: boolean): void {
   hookState.hostEntry = {
     ...hookState.hostEntry,
     websocketUrl: INITIAL_ENDPOINT,
+    version: "test-version",
   };
 }
 
@@ -531,6 +560,17 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     surfaceHostOpenedTabMock.mockClear();
     surfaceHostOpenedTabMock.mockReturnValue(true);
     hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
+    hookState.hostEntry = {
+      hostId: "host-test",
+      label: "Test host",
+      kind: "local",
+      websocketUrl: null,
+      version: "test-version",
+      transportDialability: "dialable",
+      owner: null,
+    };
+    hookState.localHostId = "host-test";
+    hookState.browserView = null;
     installTransport(false);
   });
 
@@ -547,6 +587,50 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         params: openRequest({}),
       },
     ]);
+  });
+
+  it("keeps an unknown local owner on the bridge until team ownership is learned", async () => {
+    const bridge = new FakeBrowserViewBridge({});
+    hookState.browserView = bridge;
+    hookState.hostEntry = {
+      ...hookState.hostEntry,
+      websocketUrl: INITIAL_ENDPOINT,
+    };
+    const rendered = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
+        "yes",
+      );
+      expect(bridge.openSessionsStreamCalls).toHaveLength(1);
+    });
+
+    const replacement = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: INITIAL_ENDPOINT,
+    });
+    hookState.durableTransportsByHostId.set("host-test", replacement);
+    hookState.hostEntry = {
+      ...hookState.hostEntry,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    rendered.rerender(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(bridge.closeSessionsStreamCalls).toHaveLength(1);
+      expect(replacement.wsStreamClient.subscribes).toHaveLength(1);
+      expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
+        "no",
+      );
+    });
   });
 
   it("mounts its own provider for an independent scope on the canvas host", async () => {
@@ -999,6 +1083,70 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     cleanup();
     expect(transport.closed).toBe(true);
     expect(stream.closed).toBe(true);
+  });
+
+  it("releases a held coordinator when its host falls below the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    // A fresh element each time: React skips re-rendering an identical one.
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    const stream = transport.wsStreamClient.sessions[0];
+    expect(stream).toBeDefined();
+    act(() => {
+      stream.emitStatus("open");
+    });
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+
+    act(() => {
+      hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("opens one coordinator when the host rises back to the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    expect(hookState.openedHostIds).toEqual([]);
+    expect(transport.wsStreamClient.sessions).toHaveLength(0);
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(false);
+    expect(transport.wsStreamClient.sessions).toHaveLength(1);
   });
 
   it("surfaces live snapshot sessions", () => {

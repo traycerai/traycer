@@ -9,23 +9,25 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+  HostRpcError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { DetailsStatus } from "@/lib/settings-details-entry";
-import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
+import {
+  beginEnvironmentCloudOperation,
+  environmentCloudQueryKey,
+} from "@/hooks/environment/use-environment-cloud";
 
 type SecretsList = ResponseOfMethod<
   HostRpcRegistry,
@@ -67,32 +69,34 @@ const STATUS: DetailsStatus = {
 };
 
 /** The scope the page's own read of the list files its answer under. */
-const listScope = (hostId: string | null): readonly unknown[] =>
-  hostQueryKeys.methodScope(
-    hostRpcServingTierHostId(
-      "environment.secrets.list",
-      hostId,
-      readProcessHostRpcTierPlan(),
-      null,
-    ),
+const listScope = (): readonly unknown[] =>
+  environmentCloudQueryKey(
     "environment.secrets.list",
-  );
+    { environmentId: ENVIRONMENT },
+    VIEWER,
+    [],
+  ).slice(0, 3);
 
 /**
  * The whole key the page's own read files its answer under: the viewer is
  * part of it (`useEnvironmentSecretsQuery`'s `cacheKeyIdentity`), because a
  * configuration-scoped list is one viewer's answer.
  */
-const listKey = (hostId: string | null): readonly unknown[] => [
-  ...listScope(hostId),
-  { environmentId: ENVIRONMENT },
-  VIEWER,
-];
+const listKey = (): readonly unknown[] =>
+  environmentCloudQueryKey(
+    "environment.secrets.list",
+    { environmentId: ENVIRONMENT },
+    VIEWER,
+    [],
+  );
 
-const mountDetails = (): TeamPageHarness =>
+const mountDetails = (onList: (() => void) | null): TeamPageHarness =>
   mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [] }),
-    "environment.secrets.list": () => ({ secrets: [], removed: [REMOVED] }),
+    "environment.secrets.list": () => {
+      onList?.();
+      return { secrets: [], removed: [REMOVED] };
+    },
     // The versions read (@1.1) carries no host failure.
     "environment.secrets.versions": () => ({
       versions: [],
@@ -122,7 +126,7 @@ afterEach(() => {
 
 describe("loadSecretDetails for a removed secret whose host failed", () => {
   it("keeps the failure line and leaves the list, failure included, in the shared cache after one list request", async () => {
-    const harness = mountDetails();
+    const harness = mountDetails(null);
     // The harness collects an unobserved query at once; the cache is read
     // after the load, so keep what the load put there.
     harness.queryClient.setDefaultOptions({
@@ -136,7 +140,9 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(null),
+        environmentCloud: beginEnvironmentCloudOperation(() =>
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
+        ),
         queryClient: harness.queryClient,
       },
       STATUS,
@@ -144,12 +150,12 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
 
     expect(loaded.status.summary).toContain("dev-box couldn't delete its copy");
     const cached = harness.queryClient.getQueriesData<SecretsList>({
-      queryKey: listScope(hostId),
+      queryKey: listScope(),
     });
     // Under the page's own whole key, and ONLY there: a second entry of our
     // own would be one no observer ever refetches, which a sweep over this
     // scope would go on reading after the page's answer had moved on.
-    expect(cached.map(([key]) => key)).toEqual([listKey(hostId)]);
+    expect(cached.map(([key]) => key)).toEqual([listKey()]);
     expect(cached.flatMap(([, list]) => list?.removed ?? [])).toEqual([
       REMOVED,
     ]);
@@ -159,8 +165,8 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(1);
   });
 
-  it("asks the host for the list even when the cache holds one the client calls fresh", async () => {
-    const harness = mountDetails();
+  it("asks authn for the list even when the cache holds one the client calls fresh", async () => {
+    const harness = mountDetails(null);
     // The app's own client holds a read fresh for a minute
     // (`createAppQueryClient`). Details authorizes its read on every open, so
     // a cache hit must not stand in for it.
@@ -169,7 +175,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     });
     const client = requireTeamHostClient();
     const hostId = client.getActiveHostId();
-    harness.queryClient.setQueryData<SecretsList>(listKey(hostId), {
+    harness.queryClient.setQueryData<SecretsList>(listKey(), {
       secrets: [],
       removed: [],
     });
@@ -179,7 +185,9 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(null),
+        environmentCloud: beginEnvironmentCloudOperation(() =>
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
+        ),
         queryClient: harness.queryClient,
       },
       STATUS,
@@ -189,5 +197,41 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       { environmentId: ENVIRONMENT },
     ]);
     expect(loaded.status.summary).toContain("dev-box couldn't delete its copy");
+  });
+
+  it("does not send the versions read after sign-in changes between list and versions", async () => {
+    let onOriginSignIn = true;
+    const harness = mountDetails(() => {
+      onOriginSignIn = false;
+    });
+    const client = requireTeamHostClient();
+    const baseCloud =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+
+    const loaded = loadSecretDetails(
+      { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
+      {
+        hostId: client.getActiveHostId(),
+        client,
+        environmentCloud: beginEnvironmentCloudOperation(() => ({
+          ...baseCloud,
+          onOriginSignIn: () => onOriginSignIn,
+        })),
+        queryClient: harness.queryClient,
+      },
+      STATUS,
+    );
+
+    const failure = loaded.catch((error: unknown) => error);
+    const error = await failure;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).toMatchObject({
+      method: "environment.secrets.versions",
+      message: "Connect to manage secrets.",
+    });
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: ENVIRONMENT },
+    ]);
+    expect(harness.paramsOf("environment.secrets.versions")).toEqual([]);
   });
 });

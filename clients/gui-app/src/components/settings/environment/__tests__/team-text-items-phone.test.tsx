@@ -30,6 +30,8 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  rejectNextTeamEnvironmentItemPut,
+  requireTeamHostBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -38,6 +40,12 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamHostBinding(),
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamHostBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -254,6 +262,307 @@ describe("TeamTextItems on a phone", () => {
     expect(previewButton("NODE_ENV", "next")).toBeTruthy();
   });
 
+  it("uses the other OS row's shown revision after discarding a same-key draft", async () => {
+    let items = [
+      variable("development", 4, "any"),
+      variable("linux-value", 9, "linux"),
+    ];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [
+            variable("teammate-value", 5, "any"),
+            variable("linux-value", 9, "linux"),
+          ];
+          return {
+            outcome: "conflict",
+            current: { revision: 5, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        items = [
+          variable("teammate-value", 5, "any"),
+          variable("linux-next", 10, "linux"),
+        ];
+        return saved(10);
+      },
+    });
+    renderPhone(<TextItemsPage />, harness);
+
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const anyDialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(anyDialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "abandoned-draft" },
+    });
+    await userEvent.click(
+      within(anyDialog).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+    });
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const linuxDialog = await openPreview("NODE_ENV", "linux-value");
+    fireEvent.change(within(linuxDialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "linux-next" },
+    });
+    await userEvent.click(
+      within(linuxDialog).getByRole("button", { name: "Save" }),
+    );
+
+    await expectUnlocked();
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        revision: 4,
+        value: { value: "abandoned-draft" },
+      },
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "linux",
+        revision: 9,
+        value: { value: "linux-next" },
+      },
+    ]);
+  });
+
+  it("retries a refused phone draft on Save at the revision named by the refusal", async () => {
+    let items = [variable("development", 3, "any")];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate", 4, "any")];
+          return {
+            outcome: "conflict",
+            current: { revision: 4, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        items = [variable("draft!", 5, "any")];
+        return saved(5);
+      },
+    });
+    renderPhone(<TextItemsPage />, harness);
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const dialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "draft" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "draft" } }),
+      ]);
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+    ).toHaveProperty("value", "draft");
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      { target: { value: "draft!" } },
+    );
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "draft" } }),
+        expect.objectContaining({ revision: 4, value: { value: "draft!" } }),
+      ]);
+    });
+  });
+
+  it("keeps a phone draft at the last-told revision through a quiet newer read", async () => {
+    let items = [variable("development", 3, "any")];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate", 4, "any")];
+          return {
+            outcome: "conflict",
+            current: { revision: 4, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        if (puts === 2) {
+          items = [variable("newer-teammate", 5, "any")];
+          return {
+            outcome: "conflict",
+            current: { revision: 5, changedBy: "Teammate", changedAt: 3 },
+          };
+        }
+        items = [variable("draft!", 6, "any")];
+        return saved(6);
+      },
+    });
+    renderPhone(<TextItemsPage />, harness);
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const dialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "draft" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      ).toHaveProperty("disabled", false);
+    });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      { target: { value: "draft!" } },
+    );
+    items = [variable("quiet-change", 5, "any")];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Save",
+        }),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+    ).toHaveProperty("value", "draft!");
+
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "draft" } }),
+        expect.objectContaining({ revision: 4, value: { value: "draft!" } }),
+      ]);
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      ).toHaveProperty("disabled", false);
+    });
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "draft" } }),
+        expect.objectContaining({ revision: 4, value: { value: "draft!" } }),
+        expect.objectContaining({ revision: 5, value: { value: "draft!" } }),
+      ]);
+    });
+  });
+
+  it("retries a transport-failed phone save after the new revision is named", async () => {
+    let items = [variable("development", 1, "any")];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate", 2, "any")];
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        items = [variable("draft", 3, "any")];
+        return saved(3);
+      },
+    });
+    renderPhone(<TextItemsPage />, harness);
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const dialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "draft" },
+    });
+    const failedRequests = rejectNextTeamEnvironmentItemPut(
+      harness,
+      "variable",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(
+      await within(screen.getByRole("dialog")).findByRole("alert"),
+    ).toHaveProperty("textContent", "Connect to manage settings.");
+    expect(failedRequests).toHaveLength(1);
+    expect(failedRequests[0]?.method).toBe("PUT");
+    expect(failedRequests[0]?.body).toMatchObject({
+      key: "NODE_ENV",
+      revision: 1,
+      value: { value: "draft" },
+    });
+
+    items = [variable("teammate", 2, "any")];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+    ).toHaveProperty("value", "draft");
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Save",
+        }),
+      ).toHaveProperty("disabled", false);
+    });
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 1, value: { value: "draft" } }),
+      ]);
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
+    ).toHaveProperty("value", "draft");
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 1, value: { value: "draft" } }),
+        expect.objectContaining({ revision: 2, value: { value: "draft" } }),
+      ]);
+    });
+  });
+
   it("does not write on blur or Cancel", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
@@ -278,6 +587,32 @@ describe("TeamTextItems on a phone", () => {
     expect(previewButton("NODE_ENV", "development")).toBeTruthy();
     expect(screen.queryByText("draft-value")).toBeNull();
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+  });
+
+  it("does not send a dirty phone value when the page unmounts before Save", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("development", 4, "any")],
+      }),
+      "environment.configuration.items.put": () => saved(5),
+    });
+    const page = renderPhone(<TextItemsPage />, harness);
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const dialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "unsaved-phone-draft" },
+    });
+
+    page.unmount();
+
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+    expect(
+      harness.cloudRequests.filter(
+        (request) =>
+          request.method === "PUT" &&
+          new URL(request.url).pathname.endsWith("/items/variable"),
+      ),
+    ).toEqual([]);
   });
 
   it("removes the original key, scope and revision from the sheet", async () => {

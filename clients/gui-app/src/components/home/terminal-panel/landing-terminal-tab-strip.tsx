@@ -39,6 +39,7 @@ import {
   type LandingBrowserViewModel,
 } from "./landing-browser-presentation";
 import { landingStripRows } from "./landing-strip-rows";
+import { TerminalViewerFaces } from "@/components/terminals/terminal-viewer-faces";
 
 export interface LandingTerminalTabStripProps {
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
@@ -438,6 +439,12 @@ function LandingPanelTab(props: {
             inputProps={rename.inputProps}
             row={props.row}
           />
+          {tab.kind === "terminal" ? (
+            <TerminalViewerFaces
+              instanceId={tab.instanceId}
+              hostId={tab.hostId}
+            />
+          ) : null}
           <Button
             type="button"
             variant="ghost"

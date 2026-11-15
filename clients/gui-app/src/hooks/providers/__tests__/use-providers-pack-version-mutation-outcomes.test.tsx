@@ -34,6 +34,7 @@ vi.mock("@/lib/host", () => ({
     request: mocks.request,
     getActiveHostId: () => HOST_ID,
   }),
+  useHostBinding: () => null,
 }));
 
 // The settings-save memory is not what these outcome tests check; the save

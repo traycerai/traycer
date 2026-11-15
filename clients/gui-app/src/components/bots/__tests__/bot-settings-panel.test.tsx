@@ -35,6 +35,7 @@ import type {
   BotMemoryEntry,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
@@ -111,6 +112,11 @@ const mocks = vi.hoisted(() => ({
   usageSupported: false,
   // The host each read of that support asked about.
   usageSupportHosts: [] as Array<string | null>,
+  // The bot's threads (`useBotThreadListQuery`) and whether each read was enabled.
+  threads: [] as BotThreadSummary[],
+  // The chats the usage summary holds facts for.
+  usageChatIds: [] as string[],
+  threadListEnabled: [] as boolean[],
   // What the bot's memory reads as (`useBotMemory`); `null` = unsupported.
   memoryEntries: null as number | "loading" | null,
   // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
@@ -174,13 +180,54 @@ vi.mock("@/hooks/bots/use-bot-memory", () => ({
     };
   },
 }));
-// The usage dialog has its own suite; here it only shows which epic it reads.
-vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", () => ({
-  EpicUsageDialog: (props: { epicId: string; open: boolean }) =>
-    props.open ? (
-      <div data-testid="stub-usage-dialog" data-epic-id={props.epicId} />
-    ) : null,
+vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
+  useBotThreadListQuery: (
+    _client: unknown,
+    _botId: string,
+    args: { enabled: boolean },
+  ) => {
+    mocks.threadListEnabled.push(args.enabled);
+    return {
+      data: args.enabled ? { threads: mocks.threads } : undefined,
+    };
+  },
 }));
+// The usage dialog has its own suite; here it shows which epic it reads and
+// draws the by-chat table the real way from the titles it is given - in a bot
+// tab, where there is no epic session around it.
+vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", async () => {
+  const { UsageChatBreakdown } =
+    await import("@/components/usage-analytics/usage-chat-breakdown");
+  return {
+    EpicUsageDialog: (props: {
+      epicId: string;
+      open: boolean;
+      chatTitles: ReadonlyMap<string, string> | null;
+    }) =>
+      props.open ? (
+        <div data-testid="stub-usage-dialog" data-epic-id={props.epicId}>
+          <UsageChatBreakdown
+            chatTitles={props.chatTitles}
+            rows={mocks.usageChatIds.map((chatId) => ({
+              chatId,
+              epicId: props.epicId,
+              factCount: 1,
+              tokens: {
+                uncachedInputTokens: 10,
+                cacheReadInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 5,
+              },
+              knownCostUsd: 1,
+              knownCacheSavingsUsd: 0,
+              knownReasoningTokens: 0,
+              costProvenance: "providerReported",
+            }))}
+          />
+        </div>
+      ) : null,
+  };
+});
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: { maxModeContext: MaxModeContext }) => {
     mocks.pickerContexts.push(props.maxModeContext);
@@ -369,6 +416,7 @@ function mountPanel(bot: BotRecord, personal: boolean): void {
         <BotChannelSettingsPanel
           bot={bot}
           personal={personal}
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
@@ -421,6 +469,9 @@ beforeEach(() => {
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
   mocks.usageSupportHosts.length = 0;
+  mocks.threads = [];
+  mocks.threadListEnabled.length = 0;
+  mocks.usageChatIds = [];
   mocks.memoryEntries = null;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
@@ -881,6 +932,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
           <BotChannelSettingsPanel
             bot={BOT}
             personal={input.personal}
+            mayChange
             channelId={CHANNEL}
             environmentBots={input.environmentBots}
             onClose={onClose}
@@ -977,6 +1029,52 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     ).toBe(BOT.botId);
   });
 
+  it("names the trunk and each thread session in the usage by-chat table, reading threads only while the dialog is open", async () => {
+    const user = userEvent.setup();
+    mocks.usageSupported = true;
+    const anchor = {
+      messageId: "message-1",
+      requestId: "request-1",
+      senderUserId: "user-1",
+      sentAt: 1_000,
+      resolvedAt: null,
+    };
+    const summary = {
+      conversationId: "conversation-1",
+      replyCount: 1,
+      lastReplyAt: null,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+    mocks.threads = [
+      {
+        ...summary,
+        threadId: "thread-1",
+        sessionChatId: "session-1",
+        anchor: { ...anchor, excerpt: "Ship the release" },
+      },
+      {
+        ...summary,
+        threadId: "thread-2",
+        sessionChatId: "session-2",
+        anchor: null,
+      },
+    ];
+    mocks.usageChatIds = [BOT.trunkChatId, "session-1", "session-2"];
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    expect(mocks.threadListEnabled.every((enabled) => !enabled)).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "View usage" }));
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining(BOT.title),
+      expect.stringContaining("Ship the release"),
+      expect.stringContaining("Thread"),
+    ]);
+    expect(mocks.threadListEnabled.at(-1)).toBe(true);
+  });
+
   it("offers no usage on a host that cannot read it", () => {
     mountChannelPanel({ personal: true, owner: null, environmentBots: null });
 
@@ -1004,6 +1102,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
             <BotChannelSettingsPanel
               bot={BOT}
               personal
+              mayChange
               channelId={CHANNEL}
               environmentBots={null}
               onClose={onClose}
@@ -1291,6 +1390,7 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
         <BotChannelSettingsPanel
           bot={BOT}
           personal
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
