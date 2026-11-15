@@ -1,8 +1,7 @@
 import { useMemo } from "react";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
-import { invalidateLocalTeamAdmission } from "@/lib/host/local-admission-invalidation";
+import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
 import {
   queryOptions,
   useMutation,
@@ -205,23 +204,22 @@ export function useEnvironmentInvitationAcceptMutation(
   const auth = binding?.auth ?? null;
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
-  const runnerHost = useRunnerHost();
   const captureAdmission = () => ({
     context: auth?.getRequestContextProvider().current() ?? null,
     localHostId: readLocalHostIdSnapshot(),
   });
-  const invalidateAdmission = (captured: {
+  const noteMembershipChange = (captured: {
     readonly context: RequestContext | null;
     readonly localHostId: string | null;
-  }): Promise<void> => {
+  }): void => {
     if (
       captured.localHostId === null ||
       captured.context === null ||
       captured.context.abortSignal.aborted ||
       auth?.getRequestContextProvider().current() !== captured.context
     )
-      return Promise.resolve();
-    return invalidateLocalTeamAdmission(captured.localHostId, runnerHost);
+      return;
+    noteHostMembershipChanged(captured.localHostId);
   };
   const rpc = useHostScopedMutationForClient(route.servingClient, {
     method: "environment.invitations.accept",
@@ -230,7 +228,7 @@ export function useEnvironmentInvitationAcceptMutation(
     invalidateMethods: ["environment.invitations.list", "environment.list"],
     captureContext: captureAdmission,
     onSuccess: (answer, _request, _hostId, captured) => {
-      if (answer.outcome === "accepted") void invalidateAdmission(captured);
+      if (answer.outcome === "accepted") noteMembershipChange(captured);
     },
   });
   const direct = useMutation({
@@ -241,7 +239,7 @@ export function useEnvironmentInvitationAcceptMutation(
     },
     onMutate: () => ({ auth, viewerUserId, ...captureAdmission() }),
     onSuccess: async (answer, _request, captured) => {
-      if (answer.outcome === "accepted") await invalidateAdmission(captured);
+      if (answer.outcome === "accepted") noteMembershipChange(captured);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: authQueryKeys.environmentInvitations(

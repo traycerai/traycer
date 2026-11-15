@@ -51,7 +51,7 @@ export const environmentMutationKeys = {
   membersRemove: () => ["environment.members.remove"] as const,
   membersNoticeSeen: () => ["environment.members.noticeSeen"] as const,
   invitationsAccept: () => ["environment.invitations.accept"] as const,
-  reviewHeldApply: () => ["environment.review.heldApply"] as const,
+  reviewApplyChoice: () => ["environment.review.applyChoice"] as const,
   reviewRecord: () => ["environment.review.record"] as const,
   plansUnlink: () => ["environment.plans.unlink"] as const,
   // `providers.link@1.1` carries a team's `environmentId`: a team's Plans
