@@ -26,10 +26,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
-import type {
-  McpListData,
-  ProvidersListWireResponse,
-} from "@/hooks/providers/native-response-map";
+import type { McpListData } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
@@ -204,7 +201,7 @@ type ListOutcome =
   | { readonly kind: "error"; readonly error: Error }
   | {
       readonly kind: "pending";
-      readonly promise: Promise<ProvidersListWireResponse>;
+      readonly promise: Promise<ProvidersListResponse>;
     };
 
 interface ListKey {
@@ -506,10 +503,13 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     const fixture = createFixture();
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "pending",
+      // A host off its contract: a promote-only code in a list answer, which
+      // the list's own type cannot carry. The whole answer is stated here, so
+      // the cast hides no missing field.
       promise: Promise.resolve({
         providers: [],
         native: { ok: false, code: "needs_connection", detail: null },
-      }),
+      } as unknown as ProvidersListResponse),
     });
     renderTab(fixture, "codex");
 
