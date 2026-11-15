@@ -102,7 +102,6 @@ export function McpServerDialog(props: {
       />
     );
   else if (secrets.isLoading) secretsRead = <MutedAgentSpinner />;
-  const { put } = useConfigurationMcpServerMutations();
   const [form, setForm] = useState<McpServerForm>(() =>
     initialMcpServerForm(server),
   );
@@ -110,11 +109,20 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, canPick);
+  const { put } = useConfigurationMcpServerMutations(() => {
+    if (source.kind !== "pool" || credential === null) {
+      throw new Error("MCP server input is unavailable.");
+    }
+    return mcpServerPutRequest(form, server, source.environmentId, credential);
+  });
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
     put.mutate(
-      mcpServerPutRequest(form, server, source.environmentId, credential),
+      {
+        environmentId: source.environmentId,
+        serverId: server?.serverId ?? null,
+      },
       {
         onSuccess: (result) => {
           if (result.outcome === "saved") props.onClose();

@@ -6,15 +6,20 @@ import { useQueryClient } from "@tanstack/react-query";
 import type {
   HostRpcError,
   ResponseOfMethod,
+  RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import {
+  useHostMutation,
+  useHostQueryWithResponseMap,
+} from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import {
   authorizesCloudCapability,
@@ -134,23 +139,48 @@ const MCP_SERVER_READS = [
  * (`setEnabled`), and its item (`putItem`: the per-provider and per-tool
  * switches).
  */
-export function useConfigurationMcpServerMutations() {
+export function useConfigurationMcpServerMutations(
+  readPutRequest:
+    | (() => RequestOfMethod<
+        HostRpcRegistry,
+        "environment.configuration.mcpServers.put"
+      >)
+    | null,
+) {
   const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   // A configuration write refreshes every cached projection of its server
   // list, including readers mounted under another host scope.
   const reread = (environmentId: string): void =>
     invalidateConfigurationReads(queries, environmentId, MCP_SERVER_READS);
-  const put = useHostScopedMutationForClient(client, {
+  const put = useHostMutation<
+    HostRpcRegistry,
+    "environment.configuration.mcpServers.put",
+    { readonly hostId: string | null; readonly captured: undefined },
+    { readonly environmentId: string; readonly serverId: string | null }
+  >({
+    client,
     method: "environment.configuration.mcpServers.put",
-    mutationKey: environmentMutationKeys.configurationMcpServersPut(),
-    errorMessage: "Couldn't save this server.",
-    invalidateMethods: [],
+    mapVariables: (target) => {
+      if (readPutRequest === null) {
+        throw new Error("MCP server input is unavailable.");
+      }
+      return { ...readPutRequest(), ...target };
+    },
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.mcpServers.put")();
       return Promise.resolve(request);
     },
-    onSuccess: (_result, request) => reread(request.environmentId),
+    options: {
+      mutationKey: environmentMutationKeys.configurationMcpServersPut(),
+      onMutate: () => ({
+        hostId: client.getActiveHostId(),
+        captured: undefined,
+      }),
+      onSuccess: (_result, target) => reread(target.environmentId),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't save this server."),
+    },
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.configuration.mcpServers.delete",

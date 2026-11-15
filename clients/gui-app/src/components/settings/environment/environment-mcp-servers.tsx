@@ -215,7 +215,7 @@ function McpServerRow(props: {
   const { server } = props;
   const source = useConfigurationSource();
   const name = useConfigurationName();
-  const { remove, setEnabled } = useConfigurationMcpServerMutations();
+  const { remove, setEnabled } = useConfigurationMcpServerMutations(null);
   const client = useHostClient();
   const removable =
     useHostNegotiatedMethodVersion(
@@ -426,7 +426,7 @@ export function McpServerTools(props: {
   readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { putItem } = useConfigurationMcpServerMutations();
+  const { putItem } = useConfigurationMcpServerMutations(null);
   const item = props.server.item;
   const list = useProvidersMcpList({
     providerId: props.providerId,
@@ -614,7 +614,11 @@ function McpOpenEditor(props: {
   readonly onDetail: (line: string | null) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { put, putItem } = useConfigurationMcpServerMutations();
+  const { put, putItem } = useConfigurationMcpServerMutations(() => {
+    const request = readEndpointRequest();
+    if (request === null) throw new Error("MCP server input is unavailable.");
+    return request;
+  });
   const initial = endpointInitial(props.server);
   const [endpoint, setEndpoint] = useState(initial);
   const groups = groupServerTools(props.server, props.using, props.lists);
@@ -638,36 +642,42 @@ function McpOpenEditor(props: {
   useEffect(() => {
     onDetail(line);
   }, [onDetail, line]);
+  function readEndpointRequest() {
+    const item = props.server.item;
+    const request = endpointPutRequest(
+      props.server,
+      endpoint,
+      source.kind === "pool" ? source.environmentId : "",
+    );
+    return request === null || !toolsDirty || item === null
+      ? request
+      : {
+          ...request,
+          toolToggles: togglesFromDraft(
+            item.toolToggles,
+            groups,
+            draft.value,
+            draft.edited,
+          ),
+        };
+  }
   const save = (): void => {
     if (source.kind !== "pool" || !canSave) return;
     const item = props.server.item;
     // mcpServers.put writes the item's toggles itself. Sending the stored
     // toggles beside a parallel items.put loses whichever lands last.
     if (endpointDirty) {
-      const request = endpointPutRequest(
-        props.server,
-        endpoint,
-        source.environmentId,
-      );
-      const saved =
-        request === null || !toolsDirty || item === null
-          ? request
-          : {
-              ...request,
-              toolToggles: togglesFromDraft(
-                item.toolToggles,
-                groups,
-                draft.value,
-                draft.edited,
-              ),
-            };
+      const saved = readEndpointRequest();
       if (saved !== null)
-        put.mutate(saved, {
-          onSuccess: (result) =>
-            props.onIssue(
-              typedWriteIssue(result, "Couldn't save this server."),
-            ),
-        });
+        put.mutate(
+          { environmentId: saved.environmentId, serverId: saved.serverId },
+          {
+            onSuccess: (result) =>
+              props.onIssue(
+                typedWriteIssue(result, "Couldn't save this server."),
+              ),
+          },
+        );
     }
     if (toolsDirty && item !== null && !endpointDirty)
       putItem.mutate(
