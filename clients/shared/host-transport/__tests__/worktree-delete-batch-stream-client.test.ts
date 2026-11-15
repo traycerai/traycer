@@ -1,137 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  createRequestContext,
-  identityFromAuthenticatedUser,
-} from "@traycer/protocol/auth/request-context";
-import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
-import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
-import type {
-  WebSocketCloseEvent,
-  WebSocketErrorEvent,
-  WebSocketOpenEvent,
-} from "../ws-factory";
-import type {
-  IStreamWebSocketFactory,
-  StreamWebSocketLike,
-  StreamWebSocketMessageEvent,
-} from "../ws-stream-factory";
 import { WorktreeDeleteBatchStreamClient } from "../worktree-delete-batch-stream-client";
-import { WsStreamClient } from "../ws-stream-client";
+import type { WsStreamClient } from "../ws-stream-client";
 import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import {
+  completeHandshake,
+  makeStubSocketFactory,
+  makeStubSocketStreamClient,
+  subscribeFrame,
+  subscribeParams,
+  type StubStreamWebSocket,
+} from "../__testing__/stub-stream-socket";
 import type { StreamContinuity } from "../i-stream-session";
-import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const COMMAND_ID = "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11";
-
-class StubStreamWebSocket implements StreamWebSocketLike {
-  onopen: ((event: WebSocketOpenEvent) => void) | null = null;
-  onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
-  onerror: ((event: WebSocketErrorEvent) => void) | null = null;
-  onclose: ((event: WebSocketCloseEvent) => void) | null = null;
-
-  readonly textSent: string[] = [];
-
-  send(data: string | Uint8Array): void {
-    if (typeof data === "string") {
-      this.textSent.push(data);
-    }
-  }
-
-  close(_code: number, _reason: string): void {}
-
-  fireOpen(): void {
-    this.onopen?.({ type: "open" });
-  }
-
-  fireText(data: unknown): void {
-    this.onmessage?.({ type: "text", data: JSON.stringify(data) });
-  }
-
-  fireClose(code: number, reason: string): void {
-    this.onclose?.({ code, reason, wasClean: false });
-  }
-}
-
-function makeFactory(): {
-  readonly factory: IStreamWebSocketFactory;
-  readonly sockets: StubStreamWebSocket[];
-} {
-  const sockets: StubStreamWebSocket[] = [];
-  return {
-    factory: {
-      create(): StreamWebSocketLike {
-        const socket = new StubStreamWebSocket();
-        sockets.push(socket);
-        return socket;
-      },
-    },
-    sockets,
-  };
-}
-
-function makeClient(
-  factory: IStreamWebSocketFactory,
-): WsStreamClient<typeof hostStreamRpcRegistry> {
-  const user = createAuthenticatedUserFixture(undefined);
-  const context = createRequestContext({
-    identity: identityFromAuthenticatedUser(user),
-    bearerToken: "token",
-    origin: "renderer",
-    connectionId: undefined,
-    operationId: undefined,
-    externalAbortSignal: undefined,
-    cloudAuthorized: true,
-  });
-  return new WsStreamClient({
-    clientIdentity: TEST_CLIENT_IDENTITY,
-    registry: hostStreamRpcRegistry,
-    endpoint: () => mockLocalHostEntry,
-    hostId: mockLocalHostEntry.hostId,
-    bearer: () => context.credentials,
-    userId: context.identity.userId,
-    auth: null,
-    clock: null,
-    hostCredentialMint: null,
-    onHostCredentialState: null,
-    evidence: NO_TRANSPORT_EVIDENCE,
-    webSocketFactory: factory,
-    dialTimeoutMs: 1_000,
-    openAckTimeoutMs: 1_000,
-    pingIntervalMs: 25_000,
-    pongTimeoutMs: 50_000,
-    initialBackoffMs: 10,
-    maxBackoffMs: 1_000,
-  });
-}
-
-/** Mirrors the host: echo the client's own manifest so the method negotiates. */
-function completeHandshake(socket: StubStreamWebSocket): void {
-  socket.fireOpen();
-  const open = JSON.parse(socket.textSent[0]) as {
-    readonly manifest: Record<string, { major: number; minor: number }>;
-  };
-  socket.fireText({ kind: "openAck", manifest: open.manifest });
-}
-
-function subscribeFrame(socket: StubStreamWebSocket): Record<string, unknown> {
-  const raw = socket.textSent[1];
-  if (raw === undefined) throw new Error("no subscribe frame was sent");
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("subscribe frame was not an object");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function subscribeParams(socket: StubStreamWebSocket): Record<string, unknown> {
-  const params = subscribeFrame(socket).params;
-  if (typeof params !== "object" || params === null) {
-    throw new Error("subscribe frame carried no params");
-  }
-  return params as Record<string, unknown>;
-}
 
 const NOOP_CALLBACKS = {
   onTargetStarted: () => undefined,
@@ -170,8 +52,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("sends a Task sweep's destination only on the start request", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
       commandId: COMMAND_ID,
@@ -191,8 +73,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("re-subscribes as observe after a drop, so the transport can never replay the start", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const batch = openBatchClient(client);
 
     completeHandshake(sockets[0]);
@@ -234,8 +116,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("reports an incompatible close on the observe session as a connection failure, not unsupported", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const onUnsupported = vi.fn();
     const onConnectionStatus = vi.fn();
     const batch = new WorktreeDeleteBatchStreamClient({
@@ -277,18 +159,19 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[1].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith(
-      "closed",
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
       reason,
-      null,
-      null,
-    );
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
     batch.close();
   });
 
-  it("keeps retrying start while the drop happened before the host ever saw it", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+  it("keeps retrying start while the drop happened before it was sent", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const batch = openBatchClient(client);
 
     // Dies during the dial: the subscribe frame never went out, so nothing was
@@ -308,8 +191,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("reports an unsupported method instead of a connection failure", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     let unsupported = 0;
     let statusClosed = 0;
     const batch = new WorktreeDeleteBatchStreamClient({
@@ -322,7 +205,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
         onUnsupported: () => {
           unsupported += 1;
         },
-        onConnectionStatus: (status) => {
+        onConnectionStatus: ({ status }) => {
           if (status === "closed") statusClosed += 1;
         },
       },
@@ -348,8 +231,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("reports a generic incompatible close as a connection failure", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const onUnsupported = vi.fn();
     const onConnectionStatus = vi.fn();
     const batch = new WorktreeDeleteBatchStreamClient({
@@ -377,18 +260,19 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[0].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith(
-      "closed",
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
       reason,
-      null,
-      null,
-    );
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
     batch.close();
   });
 
   it("rejects a force-target @1.1 command against a 1.0 host before subscribe", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const onUnsupported = vi.fn();
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
@@ -425,8 +309,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("sends a force target on an accepted pinned @1.1 subscribe", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
       commandId: COMMAND_ID,
@@ -463,8 +347,8 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
   });
 
   it("re-attaches a force command with an unpinned observe request", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
       commandId: COMMAND_ID,
@@ -513,8 +397,8 @@ describe("WorktreeDeleteBatchStreamClient target.complete decline kind", () => {
     readonly completions: ReadonlyArray<readonly unknown[]>;
     readonly batch: WorktreeDeleteBatchStreamClient;
   } {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const completions: unknown[][] = [];
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
@@ -576,8 +460,8 @@ describe("WorktreeDeleteBatchStreamClient decline kind on a force-delete retry",
     readonly completions: ReadonlyArray<readonly unknown[]>;
     readonly batch: WorktreeDeleteBatchStreamClient;
   } {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const completions: unknown[][] = [];
     const batch = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
@@ -666,8 +550,8 @@ describe("WorktreeDeleteBatchStreamClient error tail", () => {
     readonly failures: ReadonlyArray<readonly unknown[]>;
     readonly batch: WorktreeDeleteBatchStreamClient;
   } {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
     const completions: unknown[][] = [];
     const failures: unknown[][] = [];
     const batch = new WorktreeDeleteBatchStreamClient({
@@ -786,7 +670,7 @@ describe("WorktreeDeleteBatchStreamClient held continuity", () => {
       targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
       callbacks: {
         ...NOOP_CALLBACKS,
-        onConnectionStatus: (status, _reason, _retryCause, continuity) => {
+        onConnectionStatus: ({ status, continuity }) => {
           statuses.push({ status, continuity });
         },
       },
@@ -810,7 +694,7 @@ describe("WorktreeDeleteBatchStreamClient held continuity", () => {
     batch.close();
   });
 
-  it("swaps to observe on a plain reconnect after reaching the host", () => {
+  it("swaps to observe on a plain reconnect after the start was sent", () => {
     const { fake, batch, statuses } = startReached();
     const session = fake.sessions[0];
 

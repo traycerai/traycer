@@ -759,6 +759,9 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession)", () => {
     onStatusChange(handler: StatusChangeHandler): void {
       this.statusHandler = handler;
     }
+    hasSentOpenRequest(): boolean {
+      return false;
+    }
     requestReconnect(): void {}
     getNegotiatedSchemaVersion() {
       return null;
