@@ -10,17 +10,17 @@ import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import {
-  RETIRED_SECRET_ROW_FIELDS,
-  RETIRED_PROVIDER_VARIABLES,
-} from "@traycer/protocol/host/released-wire-rows";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 import type { ProviderMcpServer } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
-import { jsonEnvironmentAnswer } from "../../../../../__tests__/create-fake-runner-host";
-import { authnMcpServer } from "./team-environment-cloud-handlers";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   providerDisplayName,
@@ -39,8 +39,9 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
-  requireTeamHostBinding,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
+  setTeamEnvironmentCloudOverride,
   windowHostBoundary,
   resetTeamPageHarness,
   windowHostScopeMock,
@@ -49,12 +50,13 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 // The ambient host binding is what the viewing-host binding re-provides.
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => requireTeamHostBinding(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -107,6 +109,37 @@ const ALL_METHODS = {
   "environment.configuration.items": { major: 1, minor: 0 },
 } as const;
 
+const SWITCH_FAILURE_CASES = [
+  {
+    item: null,
+    message: "Couldn't turn github on. Try again.",
+  },
+  {
+    item: { key: "github", revision: 4, toolToggles: {}, offFor: [] },
+    message: "Couldn't turn github off. Try again.",
+  },
+];
+
+const OWNED_MCP_SECRET: EnvironmentSecretV12 = {
+  secretId: "sec-1",
+  name: "MCP_SRV1_GitHub token",
+  kind: "mcp_credential",
+  protocol: "http",
+  destinations: [],
+  ...RETIRED_SECRET_ROW_FIELDS,
+  currentVersionId: "version-1",
+  revoked: false,
+  updatedAt: 1,
+  variables: [],
+  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+};
+
+const EXTERNAL_MCP_SECRET: EnvironmentSecretV12 = {
+  ...OWNED_MCP_SECRET,
+  name: "GitHub token",
+  kind: "secret",
+};
+
 function handlers(options: {
   readonly servers: () => EnvironmentMcpServerDeclaration[];
   /** The servers the viewing host lists for any provider. */
@@ -129,6 +162,10 @@ function handlers(options: {
       revision: null,
     }),
     "environment.configuration.mcpServers.delete": () => ({
+      outcome: "saved" as const,
+      reason: null,
+    }),
+    "environment.configuration.mcpServers.setEnabled": () => ({
       outcome: "saved" as const,
       reason: null,
     }),
@@ -155,6 +192,56 @@ function handlers(options: {
             },
           },
   };
+}
+
+interface AuthnWrite {
+  readonly method: string;
+  readonly path: string;
+  readonly body: unknown;
+}
+
+function authnWritesSince(start: number): AuthnWrite[] {
+  return vi
+    .mocked(globalThis.fetch)
+    .mock.calls.slice(start)
+    .flatMap(([input, init]) => {
+      const method = init?.method;
+      if (method === undefined || method === "GET") return [];
+      let url: string;
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.href;
+      } else {
+        url = input.url;
+      }
+      let body: unknown = null;
+      if (typeof init?.body === "string") body = JSON.parse(init.body);
+      return [{ method, path: new URL(url).pathname, body }];
+    });
+}
+
+function refuseNextMcpItemPut(
+  status: number,
+  code: string,
+): EnvironmentTransportRequest[] {
+  const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+  const requests: EnvironmentTransportRequest[] = [];
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        request.method === "PUT" &&
+        new URL(request.url).pathname ===
+          "/api/v3/environments/env-a/items/mcp_server"
+      ) {
+        requests.push(request);
+        return { status, text: JSON.stringify({ code }) };
+      }
+      return cloud.transport(request);
+    },
+  });
+  return requests;
 }
 
 function offFor(providers: readonly ProviderId[]): string[] {
@@ -415,94 +502,237 @@ describe("The MCP servers page", () => {
     );
   });
 
-  it("enables a declared server by creating its item", async () => {
+  it("reads a server with no item as disabled, and its switch restores its item", async () => {
     negotiateMethods(ALL_METHODS);
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers({
+    let enabled = false;
+    const item = {
+      key: "github",
+      revision: 5,
+      toolToggles: {},
+      offFor: [],
+    };
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
         servers: () => [
-          declaredServer({ serverId: "srv-1", name: "github", item: null }),
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: enabled ? item : null,
+          }),
         ],
         hostServers: [],
       }),
-    );
+      "environment.configuration.items": () => ({
+        items: enabled
+          ? [
+              configurationItem({
+                kind: "mcp_server",
+                key: item.key,
+                value: {
+                  mcpServerId: "srv-1",
+                  toolToggles: item.toolToggles,
+                  offFor: item.offFor,
+                },
+                revision: item.revision,
+              }),
+            ]
+          : [],
+      }),
+      "environment.configuration.items.put": () => {
+        enabled = true;
+        return { outcome: "saved", revision: 5 };
+      },
+    });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     expect(
       await screen.findByText("http · disabled · no provider uses it"),
     ).toBeTruthy();
     expect(screen.queryByText("Disabled")).toBeNull();
+    const listReadsBefore = harness.paramsOf(
+      "environment.configuration.mcpServers.list",
+    ).length;
+    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
     await userEvent.click(screen.getByRole("switch", { name: "github" }));
 
     await waitFor(() => {
-      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-        {
-          environmentId: "env-a",
-          kind: "mcp_server",
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list").length,
+      ).toBeGreaterThan(listReadsBefore + 1);
+    });
+    expect(authnWritesSince(fetchStart)).toEqual([
+      {
+        method: "PUT",
+        path: "/api/v3/environments/env-a/items/mcp_server",
+        body: {
           key: "github",
           os: null,
-          revision: null,
           value: { mcpServerId: "srv-1", toolToggles: {} },
+          revision: null,
+          upload: null,
         },
-      ]);
-    });
+      },
+    ]);
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+    ).toEqual([]);
+    expect(
+      await screen.findByText("Enabled · http · all providers"),
+    ).toBeTruthy();
   });
 
-  it("disables an enabled server by preserving its toggles and deleting its item", async () => {
+  it("turns an enabled server off by preserving its switches and deleting its shown item revision", async () => {
     negotiateMethods(ALL_METHODS);
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers({
-        servers: () => [declaredServer({ serverId: "srv-1", name: "github" })],
+    let enabled = true;
+    const item = { key: "github", revision: 4, toolToggles: {}, offFor: [] };
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: enabled ? item : null,
+          }),
+        ],
         hostServers: [],
       }),
-    );
+      "environment.configuration.items.delete": () => {
+        enabled = false;
+        return { outcome: "saved", revision: null };
+      },
+    });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     expect(
       await screen.findByText("Enabled · http · all providers"),
     ).toBeTruthy();
+    const listReadsBefore = harness.paramsOf(
+      "environment.configuration.mcpServers.list",
+    ).length;
+    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
     await userEvent.click(screen.getByRole("switch", { name: "github" }));
 
     await waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.items.delete"),
-      ).toEqual([
-        {
-          environmentId: "env-a",
-          kind: "mcp_server",
-          key: "github",
-          os: null,
-          revision: 4,
-        },
-      ]);
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list").length,
+      ).toBeGreaterThan(listReadsBefore);
     });
-    expect(
-      harness.cloudRequests
-        .filter((request) => request.method === "PATCH")
-        .map((request) => ({
-          path: new URL(request.url).pathname,
-          body: request.body,
-        })),
-    ).toEqual([
+    expect(authnWritesSince(fetchStart)).toEqual([
       {
+        method: "PATCH",
         path: "/api/v3/environments/env-a/mcp-servers/srv-1",
         body: { toolToggles: {} },
       },
+      {
+        method: "DELETE",
+        path: "/api/v3/environments/env-a/items/mcp_server",
+        body: { key: "github", os: null, revision: 4, upload: null },
+      },
     ]);
+    expect(harness.paramsOf("environment.configuration.items.delete")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "mcp_server",
+        key: "github",
+        os: null,
+        revision: 4,
+      },
+    ]);
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+    ).toEqual([]);
+    expect(
+      await screen.findByText("http · disabled · no provider uses it"),
+    ).toBeTruthy();
   });
 
-  it.each([
-    {
-      item: null,
-      message: "Couldn't turn github on. Try again.",
+  it("keeps the server enabled when authn refuses its revision-guarded item DELETE", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        servers: () => [declaredServer({ serverId: "srv-1", name: "github" })],
+        hostServers: [],
+      }),
+      "environment.configuration.items.delete": () => ({
+        outcome: "conflict",
+        current: { revision: 5, changedBy: "Teammate", changedAt: 2 },
+      }),
+    });
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "github" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Couldn't turn github off. Try again.",
+    );
+    expect(harness.paramsOf("environment.configuration.items.delete")).toEqual([
+      expect.objectContaining({ key: "github", revision: 4 }),
+    ]);
+    expect(authnWritesSince(fetchStart)).toEqual([
+      {
+        method: "PATCH",
+        path: "/api/v3/environments/env-a/mcp-servers/srv-1",
+        body: { toolToggles: {} },
+      },
+      {
+        method: "DELETE",
+        path: "/api/v3/environments/env-a/items/mcp_server",
+        body: { key: "github", os: null, revision: 4, upload: null },
+      },
+    ]);
+    expect(
+      screen
+        .getByRole("switch", { name: "github" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it.each(SWITCH_FAILURE_CASES)(
+    "shows the inline refusal line when authn answers 5xx: $message",
+    async ({ item, message }) => {
+      negotiateMethods(ALL_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          servers: () => [
+            declaredServer({ serverId: "srv-1", name: "github", item }),
+          ],
+          hostServers: [],
+        }),
+        ...(item === null
+          ? {
+              "environment.configuration.items.put": () => {
+                throw new Error("authn is unavailable");
+              },
+            }
+          : {
+              "environment.configuration.items.delete": () => {
+                throw new Error("authn is unavailable");
+              },
+            }),
+      });
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("switch", { name: "github" }),
+      );
+
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(toast.error).not.toHaveBeenCalled();
     },
-    {
-      item: { key: "github", revision: 4, toolToggles: {}, offFor: [] },
-      message: "Couldn't turn github off. Try again.",
-    },
-  ])(
-    "toasts $message when the switch cannot reach authn",
+  );
+
+  it.each(SWITCH_FAILURE_CASES)(
+    "toasts $message when the authn transport rejects without an answer",
     async ({ item, message }) => {
       negotiateMethods(ALL_METHODS);
       const harness = mountTeamPage(poolSource("editor"), {
@@ -513,27 +743,23 @@ describe("The MCP servers page", () => {
           hostServers: [],
         }),
       });
-      harness.cloudResponses.set(
-        item === null
-          ? "PUT /api/v3/environments/env-a/items/mcp_server"
-          : "PATCH /api/v3/environments/env-a/mcp-servers/srv-1",
-        () => {
-          throw new Error("authn unavailable");
-        },
-      );
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-      await userEvent.click(
-        await screen.findByRole("switch", { name: "github" }),
+      const toggle = await screen.findByRole("switch", { name: "github" });
+      vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+        new Error("The transport did not answer."),
       );
+      await userEvent.click(toggle);
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalled();
+        expect(toast.error).toHaveBeenCalledTimes(1);
       });
-      expect(toast.error).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).toContain(
         message,
       );
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+      ).toHaveLength(0);
     },
   );
 
@@ -542,12 +768,9 @@ describe("The MCP servers page", () => {
       reason: "name_taken",
       line: "Acme already has a server named github. Pick another name.",
     },
-    {
-      reason: "invalid_body",
-      line: "Couldn't turn github on. Try again.",
-    },
+    { reason: "invalid_body", line: "Couldn't turn github on. Try again." },
   ])(
-    "says $line on the page when authn refuses the switch ($reason)",
+    "shows the switch's refusal line for an authn item-write answer ($reason)",
     async ({ reason, line }) => {
       negotiateMethods(ALL_METHODS);
       const harness = mountTeamPage(poolSource("editor"), {
@@ -558,25 +781,72 @@ describe("The MCP servers page", () => {
           hostServers: [],
         }),
       });
-      harness.cloudResponses.set(
-        "PUT /api/v3/environments/env-a/items/mcp_server",
-        () => ({
-          status: reason === "name_taken" ? 409 : 400,
-          text: JSON.stringify({ code: reason }),
-        }),
-      );
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
+      const requests = refuseNextMcpItemPut(400, reason);
       await userEvent.click(
         await screen.findByRole("switch", { name: "github" }),
       );
 
       expect((await screen.findByRole("status")).textContent).toBe(line);
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+      ).toEqual([]);
+      expect(
+        requests.map(({ method, url, body }) => ({
+          method,
+          path: new URL(url).pathname,
+          body,
+        })),
+      ).toEqual([
+        {
+          method: "PUT",
+          path: "/api/v3/environments/env-a/items/mcp_server",
+          body: {
+            key: "github",
+            os: null,
+            value: { mcpServerId: "srv-1", toolToggles: {} },
+            revision: null,
+            upload: null,
+          },
+        },
+      ]);
       expect(toast.error).not.toHaveBeenCalled();
     },
   );
 
-  it("preserves a mixed tool choice through disabling and reenabling the server", async () => {
+  it("shows the standing permission refusal when authn forbids the switch item write", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        servers: () => [
+          declaredServer({ serverId: "srv-1", name: "github", item: null }),
+        ],
+        hostServers: [],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "forbidden" as const,
+      }),
+    });
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "github" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You no longer have access to change these settings.",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("shows a mixed tool off and restores its switches through item writes", async () => {
     negotiateMethods(ALL_METHODS);
     const host = {
       enabled: true,
@@ -644,16 +914,15 @@ describe("The MCP servers page", () => {
       "disabled",
       true,
     );
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "mcp_server",
-        key: "github",
-        os: null,
-        revision: null,
-        value: { mcpServerId: "srv-1", toolToggles: host.toolToggles },
-      },
-    ]);
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+    ).toEqual([]);
+    expect(
+      harness.paramsOf("environment.configuration.items.delete"),
+    ).toHaveLength(1);
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
   });
 
   it("shows one mixed shared tool switch and saves its state across providers once", async () => {
@@ -910,11 +1179,10 @@ describe("The MCP servers page", () => {
     });
   });
 
-  it("saves an endpoint edit and a tool edit in one atomic cloud patch", async () => {
+  it("saves an endpoint and its tool switches in one authn server write", async () => {
     negotiateMethods(ALL_METHODS);
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers({
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
         servers: () => [
           declaredServer({
             serverId: "srv-1",
@@ -932,61 +1200,96 @@ describe("The MCP servers page", () => {
           codex: [hostMcpServer("github", ["search"])],
         },
       }),
-    );
-    harness.cloudResponses.set(
-      "PATCH /api/v3/environments/env-a/mcp-servers/srv-1",
-      () =>
-        jsonEnvironmentAnswer({
-          server: authnMcpServer(
-            declaredServer({
-              serverId: "srv-1",
-              name: "github",
-              url: "https://github.invalid/mcpx",
-            }),
-          ),
-        }),
-    );
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "mcp_server",
+            key: "github",
+            value: {
+              mcpServerId: "srv-1",
+              toolToggles: {},
+              offFor: [],
+            },
+            revision: 4,
+          }),
+        ],
+      }),
+    });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     await screen.findByText("github");
     await openServerCard("github");
     const endpoint = await screen.findByLabelText("Endpoint URL for github");
     expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    const fetchStart = vi.mocked(globalThis.fetch).mock.calls.length;
     await userEvent.type(endpoint, "x");
     await userEvent.click(
       await screen.findByRole("switch", { name: "github search" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.put"),
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(0);
+    });
     expect(
-      harness.cloudRequests
-        .filter((request) => request.method !== "GET")
-        .map((request) => ({
-          method: request.method,
-          path: new URL(request.url).pathname,
-          body: request.body,
-        })),
-    ).toMatchObject([
-      {
-        method: "PATCH",
-        path: "/api/v3/environments/env-a/mcp-servers/srv-1",
-        body: {
-          name: "github",
-          url: "https://github.invalid/mcpx",
-          toolToggles: { codex: { search: false } },
-          item: {
-            key: "github",
-            revision: 4,
-            retire: null,
-            value: {
-              mcpServerId: "srv-1",
-              toolToggles: { codex: { search: false } },
-            },
+      harness.paramsOf("environment.configuration.mcpServers.put")[0],
+    ).toMatchObject({
+      environmentId: "env-a",
+      serverId: "srv-1",
+      name: "github",
+      url: "https://github.invalid/mcpx",
+      toolToggles: { codex: { search: false } },
+      offFor: [],
+    });
+    const writes: {
+      readonly method: string;
+      readonly path: string;
+      readonly body: unknown;
+    }[] = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.slice(fetchStart)
+      .flatMap(([input, init]) => {
+        const method = init?.method;
+        if (method === undefined || method === "GET") return [];
+        let url: string;
+        if (typeof input === "string") {
+          url = input;
+        } else if (input instanceof URL) {
+          url = input.href;
+        } else {
+          url = input.url;
+        }
+        let body: unknown = null;
+        if (typeof init?.body === "string") body = JSON.parse(init.body);
+        return [
+          {
+            method,
+            path: new URL(url).pathname,
+            body,
           },
+        ];
+      });
+    expect(writes).toHaveLength(1);
+    const [write] = writes;
+    expect(write.method).toBe("PATCH");
+    expect(write.path).toBe("/api/v3/environments/env-a/mcp-servers/srv-1");
+    expect(write.body).toMatchObject({
+      url: "https://github.invalid/mcpx",
+      item: {
+        key: "github",
+        value: {
+          mcpServerId: "srv-1",
+          toolToggles: { codex: { search: false } },
         },
+        revision: 4,
+        retire: null,
       },
-    ]);
+    });
   });
 
   it("writes a shared tool setting only to providers that listed it", async () => {
@@ -1138,12 +1441,13 @@ describe("The MCP servers page", () => {
       credential: {
         kind: "secret" as const,
         secretId: "sec-1",
-        secretName: "MCP_SRV1_PAT",
+        secretName: "GitHub token",
         owned: true,
       },
+      secrets: [OWNED_MCP_SECRET],
       lines: [
         "This removes github from every provider on every computer and sandbox running Personal.",
-        "Its secret, MCP_SRV1_PAT, was added with this server and is deleted with it.",
+        "Its secret, MCP_SRV1_GitHub token, was added with this server and is deleted with it.",
       ],
     },
     {
@@ -1155,6 +1459,7 @@ describe("The MCP servers page", () => {
         secretName: "GitHub token",
         owned: false,
       },
+      secrets: [EXTERNAL_MCP_SECRET],
       lines: [
         "This removes github from every provider on every host running Acme.",
         "Its secret, GitHub token, stays on Secrets.",
@@ -1169,13 +1474,14 @@ describe("The MCP servers page", () => {
         secretName: null,
         owned: false,
       },
+      secrets: [],
       lines: [
         "This removes github from every provider on every host running Acme.",
       ],
     },
   ])(
     "asks before removing a server from $configuration, naming its secret only when it has one",
-    async ({ source, credential, lines }) => {
+    async ({ source, credential, secrets, lines }) => {
       negotiateMethods(ALL_METHODS);
       const harness = mountTeamPage(source, {
         ...handlers({
@@ -1184,29 +1490,7 @@ describe("The MCP servers page", () => {
           ],
           hostServers: [],
         }),
-        "environment.secrets.list": () => ({
-          secrets:
-            credential.kind === "secret"
-              ? [
-                  {
-                    ...RETIRED_SECRET_ROW_FIELDS,
-                    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-                    secretId: credential.secretId,
-                    name: credential.secretName,
-                    kind: credential.owned
-                      ? ("mcp_credential" as const)
-                      : ("api_key" as const),
-                    protocol: "https",
-                    destinations: ["github.invalid"],
-                    currentVersionId: "ver-1",
-                    revoked: false,
-                    updatedAt: 1,
-                    variables: [],
-                  },
-                ]
-              : [],
-          removed: [],
-        }),
+        "environment.secrets.list": () => ({ secrets, removed: [] }),
       });
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
@@ -1225,6 +1509,50 @@ describe("The MCP servers page", () => {
       ).toHaveLength(0);
     },
   );
+
+  it("removes an owned credential with its server id and no separate secret delete", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            credential: {
+              kind: "secret",
+              secretId: "sec-1",
+              secretName: "MCP_SRV1_GitHub token",
+              owned: true,
+            },
+          }),
+        ],
+        hostServers: [],
+      }),
+      "environment.secrets.list": () => ({
+        secrets: [OWNED_MCP_SECRET],
+        removed: [],
+      }),
+    });
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await openRemoveForGithub();
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "Its secret, MCP_SRV1_GitHub token, was added with this server and is deleted with it.",
+      ),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove server" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.delete"),
+      ).toEqual([{ environmentId: "env-personal", serverId: "srv-1" }]);
+    });
+    expect(harness.paramsOf("environment.secrets.destroy")).toHaveLength(0);
+  });
 
   it("sends nothing when the removal is cancelled, and one delete by id when it is confirmed", async () => {
     negotiateMethods(ALL_METHODS);

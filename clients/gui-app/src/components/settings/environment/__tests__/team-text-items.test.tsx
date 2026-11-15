@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import {
   act,
   cleanup,
@@ -9,39 +9,66 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentConfigurationItem,
   EnvironmentConfigurationItemWriteResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import { AuthService } from "@/lib/auth/auth-service";
 import { TeamTextItems } from "@/components/settings/environment/team-text-items";
-import { useConfigurationItemWrites } from "@/components/settings/environment/configuration-item-writes";
+import {
+  useConfigurationItemWrites,
+  type ConfigurationItemWrite,
+  type ConfigurationItemWrites,
+} from "@/components/settings/environment/configuration-item-writes";
 import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use-provider-items-query";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 import {
+  authSessionForUser,
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 
+const authViewerMock = vi.hoisted(() => ({ fromAuthStore: false }));
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
-vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/chats/use-cloud-chat-queries")
-  >()),
-  useCloudChatViewerId: () => "user-me",
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const { useAuthStore } = await import("@/stores/auth/auth-store");
+  return {
+    ...(await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >()),
+    useCloudChatViewerId: () => {
+      const userId = useAuthStore(
+        (state) => state.contextMetadata?.userId ?? "",
+      );
+      return authViewerMock.fromAuthStore ? userId : "user-me";
+    },
+  };
+});
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  authViewerMock.fromAuthStore = false;
+  vi.mocked(toast.error).mockClear();
   vi.useRealTimers();
 });
 
@@ -154,6 +181,59 @@ function mountEditor(
     "environment.configuration.items": items,
     "environment.configuration.items.put": put,
   });
+}
+
+interface MountedAuthPersonalVariables {
+  readonly harness: TeamPageHarness;
+  readonly unmount: () => void;
+}
+
+function mountAuthPersonalVariables(
+  items: EnvironmentConfigurationItem[],
+  userId: string,
+  token: string,
+): MountedAuthPersonalVariables {
+  authViewerMock.fromAuthStore = true;
+  const personalEnvironment = {
+    environmentId: "env-personal",
+    ownerKind: "user" as const,
+    ownerId: userId,
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner" as const,
+    kind: "personal" as const,
+    hostCount: 0,
+    providerHandle: null,
+  };
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({ environments: [personalEnvironment] }),
+    "environment.configuration.revision": () => ({ revision: "1" }),
+    "environment.configuration.items": () => ({ items }),
+    "environment.configuration.items.put": () => ({
+      outcome: "saved",
+      revision: 2,
+    }),
+    "environment.host.list": () => ({ hosts: [] }),
+  });
+  harness.auth.environmentCloud = AuthService.prototype.environmentCloud.bind(
+    harness.auth,
+  );
+  harness.auth.applyExternalSession(authSessionForUser(userId, token));
+  const page = render(
+    <ConfigurationSourceBoundary section={null} target={{ kind: "personal" }}>
+      <TextItemsPage />
+    </ConfigurationSourceBoundary>,
+    { wrapper: harness.Wrapper },
+  );
+  return { harness, unmount: page.unmount };
+}
+
+function variablePutRequests(harness: TeamPageHarness) {
+  return harness.cloudRequests.filter(
+    (request) =>
+      request.method === "PUT" &&
+      new URL(request.url).pathname.endsWith("/items/variable"),
+  );
 }
 
 describe("TeamTextItems accepted writes", () => {
@@ -392,6 +472,12 @@ describe("TeamTextItems accepted writes", () => {
       "environment.configuration.items.put": () => {
         puts += 1;
         if (puts === 1) return firstWrite.promise;
+        if (puts === 2) {
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
         items = [variable("production", 3), linux];
         return { outcome: "saved", revision: 3 };
       },
@@ -417,7 +503,7 @@ describe("TeamTextItems accepted writes", () => {
     const row = nodeRegion();
     expect(await within(row).findByRole("alert")).toHaveProperty(
       "textContent",
-      "the cloud could not be reached",
+      "Cloud service is temporarily unavailable. Please try again shortly.",
     );
     expect(
       within(
@@ -441,15 +527,526 @@ describe("TeamTextItems accepted writes", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
     commitNodeValue();
-    await expectUnlocked();
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(nodeValue()).toHaveProperty("value", "production");
+    await waitFor(() => expect(puts).toBe(2));
+    await waitFor(() => {
+      expect(nodeValue()).toHaveProperty("disabled", false);
+    });
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(2);
     expect(
       harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 1 });
+    commitNodeValue();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(3);
+    });
+    await expectUnlocked();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(nodeValue()).toHaveProperty("value", "production");
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[2],
     ).toMatchObject({ revision: 2 });
+  });
+
+  it("the hook's unmount writer skips a failed draft restored to its submitted text", async () => {
+    const harness = mountEditor(
+      () => ({ items: [variable("development", 1)] }),
+      () => ({ outcome: "saved", revision: 2 }),
+    );
+    const observeWrites = vi.fn<(writes: ConfigurationItemWrites) => void>();
+    function WritesProbe(): ReactNode {
+      const query = useConfigurationVariablesQuery();
+      const writes = useConfigurationItemWrites(query, () => undefined);
+      useEffect(() => observeWrites(writes), [writes]);
+      return <p>{query.data === undefined ? "loading" : query.data.length}</p>;
+    }
+    render(<WritesProbe />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("1")).toBeTruthy();
+    const getWrites = (): ConfigurationItemWrites => {
+      const writes = observeWrites.mock.lastCall?.[0];
+      if (writes === undefined)
+        throw new Error("The item writes hook is absent.");
+      return writes;
+    };
+    const submitted: ConfigurationItemWrite = {
+      kind: "variable",
+      key: "NODE_ENV",
+      os: "any",
+      action: "put",
+      value: { value: "submitted" },
+      original: variable("development", 1),
+    };
+    const beforeWrite = vi.mocked(globalThis.fetch).mock.calls.length;
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+      new Error("The transport did not answer."),
+    );
+    const firstWrites = getWrites();
+    await act(async () => {
+      await firstWrites.write(submitted);
+    });
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
+      beforeWrite + 1,
+    );
+    const failedWrites = getWrites();
+    const failure = failedWrites.failure;
+    if (failure === null) throw new Error("The failed draft was not retained.");
+    expect(failure.write.value).toEqual(submitted.value);
+
+    act(() => {
+      failedWrites.updateDraft({
+        ...submitted,
+        value: { value: "submitted!" },
+      });
+    });
+    const editedWrites = getWrites();
+    act(() => {
+      editedWrites.updateDraft(submitted);
+    });
+    const restoredWrites = getWrites();
+    const typedOn =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+    await act(async () => {
+      await restoredWrites.writeOnUnmount(submitted, typedOn);
+    });
+
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
+      beforeWrite + 1,
+    );
+  });
+
+  it("the hook's unmount writer uses the last-typed revision after refusal (model via public calls)", async () => {
+    let items = [variable("shown", 3)];
+    let puts = 0;
+    const firstWrite =
+      Promise.withResolvers<EnvironmentConfigurationItemWriteResponse>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        return puts === 1
+          ? firstWrite.promise
+          : {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Teammate", changedAt: 2 },
+            };
+      },
+    });
+    const observeWrites = vi.fn<(writes: ConfigurationItemWrites) => void>();
+    function WritesProbe(): ReactNode {
+      const query = useConfigurationVariablesQuery();
+      const writes = useConfigurationItemWrites(query, () => undefined);
+      useEffect(() => observeWrites(writes), [writes]);
+      return <p>{query.data === undefined ? "loading" : query.data.length}</p>;
+    }
+    render(<WritesProbe />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("1")).toBeTruthy();
+    const typedOn =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+    const getWrites = (): ConfigurationItemWrites => {
+      const writes = observeWrites.mock.lastCall?.[0];
+      if (writes === undefined)
+        throw new Error("The item writes hook is absent.");
+      return writes;
+    };
+    const readsBeforeWrite = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    const submitted: ConfigurationItemWrite = {
+      kind: "variable",
+      key: "NODE_ENV",
+      os: "any",
+      action: "put",
+      value: { value: "a" },
+      original: variable("shown", 3),
+    };
+    let operation: Promise<void> = Promise.resolve();
+    act(() => {
+      operation = getWrites().write(submitted);
+    });
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+    });
+
+    const typed = { ...submitted, value: { value: "ab" } };
+    act(() => getWrites().updateDraft(typed));
+    items = [variable("teammate", 4)];
+    await act(async () => {
+      firstWrite.resolve({
+        outcome: "conflict",
+        current: { revision: 4, changedBy: "Teammate", changedAt: 2 },
+      });
+      await operation;
+    });
+    await waitFor(() => {
+      expect(getWrites().pending).toBeNull();
+      expect(getWrites().drafts).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforeWrite);
+    });
+    await act(async () => {
+      await getWrites().writeOnUnmount(typed, typedOn);
+    });
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "a" } }),
+        expect.objectContaining({ revision: 3, value: { value: "ab" } }),
+      ]);
+    });
+  });
+
+  it("does not resend the submitted value when a delayed read remounts after a failed retry", async () => {
+    let items = [variable("development", 1)];
+    let holdReads = false;
+    let delayedReadStarted = false;
+    let puts = 0;
+    const delayedRead = Promise.withResolvers<{
+      items: EnvironmentConfigurationItem[];
+    }>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => {
+        if (holdReads) {
+          delayedReadStarted = true;
+          return delayedRead.promise;
+        }
+        return { items };
+      },
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate-value", 2)];
+          holdReads = true;
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        return { outcome: "forbidden" };
+      },
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("submitted");
+    commitNodeValue();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 1, value: { value: "submitted" } }),
+      ]);
+      expect(nodeValue()).toHaveProperty("disabled", false);
+    });
+    await waitFor(() => expect(delayedReadStarted).toBe(true));
+    const submittedField = nodeValue();
+    await userEvent.type(submittedField, "!");
+    const fetchCallsBeforeRetry = vi.mocked(globalThis.fetch).mock.calls.length;
+    const authnFetch = vi.mocked(globalThis.fetch).getMockImplementation();
+    if (authnFetch === undefined)
+      throw new Error("The authn fetch fixture is absent.");
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      let target: string;
+      if (input instanceof Request) target = input.url;
+      else if (input instanceof URL) target = input.href;
+      else target = input;
+      const method =
+        init?.method ?? (input instanceof Request ? input.method : "GET");
+      if (
+        method === "PUT" &&
+        new URL(target).pathname.endsWith("/items/variable")
+      ) {
+        throw new Error("The transport did not answer.");
+      }
+      return authnFetch(input, init);
+    });
+    commitNodeValue();
+    expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Connect to manage settings.",
+    );
+    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(
+      fetchCallsBeforeRetry,
+    );
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      expect.objectContaining({ revision: 1, value: { value: "submitted" } }),
+    ]);
+
+    const fetchCallsBeforeReadSettles = vi.mocked(globalThis.fetch).mock.calls
+      .length;
+    await act(async () => {
+      delayedRead.resolve({ items });
+      await delayedRead.promise;
+    });
+    await waitFor(() => expect(nodeValue()).not.toBe(submittedField));
+    expect(nodeValue()).toHaveProperty("value", "submitted!");
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
+      fetchCallsBeforeReadSettles,
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
+  });
+
+  it("does not write a submitted draft again when the conflict read remounts its row", async () => {
+    let items = [variable("development", 1)];
+    let holdRead = false;
+    let readStarted = false;
+    const delayedRead = Promise.withResolvers<{
+      items: EnvironmentConfigurationItem[];
+    }>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => {
+        if (holdRead) {
+          readStarted = true;
+          return delayedRead.promise;
+        }
+        return { items };
+      },
+      "environment.configuration.items.put": () => {
+        items = [variable("teammate-value", 2)];
+        holdRead = true;
+        return {
+          outcome: "conflict",
+          current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+        };
+      },
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("submitted");
+    commitNodeValue();
+    const submittedField = nodeValue();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 1, value: { value: "submitted" } }),
+      ]);
+      expect(readStarted).toBe(true);
+    });
+    await act(async () => {
+      delayedRead.resolve({ items });
+      await delayedRead.promise;
+    });
+
+    await waitFor(() => expect(nodeValue()).not.toBe(submittedField));
+    expect(nodeValue()).toHaveProperty("value", "submitted");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
+  });
+
+  it("writes the edited value at the last-told revision when a failed draft unmounts", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("shown", 3)],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 4,
+      }),
+    });
+    const page = render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("first");
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+      new Error("The transport did not answer."),
+    );
+    commitNodeValue();
+
+    expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Connect to manage settings.",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    await editVariable("second");
+    page.unmount();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "second" } }),
+      ]);
+    });
+  });
+
+  it("writes a post-conflict edit at the refused revision when the row unmounts", async () => {
+    let items = [variable("shown", 3)];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate", 4)];
+          return {
+            outcome: "conflict",
+            current: { revision: 4, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        return { outcome: "saved", revision: 5 };
+      },
+    });
+    const page = render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("first");
+    const readsBeforeConflict = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    commitNodeValue();
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforeConflict);
+    });
+    await waitFor(() => {
+      expect(nodeValue()).toHaveProperty("disabled", false);
+    });
+    await editVariable("second");
+    page.unmount();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 3, value: { value: "first" } }),
+        expect.objectContaining({ revision: 4, value: { value: "second" } }),
+      ]);
+    });
+  });
+
+  it("saves a held draft at the revision named by a refused Remove", async () => {
+    let items = [variable("development", 1)];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate-before-remove", 2)];
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        items = [variable("saved-after-remove", 4)];
+        return { outcome: "saved", revision: 4 };
+      },
+      "environment.configuration.items.delete": () => {
+        items = [variable("teammate-after-remove", 3)];
+        return {
+          outcome: "conflict",
+          current: { revision: 3, changedBy: "Teammate", changedAt: 3 },
+        };
+      },
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const readsBeforePut = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    await editVariable("draft-before-remove");
+    commitNodeValue();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforePut);
+    });
+    const readsBeforeRemove = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    await userEvent.click(
+      within(nodeRegion()).getByRole("button", { name: "Remove NODE_ENV" }),
+    );
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.delete"),
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforeRemove);
+    });
+    await editVariable("saved-after-remove");
+    commitNodeValue();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({
+          revision: 1,
+          value: { value: "draft-before-remove" },
+        }),
+        expect.objectContaining({
+          revision: 3,
+          value: { value: "saved-after-remove" },
+        }),
+      ]);
+      expect(
+        harness.paramsOf("environment.configuration.items.delete"),
+      ).toEqual([expect.objectContaining({ revision: 2, key: "NODE_ENV" })]);
+    });
+  });
+
+  it("keeps and saves a held draft at its last-told revision when a quiet read deletes the row", async () => {
+    let items = [variable("development", 1)];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          items = [variable("teammate-value", 2)];
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
+        items = [variable("draft", 3)];
+        return { outcome: "saved", revision: 3 };
+      },
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const readsBeforePut = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    await editVariable("draft");
+    commitNodeValue();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforePut);
+    });
+    expect(nodeValue()).toHaveProperty("value", "draft");
+
+    const readsBeforeQuietRead = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
+    items = [];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+      readsBeforeQuietRead + 1,
+    );
+    expect(
+      await screen.findByRole("region", { name: "NODE_ENV" }),
+    ).toBeTruthy();
+    expect(nodeValue()).toHaveProperty("value", "draft");
+    commitNodeValue();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({ revision: 1, value: { value: "draft" } }),
+        expect.objectContaining({ revision: 2, value: { value: "draft" } }),
+      ]);
+    });
   });
 
   it("retains acceptance after a failed read and retries only that read before unlocking", async () => {
@@ -888,5 +1485,95 @@ describe("TeamTextItems editor", () => {
       "value",
       "linux-value",
     );
+  });
+});
+
+describe("an unsaved variable's sign-in when its row unmounts", () => {
+  it("does not send person A's draft on person B's bearer when the Personal page changes accounts", async () => {
+    const { harness } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-by-a");
+    expect(nodeValue()).toHaveProperty("value", "typed-by-a");
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-b", "person-b-token"),
+      );
+    });
+
+    await waitFor(() => {
+      expect(nodeValue()).toHaveProperty("value", "saved");
+    });
+    expect(variablePutRequests(harness)).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Couldn't save these settings/)).toBeNull();
+  });
+
+  it("does not send person A's draft after sign-out and signing back in as A", async () => {
+    const { harness } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-before-sign-out");
+
+    act(() => {
+      harness.auth.applyExternalSession({ status: "signed-out" });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "NODE_ENV" })).toBeNull();
+    });
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-a", "person-a-token-again"),
+      );
+    });
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    expect(nodeValue()).toHaveProperty("value", "saved");
+    expect(variablePutRequests(harness)).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Couldn't save these settings/)).toBeNull();
+  });
+
+  it("sends person A's draft on the rotated bearer after an in-place token rotation", async () => {
+    const { harness, unmount } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-before-rotation");
+    expect(nodeValue()).toHaveProperty("value", "typed-before-rotation");
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-a", "person-a-token-rotated"),
+      );
+    });
+    expect(nodeValue()).toHaveProperty("value", "typed-before-rotation");
+
+    act(() => {
+      unmount();
+    });
+    await waitFor(() => {
+      expect(variablePutRequests(harness)).toHaveLength(1);
+    });
+    const [request] = variablePutRequests(harness);
+    expect(request.method).toBe("PUT");
+    expect(new Headers(request.headers).get("authorization")).toBe(
+      "Bearer person-a-token-rotated",
+    );
+    expect(request.body).toMatchObject({
+      key: "NODE_ENV",
+      os: "any",
+      value: { value: "typed-before-rotation" },
+      revision: 1,
+    });
   });
 });

@@ -21,8 +21,10 @@ import { negotiateMethods } from "./mcp-skills-test-support";
 import {
   mountTeamPage,
   mountTeamPageNegotiating,
+  hostIdsOf,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -30,6 +32,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 // The link dialog imports the hook from the runtime module itself.
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
@@ -240,16 +243,16 @@ describe("TeamPlans", () => {
 
   it.each([
     {
-      name: "sends the held binding version through cloud when the host only supports 1.0",
-      bindingVersion: 7,
-      negotiatedMinor: 0,
-      sent: { expectedBindingVersion: 7 },
-    },
-    {
-      name: "sends a null binding version through cloud when none is held",
+      name: "sends an authn unlink when no binding version is held",
       bindingVersion: undefined,
       negotiatedMinor: 0,
       sent: { expectedBindingVersion: null },
+    },
+    {
+      name: "sends the held revision through authn even when the host is at 1.0",
+      bindingVersion: 7,
+      negotiatedMinor: 0,
+      sent: { expectedBindingVersion: 7 },
     },
   ])("$name", async ({ bindingVersion, negotiatedMinor, sent }) => {
     const harness = mountTeamPageNegotiating(
@@ -292,19 +295,7 @@ describe("TeamPlans", () => {
         { environmentId: "env-a", profileId: "prof-1", ...sent },
       ]);
     });
-    expect(
-      harness.cloudRequests.filter((request) => request.method === "DELETE"),
-    ).toMatchObject([
-      {
-        url: "https://auth.example.invalid/api/v3/environments/env-a/secrets/harness-connections/prof-1",
-        body: sent,
-      },
-    ]);
-    expect(
-      harness.messenger.calls.filter(
-        (call) => call.method === "environment.plans.unlink",
-      ),
-    ).toEqual([]);
+    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 

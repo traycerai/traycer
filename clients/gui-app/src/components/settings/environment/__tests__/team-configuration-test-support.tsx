@@ -19,7 +19,10 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -37,7 +40,7 @@ import {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ExternalSession } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
@@ -79,6 +82,14 @@ export const viewingHostBoundary: {
  * `windowHostScopeMock`; `null` is a window with no host of its own.
  */
 export const windowHostBoundary: { hostId: string | null } = { hostId: null };
+
+let environmentCloudOverride: EnvironmentCloud | null = null;
+
+export function setTeamEnvironmentCloudOverride(
+  cloud: EnvironmentCloud | null,
+): void {
+  environmentCloudOverride = cloud;
+}
 
 export function windowHostScopeMock(): { hostId: string | null } {
   return { hostId: windowHostBoundary.hostId };
@@ -122,6 +133,9 @@ export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
   };
 }
 
+export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  return requireTeamHostBinding();
+}
 /**
  * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
  * the source it yields holds none, exactly as an inventory row naming it
@@ -163,6 +177,59 @@ export function configurationItem(
     updatedAt: 1,
     writtenBy: { source: "live", hostId: null, hostName: null },
     ...row,
+  };
+}
+
+export function authSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
+    },
   };
 }
 
@@ -344,6 +411,9 @@ function buildTeamPage(
     }),
     runnerHostOverrides: {},
   });
+  const baseEnvironmentCloud = auth.environmentCloud.bind(auth);
+  auth.environmentCloud = () =>
+    environmentCloudOverride ?? baseEnvironmentCloud();
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -419,6 +489,7 @@ function buildTeamPage(
 }
 
 export function resetTeamPageHarness(): void {
+  environmentCloudOverride = null;
   teamHostBoundary.runtime?.dispose();
   teamHostBoundary.directory?.dispose();
   teamHostBoundary.auth?.dispose();
