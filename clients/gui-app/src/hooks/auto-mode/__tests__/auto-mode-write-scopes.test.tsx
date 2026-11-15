@@ -78,6 +78,10 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
+import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+
+/** The sign-in a save was pressed on; these saves go to the host, which reads none of it. */
+const PRESSED_ERA: AuthEra = { identity: null, credentialGeneration: 0 };
 
 interface CapturedMutation {
   readonly options: {
@@ -264,8 +268,14 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
       wrapper: wrapperWith(queryClient),
     });
 
-    result.current.mutate({ body: "policy draft one" });
-    result.current.mutate({ body: "policy draft two" });
+    result.current.mutate({
+      request: { body: "policy draft one" },
+      era: PRESSED_ERA,
+    });
+    result.current.mutate({
+      request: { body: "policy draft two" },
+      era: PRESSED_ERA,
+    });
 
     await waitFor(() => {
       expect(mocks.request).toHaveBeenCalledTimes(1);

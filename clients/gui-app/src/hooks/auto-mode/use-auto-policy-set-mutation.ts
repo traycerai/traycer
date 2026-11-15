@@ -12,8 +12,13 @@ import type {
 import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
   useHostBinding,
   useHostClient,
@@ -38,6 +43,16 @@ import {
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 const METHOD = "autoPolicy.set";
+
+/**
+ * One save: the policy, and the sign-in that made it, read when the person
+ * pressed Save or Reset. Saves queue, so the one sent later must still go out
+ * as them.
+ */
+export interface AutoPolicySave {
+  readonly request: AutoPolicySetRequest;
+  readonly era: AuthEra;
+}
 
 type SetAutoPolicyContext = {
   readonly hostId: string | null;
@@ -99,11 +114,24 @@ interface SignInSave {
  */
 async function saveOnSignIn(
   { binding, client, hostId, viewerId, stream }: SignInSave,
-  body: string,
+  save: AutoPolicySave,
 ): Promise<AutoPolicySetResponse> {
   const { onOriginSignIn } = binding.auth.environmentCloud();
-  if (!onOriginSignIn()) throw saveFailure("no_response");
-  const result = await binding.auth.saveAutoPolicy(body);
+  const result = await binding.auth
+    .saveAutoPolicy(save.request.body, save.era)
+    .catch((error: unknown) => {
+      // Its sign-in ended before its turn: not sent, and nothing is said to
+      // whoever is signed in now.
+      if (error instanceof SupersededAuthEraError) {
+        throw new HostRequestAbortedError({
+          message: "The account changed before the save was sent",
+          requestId: crypto.randomUUID(),
+          method: METHOD,
+          mayHaveDispatched: false,
+        });
+      }
+      throw error;
+    });
   if (result.kind !== "ok") throw saveFailure(result.kind);
   if (binding.directory.findById(hostId) === null) {
     await client
@@ -150,7 +178,7 @@ async function saveOnSignIn(
 export function useAutoPolicySetMutation(): UseMutationResult<
   AutoPolicySetResponse,
   HostRpcError,
-  AutoPolicySetRequest,
+  AutoPolicySave,
   SetAutoPolicyContext
 > {
   // The account's policy is the pool's family (see `usePoolTierHostClient`).
@@ -162,7 +190,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
   return useMutation<
     AutoPolicySetResponse,
     HostRpcError,
-    AutoPolicySetRequest,
+    AutoPolicySave,
     SetAutoPolicyContext
   >({
     ...withHostMutationLifecycleBoundary(METHOD, {
@@ -209,7 +237,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
         queryClient.setQueriesData<AutoPolicyGetResponseV11>(
           { queryKey },
           (previous) => ({
-            body: variables.body,
+            body: variables.request.body,
             updatedAt: data.updatedAt,
             source: previous?.source ?? "account",
             // A completed write is the strongest evidence of a current record
@@ -245,11 +273,11 @@ export function useAutoPolicySetMutation(): UseMutationResult<
             hostAccountSettingsRefreshV10.method,
           ) === null
         ) {
-          return client.request(METHOD, variables);
+          return client.request(METHOD, variables.request);
         }
         return saveOnSignIn(
           { binding, client, hostId, viewerId: viewerUserId, stream },
-          variables.body,
+          variables,
         );
       }),
   });

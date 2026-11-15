@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
+import { useHostBinding } from "@/lib/host";
 import {
   AUTO_POLICY_MAX_BYTES,
   EMPTY_AUTO_POLICY_SECTIONS,
@@ -376,6 +377,7 @@ function RulesEditor(props: {
 }): ReactNode {
   const query = useAutoPolicyQuery();
   const setPolicy = useAutoPolicySetMutation();
+  const binding = useHostBinding();
   // The row is mounted on `autoPolicy.get`, and `autoPolicy.set` is its own
   // optional method. The BOOLEAN form is safe here: the tab only exists because
   // the getter answered `true`, so a manifest for this host is recorded.
@@ -445,8 +447,11 @@ function RulesEditor(props: {
   });
   const commit = (): void => {
     const body = joinAutoPolicySections(editor.sections);
+    // The sign-in's era is taken now, at the press, not when a queued save's
+    // turn comes.
+    if (binding === null) return;
     setPolicy.mutate(
-      { body },
+      { request: { body }, era: binding.auth.currentAuthEra() },
       {
         onSuccess: (response) => {
           setEditorState((current) =>
@@ -464,9 +469,9 @@ function RulesEditor(props: {
   // Reset saves the empty policy: the custom rules go, and the built-in ones
   // they sat on top of are the default.
   const reset = (): void => {
-    if (saving || resetBlockedReason !== null) return;
+    if (saving || resetBlockedReason !== null || binding === null) return;
     setPolicy.mutate(
-      { body: "" },
+      { request: { body: "" }, era: binding.auth.currentAuthEra() },
       {
         onSuccess: (response) => {
           setResetConfirm(false);
