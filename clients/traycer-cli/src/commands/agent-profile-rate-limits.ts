@@ -4,7 +4,7 @@ import {
   agentGetProviderProfileRateLimitsResponseSchemaV8,
 } from "@traycer/protocol/host/agent/profiles";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -42,7 +42,7 @@ export function buildAgentProfileRateLimitsCommand(opts: {
       },
     );
     const result = await toAgentCliError(
-      callHostRpc("agent.getProviderProfileRateLimits", request),
+      callAgentHostRpc("agent.getProviderProfileRateLimits", request),
     );
     // The explicit v6.0 schema, not the base `...ResponseSchema` name this
     // used to read. That name is a structurally identical but DISTINCT object

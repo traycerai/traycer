@@ -1,3 +1,10 @@
+import {
+  isRefusalOfAgentSessionCapability,
+  markRefusalOfAgentSessionCapability,
+  PROCESS_AGENT_ENVIRONMENT,
+  readAgentCommandCredential,
+  type AgentCommandCredential,
+} from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
 import {
@@ -255,6 +262,104 @@ export async function callHostRpcWithDispatch<
     auth,
     dispatch,
   );
+}
+
+const FAIL_FAST_DISPATCH: HostRpcDispatch = {
+  ...PLAIN_DISPATCH,
+  failFast: true,
+};
+
+/**
+ * {@link callHostRpcWithDispatch} for an agent's own commands. With an agent
+ * session capability in the agent's environment the call presents it, and
+ * neither the stored sign-in nor a host-only token is read; the host's
+ * refusal of it ends the call, which recovers nothing. In a session of the
+ * host's that carries none, nothing is presented in its place and the call
+ * fails as it does with no credential. Outside any such session the call is
+ * {@link callHostRpcWithDispatch} itself. Which methods a capability may call
+ * is the host's list, not this one's.
+ */
+export async function callAgentHostRpcWithDispatch<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callHostRpcWithAgentCredential(
+    method,
+    params,
+    readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT),
+    dispatch,
+  );
+}
+
+/** Uses the credential captured by a monitor for all of its acknowledgements. */
+export async function callHostRpcWithAgentCredential<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  credential: AgentCommandCredential,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  if (credential.kind === "outside-agent-session")
+    return callHostRpcWithDispatch(method, params, dispatch);
+  if (credential.kind === "none") {
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: the agent session carries no capability",
+      { environment: config.environment, method },
+    );
+    throw signedOutCliError();
+  }
+  const endpoint = await resolveEndpoint();
+  const capability = credential.capability;
+  createCliLogger(config.environment).debug(
+    "Host RPC requested with the agent session capability",
+    {
+      environment: config.environment,
+      method,
+      retryPolicy: dispatch.failFast ? "fast-fail" : "default",
+    },
+  );
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      endpoint,
+      capability.bearer,
+      capability.recovery,
+      dispatch.failFast
+        ? NO_RETRY_TRANSPORT_POLICY
+        : DEFAULT_TRANSPORT_RETRY_POLICY,
+      dispatch,
+      () => false,
+    );
+  } catch (err) {
+    const refusal = finalRefusalOf(err);
+    if (refusal instanceof HostRpcError) {
+      markRefusalOfAgentSessionCapability(refusal);
+    }
+    throw err;
+  }
+}
+
+/** {@link callHostRpc} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
+export function callAgentHostRpc<Method extends keyof HostRpcRegistry & string>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, PLAIN_DISPATCH);
+}
+
+/** {@link callHostRpcFastFail} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
+export function callAgentHostRpcFastFail<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, FAIL_FAST_DISPATCH);
 }
 
 /**
@@ -792,7 +897,10 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
-  const doorRefusal = hostRefusalOf(err);
+  // A capability cannot be repaired by the stored sign-in or a host-token mint.
+  const doorRefusal = isRefusalOfAgentSessionCapability(err)
+    ? null
+    : hostRefusalOf(err);
   const doorError =
     doorRefusal === null
       ? null

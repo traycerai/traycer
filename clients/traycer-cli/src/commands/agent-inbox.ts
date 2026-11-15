@@ -1,7 +1,7 @@
 import { formatAgentMessageSenderLabel } from "@traycer/protocol/agent/a2a-message-format";
 import { agentInboxReadResponseSchemaV20 } from "@traycer/protocol/host/agent/inbox";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -32,7 +32,7 @@ export function buildAgentInboxCommand(opts: {
     const agentId = resolveSenderAgentId(opts.agentId);
     const after = parseCursor(opts.after);
     const result = await toAgentCliError(
-      callHostRpc("agent.inbox.read", { epicId, agentId, after }),
+      callAgentHostRpc("agent.inbox.read", { epicId, agentId, after }),
     );
     const { messages, nextCursor } = parseCanonicalHostResponse(
       "agent.inbox.read",
