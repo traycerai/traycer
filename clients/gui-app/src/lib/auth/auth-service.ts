@@ -91,6 +91,10 @@ import {
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
 import {
+  fetchClaimedComputers,
+  type ClaimedComputersResult,
+} from "@traycer-clients/shared/auth/claimed-computers";
+import {
   claimCreditOfferViaHttp,
   listCreditOffersViaHttp,
   type ClaimCreditOfferFetchResult,
@@ -3508,6 +3512,21 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
+  }
+
+  /** The team computers a member claimed away from this team, kept 30 days. */
+  async listClaimedComputers(
+    environmentId: string,
+    signal: AbortSignal | null,
+  ): Promise<ClaimedComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return fetchClaimedComputers(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      signal,
+    );
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
