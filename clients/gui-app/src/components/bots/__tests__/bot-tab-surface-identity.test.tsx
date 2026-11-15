@@ -127,8 +127,8 @@ import {
 const channelHandles = vi.hoisted(() => ({
   handles: new Map<string, unknown>(),
   client: null as HostRequester<HostRpcRegistry> | null,
-  /** While set, every stored image's read waits for it. */
-  imageGate: null as Promise<void> | null,
+  /** A stored image's read waits for the gate of its hash, while there is one. */
+  imageGates: new Map<string, PromiseWithResolvers<void>>(),
   /** Every (viewer, A's markers) pair the probe under the surface's composer saw. */
   observed: [] as Array<{
     readonly at: "render" | "layout";
@@ -320,8 +320,7 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   return {
     ...real,
     getImageBytes: async (hash: string) => {
-      const gate = channelHandles.imageGate;
-      if (gate !== null) await gate;
+      await channelHandles.imageGates.get(hash)?.promise;
       return real.getImageBytes(hash);
     },
   };
@@ -633,13 +632,23 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Every image read a case held ends before its tree goes, so it cannot
+  // land in the next case's store.
+  for (const gate of channelHandles.imageGates.values()) gate.resolve();
+  await act(async () => {
+    await vi.waitFor(() => {
+      const drafts = useBotDraftsStore.getState();
+      expect(drafts.ownDraftsRead).toBe(true);
+      expect(drafts.boxesReading).toEqual({});
+    });
+  });
   endBotTabSurfaceCase(queryClient);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1);
   });
   resetBotFailedRequestSupport();
   channelHandles.handles.clear();
-  channelHandles.imageGate = null;
+  channelHandles.imageGates.clear();
   localStorage.clear();
 });
 
@@ -980,30 +989,34 @@ describe("<BotTabSurface /> a task card's answer across an account switch", () =
   });
 });
 
+/** A thread the host lists, opened on the post `postId` by account A. */
+function listedThreadOf(threadId: string, postId: string): BotThreadSummary {
+  return {
+    threadId,
+    conversationId: CHANNEL,
+    sessionChatId: "session-1",
+    anchor: {
+      messageId: postId,
+      requestId: "req-post",
+      senderUserId: ACCOUNT_A,
+      sentAt: 1_000,
+      resolvedAt: null,
+      excerpt: null,
+    },
+    replyCount: 1,
+    lastReplyAt: 2_000,
+    openRequestCount: 1,
+    costUsd: null,
+  };
+}
+
 describe("<BotTabSurface /> a thread box's answer and quote, through the real thread panel", () => {
   const THREAD_ID = "thread-1";
   const POST_ID = "post-1";
   const REPLY_REQUEST = "req-reply";
 
-  function listedThread(): BotThreadSummary {
-    return {
-      threadId: THREAD_ID,
-      conversationId: CHANNEL,
-      sessionChatId: "session-1",
-      anchor: {
-        messageId: POST_ID,
-        requestId: "req-post",
-        senderUserId: ACCOUNT_A,
-        sentAt: 1_000,
-        resolvedAt: null,
-        excerpt: null,
-      },
-      replyCount: 1,
-      lastReplyAt: 2_000,
-      openRequestCount: 1,
-      costUsd: null,
-    };
-  }
+  const listedThread = (): BotThreadSummary =>
+    listedThreadOf(THREAD_ID, POST_ID);
 
   function openThread(): void {
     act(() =>
@@ -1233,12 +1246,8 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
   it("opens the tab while A's stored draft with an image is still being read, holding that box read-only with A's stored text, then gives the box A's stored text and image to edit", async () => {
     installFreshIndexedDb();
     const hash = await storeImageBytes();
-    let release = (): void => {};
-    channelHandles.imageGate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    // Whatever the case does, the image read ends with it.
-    onTestFinished(() => release());
+    const gate = Promise.withResolvers<void>();
+    channelHandles.imageGates.set(hash, gate);
     localStorage.setItem(
       botBoxDraftsKey(ACCOUNT_A),
       storedChannelDraft(
@@ -1266,7 +1275,7 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
       "This draft's images are still loading.",
     );
 
-    release();
+    gate.resolve();
 
     await vi.waitFor(() =>
       expect(textOf(channelBox())).toContain("A stored draft"),
@@ -1390,5 +1399,99 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
         (seen) => seen.viewer === ACCOUNT_B && seen.markers.length > 0,
       ),
     ).toEqual([]);
+  });
+
+  it("opens the thread box for editing as soon as its own image is read, while the channel box still waits for its own", async () => {
+    installFreshIndexedDb();
+    const channelHash = await storeImageBytes();
+    const { putImage } = await import("@/lib/composer/landing-image-store");
+    const threadHash = await putImage(new Uint8Array([9, 8, 7, 6]));
+    // The channel's image read is held until the thread box has opened.
+    const channelGate = Promise.withResolvers<void>();
+    channelHandles.imageGates.set(channelHash, channelGate);
+    const threadGate = Promise.withResolvers<void>();
+    channelHandles.imageGates.set(threadHash, threadGate);
+    localStorage.setItem(
+      botBoxDraftsKey(ACCOUNT_A),
+      JSON.stringify({
+        state: {
+          threadBoxes: {
+            [BOT_ID]: {
+              [CHANNEL]: {
+                text: "Channel draft",
+                content: boxDoc("Channel draft ", [hashedImage(channelHash)]),
+                seedId: 1,
+              },
+              "post-1": {
+                text: "Thread draft",
+                content: boxDoc("Thread draft ", [hashedImage(threadHash)]),
+                seedId: 1,
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+    mocks.state.threads = [listedThreadOf("thread-1", "post-1")];
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "Ship it?")]),
+    );
+    channelHandles.handles.set(
+      "thread-1",
+      chatSessionWithThreadRows([postRow("reply-1", "A reply")]),
+    );
+    act(() =>
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "post-1",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+
+    mountSurface();
+
+    expect(
+      await screen.findByTestId("bot-thread-composer-reading"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+
+    threadGate.resolve();
+
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull(),
+    );
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(textOf(boxWithin(panel, "Reply in the thread"))).toContain(
+      "Thread draft",
+    );
+    expect(screen.getByTestId("bot-thread-composer-send")).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+    expect(screen.getByTestId("bot-channel-composer-input")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    channelGate.resolve();
+
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull(),
+    );
+    expect(textOf(channelBox())).toContain("Channel draft");
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 });

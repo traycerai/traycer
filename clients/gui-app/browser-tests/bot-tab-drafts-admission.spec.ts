@@ -219,5 +219,17 @@ test.describe("a stored draft whose image read never settles", () => {
     await boxEditor(page).click();
     await page.keyboard.type("typed after discarding");
     await expect(boxEditor(page)).toHaveText("typed after discarding");
+
+    // Reloaded with the open still hung, the box holds what was typed in its place.
+    await page.reload();
+
+    await expectTabOpen(page);
+    await expect(page.getByTestId("bot-channel-composer-reading")).toHaveCount(
+      0,
+    );
+    await expect(boxEditor(page)).toHaveText("typed after discarding");
+    await boxEditor(page).click();
+    await page.keyboard.type(" and more");
+    await expect(boxEditor(page)).toHaveText("typed after discarding and more");
   });
 });

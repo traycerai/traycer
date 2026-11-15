@@ -641,7 +641,7 @@ describe("the image budget a draft's images are stored under", () => {
 });
 
 describe("a box changed while the stored drafts are read", () => {
-  it("writes what was typed over what was stored, once the read answers and typing pauses", async () => {
+  it("writes what was typed over what was stored as typing pauses, while the stored draft's image is still being read, and the stored draft does not come back when the read ends", async () => {
     const reading = await startReadingStoredDraft("old");
 
     reading.drafts.getState().typeThreadBox(BOT_ID, "channel", {
@@ -649,18 +649,24 @@ describe("a box changed while the stored drafts are read", () => {
       content: null,
       held: [],
     });
-    await pastTheDebounce(reading);
-    expect(storedDrafts(reading)?.[BOT_ID]?.channel?.text).toBe("old");
+    await waitForStore(
+      reading,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "new",
+    );
+    expect(reading.drafts.persist.hasHydrated()).toBe(false);
 
     await hydrated(reading);
 
     expect(reading.drafts.getState().threadBoxes[BOT_ID]?.channel?.text).toBe(
       "new",
     );
-    await waitForStore(
-      reading,
-      (stored) => stored?.[BOT_ID]?.channel?.text === "new",
-    );
+    const document = storedDrafts(reading);
+    expect(Object.keys(document ?? {})).toEqual([BOT_ID]);
+    expect(Object.keys(document?.[BOT_ID] ?? {})).toEqual(["channel"]);
+    expect(document?.[BOT_ID]?.channel?.text).toBe("new");
+    const raw = localStorage.getItem(BOX_DRAFTS_KEY) ?? "";
+    expect(raw).not.toContain('"hash"');
+    expect(raw).not.toContain("b64content");
     app = reading;
   });
 

@@ -47,12 +47,37 @@ export interface PersistedBotBoxDrafts {
  * documents, before it reads any image back (T186).
  */
 export interface BotBoxDraftsTextRead {
-  /** The read's number, for {@link isCurrentBotBoxDraftsRead}. */
-  readonly read: number;
   /** The drafts that name no stored image, as the read puts them back. */
   readonly threadBoxes: StoredBoxDrafts;
   /** The drafts whose images are still to be read back, as stored. */
   readonly waiting: StoredBoxDrafts;
+}
+
+/** One waiting box's draft, its images read back (T186). */
+export interface BotBoxDraftImagesRead {
+  readonly botId: string;
+  readonly key: string;
+  /** `null` where nothing is left of it. */
+  readonly draft: StoredBoxDraft | null;
+}
+
+/**
+ * What a read hands the drafts store as it goes, only ever for the read the
+ * store is waiting on: one an account's retirement, a newer read or a wipe
+ * overtook hands over nothing more.
+ */
+export interface BotBoxDraftsReadHandlers {
+  /**
+   * The documents are read, and some drafts name images still to be read
+   * back: each of those boxes is handed over on its own (`boxRead`) once its
+   * own images are.
+   */
+  readonly textRead: (textRead: BotBoxDraftsTextRead) => void;
+  /**
+   * Whether the store takes that box's draft: it does not where the person
+   * changed the box, or forgot its bot, while the drafts were read.
+   */
+  readonly boxRead: (boxRead: BotBoxDraftImagesRead) => boolean;
 }
 
 /**
@@ -93,18 +118,22 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * the composer image store's budget before it is stored; one the budget
  * refuses is written without, the person told once, and tried again on the
  * next write. Only a change to the boxes' drafts is written. Nothing is
- * written until the drafts store says the stored drafts are read and merged
+ * written until the drafts store says it holds the stored drafts' text
  * ({@link botBoxDraftsRead}), so a change made while they are still being
  * read cannot replace them. A read that storage refuses fails, never reads as
  * nothing stored, so nothing is written for that account until a read does
  * succeed; a write that cannot read what is stored waits.
  *
  * Where some drafts name images, a read hands the drafts store the others as
- * soon as it has read the documents (`onTextRead`), before it reads any image
- * back: an image read that never ends holds its own box, never the others.
+ * soon as it has read the documents (`textRead`), before it reads any image
+ * back, and each of those boxes on its own once its own images are
+ * (`boxRead`): an image read that never ends holds its own box, never the
+ * others. The boxes' changes are written from the first hand-over on, and a
+ * box still waiting is in neither what the store holds nor this window's
+ * baseline, so no write touches what is stored for it.
  */
 export function createBotBoxDraftStorage(
-  onTextRead: (textRead: BotBoxDraftsTextRead) => void,
+  handlers: BotBoxDraftsReadHandlers,
 ): PersistStorage<PersistedBotBoxDrafts> {
   return {
     getItem: async (name) => {
@@ -112,33 +141,39 @@ export function createBotBoxDraftStorage(
       const read = writer.readGeneration;
       const stored = readStoredValue(name);
       if (stored === null) return null;
-      const waiting = mapDrafts(stored.state.threadBoxes, (draft) =>
-        namesStoredImages(draft) ? draft : null,
+      const threadBoxes = mapDrafts(stored.state.threadBoxes, (draft) =>
+        namesStoredImages(draft) ? null : restoredDraft(draft, draft.content),
       );
-      if (Object.keys(waiting).length > 0) {
-        onTextRead({
-          read,
-          threadBoxes: mapDrafts(stored.state.threadBoxes, (draft) =>
-            namesStoredImages(draft)
-              ? null
-              : restoredDraft(draft, draft.content),
-          ),
-          waiting,
-        });
+      writer.baseline = threadBoxes;
+      const waiting: WaitingBox[] = [];
+      for (const [botId, key, draft] of eachBox(stored.state.threadBoxes)) {
+        if (namesStoredImages(draft)) waiting.push({ botId, key, draft });
       }
-      const state = await inlineStoredImages(stored.state, read);
-      // The stored drafts were wiped while their images were read, or the
-      // account whose drafts they are retired and another's are read now.
-      if (wiped() || read !== writer.readGeneration) return null;
-      writer.baseline = state.threadBoxes;
-      return { ...stored, state };
+      if (waiting.length === 0) return { ...stored, state: { threadBoxes } };
+      handlers.textRead({
+        threadBoxes,
+        waiting: mapDrafts(stored.state.threadBoxes, (draft) =>
+          namesStoredImages(draft) ? draft : null,
+        ),
+      });
+      const imagesRead: BoxImagesRead = {
+        read,
+        deletions: landingImageDeletions(),
+        reads: new Map(),
+      };
+      await Promise.all(
+        waiting.map((box) => readBoxImages(imagesRead, box, handlers)),
+      );
+      // Every box was handed over as its own images were read back: the
+      // store's merge adds nothing.
+      return null;
     },
     setItem: (name, value) => {
       if (writer.stopped || !writer.read) return;
       const { threadBoxes } = value.state;
       if (threadBoxes === writer.lastThreadBoxes) return;
       writer.lastThreadBoxes = threadBoxes;
-      schedule({ name, value });
+      schedule(snapshot({ name, value }));
     },
     removeItem: (name) => {
       dropWrites();
@@ -159,8 +194,6 @@ export function botBoxDraftsReading(): number {
   writer.baseline = {};
   writer.unresolved = new Map();
   writer.gone = new Map();
-  writer.droppedDuringRead.keys.clear();
-  writer.droppedDuringRead.bots.clear();
   return writer.readGeneration;
 }
 
@@ -193,7 +226,7 @@ export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
     // What the read found, if it got that far, is not this window's yet.
     writer.baseline = {};
     const { hashByInline } = writer;
-    land(midRead, (b64content) => hashByInline.get(b64content));
+    land(snapshot(midRead), (b64content) => hashByInline.get(b64content));
   } else {
     flushPendingBotBoxDraftWrite();
   }
@@ -233,13 +266,14 @@ export function retireLegacyBotBoxDrafts(): void {
 
 /**
  * The person cleared or sent that box: the images it kept that this window
- * could not show go with it.
+ * could not show go with it. Written even where the store's drafts did not
+ * change, as for a box still waiting for its images, which they never held.
  */
 export function botBoxDraftCleared(botId: string, key: string): void {
   const box = boxKeyOf(botId, key);
-  if (!writer.read) writer.droppedDuringRead.keys.add(box);
   writer.unresolved.delete(box);
   writer.cleared.set(box, { botId, key });
+  writer.lastThreadBoxes = null;
 }
 
 /**
@@ -249,18 +283,24 @@ export function botBoxDraftCleared(botId: string, key: string): void {
  * written even where this window held none of the bot's boxes.
  */
 export function botBoxDraftsForgotten(botId: string): void {
-  if (!writer.read) writer.droppedDuringRead.bots.add(botId);
   writer.forgotten.add(botId);
   writer.lastThreadBoxes = null;
   for (const [box, unresolved] of writer.unresolved) {
     if (unresolved.botId === botId) writer.unresolved.delete(box);
   }
+  // Every write drops the bot from here on, whatever its drafts held: none of
+  // its boxes is left for a write that holds it.
+  for (const [box, handed] of writer.handedOver) {
+    if (handed.botId === botId) writer.handedOver.delete(box);
+  }
 }
 
 /**
- * The drafts store has read and merged the stored drafts: from here on its
- * changes are written. `changedDuringRead` writes the merged drafts at once,
- * for a change made while they were read reached no write.
+ * The drafts store has merged the stored drafts, or their text where some
+ * boxes still wait for their images: from here on its changes are written,
+ * and a later call for the same read does nothing. `changedDuringRead` writes
+ * the merged drafts at once, for a change made while they were read reached
+ * no write.
  */
 export function botBoxDraftsRead(input: {
   readonly name: string;
@@ -268,17 +308,19 @@ export function botBoxDraftsRead(input: {
   readonly threadBoxes: StoredBoxDrafts;
   readonly changedDuringRead: boolean;
 }): void {
-  if (writer.stopped) return;
+  if (writer.stopped || writer.read) return;
   writer.read = true;
   writer.lastThreadBoxes = input.threadBoxes;
   if (!input.changedDuringRead) return;
-  schedule({
-    name: input.name,
-    value: {
-      state: { threadBoxes: input.threadBoxes },
-      version: input.version,
-    },
-  });
+  schedule(
+    snapshot({
+      name: input.name,
+      value: {
+        state: { threadBoxes: input.threadBoxes },
+        version: input.version,
+      },
+    }),
+  );
 }
 
 /**
@@ -324,9 +366,31 @@ export interface PendingWrite {
   readonly value: StorageValue<PersistedBotBoxDrafts>;
 }
 
+/** A write as it waits and lands, with what its drafts knew when they were taken. */
+interface QueuedWrite extends PendingWrite {
+  /**
+   * How many boxes reads had handed over one by one (`writer.handOvers`)
+   * when its drafts were taken, kept as they were through every wait, retry
+   * and page hide: it leaves each box handed over after them, and what is
+   * owed to that box, to a write whose drafts hold it.
+   */
+  readonly knows: number;
+}
+
+/** `write`, its drafts taken now. */
+function snapshot(write: PendingWrite): QueuedWrite {
+  return { ...write, knows: writer.handOvers };
+}
+
+/** A box a read handed over on its own, and when. */
+interface HandedOver extends BoxAt {
+  /** `writer.handOvers` as it handed the box over. */
+  readonly at: number;
+}
+
 /** One writer per window: the store it serves is a module singleton. */
 const writer: {
-  /** Whether the drafts store has read and merged the stored drafts. */
+  /** Whether the drafts store has read and merged the stored drafts, or their text. */
   read: boolean;
   /** Bumped by each read and each account's retirement; a read that sees it move is stale. */
   readGeneration: number;
@@ -334,10 +398,10 @@ const writer: {
   stopped: boolean;
   /** The drafts last written or read, to tell a change to them from none. */
   lastThreadBoxes: StoredBoxDrafts | null;
-  pending: PendingWrite | null;
+  pending: QueuedWrite | null;
   timer: number | null;
   /** The write whose images are being stored; `null` for none. */
-  inFlight: PendingWrite | null;
+  inFlight: QueuedWrite | null;
   /** Bumped by each newer write and each wipe; a write that sees it move is stale. */
   generation: number;
   /**
@@ -362,8 +426,17 @@ const writer: {
    * found gone, until a write takes them out of what is stored.
    */
   gone: Map<string, GoneImages>;
-  /** The boxes cleared and the bots forgotten while the stored drafts are read. */
-  droppedDuringRead: { readonly keys: Set<string>; readonly bots: Set<string> };
+  /**
+   * Counts the boxes reads handed over one by one, each as its own images
+   * were read back; never reset, so a write's drafts tell what they knew.
+   */
+  handOvers: number;
+  /**
+   * By box (`boxKeyOf`): each box handed over that a write whose drafts held
+   * it has yet to land. A write whose drafts are older leaves the box, and
+   * what is owed to it, as they are.
+   */
+  handedOver: Map<string, HandedOver>;
   /**
    * This window's drafts as it last read or wrote them: a write puts only the
    * boxes that differ from them onto what is stored.
@@ -399,7 +472,8 @@ const writer: {
   inFlightHashByInline: new Map(),
   unresolved: new Map(),
   gone: new Map(),
-  droppedDuringRead: { keys: new Set(), bots: new Set() },
+  handOvers: 0,
+  handedOver: new Map(),
   baseline: {},
   forgotten: new Set(),
   cleared: new Map(),
@@ -439,7 +513,7 @@ function wiped(): boolean {
   return writer.stopped;
 }
 
-function schedule(write: PendingWrite): void {
+function schedule(write: QueuedWrite): void {
   writer.pending = write;
   if (writer.timer !== null) window.clearTimeout(writer.timer);
   writer.timer = window.setTimeout(() => {
@@ -449,7 +523,7 @@ function schedule(write: PendingWrite): void {
 }
 
 /** The write waiting for typing to pause, taken: it is newer than any before it. */
-function takePending(): PendingWrite | null {
+function takePending(): QueuedWrite | null {
   if (writer.timer !== null) window.clearTimeout(writer.timer);
   writer.timer = null;
   const pending = writer.pending;
@@ -468,6 +542,8 @@ function dropWrites(): void {
   writer.forgotten.clear();
   writer.cleared.clear();
   writer.incomplete.clear();
+  // No write that predates them lands now.
+  writer.handedOver.clear();
   writer.generation += 1;
 }
 
@@ -519,15 +595,31 @@ async function writePending(): Promise<void> {
  * it has none; every other box stays as stored, whichever window wrote it.
  * From here on, the hashes of the images `write` names are the ones this
  * window's boxes hold.
+ *
+ * A box a read handed over after `write`'s drafts were taken is not one it
+ * knows: it leaves the box as stored, and keeps for a write that holds it the
+ * box's baseline, its read-back hashes, and the clear, gone images and retry
+ * owed to it.
  */
 function land(
-  write: PendingWrite,
+  write: QueuedWrite,
   hashOf: (b64content: string) => string | undefined,
 ): void {
   const next = write.value.state.threadBoxes;
+  const unknown = new Map<string, HandedOver>();
+  for (const [box, handed] of writer.handedOver) {
+    if (handed.at > write.knows) unknown.set(box, handed);
+  }
+  const unknownBaseline = withBoxesOf({}, writer.baseline, unknown.values());
   const hashByInline = new Map<string, string>();
   for (const b64content of draftImages(write.value.state).keys()) {
     const hash = hashOf(b64content);
+    if (hash !== undefined) hashByInline.set(b64content, hash);
+  }
+  // Only the ones still held: an image store deleted since took them out.
+  const unknownImages = draftImages({ threadBoxes: unknownBaseline });
+  for (const b64content of unknownImages.keys()) {
+    const hash = writer.hashByInline.get(b64content);
     if (hash !== undefined) hashByInline.set(b64content, hash);
   }
   writer.hashByInline = hashByInline;
@@ -544,10 +636,11 @@ function land(
     writeFailed(write, error);
     return;
   }
+  // A forgotten bot has no box handed over left (`botBoxDraftsForgotten`).
   for (const botId of writer.forgotten) delete threadBoxes[botId];
   // Before this write's own boxes, which replace a box it changed anyway.
-  takeOutGoneImages(threadBoxes, partition);
-  const incomplete = putChangedBoxes(threadBoxes, next, partition);
+  takeOutGoneImages(threadBoxes, partition, unknown);
+  const incomplete = putChangedBoxes(threadBoxes, next, partition, unknown);
   try {
     localStorage.setItem(
       write.name,
@@ -557,20 +650,58 @@ function land(
     writeFailed(write, error);
     return;
   }
-  writer.baseline = next;
+  writer.baseline = withBoxesOf(next, unknownBaseline, unknown.values());
   writer.forgotten.clear();
-  writer.cleared.clear();
-  writer.gone = new Map();
-  writer.incomplete = incomplete;
+  writer.cleared = onlyBoxes(writer.cleared, unknown);
+  writer.gone = onlyBoxes(writer.gone, unknown);
+  writer.incomplete = new Map([
+    ...onlyBoxes(writer.incomplete, unknown),
+    ...incomplete,
+  ]);
+  writer.handedOver = unknown;
+}
+
+/** `drafts`, each of `boxes` as `from` holds it, or taken out where it holds nothing. */
+function withBoxesOf(
+  drafts: StoredBoxDrafts,
+  from: StoredBoxDrafts,
+  boxes: Iterable<BoxAt>,
+): StoredBoxDrafts {
+  const copy = editableDrafts(drafts);
+  for (const { botId, key } of boxes) {
+    putBox(copy, botId, key, from[botId]?.[key] ?? null);
+  }
+  return copy;
+}
+
+/** `drafts` with that box holding `draft`, or taken out for `null`. */
+function withBox(
+  drafts: StoredBoxDrafts,
+  botId: string,
+  key: string,
+  draft: StoredBoxDraft | null,
+): StoredBoxDrafts {
+  const copy = editableDrafts(drafts);
+  putBox(copy, botId, key, draft);
+  return copy;
+}
+
+/** The entries of `byBox` for the boxes `boxes` names. */
+function onlyBoxes<T>(
+  byBox: ReadonlyMap<string, T>,
+  boxes: ReadonlyMap<string, unknown>,
+): Map<string, T> {
+  return new Map([...byBox].filter(([box]) => boxes.has(box)));
 }
 
 /**
  * Storage could not be read for `write`, or refused it (full, say): it waits
- * again, for the next change to replace or the page hiding to try once more.
+ * again, for the next change to replace or the page hiding to try once more,
+ * with what its drafts knew when they were taken.
  * The error's name only: a quota error's message names the key, and the key
  * holds the account's id.
  */
-function writeFailed(write: PendingWrite, error: unknown): void {
+function writeFailed(write: QueuedWrite, error: unknown): void {
   appLogger.warn("[bot-box-drafts] draft write failed", {
     errorName: error instanceof Error ? error.name : "unknown",
   });
@@ -579,13 +710,16 @@ function writeFailed(write: PendingWrite, error: unknown): void {
 
 /**
  * Takes this window's own images the last read found gone out of each box as
- * stored, which may be another window's newer draft of it.
+ * stored, which may be another window's newer draft of it; not out of a box
+ * the write does not know (`unknown`).
  */
 function takeOutGoneImages(
   threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
   partition: string,
+  unknown: ReadonlyMap<string, HandedOver>,
 ): void {
-  for (const { botId, key, hashes } of writer.gone.values()) {
+  for (const [box, { botId, key, hashes }] of writer.gone) {
+    if (unknown.has(box)) continue;
     const draft = threadBoxes[botId]?.[key];
     if (draft === undefined || draft.content === null) continue;
     const content = withoutImages(draft.content, hashes, partition);
@@ -608,9 +742,10 @@ function putChangedBoxes(
   threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
   next: StoredBoxDrafts,
   partition: string,
+  unknown: ReadonlyMap<string, HandedOver>,
 ): Map<string, IncompleteBox> {
   const incomplete = new Map<string, IncompleteBox>();
-  for (const { botId, key } of changedBoxes(next, threadBoxes)) {
+  for (const { botId, key } of changedBoxes(next, threadBoxes, unknown)) {
     const draft = next[botId]?.[key];
     const box = boxKeyOf(botId, key);
     if (draft === undefined) {
@@ -701,11 +836,13 @@ function editableDrafts(
  * The boxes this window changed: those whose draft in `next` differs from
  * this window's baseline, one it cleared included; those the person cleared
  * or sent since the last write that landed; and those the last write left an
- * image out of, while `stored` still holds for them what it wrote.
+ * image out of, while `stored` still holds for them what it wrote. None the
+ * write does not know (`unknown`).
  */
 function changedBoxes(
   next: StoredBoxDrafts,
   stored: StoredBoxDrafts,
+  unknown: ReadonlyMap<string, HandedOver>,
 ): ReadonlyArray<BoxAt> {
   const { baseline } = writer;
   const candidates: BoxAt[] = [
@@ -720,7 +857,7 @@ function changedBoxes(
   const changed = new Map<string, BoxAt>();
   for (const { botId, key } of candidates) {
     const box = boxKeyOf(botId, key);
-    if (changed.has(box)) continue;
+    if (changed.has(box) || unknown.has(box)) continue;
     const incomplete = writer.incomplete.get(box);
     if (
       writer.cleared.has(box) ||
@@ -897,75 +1034,89 @@ async function readBack(hash: string): Promise<ReadBack> {
   );
 }
 
+/** A stored draft that names images whose bytes are stored apart. */
+interface DraftNamingImages extends StoredBoxDraft {
+  readonly content: JsonContent;
+}
+
+/** A box whose stored draft names images, to be read back. */
+interface WaitingBox extends BoxAt {
+  readonly draft: DraftNamingImages;
+}
+
+/** What one read of the stored drafts shares among its boxes' image reads. */
+interface BoxImagesRead {
+  /** The read's number: an account's retirement, a newer read or a wipe ends it. */
+  readonly read: number;
+  /** `landingImageDeletions()` as the read began. */
+  readonly deletions: number;
+  /** Each hash's read, once for every box that names it. */
+  readonly reads: Map<string, Promise<ReadBack>>;
+}
+
 /**
- * Every stored draft with its images' bytes back inline; a draft left with
- * nothing in it is dropped. An image this window stored and its image store
- * no longer holds is dropped. Any other image it cannot read back is left
- * out of the box and kept for its writes (`writer.unresolved`). Each image
- * read back is remembered under its hash, so a write that cannot wait keeps
- * it, unless the image store was deleted while they were read: the box still
- * gets them back, and its next write stores them again.
+ * Reads `box`'s images back, then hands the box over with them in one step:
+ * the store takes it, or refuses a box changed meanwhile, and only for a box
+ * it takes does the writer keep what the read found. An image this window
+ * stored and its image store no longer holds is dropped. Any other image it
+ * cannot read back is left out of the box and kept for its writes
+ * (`writer.unresolved`). Each image read back is remembered under its hash,
+ * so a write that cannot wait keeps it, unless the image store was deleted
+ * since the read began: the box still gets them back, and its next write
+ * stores them again.
  */
-async function inlineStoredImages(
-  state: PersistedBotBoxDrafts,
-  read: number,
-): Promise<PersistedBotBoxDrafts> {
-  const deletions = landingImageDeletions();
-  const hashes = new Set<string>();
-  for (const draft of eachDraft(state.threadBoxes)) {
-    if (draft.content === null) continue;
-    for (const hash of hashOnlyImageHashes(draft.content)) hashes.add(hash);
-  }
+async function readBoxImages(
+  imagesRead: BoxImagesRead,
+  { botId, key, draft }: WaitingBox,
+  handlers: BotBoxDraftsReadHandlers,
+): Promise<void> {
+  const { read, deletions, reads } = imagesRead;
   const found = new Map<string, ReadBack>();
   await Promise.all(
-    [...hashes].map(async (hash) => {
-      found.set(hash, await readBack(hash));
+    hashOnlyImageHashes(draft.content).map(async (hash) => {
+      let outcome = reads.get(hash);
+      if (outcome === undefined) {
+        outcome = readBack(hash);
+        reads.set(hash, outcome);
+      }
+      found.set(hash, await outcome);
     }),
   );
-  const partition = landingImagePartition();
-  const unresolved = new Map<string, UnresolvedBox>();
-  const gone = new Map<string, GoneImages>();
-  const threadBoxes = mapDrafts(state.threadBoxes, (draft, botId, key) => {
-    if (draft.content === null) return draft;
-    const out: RestoreOut = { left: [], gone: [] };
-    const content = restoreNode(draft.content, found, partition, out) ?? {
+  // A read overtaken meanwhile hands over nothing, nor touches what waits.
+  if (wiped() || read !== writer.readGeneration) return;
+  const out: RestoreOut = { left: [], gone: [] };
+  const restored = restoredDraft(
+    draft,
+    restoreNode(draft.content, found, landingImagePartition(), out) ?? {
       type: "doc",
       content: [],
-    };
-    if (out.left.length > 0) {
-      unresolved.set(boxKeyOf(botId, key), { botId, images: out.left });
-    }
-    if (out.gone.length > 0) {
-      gone.set(boxKeyOf(botId, key), {
-        botId,
-        key,
-        hashes: new Set(out.gone),
-      });
-    }
-    return restoredDraft(draft, content);
-  });
-  // A read overtaken meanwhile leaves the writer to the read that overtook it.
-  if (!wiped() && read === writer.readGeneration) {
-    if (deletions === landingImageDeletions()) {
-      const restored = new Map<string, string>();
-      for (const [hash, outcome] of found) {
-        if (outcome.kind === "bytes") restored.set(outcome.b64content, hash);
-      }
-      writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
-    }
-    const { keys, bots } = writer.droppedDuringRead;
-    writer.unresolved = new Map(
-      [...unresolved].filter(
-        ([box, { botId }]) => !keys.has(box) && !bots.has(botId),
-      ),
-    );
-    writer.gone = gone;
+    },
+  );
+  writer.handOvers += 1;
+  const at = writer.handOvers;
+  // The store taking the box is written, even where nothing is left of it and
+  // its drafts are otherwise as they were.
+  writer.lastThreadBoxes = null;
+  if (!handlers.boxRead({ botId, key, draft: restored })) return;
+  const box = boxKeyOf(botId, key);
+  writer.handedOver.set(box, { botId, key, at });
+  writer.baseline = withBox(writer.baseline, botId, key, restored);
+  if (out.left.length > 0) {
+    writer.unresolved.set(box, { botId, images: out.left });
   }
-  return { threadBoxes };
+  if (out.gone.length > 0) {
+    writer.gone.set(box, { botId, key, hashes: new Set(out.gone) });
+  }
+  if (deletions !== landingImageDeletions()) return;
+  const hashByInline = new Map(writer.hashByInline);
+  for (const [hash, outcome] of found) {
+    if (outcome.kind === "bytes") hashByInline.set(outcome.b64content, hash);
+  }
+  writer.hashByInline = hashByInline;
 }
 
 /** Whether `draft` names an image whose bytes are stored apart, to be read back. */
-function namesStoredImages(draft: StoredBoxDraft): boolean {
+function namesStoredImages(draft: StoredBoxDraft): draft is DraftNamingImages {
   return (
     draft.content !== null && hashOnlyImageHashes(draft.content).length > 0
   );

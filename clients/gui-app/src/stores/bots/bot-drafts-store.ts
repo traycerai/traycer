@@ -12,6 +12,7 @@ import {
   retireBotBoxDraftWrites,
   storedBotBoxDrafts,
   storedBoxDraftsOf,
+  type BotBoxDraftImagesRead,
   type BotBoxDraftsTextRead,
   type PersistedBotBoxDrafts,
   type StoredBoxDrafts,
@@ -234,9 +235,9 @@ interface BotDraftsState {
   readonly ownDraftsRead: boolean;
   /**
    * The boxes whose stored drafts name images still being read back, keyed
-   * as `threadBoxes`, which holds none of them until that read ends. Each
-   * waits on its own (`useKeptBoxDraft`): a read that never ends holds those
-   * boxes, never the tab.
+   * as `threadBoxes`, which holds none of them until its own images are. Each
+   * waits on its own (`useKeptBoxDraft`): a read that never ends holds that
+   * box, never the tab or another box.
    */
   readonly boxesReading: ByBot<BotReadingBox>;
   /** Keeps a card's draft; `null` drops it, and any failure's word of it. */
@@ -356,10 +357,12 @@ function withEntry<T>(
 
 /**
  * The boxes' drafts the store changed while the stored ones were being read,
- * by bot and box (`boxKey`), and the bots it forgot then: the merge keeps
- * none of the stored drafts they name, a cleared or forgotten one included,
- * and the merged drafts are written once read, since nothing was written
- * while they were read.
+ * by bot and box (`boxKey`), and the bots it forgot then, until that read
+ * ends: neither the merge nor a waiting box's images read back
+ * (`storedBoxRead`) brings back a stored draft they name, a cleared or
+ * forgotten one included, however many writes landed since. The merged
+ * drafts are written as soon as they are read, or their text is, since
+ * nothing was written before.
  */
 const changedDuringRead = { keys: new Set<string>(), bots: new Set<string>() };
 let readingStoredDrafts = false;
@@ -841,19 +844,25 @@ export const useBotDraftsStore = create<BotDraftsState>()(
     {
       ...PERSIST_OPTIONS,
       skipHydration: true,
-      storage: createBotBoxDraftStorage(storedTextRead),
+      storage: createBotBoxDraftStorage({
+        textRead: storedTextRead,
+        boxRead: storedBoxRead,
+      }),
       partialize: (state): PersistedBotBoxDrafts => ({
         threadBoxes: state.threadBoxes,
       }),
       merge: (persisted, current) => {
-        if (!isCurrentBotBoxDraftsRead(storedRead)) return current;
-        const stored = storedBoxDraftsOf(
-          isRecord(persisted) ? persisted.threadBoxes : null,
-        );
+        // Nothing stored, or every box handed over as its images were read
+        // back: the read ends with what the store holds.
+        if (!isRecord(persisted) || !isCurrentBotBoxDraftsRead(storedRead)) {
+          return current;
+        }
         return {
           ...current,
-          threadBoxes: mergedThreadBoxes(stored, current.threadBoxes),
-          boxesReading: {},
+          threadBoxes: mergedThreadBoxes(
+            storedBoxDraftsOf(persisted.threadBoxes),
+            current.threadBoxes,
+          ),
         };
       },
       onRehydrateStorage: () => {
@@ -873,6 +882,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           // over the stored.
           useBotDraftsStore.setState({ ownDraftsRead: true, boxesReading: {} });
           if (state === undefined || error !== undefined) return;
+          // Where the text read already started the writes, this does nothing.
           botBoxDraftsRead({
             // The account's own key, which the bridge set before this read.
             name:
@@ -891,16 +901,43 @@ export const useBotDraftsStore = create<BotDraftsState>()(
 /**
  * The account's stored drafts' text is read and some still have images to
  * read back: every other box's draft is the store's now and the tab shows
- * (`ownDraftsRead`), those boxes waiting on their own (`boxesReading`). A
- * read that an account's retirement or a newer read overtook changes nothing.
+ * (`ownDraftsRead`), those boxes waiting on their own (`boxesReading`). The
+ * store's changes are written from here on; a waiting box is in none of its
+ * drafts, so no write touches what is stored for it.
  */
 function storedTextRead(textRead: BotBoxDraftsTextRead): void {
-  if (!isCurrentBotBoxDraftsRead(textRead.read)) return;
   useBotDraftsStore.setState((state) => ({
     threadBoxes: mergedThreadBoxes(textRead.threadBoxes, state.threadBoxes),
     boxesReading: readingBoxesOf(textRead.waiting),
     ownDraftsRead: true,
   }));
+  botBoxDraftsRead({
+    name: useBotDraftsStore.persist.getOptions().name ?? PERSIST_OPTIONS.name,
+    version: PERSIST_OPTIONS.version,
+    threadBoxes: useBotDraftsStore.getState().threadBoxes,
+    changedDuringRead:
+      changedDuringRead.keys.size > 0 || changedDuringRead.bots.size > 0,
+  });
+}
+
+/**
+ * A waiting box's images are read back: the box holds its draft now, unless
+ * the person changed it, or forgot its bot, while the drafts were read (its
+ * waiting mark went with that change). Whether the store took it.
+ */
+function storedBoxRead(boxRead: BotBoxDraftImagesRead): boolean {
+  const { botId, key, draft } = boxRead;
+  if (
+    changedDuringRead.bots.has(botId) ||
+    changedDuringRead.keys.has(boxKey(botId, key))
+  ) {
+    return false;
+  }
+  useBotDraftsStore.setState((state) => ({
+    threadBoxes: withEntry(state.threadBoxes, botId, key, draft),
+    boxesReading: withEntry(state.boxesReading, botId, key, null),
+  }));
+  return true;
 }
 
 /**
