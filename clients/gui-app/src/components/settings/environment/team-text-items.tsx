@@ -1,4 +1,13 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -414,7 +423,7 @@ interface TeamTextEditorProps {
   readonly pending: ConfigurationItemWrite | null;
   readonly busy: boolean;
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
-  readonly onUnmountWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: ConfigurationItemWrites["writeOnUnmount"];
   readonly saving: boolean;
   readonly accepted: boolean;
   readonly kind: "variable" | "env_override";
@@ -434,6 +443,9 @@ function TeamTextEditor(props: TeamTextEditorProps): ReactNode {
     <InlineTeamTextEditor {...props} />
   );
 }
+
+/** The phone writes only on its Save, the person's own write: no unmount write. */
+const PHONE_SAVE_ONLY: RefObject<EnvironmentCloud | null> = { current: null };
 
 function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const canEdit = useCanEditConfiguration();
@@ -465,7 +477,15 @@ function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     if (props.busy) return;
     if (props.item !== null) {
       commitSavedText(
-        { ...props, name, value, saved, displayName, snapName: setName },
+        {
+          ...props,
+          name,
+          value,
+          saved,
+          displayName,
+          typedOn: PHONE_SAVE_ONLY,
+          snapName: setName,
+        },
         "person",
       );
       if (value === saved) dismiss();
@@ -673,7 +693,13 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const removing =
     props.saving && props.pending !== null && props.pending.action === "remove";
+  // The sign-in the dirty text was typed on: an unmount's write goes only on
+  // it. Taken at the edit, kept while that sign-in lasts.
+  const cloud = useEnvironmentCloud();
+  const typedOn = useRef<EnvironmentCloud | null>(null);
   const changeValue = (next: string): void => {
+    if (typedOn.current === null || !typedOn.current.onOriginSignIn())
+      typedOn.current = cloud === null ? null : cloud();
     setValue(next);
     if (props.draft !== null)
       props.onDraftChange({ ...props.draft, value: { value: next } });
@@ -691,6 +717,7 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     onDiscardDraft: props.onDiscardDraft,
     onWrite: props.onWrite,
     onUnmountWrite: props.onUnmountWrite,
+    typedOn,
     snapName: setName,
   };
   const snapRef = useRef(snapshot);
@@ -792,7 +819,8 @@ interface SavedTextCommit {
   readonly kind: "variable" | "env_override";
   readonly onDiscardDraft: ConfigurationItemWrites["discardDraft"];
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
-  readonly onUnmountWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: ConfigurationItemWrites["writeOnUnmount"];
+  readonly typedOn: RefObject<EnvironmentCloud | null>;
   readonly snapName: (name: string) => void;
 }
 
@@ -816,7 +844,10 @@ function commitSavedText(
     kind: snap.kind,
     draft: snap.draft,
     onDiscardDraft: snap.onDiscardDraft,
-    onWrite: trigger === "person" ? snap.onWrite : snap.onUnmountWrite,
+    onWrite:
+      trigger === "person"
+        ? snap.onWrite
+        : (write) => snap.onUnmountWrite(write, snap.typedOn.current),
     key: snap.item.key,
     os: snap.item.os,
     value: snap.value,
