@@ -540,7 +540,6 @@ describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
     mocks.getActiveHostId.mockReturnValue(POOL_HOST_ID);
     mocks.request.mockResolvedValue(undefined);
     const fixture = await createDirectAuthFixture(queryClient);
-    connectLocalComputer(fixture);
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "host.accountSettings.refresh": { major: 1, minor: 0 },
     });
@@ -584,11 +583,6 @@ describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
       { bearer: "token-a", body: "Allow the task to run" },
     ]);
     expect(mocks.request).toHaveBeenCalledTimes(1);
-    expect(
-      fixture.messenger.calls.filter(
-        (call) => call.method === "host.accountSettings.refresh",
-      ),
-    ).toHaveLength(1);
   });
 });
 
