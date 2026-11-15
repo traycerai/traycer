@@ -30,6 +30,7 @@ import type {
   EpicCanvasTileRef,
   EpicTerminalRef,
 } from "@/stores/epics/canvas/types";
+import { TerminalViewerFaces } from "@/components/terminals/terminal-viewer-faces";
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
@@ -258,6 +259,12 @@ function MobileCurrentTileBarBody(
             {title}
           </Button>
         )}
+        {tile.type === "terminal" || tile.type === "terminal-agent" ? (
+          <TerminalViewerFaces
+            instanceId={tile.instanceId}
+            hostId={tile.hostId}
+          />
+        ) : null}
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
         {onSwitch === null ? null : (
           <Button

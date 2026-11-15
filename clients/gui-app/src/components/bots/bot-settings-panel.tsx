@@ -83,16 +83,21 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * Every write goes through the tab host's client - the host `bot.open` chose
- * to serve the tab - with nothing gated on which host that is: a host that
- * cannot make the change refuses it, and the refusal is shown in place,
- * under the control. The stream snapshot, not the mutation's answer, is what
- * the header re-renders from.
+ * The Model group and Delete are drawn only for a reader who may change the
+ * bot's environment (`mayChange`): for a team's Viewer neither is drawn, and
+ * nothing stands in their place. Every write goes through the tab host's
+ * client - the host `bot.open` chose to serve the tab - with nothing gated on
+ * which host that is: a host that cannot make the change refuses it, and the
+ * refusal is shown in place, under the control, as it is when the reader's
+ * role changed after the panel opened. The stream snapshot, not the
+ * mutation's answer, is what the header re-renders from.
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
+  /** The reader may change the bot's environment: its run settings and Delete. */
+  readonly mayChange: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
   readonly channelId: string | null;
   /** The bots of the bot's environment; `null` until the list answers. */
@@ -101,7 +106,8 @@ export function BotChannelSettingsPanel(props: {
   /** The bot was deleted: the surface moves to its default channel. */
   readonly onDeleted: () => void;
 }): ReactNode {
-  const { bot, personal, channelId, environmentBots, onClose } = props;
+  const { bot, personal, mayChange, channelId, environmentBots, onClose } =
+    props;
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   // Opening the panel takes focus into it, and Escape inside it closes it.
@@ -156,7 +162,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
-        <BotRunSettingsForm bot={bot} />
+        {mayChange ? <BotRunSettingsForm bot={bot} /> : null}
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -165,7 +171,9 @@ export function BotChannelSettingsPanel(props: {
         )}
         <BotSlackSettings botId={bot.botId} />
         <BotUsageSection bot={bot} onClose={onClose} />
-        <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        {mayChange ? (
+          <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        ) : null}
       </div>
     </aside>
   );

@@ -1,5 +1,6 @@
 import { create, useStore } from "zustand";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
+import { useBotTurnMayChange } from "@/hooks/bots/use-reader-may-change-bot";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { fallbackComposerCardVisible } from "./fallback-state";
@@ -177,9 +178,15 @@ export function useSettledRoutingCardOffersSwitch(input: {
   );
   const store = handle === null ? emptySlice : handle.store;
   const refusal = useFailedTurnRefusal({ hostId, chatId });
+  // The card's own gate on a bot's chat (`fallback-manual-rungs.tsx`): a
+  // Switch it does not offer does not hold the banner back.
+  const mayChangeBot = useBotTurnMayChange(epicId);
   const { harnessId, profileId } = account;
-  return useStore(store, (state) =>
-    settledRoutingCardOffersSwitch(state, refusal, { harnessId, profileId }),
+  return useStore(
+    store,
+    (state) =>
+      mayChangeBot &&
+      settledRoutingCardOffersSwitch(state, refusal, { harnessId, profileId }),
   );
 }
 

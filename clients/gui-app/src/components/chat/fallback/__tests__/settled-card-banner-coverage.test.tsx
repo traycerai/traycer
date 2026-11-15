@@ -19,11 +19,13 @@ import {
   messageSchema,
   type Message,
 } from "@traycer/protocol/persistence/epic/messages";
+import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
 import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
+import { BotMayChangeContext } from "@/hooks/bots/use-reader-may-change-bot";
 import {
   useComposerRateLimitAdvisory,
   type ComposerBannerAccount,
@@ -853,5 +855,33 @@ describe("two cards for one turn (two tiles of one chat)", () => {
     const fresh = tileOf(render(<Scene turnIds={[TURN_ID]} />));
     expect(fresh.hasSwitch()).toBe(true);
     expect(fresh.advisory()).toBe("hidden");
+  });
+});
+
+describe("the card's Switch and the composer's advisory on a bot's own chat", () => {
+  /** The bot's own chat: the bot's id is the epic id, as the bot's tab draws it. */
+  function onBotsChat(mayChange: boolean) {
+    seedSettledCard();
+    return render(
+      <BotIdentityContext
+        value={{ botId: EPIC_ID, title: "Release Bot", owner: null }}
+      >
+        <BotMayChangeContext value={mayChange}>
+          <Scene turnIds={[TURN_ID]} />
+        </BotMayChangeContext>
+      </BotIdentityContext>,
+    );
+  }
+
+  it("a reader who may not change the bot is offered no Switch, and the advisory shows", () => {
+    onBotsChat(false);
+
+    expectHalves({ cardDrawsSwitch: false, advisory: "shown" });
+  });
+
+  it("a reader who may change the bot is offered the Switch, and the advisory is held back", () => {
+    onBotsChat(true);
+
+    expectHalves({ cardDrawsSwitch: true, advisory: "hidden" });
   });
 });
