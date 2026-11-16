@@ -1267,6 +1267,10 @@ function HomeWorkspaceRows(props: {
     () =>
       baseItems.map((item) => {
         if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        // Recent is the selected host's list. A row this host has not
+        // confirmed (another machine's path, or metadata still loading) is
+        // removed without being recorded there.
+        if (item.unresolved || item.metadataPending) return item;
         const removeFromActive = item.onRemove;
         return {
           ...item,
