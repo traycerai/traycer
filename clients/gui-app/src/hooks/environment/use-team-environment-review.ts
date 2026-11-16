@@ -1,5 +1,6 @@
 import {
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -99,6 +100,37 @@ interface TeamReviewPress {
   readonly allowed: boolean;
 }
 
+function executeTeamReviewChoice(
+  queries: QueryClient,
+  press: TeamReviewPress,
+): Promise<ReviewChoiceOutcome> {
+  return withHostQueryErrorBoundary(
+    APPLY_METHOD,
+    async (): Promise<ReviewChoiceOutcome> => {
+      if (press.entry === null) return { outcome: "gone" };
+      if (!press.allowed) return { outcome: "forbidden" };
+      try {
+        return await applyReviewChoice(
+          press.cloud,
+          press.environmentId,
+          press.entry,
+          press.choice,
+        );
+      } catch (error) {
+        throw environmentCloudHostError(APPLY_METHOD, error);
+      } finally {
+        if (press.cloud.onOriginSignIn()) {
+          invalidateConfigurationReads(
+            queries,
+            press.environmentId,
+            REVISION_MOVED_READS,
+          );
+        }
+      }
+    },
+  );
+}
+
 export function useTeamEnvironmentReviewApply(
   environmentId: string,
   viewerId: string,
@@ -155,31 +187,7 @@ export function useTeamEnvironmentReviewApply(
         viewerId,
       ),
       mutationFn: (_variables, press) =>
-        withHostQueryErrorBoundary(
-          APPLY_METHOD,
-          async (): Promise<ReviewChoiceOutcome> => {
-            if (press.entry === null) return { outcome: "gone" };
-            if (!press.allowed) return { outcome: "forbidden" };
-            try {
-              return await applyReviewChoice(
-                press.cloud,
-                press.environmentId,
-                press.entry,
-                press.choice,
-              );
-            } catch (error) {
-              throw environmentCloudHostError(APPLY_METHOD, error);
-            } finally {
-              if (press.cloud.onOriginSignIn()) {
-                invalidateConfigurationReads(
-                  queries,
-                  press.environmentId,
-                  REVISION_MOVED_READS,
-                );
-              }
-            }
-          },
-        ),
+        executeTeamReviewChoice(queries, press),
     },
   );
 }
