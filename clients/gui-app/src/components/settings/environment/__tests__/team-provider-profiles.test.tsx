@@ -15,6 +15,7 @@ import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-setting
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
+  mountTeamPage,
   mountTeamPageThroughBoundary,
   mountPersonalProvidersThroughBoundary,
   mountVerifiedTeamProvidersPage,
