@@ -30,6 +30,7 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
+import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { TaskFocusBoundary } from "@/components/bots/task-focus-boundary";
@@ -158,12 +159,17 @@ export function BotActivityPage(props: {
     )
       lastTaskFocus.current = null;
   }, []);
+  const isPaneFocused = usePaneFocusProbe();
   const restoreTaskFocus = useCallback((): void => {
     const previous = lastTaskFocus.current;
     const activity = activityRef.current;
     if (previous === null || activity === null || previous.target.isConnected)
       return;
     if (document.activeElement !== document.body) return;
+    if (!isPaneFocused()) {
+      lastTaskFocus.current = null;
+      return;
+    }
     const row = Array.from(
       activity.querySelectorAll<HTMLElement>("[data-task-id]"),
     ).find((element) => element.dataset.taskId === previous.taskId);
@@ -182,7 +188,7 @@ export function BotActivityPage(props: {
       activity;
     lastTaskFocus.current = null;
     target.focus();
-  }, []);
+  }, [isPaneFocused]);
   useLayoutEffect(() => {
     restoreTaskFocus();
   });
@@ -542,18 +548,23 @@ function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
     [agents, taskId],
   );
   return (
-    <ChatIndicatorHostScopes
-      freshnessMode="activity"
-      scopes={scopes}
-      chatEpicIds={chatEpicIds}
+    <TaskFocusBoundary
+      beforeChange={props.onBeforeTaskChange}
+      afterChange={props.onReportingRemoved}
     >
-      <TaskFocusBoundary
-        beforeChange={props.onBeforeTaskChange}
-        afterChange={props.onReportingRemoved}
+      <ChatIndicatorHostScopes
+        freshnessMode="activity"
+        scopes={scopes}
+        chatEpicIds={chatEpicIds}
       >
-        <ActiveTaskRowBody {...props} agents={agents} />
-      </TaskFocusBoundary>
-    </ChatIndicatorHostScopes>
+        <TaskFocusBoundary
+          beforeChange={props.onBeforeTaskChange}
+          afterChange={props.onReportingRemoved}
+        >
+          <ActiveTaskRowBody {...props} agents={agents} />
+        </TaskFocusBoundary>
+      </ChatIndicatorHostScopes>
+    </TaskFocusBoundary>
   );
 }
 
@@ -656,16 +667,21 @@ function ActiveTaskRowBody(
           onReportingRemoved={props.onReportingRemoved}
         />
       </div>
-      {expanded && agents !== null ? (
-        <TaskAgentRows
-          taskId={taskId}
-          agents={agents}
-          agentStates={agentStates}
-          tiers={tiers}
-          inputNeeded={inputNeeded}
-          waitingFresh={task.inputNeeded !== null}
-        />
-      ) : null}
+      <TaskFocusBoundary
+        beforeChange={props.onBeforeTaskChange}
+        afterChange={props.onReportingRemoved}
+      >
+        {expanded && agents !== null ? (
+          <TaskAgentRows
+            taskId={taskId}
+            agents={agents}
+            agentStates={agentStates}
+            tiers={tiers}
+            inputNeeded={inputNeeded}
+            waitingFresh={task.inputNeeded !== null}
+          />
+        ) : null}
+      </TaskFocusBoundary>
     </div>
   );
 }

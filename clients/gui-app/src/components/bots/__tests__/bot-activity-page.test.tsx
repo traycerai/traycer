@@ -8,7 +8,7 @@
  * replaced: the host's query transport, the task-title read, host
  * reachability, the member actions' writes and navigation.
  */
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -39,6 +39,7 @@ import {
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import {
   __resetAgentActivityStoreForTests,
@@ -4117,6 +4118,295 @@ describe("<BotActivityPage /> a row that leaves through the activity store alone
 
     expect(rowIds()).toEqual([]);
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("<BotActivityPage /> an archived agent that stops working under a task row", () => {
+  // An archived agent is listed under its task only while it works. Moving the
+  // one working agent from it to a live sibling leaves the task's working count
+  // at one, so the row's parent is not rendered again: only the row's own
+  // subscription to the activity store changes which agents are shown. Neither
+  // task here has a reporting control to take focus back, and nothing but the
+  // activity store changes.
+  const AGENTS: ReadonlyArray<WarmAgent> = [
+    { id: "a-archived", parentId: null, title: "Archived", archivedAt: 5 },
+    { id: "a-live", parentId: null, title: "Live", archivedAt: null },
+  ];
+  const agentControl = (agentId: string): HTMLButtonElement | null =>
+    row("t-w").querySelector<HTMLButtonElement>(`[data-agent-id="${agentId}"]`);
+  const mountExpanded = async (user: UserEvent): Promise<HTMLButtonElement> => {
+    working({ "t-w": { working: ["a-archived"], turn: ["a-archived"] } });
+    warmTask("t-w", AGENTS);
+    render(
+      <Harness
+        threads={[]}
+        tasks={[task("t-w", { inputNeeded: [] })]}
+        boundHere={false}
+        notificationSubscriptions={null}
+      />,
+    );
+    await user.click(
+      within(row("t-w")).getByTestId("bot-activity-task-chevron"),
+    );
+    const archived = agentControl("a-archived");
+    if (archived === null)
+      throw new Error("the working archived agent is not listed");
+    expect(agentControl("a-live")).not.toBeNull();
+    return archived;
+  };
+  const moveWorkToLive = (): void => {
+    act(() => working({ "t-w": { working: ["a-live"], turn: ["a-live"] } }));
+  };
+
+  it("hands focus from the archived agent that is no longer listed to the row open button", async () => {
+    const user = userEvent.setup();
+    const archived = await mountExpanded(user);
+    archived.focus();
+    expect(document.activeElement).toBe(archived);
+
+    moveWorkToLive();
+
+    expect(agentControl("a-archived")).toBeNull();
+    expect(agentControl("a-live")).not.toBeNull();
+    expect(archived.isConnected).toBe(false);
+    expect(document.activeElement).toBe(
+      within(row("t-w")).getByTestId("bot-activity-task-open"),
+    );
+  });
+
+  it("leaves focus on the body after a direct blur from the archived agent that is then no longer listed", async () => {
+    const user = userEvent.setup();
+    const archived = await mountExpanded(user);
+    archived.focus();
+    archived.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    moveWorkToLive();
+
+    expect(agentControl("a-archived")).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("<BotActivityPage /> an agent list that goes away under a focused agent through the task's session", () => {
+  it("hands focus from a focused agent to the row open button when the task's session closes", async () => {
+    const user = userEvent.setup();
+    warmTask("t-w", [
+      { id: "a-one", parentId: null, title: "First", archivedAt: null },
+    ]);
+    render(
+      <Harness
+        threads={[]}
+        tasks={[task("t-w", { inputNeeded: [] })]}
+        boundHere={false}
+        notificationSubscriptions={null}
+      />,
+    );
+    await user.click(
+      within(row("t-w")).getByTestId("bot-activity-task-chevron"),
+    );
+    const agent = row("t-w").querySelector<HTMLButtonElement>(
+      '[data-agent-id="a-one"]',
+    );
+    if (agent === null) throw new Error("the agent is not listed");
+    agent.focus();
+
+    act(() => coolAllEpics());
+
+    expect(row("t-w").querySelector('[data-agent-id="a-one"]')).toBeNull();
+    expect(document.activeElement).toBe(
+      within(row("t-w")).getByTestId("bot-activity-task-open"),
+    );
+  });
+});
+
+describe("<BotActivityPage /> what the cloud notification feed takes off a task row alone", () => {
+  it("hands focus from the row open button of a task whose unseen result is read to the Activity section", () => {
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-u", "chat-t-u", "host-remote")]);
+    render(
+      <Harness
+        threads={[]}
+        tasks={[
+          task("t-u", {
+            cadence: { kind: "none" },
+            inputNeeded: [],
+            lastCheckinAt: NOW,
+          }),
+        ]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(rowIds()).toEqual(["t-u"]);
+    within(row("t-u")).getByTestId("bot-activity-task-open").focus();
+
+    act(() => holdCloudFeed([]));
+
+    expect(rowIds()).toEqual([]);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("bot-activity-page"),
+    );
+  });
+
+  it.each([
+    [
+      "hands focus from an archived agent whose local failure is cleared, in a task that stays listed, to the row open button",
+      false,
+    ],
+    [
+      "leaves focus on the body after a direct blur from an archived agent whose local failure is then cleared",
+      true,
+    ],
+  ] as const)("%s", async (_name, blurred) => {
+    const user = userEvent.setup();
+    mocks.state.feedMode = "cloud";
+    working({ "t-u": { working: ["a-live"], turn: ["a-live"] } });
+    warmTask("t-u", [
+      { id: "a-archived", parentId: null, title: "Archived", archivedAt: 5 },
+      { id: "a-live", parentId: null, title: "Live", archivedAt: null },
+    ]);
+    localFailure("t-u", "a-archived", "host-a");
+    render(
+      <Harness
+        threads={[]}
+        tasks={[task("t-u", { inputNeeded: [] })]}
+        boundHere={false}
+        notificationSubscriptions={null}
+      />,
+    );
+    await user.click(
+      within(row("t-u")).getByTestId("bot-activity-task-chevron"),
+    );
+    const archived = row("t-u").querySelector<HTMLButtonElement>(
+      '[data-agent-id="a-archived"]',
+    );
+    if (archived === null)
+      throw new Error("the archived agent with a failure is not listed");
+    archived.focus();
+    if (blurred) archived.blur();
+
+    act(() => useAppLocalNotificationsStore.getState().clearAll());
+
+    expect(row("t-u").querySelector('[data-agent-id="a-archived"]')).toBeNull();
+    expect(document.activeElement).toBe(
+      blurred
+        ? document.body
+        : within(row("t-u")).getByTestId("bot-activity-task-open"),
+    );
+  });
+});
+
+describe("<BotActivityPage /> a pane that stops being the focused one in the same commit as a removal", () => {
+  // The real boundary: it publishes the pane's activity and conceals only its
+  // own portal host, not the page. Focusing something here would make the pane
+  // the focused one again (its focus capture), so a pane that is no longer
+  // focused must not be handed focus back.
+  const scene = {
+    setFocused: (_focused: boolean): void => undefined,
+    activations: 0,
+  };
+  function Pane(props: { readonly children: ReactNode }): ReactNode {
+    const [focused, setFocused] = useState(true);
+    useEffect(() => {
+      scene.setFocused = setFocused;
+    }, []);
+    return (
+      <div
+        onFocusCapture={() => {
+          if (!focused) scene.activations += 1;
+        }}
+      >
+        <SurfacePresentationBoundary visible focused={focused}>
+          {props.children}
+        </SurfacePresentationBoundary>
+      </div>
+    );
+  }
+  beforeEach(() => {
+    scene.activations = 0;
+  });
+  const mountListed = (): HTMLElement => {
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([]);
+    working({ "t-working": { working: ["a-1"], turn: ["a-1"] } });
+    render(
+      <Pane>
+        <Harness
+          threads={[]}
+          tasks={[
+            task("t-working", {
+              cadence: { kind: "none" },
+              inputNeeded: [],
+              lastCheckinAt: NOW,
+            }),
+          ]}
+          boundHere
+          notificationSubscriptions={null}
+        />
+      </Pane>,
+    );
+    const open = within(row("t-working")).getByTestId("bot-activity-task-open");
+    open.focus();
+    return open;
+  };
+
+  it("hands focus to the Activity section when the pane stays the focused one", () => {
+    mountListed();
+
+    act(() => working({}));
+
+    expect(rowIds()).toEqual([]);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("bot-activity-page"),
+    );
+    expect(scene.activations).toBe(0);
+  });
+
+  it("leaves focus on the body, and the pane unactivated, when the focused row leaves as the pane stops being the focused one", () => {
+    mountListed();
+
+    act(() => {
+      working({});
+      scene.setFocused(false);
+    });
+
+    expect(rowIds()).toEqual([]);
+    expect(document.activeElement).toBe(document.body);
+    expect(scene.activations).toBe(0);
+  });
+
+  it("leaves focus on the body, and the pane unactivated, when the focused reporting trigger's methods are lost as the pane stops being the focused one", () => {
+    mocks.state.realManifest = true;
+    act(() =>
+      recordNegotiatedHostMethods(HOST_ID, ["host.status", ...REPORT_METHODS]),
+    );
+    render(
+      <Pane>
+        <Harness
+          threads={[]}
+          tasks={[periodic("t-every", {})]}
+          boundHere
+          notificationSubscriptions={null}
+        />
+      </Pane>,
+    );
+    within(row("t-every"))
+      .getByRole("button", { name: "Reporting actions" })
+      .focus();
+
+    act(() => {
+      recordNegotiatedHostMethods(HOST_ID, ["host.status"]);
+      scene.setFocused(false);
+    });
+
+    expect(
+      within(row("t-every")).queryByRole("button", {
+        name: "Reporting actions",
+      }),
+    ).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    expect(scene.activations).toBe(0);
   });
 });
 

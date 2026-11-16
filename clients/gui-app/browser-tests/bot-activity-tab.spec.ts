@@ -400,12 +400,19 @@ test("a focused row that leaves through the activity plane alone hands focus to 
   expect(await describeActiveIn(page, ROSTER_ROW)).toBe("the Activity section");
 });
 
-// The pane's own presentation loss: the real host presentation blurs the
-// focused control when its pane is no longer the one shown (a hidden, inert
-// host keeps DOM focus otherwise), and a removal after that must leave focus
-// on the body. jsdom cannot show it: a blur inside a hidden host does nothing
-// there.
-test("a row control focused when its pane is hidden leaves focus on the body when the row then leaves through the activity plane", async ({
+// The pane: the real presentation boundary conceals only its own portal host,
+// so a focused control in the tab keeps DOM focus when the pane stops being the
+// focused one. When a removal lands in that same commit, nothing may be handed
+// focus back inside the pane (its focus capture would reactivate it): focus
+// ends on the body and the pane stays as it is.
+async function paneActivations(page: Page): Promise<number> {
+  const count: unknown = await page.evaluate((): unknown =>
+    Reflect.get(window, "paneActivations"),
+  );
+  return z.number().parse(count);
+}
+
+test("a row control focused when its pane stops being the focused one in the commit that removes the row leaves focus on the body and the pane unactivated", async ({
   page,
 }) => {
   await page.goto(`${fixture("bot-activity-tab")}?working=1&pane=1`);
@@ -413,17 +420,15 @@ test("a row control focused when its pane is hidden leaves focus on the body whe
   await expect(row).toHaveCount(1);
   await row.locator(OPEN).focus();
 
-  await callHook(page, "hidePane", []);
-  await nextFrames(page, 2);
-  expect(await describeActiveIn(page, ROSTER_ROW)).toBe("body");
-  await callHook(page, "endWorkingRow", []);
+  await callHook(page, "unfocusPaneAnd", ["endWorkingRow", []]);
   await nextFrames(page, 2);
 
   await expect(row).toHaveCount(0);
   expect(await describeActiveIn(page, ROSTER_ROW)).toBe("body");
+  expect(await paneActivations(page)).toBe(0);
 });
 
-test("a reporting trigger focused when its pane is hidden leaves focus on the body when its methods are then lost through the negotiated manifest", async ({
+test("a reporting trigger focused when its pane stops being the focused one in the commit that removes its methods leaves focus on the body and the pane unactivated", async ({
   page,
 }) => {
   await page.goto(`${fixture("bot-activity-tab")}?pane=1`);
@@ -434,12 +439,51 @@ test("a reporting trigger focused when its pane is hidden leaves focus on the bo
   await expect(trigger).toHaveCount(1);
   await trigger.focus();
 
-  await callHook(page, "hidePane", []);
-  await nextFrames(page, 2);
-  expect(await describeActiveIn(page, ROSTER_ROW)).toBe("body");
-  await callHook(page, "offerBotTaskMethods", [[]]);
+  await callHook(page, "unfocusPaneAnd", ["offerBotTaskMethods", [[]]]);
   await nextFrames(page, 2);
 
   await expect(trigger).toHaveCount(0);
   expect(await describeActiveIn(page, ROSTER_ROW)).toBe("body");
+  expect(await paneActivations(page)).toBe(0);
+});
+
+// The host's own chat indicator is the only thing that keeps an archived agent
+// listed under its task here, and the host answering it differently is the only
+// thing that changes: the row's chat-indicator scope reads it again, while the
+// task, its agents, the notifications and the working count stay as they were.
+const ARCHIVED = '[data-agent-id="agent-archived"]';
+
+async function openArchivedAgent(page: Page): Promise<void> {
+  await page.goto(`${fixture("bot-activity-tab")}?archived=1`);
+  await recordFocus(page);
+  await focusAgentIn(page, RELEASE_ROW, "agent-archived");
+}
+
+test("a focused archived agent that the host's chat indicator no longer lists hands focus to the task's open button", async ({
+  page,
+}) => {
+  await openArchivedAgent(page);
+
+  await callHook(page, "clearArchivedIndicator", []);
+
+  await expect(page.locator(ARCHIVED)).toHaveCount(0);
+  await readFocusRecord(page);
+  expect(await describeActive(page)).toBe("the task's open button");
+});
+
+test("focus let go of before the host's chat indicator stops listing the archived agent stays on the body", async ({
+  page,
+}) => {
+  await openArchivedAgent(page);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
+  });
+  expect(await describeActive(page)).toBe("body");
+
+  await callHook(page, "clearArchivedIndicator", []);
+
+  await expect(page.locator(ARCHIVED)).toHaveCount(0);
+  await readFocusRecord(page);
+  expect(await describeActive(page)).toBe("body");
 });

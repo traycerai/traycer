@@ -1,4 +1,11 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   createMemoryHistory,
@@ -22,7 +29,7 @@ import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transp
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { usePanePortalHostPresentation } from "@/components/epic-tabs/pane-visibility-context";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -78,8 +85,11 @@ useSettingsStore
 const empty = params.get("empty") === "1";
 // `?working=1` lists one more task, kept in the list only by a working agent.
 const withWorking = params.get("working") === "1";
-// `?pane=1` seats the tab in a pane host that `hidePane()` stops presenting.
+// `?pane=1` seats the tab in a pane that `unfocusPaneAnd` stops focusing.
 const withPane = params.get("pane") === "1";
+// `?archived=1` adds an archived agent to the release task's session: only the
+// host's chat indicator for it keeps it listed under the task.
+const withArchivedAgent = params.get("archived") === "1";
 
 const localHost = {
   hostId: HOST_ID,
@@ -230,10 +240,9 @@ const EPIC_INDICATORS: Readonly<
 > = {
   "task-ipad": indicator({ unreadDone: true, unreadCount: 1 }),
 };
-const CHAT_INDICATORS: Readonly<
-  Record<string, HostNotificationsIndicatorState>
-> = {
+const CHAT_INDICATORS: Record<string, HostNotificationsIndicatorState> = {
   "agent-writer": indicator({ pendingApproval: true, unreadCount: 1 }),
+  "agent-archived": indicator({ pendingApproval: true, unreadCount: 1 }),
 };
 
 const thread: BotThreadSummary = {
@@ -354,6 +363,7 @@ type SessionAgent = {
   readonly title: string;
   readonly parentId: string | null;
   readonly updatedAt: number;
+  readonly archivedAt: number | null;
 };
 
 const RELEASE_AGENTS: ReadonlyArray<SessionAgent> = [
@@ -362,20 +372,31 @@ const RELEASE_AGENTS: ReadonlyArray<SessionAgent> = [
     title: "Release notes lead",
     parentId: null,
     updatedAt: NOW - 30 * MINUTE,
+    archivedAt: null,
   },
   {
     id: "agent-writer",
     title: "Draft writer",
     parentId: "agent-lead",
     updatedAt: NOW - 2 * MINUTE,
+    archivedAt: null,
   },
   {
     id: "agent-reader",
     title: "Changelog reader",
     parentId: "agent-lead",
     updatedAt: NOW - 11 * MINUTE,
+    archivedAt: null,
   },
 ];
+
+const ARCHIVED_AGENT: SessionAgent = {
+  id: "agent-archived",
+  title: "Archived helper",
+  parentId: "agent-lead",
+  updatedAt: NOW - 40 * MINUTE,
+  archivedAt: NOW - 30 * MINUTE,
+};
 
 const ROSTER_AGENTS: ReadonlyArray<SessionAgent> = [
   {
@@ -383,12 +404,14 @@ const ROSTER_AGENTS: ReadonlyArray<SessionAgent> = [
     title: "Shard A",
     parentId: null,
     updatedAt: NOW - 4 * MINUTE,
+    archivedAt: null,
   },
   {
     id: "agent-shard-b",
     title: "Shard B",
     parentId: null,
     updatedAt: NOW - 6 * MINUTE,
+    archivedAt: null,
   },
 ];
 
@@ -439,7 +462,7 @@ function openSession(
       isTitleEditedByUser: false,
       docResident: false,
       settings: null,
-      archivedAt: null,
+      archivedAt: agent.archivedAt,
     };
     if (agent.parentId !== null) {
       childrenByParent[agent.parentId] = [
@@ -492,7 +515,11 @@ function openSession(
   });
 }
 if (!empty) {
-  openSession("task-release", RELEASE_AGENTS, "removeReleaseAgent");
+  openSession(
+    "task-release",
+    withArchivedAgent ? [...RELEASE_AGENTS, ARCHIVED_AGENT] : RELEASE_AGENTS,
+    "removeReleaseAgent",
+  );
   openSession("task-roster", ROSTER_AGENTS, "removeRosterAgent");
 }
 // What a spec drives from the page: the host's negotiated methods, which gate
@@ -500,6 +527,19 @@ if (!empty) {
 Object.defineProperty(window, "offerBotTaskMethods", {
   value: (methods: ReadonlyArray<string>): void => {
     recordNegotiatedHostMethods(HOST_ID, ["host.status", ...methods]);
+  },
+});
+// The host answering the archived agent's chat indicator differently: the query the
+// row's own chat-indicator scope reads is the only one told to read again, so
+// the page's parent (which asks about the tasks, not their agents) is not
+// rendered again.
+Object.defineProperty(window, "clearArchivedIndicator", {
+  value: (): void => {
+    Reflect.deleteProperty(CHAT_INDICATORS, "agent-archived");
+    void queryClient.invalidateQueries({
+      predicate: (query) =>
+        JSON.stringify(query.queryKey).includes("agent-archived"),
+    });
   },
 });
 Object.defineProperty(window, "endWorkingRow", {
@@ -596,23 +636,43 @@ const runnerHost = new MockRunnerHost({
   traycerCli: new MockTraycerCli(),
 });
 
-/** What a pane does to its tab: the real host presentation, hidden on request. */
+/**
+ * The tab in a pane the real way: `SurfacePresentationBoundary` publishes the
+ * pane's activity and conceals only its own portal host, never the tab.
+ * `unfocusPaneAnd(hook, args)` makes the pane no longer the focused one in the
+ * same commit as one of the fixture's own store writes; a focus landing in an
+ * unfocused pane is counted, as the pane's focus capture would reactivate it.
+ */
 function PaneHost(props: { readonly children: ReactNode }): ReactElement {
-  const [host, setHost] = useState<HTMLElement | null>(null);
-  const [presented, setPresented] = useState(true);
-  const presentation = usePanePortalHostPresentation(host, {
-    visible: presented,
-    focused: presented,
-  });
+  const [focused, setFocused] = useState(true);
+  const activations = useRef(0);
   useEffect(() => {
-    Object.defineProperty(window, "hidePane", {
+    Object.defineProperty(window, "unfocusPaneAnd", {
       configurable: true,
-      value: (): void => setPresented(false),
+      value: (name: string, args: ReadonlyArray<unknown>): void => {
+        const hook: unknown = Reflect.get(window, name);
+        if (typeof hook !== "function")
+          throw new Error(`the fixture has no ${name}`);
+        flushSync(() => {
+          Reflect.apply(hook, window, args);
+          setFocused(false);
+        });
+      },
+    });
+    Object.defineProperty(window, "paneActivations", {
+      configurable: true,
+      get: (): number => activations.current,
     });
   }, []);
   return (
-    <div ref={setHost} {...presentation}>
-      {props.children}
+    <div
+      onFocusCapture={() => {
+        if (!focused) activations.current += 1;
+      }}
+    >
+      <SurfacePresentationBoundary visible focused={focused}>
+        {props.children}
+      </SurfacePresentationBoundary>
     </div>
   );
 }
