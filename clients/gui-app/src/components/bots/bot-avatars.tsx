@@ -14,6 +14,7 @@ import {
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import {
   BotMascotFrame,
   type IdentityAvatarSize,
@@ -229,25 +230,12 @@ export function BotMascotPreview(props: {
 
 /**
  * The bot's picture: the surface's bot (`BotIdentityContext`) by its id, or
- * a plain bot outside one.
+ * the Tracy glyph outside one.
  */
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
 }): ReactElement {
   return <ExpressiveBotAvatar size={props.size} expression="idle" />;
-}
-
-/** The bot a picture is of where none is named. */
-const PLAIN_BOT_ID = "bot";
-
-/**
- * The plain bot's picture, whatever surface it is drawn on: what stands for
- * bots as a kind, where no one bot is meant.
- */
-export function PlainBotAvatar(props: {
-  readonly size: IdentityAvatarSize;
-}): ReactElement {
-  return <NamedBotAvatar botId={PLAIN_BOT_ID} size={props.size} />;
 }
 
 /**
@@ -259,10 +247,13 @@ export function ExpressiveBotAvatar(props: {
   readonly expression: MascotExpression;
 }): ReactElement {
   const identity = useBotIdentity();
+  if (identity === null) {
+    return <TracyGlyph size={props.size} className={undefined} />;
+  }
   return (
     <IdentityAvatar
       kind="bot"
-      botId={identity?.botId ?? PLAIN_BOT_ID}
+      botId={identity.botId}
       expression={props.expression}
       size={props.size}
       testId="bot-avatar"
