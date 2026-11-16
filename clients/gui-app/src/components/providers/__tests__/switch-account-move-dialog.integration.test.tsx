@@ -87,10 +87,11 @@ vi.mock("@/lib/host-error-toast", async (importOriginal) => {
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+import {
+  type HostRpcError,
+  HostTransportFailureError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProvidersCommitProfileMoveRequest,
@@ -1366,6 +1367,63 @@ describe("Switch account moves only previewed work", () => {
         .filter((call) => call.method === "providers.commitProfileMove")
         .map((call) => call.authority.endpoint.hostId),
     ).toEqual([HOST_ID, running.hostId]);
+  });
+
+  it("keeps the remote move result when the switch anchor disconnects", async () => {
+    const remote = {
+      ...agentTarget("epic-remote", "remote-agent", "Remote agent", "idle"),
+      hostId: "other-computer",
+    };
+    const local = agentTarget(
+      "epic-local",
+      "local-agent",
+      "Local agent",
+      "idle",
+    );
+    const bot = botTarget(BOT_ID, "Team bot");
+    const harness = renderMoveDialog({
+      moveHostId: HOST_ID,
+      teamName: "Design Team",
+      preview: { ...emptyPreview(), targets: [remote, local, bot] },
+      commitResults: [],
+      supportedMoves: true,
+      failFirstPreview: false,
+      failFirstCommit: false,
+    });
+    const move = await screen.findByRole("button", { name: "Move 3" });
+    harness.messenger.setHandlers({
+      "providers.commitProfileMove": (request) => {
+        if (request.targets.some((target) => target.kind === "bot"))
+          throw new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "unreachable",
+            requestId: "anchor-down",
+            method: "providers.commitProfileMove",
+            fatalDetails: null,
+          });
+        return {
+          operationId: request.operationId,
+          extent: request.extent,
+          mode: request.mode,
+          results: request.targets.map((target) => ({
+            target,
+            row: null,
+            outcome: "moved",
+          })),
+        };
+      },
+    });
+    fireEvent.click(move);
+    await screen.findByText("Moved 1 to New account.");
+    expect(
+      screen.getByText(
+        "Switch computer can't be reached. These move when you run this again while it is online.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Team bot")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Move 3" })).toBeNull();
+    expect(toastFallbacks.values).toEqual([]);
   });
 
   it("keeps the completed move result when a later manifest drops move support", async () => {

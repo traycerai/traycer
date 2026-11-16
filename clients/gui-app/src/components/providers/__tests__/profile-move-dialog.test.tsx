@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
+  act,
+  renderHook,
   render,
   screen,
   waitFor,
@@ -44,6 +46,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { ProfileMoveDialog } from "../profile-move-dialog";
+import {
+  createProfileMoveCommitPlan,
+  useProvidersCommitProfileMove,
+} from "@/hooks/providers/use-profile-move";
 import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import { observeComposerDraft } from "@/components/chat/composer/__tests__/composer-draft-observation";
@@ -485,8 +491,89 @@ describe("ProfileMoveDialog", () => {
     },
   );
 
-  it("retries the same owning-host bodies after a later host's answer is lost", async () => {
+  it("keeps another owner's success when the anchor's agents and bot become unreachable", async () => {
     const user = userEvent.setup();
+    const remote = {
+      ...AGENT_ROW,
+      agentId: "remote-first",
+      hostId: REMOTE_HOST,
+    };
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote, AGENT_ROW, BOT_ROW] }),
+      commit: (request) => {
+        if (request.targets.some((target) => target.kind === "bot"))
+          throw new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "unreachable",
+            requestId: "anchor-down",
+            method: "providers.commitProfileMove",
+            fatalDetails: null,
+          });
+        return {
+          operationId: request.operationId,
+          extent: request.extent,
+          mode: request.mode,
+          results: request.targets.map((target) => ({
+            target,
+            row: null,
+            outcome: "moved",
+          })),
+        };
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("3 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 3" }));
+    await screen.findByText("Moved 1 to Destination profile.");
+    expect(
+      screen.getByText(
+        `Computer ${HOST_ID} can't be reached. These move when you run this again while it is online.`,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Waiting bot")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Move 3" })).toBeNull();
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+  });
+
+  it("keeps the whole-operation notice when every owning computer fails by transport", async () => {
+    const user = userEvent.setup();
+    const remote = {
+      ...AGENT_ROW,
+      agentId: "remote-first",
+      hostId: REMOTE_HOST,
+    };
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote, AGENT_ROW] }),
+      commit: () => {
+        throw new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "unreachable",
+          requestId: "all-down",
+          method: "providers.commitProfileMove",
+          fatalDetails: null,
+        });
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+    await screen.findByRole("heading", { name: "Still waiting" });
+    expect(screen.getByRole("button", { name: "Move 2" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(harness.requests).toHaveLength(2);
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+  });
+
+  it("retries the same owning-host bodies after a later host's answer is lost", async () => {
     const remote = {
       ...AGENT_ROW,
       agentId: "remote-first",
@@ -524,26 +611,40 @@ describe("ProfileMoveDialog", () => {
         };
       },
     });
-    const view = renderDialog(harness);
-    await screen.findByText("2 agents and bots are waiting on Source profile.");
-    await user.click(screen.getByRole("combobox"));
-    await user.click(
-      await screen.findByRole("option", { name: "Destination profile" }),
+    const plan = createProfileMoveCommitPlan(
+      {
+        operationId: "00000000-0000-4000-8000-000000000001",
+        mode: "waiting",
+        source: SOURCE,
+        destinationProfileId: "destination-profile",
+      },
+      [remote, AGENT_ROW],
+      HOST_ID,
     );
-    await user.click(screen.getByRole("button", { name: "Move 2" }));
-    await screen.findByRole("heading", { name: "Still waiting" });
-    view.rerender(
-      <ProfileMoveDialog
-        client={harness.client.createRequesterForHostId(THIRD_HOST)}
-        source={{ ...SOURCE, profileId: "other-source" }}
-        sourceLabel="Other source"
-        profiles={PROFILES}
-        onClose={vi.fn()}
-        onRestartTerminal={vi.fn()}
-      />,
+    const { result, rerender } = renderHook(
+      ({ client }) => useProvidersCommitProfileMove(client),
+      { wrapper: harness.Wrapper, initialProps: { client: harness.client } },
     );
-    await user.click(screen.getByRole("button", { name: "Move 2" }));
-    await screen.findByText("Moved 2 to Destination profile.");
+    await act(async () => {
+      await result.current.mutateAsync(plan);
+    });
+    await waitFor(() =>
+      expect(result.current.data?.results.map((row) => row.outcome)).toEqual([
+        "moved",
+        "pending",
+      ]),
+    );
+    expect(result.current.error).toBeNull();
+    rerender({ client: harness.client.createRequesterForHostId(THIRD_HOST) });
+    await act(async () => {
+      await result.current.mutateAsync(plan);
+    });
+    await waitFor(() =>
+      expect(result.current.data?.results.map((row) => row.outcome)).toEqual([
+        "moved",
+        "moved",
+      ]),
+    );
     const commits = harness.messenger.calls.filter(
       (call) => call.method === "providers.commitProfileMove",
     );
@@ -558,24 +659,43 @@ describe("ProfileMoveDialog", () => {
 
   it("leaves a target pending when its named computer is absent, without sending it to another computer", async () => {
     const user = userEvent.setup();
-    const remote = { ...AGENT_ROW, hostId: "absent-computer" };
+    const remote = {
+      ...AGENT_ROW,
+      agentId: "absent-agent",
+      hostId: "absent-computer",
+    };
     const harness = createHarness({
-      preview: () => ({ ...PREVIEW, targets: [remote] }),
-      commit: () => {
-        throw new Error("No computer should receive this target");
-      },
+      preview: () => ({ ...PREVIEW, targets: [AGENT_ROW, remote] }),
+      commit: (request) => ({
+        operationId: request.operationId,
+        extent: request.extent,
+        mode: request.mode,
+        results: request.targets.map((target) => ({
+          target,
+          row: null,
+          outcome: "moved",
+        })),
+      }),
     });
     renderDialog(harness);
-    await screen.findByText("1 agent is waiting on Source profile.");
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
     await user.click(screen.getByRole("combobox"));
     await user.click(
       await screen.findByRole("option", { name: "Destination profile" }),
     );
-    await user.click(screen.getByRole("button", { name: "Move 1" }));
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
     await screen.findByText(
       "Computer absent-computer can't be reached. These move when you run this again while it is online.",
     );
-    expect(harness.requests).toEqual([]);
+    expect(harness.requests.map((request) => request.targets)).toEqual([
+      [
+        {
+          kind: "agent",
+          epicId: AGENT_ROW.epicId,
+          agentId: AGENT_ROW.agentId,
+        },
+      ],
+    ]);
     expect(sonnerErrors.error.mock.calls).toHaveLength(0);
   });
 
@@ -908,7 +1028,7 @@ describe("ProfileMoveDialog", () => {
     expect(sonnerErrors.error.mock.calls).toHaveLength(0);
   });
 
-  it("shows the older-computer notice when commit is below the dispatch floor", async () => {
+  it("reports unsupported targets when commit is below the dispatch floor", async () => {
     const user = userEvent.setup();
     const harness = createHarness({
       preview: () => PREVIEW,
@@ -924,8 +1044,10 @@ describe("ProfileMoveDialog", () => {
     );
     await user.click(screen.getByRole("button", { name: "Move 2" }));
 
-    const notice = await screen.findByRole("status");
-    expect(notice.textContent).toBe(OLDER_COMPUTER_NOTICE);
+    await screen.findByRole("heading", { name: "Not moved" });
+    expect(
+      screen.getAllByText(`Computer ${HOST_ID} is running an older version`),
+    ).toHaveLength(2);
     expect(
       screen.queryByText(
         /DOWNGRADE_UNSUPPORTED|negotiated|not advertised|below the/,

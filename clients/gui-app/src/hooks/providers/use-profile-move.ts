@@ -30,7 +30,6 @@ interface ProfileMoveHostCommit {
 }
 
 export interface ProfileMoveCommitPlan {
-  readonly anchorHostId: string | null;
   readonly request: ProvidersCommitProfileMoveRequest;
   readonly groups: readonly ProfileMoveHostCommit[];
 }
@@ -62,7 +61,6 @@ export function createProfileMoveCommitPlan(
     refs.push(ref);
   }
   return {
-    anchorHostId,
     request: { ...request, extent: "this-computer", targets: refs },
     groups: [...groups].map(([hostId, body]) => ({ hostId, request: body })),
   };
@@ -182,6 +180,8 @@ export function useProvidersCommitProfileMove(
           string,
           ProvidersCommitProfileMoveResponse["results"][number]
         >();
+        let answered = false;
+        let transportError: HostRpcError | null = null;
         for (const group of plan.groups) {
           let response: ProvidersCommitProfileMoveResponse;
           try {
@@ -196,12 +196,9 @@ export function useProvidersCommitProfileMove(
                 "downgrade-unsupported";
             const denied =
               error.code === "FORBIDDEN" || error.code === "E_ROLE_FORBIDDEN";
-            if (
-              !denied &&
-              (group.hostId === plan.anchorHostId ||
-                (!isHostTransportFailure(error) && !unsupported))
-            )
-              throw error;
+            if (isHostTransportFailure(error)) transportError = error;
+            else if (denied || unsupported) answered = true;
+            else throw error;
             for (const target of group.request.targets) {
               results.set(
                 targetKey(target),
@@ -218,9 +215,11 @@ export function useProvidersCommitProfileMove(
             continue;
           }
           assertGroupResponse(response, group.request);
+          answered = true;
           for (const row of response.results)
             results.set(targetKey(row.target), row);
         }
+        if (!answered && transportError !== null) throw transportError;
         return providersCommitProfileMoveResponseSchema.parse({
           operationId: plan.request.operationId,
           extent: "this-computer",
