@@ -104,6 +104,13 @@ export function defineConditionPolicy<
   };
 }
 
+/** Whether a computer's `environment.status` says its move is running. */
+export function environmentStatusMoveRunning(
+  data: ResponseOfMethod<HostRpcRegistry, "environment.status">,
+): boolean {
+  return moveIsRunning(data) || data.move?.state === "running";
+}
+
 const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
   id: "epic.readArtifactObject.downloading",
   initialDelayMs: 500,
@@ -2607,7 +2614,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("environment.status", {
       classify: (data) => {
         if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
-        return moveIsRunning(data) || data.move?.state === "running"
+        return environmentStatusMoveRunning(data)
           ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
           : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
       },
