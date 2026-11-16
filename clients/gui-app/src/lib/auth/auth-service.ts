@@ -1,3 +1,13 @@
+import {
+  changeProviderKeyRecordViaHttp,
+  type ProviderApiKeyChange,
+  type ProviderKeyProviderId,
+  type ProviderKeyRecordChangeResult,
+} from "@traycer-clients/shared/host-client/provider-api-key-change";
+import {
+  readProfileRecordsViaHttp,
+  type ProfileRecordListResult,
+} from "@traycer-clients/shared/host-client/profile-record-actions";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   AUTH_ERROR_DISK_FULL,
@@ -3750,6 +3760,39 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /** The person's own provider-key change, sent only on a verified session. */
+  async changeProviderKeyRecord(
+    environmentId: string,
+    providerId: ProviderKeyProviderId,
+    change: ProviderApiKeyChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProviderKeyRecordChangeResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "refused", code: "UNAUTHORIZED" };
+    return changeProviderKeyRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      change,
+      callerSignal,
+    );
+  }
+
+  async readProfileRecords(
+    environmentId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordListResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return readProfileRecordsViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      callerSignal,
+    );
   }
 
   /** The user's answer to an agent's grant request. */
