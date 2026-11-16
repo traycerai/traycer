@@ -343,6 +343,11 @@ export function useChatSessionHandleForContainer(
   });
 }
 
+interface AcquiredChatSessionBinding {
+  readonly handle: ChatSessionStoreHandle;
+  readonly servingHostId: string;
+}
+
 function useChatSessionHandleInContainer(input: {
   readonly epicId: string;
   readonly chatId: string;
@@ -414,10 +419,10 @@ function useChatSessionHandleInContainer(input: {
       isLocalHostBootingEntry(hostEntry) ||
       lease?.status === "restarting-expected");
 
-  const [handle, setHandle] = useReducer(
+  const [binding, setBinding] = useReducer(
     (
-      _state: ChatSessionStoreHandle | null,
-      next: ChatSessionStoreHandle | null,
+      _state: AcquiredChatSessionBinding | null,
+      next: AcquiredChatSessionBinding | null,
     ) => next,
     null,
   );
@@ -432,13 +437,13 @@ function useChatSessionHandleInContainer(input: {
     // `ChatStreamClient` - and its eager `chat.subscribe` - is never constructed
     // and cannot open the epic before the create has seeded it.
     if (!enabled) {
-      setHandle(null);
+      setBinding(null);
       return;
     }
     // See `sessionAllowed`, which also narrows `ownerIdentityKey` to non-null
     // for the scope below.
     if (!sessionAllowed) {
-      setHandle(null);
+      setBinding(null);
       return;
     }
     // Identity only. The websocket URL and the host version stay out: both
@@ -581,7 +586,7 @@ function useChatSessionHandleInContainer(input: {
           }),
       );
       activeHandle = next;
-      setHandle(next);
+      setBinding({ handle: next, servingHostId });
     };
 
     const cacheKey = { userId, hostId, epicId, chatId };
@@ -620,7 +625,9 @@ function useChatSessionHandleInContainer(input: {
     fatalCloseNotification,
   ]);
 
-  return handle;
+  // The desired peer moves before the acquisition effect replaces the handle.
+  // Never render that prior peer's access as the new peer's verdict.
+  return binding?.servingHostId === servingHostId ? binding.handle : null;
 }
 
 /**

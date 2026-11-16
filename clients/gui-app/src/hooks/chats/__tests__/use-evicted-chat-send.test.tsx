@@ -19,8 +19,9 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/versioned-rpc-typ
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import {
-  mountTeamPage,
+  authSessionForUser,
   hostIdsOf,
+  mountTeamPage,
   poolSource,
   requireTeamHostClient,
   type TeamPageHarness,
@@ -55,7 +56,10 @@ const CHAT = {
   epicId: "epic-1",
   chatId: "chat-1",
 };
-const SENDER: UserMessageSender = { type: "user", userId: "user-1" };
+const SENDER = {
+  type: "user",
+  userId: "user-1",
+} as const satisfies UserMessageSender;
 const HASH = "a".repeat(64);
 
 function textDoc(text: string): JsonContent {
@@ -200,6 +204,11 @@ function mount(initial: Props): {
       new Promise<HydrateChatResponse>((resolve, reject) => {
         hydrates.push({ resolve, reject });
       }),
+  });
+  act(() => {
+    page.auth.applyExternalSession(
+      authSessionForUser(SENDER.userId, "evicted-send-test-session"),
+    );
   });
   // Outside the hook's tree, so a toast the unmount raises still shows.
   render(<Toaster />);
