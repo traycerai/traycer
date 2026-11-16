@@ -182,6 +182,9 @@ async function call(
         },
         body,
         signal: abort.signal,
+        // The bearer rides along: a redirect is answered here, as a failure,
+        // and never followed with it.
+        redirect: "manual",
       }),
       abort.signal,
     );

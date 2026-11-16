@@ -17,7 +17,10 @@ import {
   sandboxMutationKeys,
   sandboxQueryKeys,
 } from "@/lib/query-keys";
-import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import {
+  sandboxCreateFailureMessage,
+  sandboxFailureMessageFor,
+} from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
@@ -81,6 +84,7 @@ export type SandboxCreateRefusals = "toast" | "inline";
  */
 export function useSandboxCreate(
   refusals: SandboxCreateRefusals,
+  buysTeamCredits: boolean,
 ): UseMutationResult<
   SandboxCreateAccepted,
   Error,
@@ -113,8 +117,14 @@ export function useSandboxCreate(
       if (result.kind === "ok") {
         return result.accepted;
       }
+      // Worded for whoever sent it: a refusal for want of the team's
+      // credits tells only someone who can buy them how much to add.
       throw new SandboxCreateError(
-        sandboxCreateFailureMessage(result, teamName),
+        sandboxFailureMessageFor(
+          result,
+          sandboxCreateFailureMessage(result, teamName),
+          { buysTeamCredits, teamName },
+        ),
         result.kind === "refused" ? result.code : null,
         result.kind === "refused" ? result.reason : null,
         result,

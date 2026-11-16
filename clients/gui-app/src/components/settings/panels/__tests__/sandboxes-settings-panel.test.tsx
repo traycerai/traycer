@@ -142,6 +142,7 @@ const mocks = vi.hoisted(() => ({
   /** The Automations read and open run through their real hooks and query. */
   realAutomation: false,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
+  personalEnvironmentId: null as string | null,
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
@@ -210,6 +211,7 @@ vi.mock(
         ),
       ),
       complete: true,
+      personalEnvironmentId: mocks.personalEnvironmentId,
     }),
     useSandboxWakeString: () => null,
   }),
@@ -369,8 +371,9 @@ vi.mock(
       SandboxRowActions: (props: {
         summary: SandboxSummary;
         configuration: SandboxPageConfiguration;
+        credits: SandboxPageConfiguration | null;
         unreachable: boolean;
-        frozenNeedsOwnCredits: boolean;
+        frozenOffersAddCredits: boolean;
         settingsFailed: boolean;
       }) => {
         if (mocks.realActions) return <original.SandboxRowActions {...props} />;
@@ -565,6 +568,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.listed = true;
     mocks.realActions = false;
     mocks.configurations = [{ kind: "personal" }];
+    mocks.personalEnvironmentId = null;
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
@@ -772,42 +776,45 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toContain(shapeLine);
     });
 
-    it("shows a team's default form without repeating the environment", async () => {
-      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
-      renderPanel([]);
+    it.each(["editor", "admin"] as const)(
+      "shows a team's default form for %s without repeating the environment",
+      async (role) => {
+        viewTeamAs(role, { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+        renderPanel([]);
 
-      expect(
-        await screen.findByRole("heading", { name: "Defaults" }),
-      ).toBeTruthy();
-      expect(
-        await screen.findByTestId("sandboxes-defaults-idle-input"),
-      ).toHaveProperty("value", "45");
-      expect(
-        screen.getByTestId("sandboxes-defaults-form").textContent,
-      ).not.toContain("Acme");
-      expect(
-        screen.getByText(
-          "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
-        ),
-      ).toBeTruthy();
-      expect(
-        screen.queryByText("Each new sandbox starts with these"),
-      ).toBeNull();
-      expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
-      const shape = screen.getByRole("combobox", { name: "Shape" });
-      expect(shape.textContent).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-      fireEvent.click(shape);
-      expect(
-        screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
-      ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
-      expect(
-        screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
-      ).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-    });
+        expect(
+          await screen.findByRole("heading", { name: "Defaults" }),
+        ).toBeTruthy();
+        expect(
+          await screen.findByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "45");
+        expect(
+          screen.getByTestId("sandboxes-defaults-form").textContent,
+        ).not.toContain("Acme");
+        expect(
+          screen.getByText(
+            "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
+          ),
+        ).toBeTruthy();
+        expect(
+          screen.queryByText("Each new sandbox starts with these"),
+        ).toBeNull();
+        expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
+        const shape = screen.getByRole("combobox", { name: "Shape" });
+        expect(shape.textContent).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+        fireEvent.click(shape);
+        expect(
+          screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
+        ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
+        expect(
+          screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
+        ).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+      },
+    );
 
     it("gives a viewer the item read-only, naming who can change it", async () => {
       viewTeamAs("viewer", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
@@ -848,6 +855,9 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         screen.queryByRole("button", { name: "Save defaults" }),
       ).toBeNull();
+      expect(harness?.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
     });
 
     it("gives an editor the form on the item's values, saving it at the read revision", async () => {
@@ -1059,11 +1069,19 @@ describe("<SandboxesSettingsPanel />", () => {
   });
 
   it("renders one row per state with its badge and primary action", () => {
+    // The frozen row is the person's own: its environment is the one their
+    // environment list names, so Add credits is theirs to offer.
+    mocks.personalEnvironmentId = PERSONAL_ENV;
     renderPanel([
       row("awake-1", { state: "awake" }),
       row("suspended-1", { state: "suspended" }),
       row("stopped-1", { state: "stopped" }),
-      row("frozen-1", { state: "suspended", frozen: true, frozenAt: 1 }),
+      row("frozen-1", {
+        state: "suspended",
+        frozen: true,
+        frozenAt: 1,
+        environmentId: PERSONAL_ENV,
+      }),
       row("failed-1", { state: "failed", failureCode: "boom" }),
     ]);
 
@@ -1086,6 +1104,23 @@ describe("<SandboxesSettingsPanel />", () => {
         expect(within(element).getByText("Out of credits")).toBeDefined();
       }
     }
+  });
+
+  it("offers no Add credits on a frozen row whose owner is not known", () => {
+    renderPanel([
+      row("frozen-unknown", {
+        state: "suspended",
+        frozen: true,
+        frozenAt: 1,
+        environmentId: null,
+      }),
+    ]);
+
+    const element = rowOf("frozen-unknown");
+    expect(within(element).getByTestId("row-primary").textContent).toBe(
+      "Resume",
+    );
+    expect(within(element).queryByText("Add credits ↗")).toBeNull();
   });
 
   it("keeps the charge notice and Stop action when setup failed and the host is unreachable", () => {
@@ -1220,9 +1255,12 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
       "Couldn't start at 11:01 · The sandbox service couldn't start it. · SBX-0412",
     );
+    // The row's owner is not known (the default row has no environment id),
+    // so Retry is not held back for it and no top-up is offered.
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);
+    expect(failed.queryByText("Add credits ↗")).toBeNull();
     const destroy = failed.getByRole("button", {
       name: "Destroy build-box",
     });
@@ -1446,6 +1484,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
   it("keeps a frozen payer consequence once on its own line before the removal date", () => {
     const frozenAt = Date.UTC(2026, 9, 9);
+    mocks.personalEnvironmentId = PERSONAL_ENV;
     renderPanel([
       row("frozen", {
         state: "suspended",
@@ -1453,6 +1492,7 @@ describe("<SandboxesSettingsPanel />", () => {
         frozenAt,
         destroyAt: frozenDestroyAt(frozenAt),
         withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        environmentId: PERSONAL_ENV,
       }),
     ]);
 
@@ -1910,10 +1950,16 @@ describe("<SandboxesSettingsPanel />", () => {
       },
     ];
     renderPanel([
-      row("mine", { environmentId: null, createdBy: null }),
+      row("mine", { environmentId: null, createdBy: null, frozen: true }),
       row("acme-box", { environmentId: "env-acme" }),
     ]);
     expect(names()).toEqual(["mine"]);
+    expect(rowOf("mine").textContent).not.toContain("Your credits ran out");
+    expect(
+      within(rowOf("mine")).queryByRole("button", {
+        name: "Add credits ↗",
+      }),
+    ).toBeNull();
     expect(screen.queryByTestId("sandboxes-configuration")).toBeNull();
 
     act(() => {
@@ -2369,7 +2415,7 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
-  describe("a team row's payer", () => {
+  describe("a team row's credits", () => {
     const ACME = {
       kind: "team",
       teamId: "team-1",
@@ -2404,7 +2450,7 @@ describe("<SandboxesSettingsPanel />", () => {
       return line.textContent;
     }
 
-    it("reads Paid by you to the payer, and the payer's name to another member", () => {
+    it("names the team's credits and has no Paid by badge for either member", () => {
       const awake = row("sbx-paid", {
         state: "awake",
         environmentId: TEAM_ENV,
@@ -2412,9 +2458,8 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by you")).toBeDefined();
-      expect(within(rowOf(awake.id)).queryByText("Paid by Priya")).toBeNull();
-      expect(shapeOf(awake.id)).not.toContain("paid by");
+      expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
+      expect(shapeOf(awake.id)).toContain("uses Acme's credits");
       expect(
         screen.getByRole("heading", { name: "Acme's sandboxes" }),
       ).toBeTruthy();
@@ -2430,9 +2475,9 @@ describe("<SandboxesSettingsPanel />", () => {
 
       viewAs("user-other");
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by Priya")).toBeDefined();
+      expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
       expect(shapeOf(awake.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(within(rowOf(awake.id)).queryByText(/a member/)).toBeNull();
     });
@@ -2462,11 +2507,11 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(unnamed.id)).queryByText(/a member/)).toBeNull();
       expect(shapeOf(unnamed.id)).not.toContain("paid by");
       expect(shapeOf(unnamed.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
     });
 
-    it("omits an unnamed resting payer and keeps the funding clause for an unnamed awake payer", () => {
+    it("names team storage and credits when the payer has no display name", () => {
       viewAs("user-other");
       const resting = row("sbx-unnamed-rest", {
         state: "suspended",
@@ -2474,10 +2519,10 @@ describe("<SandboxesSettingsPanel />", () => {
         wakePayer: { userId: "user-hidden", displayName: null },
       });
       renderPanel([resting]);
-      expect(clockOf(resting.id)).not.toContain("storage uses");
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("a member");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(resting.id)).not.toContain(
         "waking it makes you the payer",
@@ -2498,11 +2543,11 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
       expect(within(rowOf(awake.id)).queryByText(/a member/)).toBeNull();
       expect(shapeOf(awake.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
     });
 
-    it("tells only a member who isn't the payer that resuming makes them the payer", () => {
+    it("names team storage and credits for a resting row despite its previous payer", () => {
       const resting = row("sbx-resting", {
         state: "suspended",
         environmentId: TEAM_ENV,
@@ -2510,10 +2555,10 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toContain("storage uses your Acme credits");
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("Storage uses");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(resting.id)).not.toContain(
         "waking it makes you the payer",
@@ -2528,20 +2573,19 @@ describe("<SandboxesSettingsPanel />", () => {
 
       viewAs("user-other");
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toContain(
-        "storage uses Priya's Acme credits",
-      );
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("Resuming changes the payer");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · waking it makes you the payer",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(
-        within(rowOf(resting.id)).getByTestId("sandboxes-row-payer-consequence")
-          .textContent,
-      ).toBe("Resuming changes the payer to you.");
+        within(rowOf(resting.id)).queryByTestId(
+          "sandboxes-row-payer-consequence",
+        ),
+      ).toBeNull();
     });
 
-    it("omits storage credits on a team row with no wake payer, and on a personal resting row names the viewer's credits", () => {
+    it("names team storage with no wake payer and preserves personal storage wording", () => {
       viewAs("user-other");
       const unnamed = row("sbx-no-payer", {
         state: "stopped",
@@ -2549,9 +2593,9 @@ describe("<SandboxesSettingsPanel />", () => {
         wakePayer: null,
       });
       renderPanel([unnamed]);
-      expect(clockOf(unnamed.id)).not.toContain("storage uses");
+      expect(clockOf(unnamed.id)).toContain("storage uses Acme's credits");
       expect(shapeOf(unnamed.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(unnamed.id)).not.toContain(
         "waking it makes you the payer",
@@ -2562,7 +2606,11 @@ describe("<SandboxesSettingsPanel />", () => {
       mocks.configurations = [{ kind: "personal" }];
       host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
       useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-      const personal = row("sbx-personal-rest", { state: "suspended" });
+      mocks.personalEnvironmentId = PERSONAL_ENV;
+      const personal = row("sbx-personal-rest", {
+        state: "suspended",
+        environmentId: PERSONAL_ENV,
+      });
       renderPanel([personal]);
       expect(clockOf(personal.id)).toContain("storage uses your credits");
       expect(shapeOf(personal.id)).not.toContain(
@@ -2571,7 +2619,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(personal.id)).queryByText(/Paid by/)).toBeNull();
     });
 
-    it("keeps the frozen payer consequence once before a short Resume", () => {
+    it("names the team's frozen credits once before Resume", () => {
       const frozen = row("sbx-frozen-payer", {
         state: "suspended",
         frozen: true,
@@ -2586,19 +2634,15 @@ describe("<SandboxesSettingsPanel />", () => {
       const consequence = within(frozenRow).getByTestId(
         "sandboxes-row-payer-consequence",
       );
-      expect(consequence.textContent).toBe(
-        "Priya's Acme credits ran out. Resuming changes the payer to you.",
-      );
-      expect(
-        frozenRow.textContent.match(/Resuming changes the payer to you\./gu),
-      ).toHaveLength(1);
+      expect(consequence.textContent).toBe("Acme's credits ran out.");
+      expect(frozenRow.textContent).not.toContain("Resuming changes the payer");
       expect(frozenRow.textContent).not.toContain(
         "waking it makes you the payer",
       );
       expect(frozenRow.textContent).not.toContain("storage uses");
       expect(
         within(frozenRow).getByText(
-          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
         ),
       ).toBeTruthy();
       expect(within(frozenRow).queryByText(/Paid by/)).toBeNull();

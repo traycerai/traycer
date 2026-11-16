@@ -14,6 +14,7 @@ import {
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
 } from "../sandbox-secrets";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://auth.example.test";
 const BEARER = "user-jwt";
@@ -1219,4 +1220,108 @@ describe("decideSecretRequestViaHttp on a fetch that ignores its signal", () => 
     expect(settled).toBe(true);
     expect(await pending).toEqual(TIMED_OUT);
   });
+});
+
+describe("a redirect answered to a sandbox secrets request", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the grants read as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer(SUMMARY_BODY));
+
+      const result = await fetchSandboxGrantsViaHttp(
+        BASE,
+        BEARER,
+        ENV_ID,
+        HOST_ID,
+      );
+
+      expect(result).toMatchObject({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a decision as a network error, with the decision sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer({}));
+
+      const result = await decideSecretRequestViaHttp(
+        BASE,
+        BEARER,
+        ENV_ID,
+        REQUEST_ID,
+        "approve",
+      );
+
+      expect(result).toMatchObject({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        decision: "approve",
+      });
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the team environment read as a network error, never as not-a-member",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer({ environmentId: ENV_ID }));
+
+      const result = await fetchTeamEnvironmentViaHttp(BASE, BEARER, "team-1");
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: "the environment answer did not match the contract",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the providers read as a network error, with both requests told not to follow",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer([]));
+
+      const result = await fetchEnvironmentProvidersViaHttp(
+        BASE,
+        BEARER,
+        ENV_ID,
+      );
+
+      expect(result).toMatchObject({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init?.redirect).toBe("manual");
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${BEARER}`,
+        );
+      }
+    },
+  );
 });

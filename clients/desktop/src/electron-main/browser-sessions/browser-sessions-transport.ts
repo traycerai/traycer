@@ -15,7 +15,11 @@ import {
   hostTokenSessionAuth,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
+import type {
+  HostDirectoryEntry,
+  LocalHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import {
   MINIMUM_HOST_VERSION,
   hostDirectoryEntryNeedsUpdate,
@@ -206,13 +210,14 @@ export function createBrowserSessionsHostDirectory(
     return started;
   };
 
-  const localEntryFor = (hostId: string): HostDirectoryEntry | null => {
+  const localEntryFor = (hostId: string): LocalHostDirectoryEntry | null => {
     const local = deps.localHost();
     if (local === null || local.hostId !== hostId) return null;
     return {
       hostId,
       label: hostId,
       kind: "local",
+      owner: cachedRemote.get(hostId)?.owner ?? null,
       websocketUrl: local.websocketUrl,
       version: local.version,
       transportDialability: "dialable",
@@ -247,7 +252,11 @@ export function createBrowserSessionsHostDirectory(
     },
     resolve: async (hostId) => {
       const local = localEntryFor(hostId);
-      if (local !== null) return local;
+      if (local !== null) {
+        // Registry discovery must not delay the browser on this machine.
+        if (!cachedRemote.has(hostId)) void refreshOnce();
+        return local;
+      }
       const cached = cachedRemote.get(hostId);
       if (cached !== undefined) return cached;
       await refreshOnce();
@@ -256,15 +265,21 @@ export function createBrowserSessionsHostDirectory(
   };
 }
 
-/** Names the ownership snapshot, independently of display names and addresses. */
+/** Local eligibility and remote principal identity, independent of addresses. */
 export function browserSessionsOwnerKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null) return null;
-  if (!isRemoteHostDirectoryEntry(entry))
-    return JSON.stringify([entry.kind, entry.hostId]);
+  if (entry.kind === "local") {
+    return JSON.stringify([
+      entry.kind,
+      entry.hostId,
+      allowsBrowserLoginSync(entry),
+    ]);
+  }
   return JSON.stringify([
     entry.kind,
+    entry.hostId,
     entry.owner?.kind ?? null,
     entry.owner?.id ?? null,
   ]);
@@ -422,6 +437,7 @@ function jarTransportLane(target: HostDirectoryEntry):
       readonly entry: RemoteHostDirectoryEntry;
     }
   | null {
+  if (!allowsBrowserLoginSync(target)) return null;
   if (target.kind === "local") {
     return { kind: "local" };
   }

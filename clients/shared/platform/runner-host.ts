@@ -1,7 +1,7 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
-import type { HostTokenSource } from "../auth/host-token-source";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
+import type { HostTokenSource } from "../auth/host-token-source";
 import type {
   TeamChatAutoArchiveReadResult,
   TeamChatAutoArchiveSetRequest,

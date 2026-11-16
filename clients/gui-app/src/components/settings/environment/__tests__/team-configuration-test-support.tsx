@@ -129,9 +129,8 @@ export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpc
   return requireTeamHostBinding();
 }
 /**
- * Build a real environment-list descriptor before deriving its configuration
- * source. The retired Viewer role and an absent role both authorize nothing,
- * but remain separate inputs to the test fixture.
+ * `effectiveRole` is the wire's spelling; the source holds the role an
+ * inventory row naming it decodes to in the app.
  */
 export function poolSource(
   effectiveRole: "owner" | "admin" | "editor" | "viewer",

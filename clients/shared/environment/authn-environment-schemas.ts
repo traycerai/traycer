@@ -300,3 +300,17 @@ export const authnUndoConflictSchema = lazySchema(() =>
     current: authnItemRowSchema.nullable(),
   }),
 );
+
+// ── members ─────────────────────────────────────────────────────────────────
+
+/**
+ * A role on authn's members answer (a member's row and the reader's own). A
+ * seat stored on the Viewer role answers `null`; it reads as
+ * `viewer`, as the host's forwarder reads it.
+ */
+export const authnMemberRoleSchema = lazySchema(() =>
+  z
+    .enum(["admin", "editor", "viewer"])
+    .nullable()
+    .transform((role) => role ?? "viewer"),
+);

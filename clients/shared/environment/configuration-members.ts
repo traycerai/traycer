@@ -34,6 +34,7 @@ import {
   type EnvironmentAnswer,
   type EnvironmentCloud,
 } from "./environment-cloud";
+import { authnMemberRoleSchema } from "./authn-environment-schemas";
 
 /** A page of rows larger than this is split by user id, as the host paged it. */
 const MEMBERS_PAGE_SIZE = 100;
@@ -55,14 +56,14 @@ const teamMembersSchema = z.object({
           avatarUrl: z.string().nullable(),
         })
         .nullable(),
-      effectiveRole: z.enum(["admin", "editor", "viewer"]),
+      effectiveRole: authnMemberRoleSchema,
       linkedPlan: z.boolean(),
       inviteState: z.enum(["pending", "accepted"]),
       invitedAddress: z.string().nullable(),
     }),
   ),
   viewer: z.object({
-    effectiveRole: z.enum(["admin", "editor", "viewer"]),
+    effectiveRole: authnMemberRoleSchema,
     legacyRoleNoticeSeenAt: z.string().nullable(),
     legacyMembers: z.array(z.string()),
   }),

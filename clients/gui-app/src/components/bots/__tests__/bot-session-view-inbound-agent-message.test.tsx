@@ -173,6 +173,7 @@ function mountTrunk(): void {
                 <BotSessionView
                   botId={BOT_ID}
                   hostId={HOST_ID}
+                  boundHostId={null}
                   botTitle="Tracy"
                   session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
                   threads={[]}

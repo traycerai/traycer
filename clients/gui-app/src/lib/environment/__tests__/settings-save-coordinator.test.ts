@@ -204,10 +204,12 @@ describe("settings save edit fence", () => {
     const coordinator = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,
       cloud: () =>
-        makeCloud(async (request) => {
+        makeCloud((request) => {
           sent.push(request);
-          if (request.method === "GET") return review({ enabled: false });
-          return { status: 200, text: "" };
+          if (request.method === "GET") {
+            return Promise.resolve(review({ enabled: false }));
+          }
+          return Promise.resolve({ status: 200, text: "" });
         }),
       readProposals: async () => {
         reading.resolve(undefined);
@@ -244,7 +246,7 @@ describe("settings save edit fence", () => {
           }
           return { status: 200, text: "" };
         }),
-      readProposals: async () => proposals(),
+      readProposals: () => Promise.resolve(proposals()),
       now: () => 100,
     });
 
@@ -272,7 +274,7 @@ describe("settings save edit fence", () => {
           applying.resolve(undefined);
           return applyAnswer.promise;
         }),
-      readProposals: async () => proposals(),
+      readProposals: () => Promise.resolve(proposals()),
       now: () => 100,
     });
 
@@ -365,7 +367,7 @@ describe("settings save edit fence", () => {
           }
           return { status: 200, text: "" };
         }),
-      readProposals: async () => proposalsForBoth,
+      readProposals: () => Promise.resolve(proposalsForBoth),
       now: () => 100,
     });
 
@@ -398,7 +400,7 @@ describe("settings save edit fence", () => {
     const proposalsAnswer = deferred<EnvironmentProposalsResponse>();
     const coordinator = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,
-      cloud: () => makeCloud(async () => ({ status: 200, text: "" })),
+      cloud: () => makeCloud(() => Promise.resolve({ status: 200, text: "" })),
       readProposals: async () => {
         reading.resolve();
         return proposalsAnswer.promise;
@@ -425,10 +427,10 @@ describe("settings save edit fence", () => {
     const reads: string[] = [];
     const coordinator = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,
-      cloud: () => makeCloud(async () => ({ status: 200, text: "" })),
-      readProposals: async (hostId) => {
+      cloud: () => makeCloud(() => Promise.resolve({ status: 200, text: "" })),
+      readProposals: (hostId) => {
         reads.push(hostId);
-        return { proposals: [] };
+        return Promise.resolve({ proposals: [] });
       },
       now: () => 100,
     });

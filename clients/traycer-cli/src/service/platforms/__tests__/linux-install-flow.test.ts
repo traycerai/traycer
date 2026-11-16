@@ -227,8 +227,17 @@ function installWith(runner: ProcessRunner): Promise<void> {
 /** The systemctl verb (or loginctl verb) of a recorded call, for sequences. */
 function verbOf(call: RecordedCall): string {
   return call.command === "systemctl"
-    ? (call.args[1] ?? "")
+    ? isUserManagerVersionProbe(call)
+      ? "show --property=Version --value"
+      : (call.args[1] ?? "")
     : `${call.command}:${call.args[0] ?? ""}`;
+}
+
+function isUserManagerVersionProbe(call: RecordedCall): boolean {
+  return (
+    call.command === "systemctl" &&
+    call.args.join(" ") === "--user show --property=Version --value"
+  );
 }
 
 afterEach(async () => {
@@ -241,9 +250,7 @@ afterAll(async () => {
 
 describe("linux service install flow", () => {
   it("refuses to install - writing NOTHING - when the user manager is unreachable, and says so", async () => {
-    const { calls, runner } = recordingRunner(
-      (call) => call.args[1] === "show-environment",
-    );
+    const { calls, runner } = recordingRunner(isUserManagerVersionProbe);
 
     await expect(installWith(runner)).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -252,7 +259,7 @@ describe("linux service install flow", () => {
     // The preflight is the FIRST thing that runs, and on failure nothing
     // else does: no unit file, no daemon-reload attempt.
     expect(await fileExists(unitFile())).toBe(false);
-    expect(calls.map(verbOf)).toEqual(["show-environment"]);
+    expect(calls.map(verbOf)).toEqual(["show --property=Version --value"]);
   });
 
   it("rolls the unit file back when daemon-reload fails", async () => {
@@ -272,7 +279,7 @@ describe("linux service install flow", () => {
     // so systemd is told about the removal even though the initial reload
     // is what failed.
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
       "daemon-reload",
       "disable",
@@ -298,7 +305,7 @@ describe("linux service install flow", () => {
     // The rollback daemon-reload runs last, so systemd forgets the removed
     // unit rather than holding a loaded orphan.
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
       "daemon-reload",
       "enable",
@@ -320,7 +327,7 @@ describe("linux service install flow", () => {
     await installWith(runner);
 
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
       "daemon-reload",
       "enable",
@@ -351,7 +358,7 @@ describe("linux service install flow", () => {
     await installWith(runner);
 
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
       "daemon-reload",
       "enable",
@@ -1354,7 +1361,7 @@ describe("linux service stop --force", () => {
 });
 
 describe("install — spawn-edge placement", () => {
-  it("show-environment then linger precede publish, and daemon-reload is the entry right after it - the install edge sits in front of the unit write", async () => {
+  it("the manager-version probe then linger precede publish, and daemon-reload is the entry right after it - the install edge sits in front of the unit write", async () => {
     // `publish` pushes into the SAME log `recordingRunner` fills, in the
     // order things actually happen - not a separately-kept count. The
     // install edge (`atServiceInstallEdge`) sits in front of the unit's
@@ -1377,7 +1384,7 @@ describe("install — spawn-edge placement", () => {
     expect(verbs.filter((verb) => verb === "publish")).toHaveLength(1);
     const publishIndex = verbs.indexOf("publish");
     expect(verbs.slice(0, publishIndex)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
     ]);
     // `atServiceSpawnEdge()` runs again right before `enable --now` and
@@ -1417,7 +1424,7 @@ describe("install — spawn-edge placement", () => {
     // verbs and no `enable` - the edge rejected before the unit was ever
     // written.
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
     ]);
     expect(await fileExists(unitFile())).toBe(false);
@@ -1500,7 +1507,7 @@ describe("install — spawn-edge placement", () => {
     // ahead of the refusal.
     expect(rejection).toBe(refusal);
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "loginctl:enable-linger",
     ]);
     expect(calls.map(verbOf)).not.toContain("daemon-reload");
@@ -1539,7 +1546,7 @@ describe("install — spawn-edge placement", () => {
 describe("linux restart without a reachable user manager", () => {
   /**
    * The real runner's contract: a tolerated non-zero exit RESOLVES with the
-   * exit code, an untolerated one rejects. `show-environment` is the
+   * exit code, an untolerated one rejects. The manager-version probe is the
    * reachability probe, so it carries `tolerateNonZeroExit: false`.
    */
   function headlessRunner(): {
@@ -1602,7 +1609,7 @@ describe("linux restart without a reachable user manager", () => {
       });
       // Only the probe ran: no `kill` of the unit, no `restart`, and no
       // escalation to the published host (`--force`'s last resort).
-      expect(calls.map(verbOf)).toEqual(["show-environment"]);
+      expect(calls.map(verbOf)).toEqual(["show --property=Version --value"]);
       expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
     },
   );
@@ -1633,10 +1640,10 @@ describe("linux restart without a reachable user manager", () => {
     // The probe now fronts each of the two legs; the signal ladder and the
     // single `restart` job between them are untouched.
     expect(calls.map(verbOf)).toEqual([
-      "show-environment",
+      "show --property=Version --value",
       "kill",
       "kill",
-      "show-environment",
+      "show --property=Version --value",
       "restart",
     ]);
   });

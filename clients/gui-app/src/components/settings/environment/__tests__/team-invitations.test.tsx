@@ -692,7 +692,7 @@ describe("InviteAcceptDialog", () => {
     expect(screen.queryByTestId("invite-accept")).toBeNull();
   });
 
-  it("reads an invitation to the retired viewer role as no longer open, with nothing to accept", async () => {
+  it("offers an invitation to a Viewer and explains what accepting allows", async () => {
     const onAccepted = vi.fn();
     const accept = vi.fn(() =>
       Promise.resolve({ outcome: "accepted" as const }),
@@ -712,12 +712,16 @@ describe("InviteAcceptDialog", () => {
       },
     );
 
-    expect((await screen.findByTestId("invite-accept-gone")).textContent).toBe(
-      "This invitation is no longer open.",
+    expect((await screen.findByTestId("role-grant-prefix")).textContent).toBe(
+      "You can see the team's settings but not change them.",
     );
-    expect(screen.queryByTestId("invite-accept-grant")).toBeNull();
-    expect(screen.queryByTestId("invite-accept")).toBeNull();
-    expect(accept).not.toHaveBeenCalled();
-    expect(onAccepted).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("invite-accept-gone")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("invite-accept"));
+
+    await waitFor(() => {
+      expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+    });
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
   });
 });

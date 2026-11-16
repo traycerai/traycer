@@ -307,6 +307,10 @@ async function postJson(
         },
         body: JSON.stringify(body),
         signal: abort.signal,
+        // The bearer and the code or secret in the body ride along: a
+        // redirect is answered here, as a failure, and never followed with
+        // them.
+        redirect: "manual",
       }),
       abort.signal,
     );

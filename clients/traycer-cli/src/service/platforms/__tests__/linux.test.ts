@@ -1533,7 +1533,7 @@ describe("systemd unit install — linger ordering (the mechanism)", () => {
     vi.unstubAllEnvs();
   });
 
-  it("enableLinger: true - loginctl enable-linger runs after show-environment and BEFORE the install-edge publish, and enable --now is the LAST runner call", async () => {
+  it("enableLinger: true - loginctl enable-linger runs after the manager-version probe and BEFORE the install-edge publish, and enable --now is the LAST runner call", async () => {
     // Best-effort linger only fires when a USER identity is available
     // (`tryEnableLinger` no-ops on an empty string); stub it so the
     // assertion doesn't depend on the ambient environment this suite
@@ -1544,16 +1544,16 @@ describe("systemd unit install — linger ordering (the mechanism)", () => {
 
     await installWith(runner, publish, true);
 
-    const showEnvIndex = log.findIndex((entry) =>
-      entry.startsWith("systemctl --user show-environment"),
+    const reachabilityIndex = log.findIndex((entry) =>
+      entry.startsWith("systemctl --user show --property=Version --value"),
     );
     const lingerIndex = log.findIndex((entry) =>
       entry.startsWith("loginctl enable-linger"),
     );
     const publishIndex = log.indexOf("publish");
 
-    expect(showEnvIndex).toBeGreaterThanOrEqual(0);
-    expect(lingerIndex).toBeGreaterThan(showEnvIndex);
+    expect(reachabilityIndex).toBeGreaterThanOrEqual(0);
+    expect(lingerIndex).toBeGreaterThan(reachabilityIndex);
     expect(publishIndex).toBeGreaterThan(lingerIndex);
     // `enable --now` is the last runner call the successful install issues -
     // linger already ran, off the grant's clock, before the edge.
@@ -1595,7 +1595,7 @@ describe("linuxUserManagerUnreachable", () => {
   it("exit 0 is reachable", async () => {
     const { run } = runnerAnswering(async () => ({
       exitCode: 0,
-      stdout: "HOME=/home/user\n",
+      stdout: "255.4\n",
       stderr: "",
     }));
 
@@ -1643,7 +1643,7 @@ describe("linuxUserManagerUnreachable", () => {
     );
   });
 
-  it("asks `systemctl --user show-environment` in the inherited environment with the caller's timeout", async () => {
+  it("asks for the manager version in the inherited environment with the caller's timeout", async () => {
     const { calls, run } = runnerAnswering(async () => ({
       exitCode: 0,
       stdout: "",
@@ -1655,7 +1655,7 @@ describe("linuxUserManagerUnreachable", () => {
     expect(calls).toEqual([
       {
         command: "systemctl",
-        args: ["--user", "show-environment"],
+        args: ["--user", "show", "--property=Version", "--value"],
         options: {
           env: undefined,
           cwd: undefined,
