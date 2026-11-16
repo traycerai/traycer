@@ -172,6 +172,29 @@ describe("devices/sessions authn fetcher", () => {
     expect(result.kind).toBe("step-up-required");
   });
 
+  it("declares a JSON body only on a request that has one, never on a session revoke's DELETE", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, {}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await revokeUserSessionViaHttp(AUTHN, "jwt", "family-1");
+    await revokeAllSessionsViaHttp(AUTHN, "jwt");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const revokeInit = fetchMock.mock.calls[0]?.[1];
+    const revokeAllInit = fetchMock.mock.calls[1]?.[1];
+    expect(revokeInit?.method).toBe("DELETE");
+    expect(revokeInit?.body).toBeUndefined();
+    const revokeHeaders = new Headers(revokeInit?.headers);
+    expect(revokeHeaders.has("Content-Type")).toBe(false);
+    expect(revokeHeaders.get("Authorization")).toBe("Bearer jwt");
+    expect(revokeHeaders.get("Accept")).toBe("application/json");
+    expect(revokeAllInit?.method).toBe("POST");
+    expect(revokeAllInit?.body).toBe("{}");
+    expect(new Headers(revokeAllInit?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+  });
+
   it("maps invalid OTP verify responses to invalid", async () => {
     vi.stubGlobal(
       "fetch",
