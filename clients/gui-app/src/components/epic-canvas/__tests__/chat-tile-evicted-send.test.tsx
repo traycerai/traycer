@@ -177,6 +177,8 @@ const MOCK_HOST_CLIENT = {
   requestWithSignal: (method: string) => {
     if (method === "epic.listCloudChats") {
       cloudChatListTestState.requestCount += 1;
+      const data = cloudChatListTestState.data;
+      return data === undefined ? new Promise(() => {}) : Promise.resolve(data);
     }
     return new Promise(() => {});
   },
@@ -857,16 +859,6 @@ function mountEvictedTile(source: ChatSourceFixture): Mounted {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  if (cloudChatListTestState.data !== undefined) {
-    queryClient.setQueryData(
-      cloudChatListQueryKey({
-        hostId: poolEntry.hostId,
-        viewerUserId: SAVED_CREATOR_USER_ID,
-        taskId: EPIC_ID,
-      }),
-      cloudChatListTestState.data,
-    );
-  }
   hydrateBoundary.client = buildHydrateClient(queryClient);
   const witnessClient = new FakeStreamClient(true);
   const witness = new PoolChatServingWitness();
@@ -938,6 +930,24 @@ async function mountOnThePool(
     expect(screen.getByText("An earlier message")).not.toBeNull();
   });
   return mounted;
+}
+
+async function waitForCloudChatList(mounted: Mounted): Promise<void> {
+  const expected = cloudChatListTestState.data;
+  if (expected === undefined) {
+    throw new Error("expected a cloud chat list response");
+  }
+  await waitFor(() => {
+    expect(
+      mounted.queryClient.getQueryData(
+        cloudChatListQueryKey({
+          hostId: HOST_ID,
+          viewerUserId: SAVED_CREATOR_USER_ID,
+          taskId: EPIC_ID,
+        }),
+      ),
+    ).toEqual(expected);
+  });
 }
 
 function putInComposer(text: string): void {
@@ -1129,16 +1139,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       starterUserId: null,
     };
     const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
-
-    expect(
-      mounted.queryClient.getQueryData(
-        cloudChatListQueryKey({
-          hostId: poolEntry.hostId,
-          viewerUserId: SAVED_CREATOR_USER_ID,
-          taskId: EPIC_ID,
-        }),
-      ),
-    ).toEqual(cloudChatListTestState.data);
+    await waitForCloudChatList(mounted);
     await parkAndSendThroughOwnerHost(
       ADMITTED_SAVED_CREATOR_ACCESS,
       TEAM_ENVIRONMENT_OWNER_ID,
@@ -1153,7 +1154,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     };
     const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
     const listKey = cloudChatListQueryKey({
-      hostId: poolEntry.hostId,
+      hostId: HOST_ID,
       viewerUserId: SAVED_CREATOR_USER_ID,
       taskId: EPIC_ID,
     });
@@ -1206,7 +1207,11 @@ describe("a message sent to a chat the pool serves because its host dropped the 
           }),
         ],
       };
-      await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+      const mounted = await mountOnThePool(
+        POOL_VIEWER_ACCESS,
+        TEAM_CREATOR_CHAT_SOURCE,
+      );
+      await waitForCloudChatList(mounted);
 
       expectReadOnlyWithoutParking();
     },
@@ -1259,7 +1264,8 @@ describe("a message sent to a chat the pool serves because its host dropped the 
         ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
         starterUserId: null,
       };
-      await mountOnThePool(POOL_VIEWER_ACCESS, source);
+      const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
+      await waitForCloudChatList(mounted);
 
       expectReadOnlyWithoutParking();
     },
@@ -1282,15 +1288,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       starterUserId: null,
     };
     const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
-    expect(
-      mounted.queryClient.getQueryData(
-        cloudChatListQueryKey({
-          hostId: poolEntry.hostId,
-          viewerUserId: SAVED_CREATOR_USER_ID,
-          taskId: EPIC_ID,
-        }),
-      ),
-    ).toEqual(cloudChatListTestState.data);
+    await waitForCloudChatList(mounted);
     await parkAndSendThroughOwnerHost(
       ADMITTED_PERSONAL_OWNER_ACCESS,
       SAVED_CREATOR_USER_ID,
