@@ -287,6 +287,7 @@ function surfacesProps(patch: {
       // renders the strip itself, above the composer.
       workspaceControls: <div data-testid="workspace-controls-stub" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },

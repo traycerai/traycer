@@ -1,11 +1,7 @@
-/**
- * A chat the pool serves because its host dropped the records takes a typed
- * message (parked until the host brings the chat back), whoever the viewer is,
- * and its composer looks like any other: the send stays enabled and nothing is
- * said above it.
- */
+/** An evicted chat parks its owner's message; a viewer stays read-only. */
 import {
   cleanup,
+  fireEvent,
   render as testingRender,
   screen,
 } from "@testing-library/react";
@@ -194,6 +190,7 @@ function props(
       onSettingsChange: null,
       workspaceControls: <div data-testid="host-workspace-selector" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },
@@ -239,16 +236,21 @@ afterEach(() => {
 });
 
 describe("the composer of an evicted chat the pool serves", () => {
-  it("renders the live composer with send enabled for a viewer who cannot act, and no line above it", () => {
-    const { container } = render(
-      <ChatLowerInteractionSurfaces {...props(evictedAccess(true))} />,
+  it("keeps a parked chat read-only for a viewer and offers Clone agent", () => {
+    const onClone = vi.fn();
+    const interactionProps = props(evictedAccess(true));
+    render(
+      <ChatLowerInteractionSurfaces
+        {...interactionProps}
+        composer={{ ...interactionProps.composer, onClone }}
+      />,
     );
 
-    expect(composerProps.at(-1)).toEqual({ sendDisabled: false });
-    expect(screen.getByTestId("composer-stub").textContent).toBe("");
-    expect(
-      container.querySelector("[role='status'], [role='alert']"),
-    ).toBeNull();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(composerProps).toEqual([]);
+    expect(screen.getByText("Read-only viewer.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clone agent" }));
+    expect(onClone).toHaveBeenCalledTimes(1);
   });
 
   it("keeps send enabled while a message is parked and the session cannot act", () => {
@@ -289,5 +291,7 @@ describe("the composer of an evicted chat the pool serves", () => {
     render(<ChatLowerInteractionSurfaces {...props(evictedAccess(false))} />);
 
     expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
   });
 });
