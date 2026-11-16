@@ -1277,7 +1277,7 @@ function HomeWorkspaceRows(props: {
           (resolvedFolders[index].kind === "local-only" &&
             item.summary === null)
         ) {
-          return item;
+          return { ...item, removeSkipsRecent: true };
         }
         const removeFromActive = item.onRemove;
         return {

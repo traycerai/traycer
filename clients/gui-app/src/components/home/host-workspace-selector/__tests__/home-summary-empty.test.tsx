@@ -21,6 +21,7 @@ import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktre
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
@@ -679,15 +680,16 @@ function mockRecentRequests(recordRecent: () => Promise<unknown>): void {
   });
 }
 
+const RECORD_RESPONSE_FIELDS = {
+  operation: "recordRecentWorkspace",
+  folders: [],
+  repoIdentifiers: [],
+  homeDir: null,
+  recentWorkspaces: null,
+};
+
 function successfulRecentRecordResponse(): unknown {
-  return {
-    operation: "recordRecentWorkspace",
-    folders: [],
-    repoIdentifiers: [],
-    homeDir: null,
-    validation: { ok: true },
-    recentWorkspaces: null,
-  };
+  return { ...RECORD_RESPONSE_FIELDS, validation: { ok: true } };
 }
 
 describe("landing workspace summary empty state", () => {
@@ -1036,7 +1038,9 @@ describe("landing workspace summary empty state", () => {
 
     const queryClient = renderControl("inline");
     fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    fireEvent.click(await screen.findByTestId("folder-remove"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move app to Recent" }),
+    );
 
     await waitFor(() => {
       expect(mocks.request).toHaveBeenCalledWith(
@@ -1080,7 +1084,7 @@ describe("landing workspace summary empty state", () => {
 
     const queryClient = renderControl("inline");
     fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    fireEvent.click(await screen.findByTestId("folder-remove"));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove app" }));
 
     expect(
       selectWorkspaceFoldersBucket(
@@ -1109,7 +1113,7 @@ describe("landing workspace summary empty state", () => {
 
     const queryClient = renderControl("inline");
     fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    fireEvent.click(await screen.findByTestId("folder-remove"));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove app" }));
 
     expect(
       selectWorkspaceFoldersBucket(
@@ -1120,6 +1124,37 @@ describe("landing workspace summary empty state", () => {
     expect(mocks.request).not.toHaveBeenCalledWith(
       "workspace.prepareFolders",
       expect.objectContaining({ operation: "recordRecentWorkspace" }),
+    );
+
+    queryClient.clear();
+  });
+
+  it("removes a folder the host refused to record without counting a move to Recent", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    mockRecentRequests(() =>
+      Promise.resolve({
+        ...RECORD_RESPONSE_FIELDS,
+        validation: { ok: false, reason: "NOT_FOUND" },
+      }),
+    );
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    fireEvent.click(await screen.findByTestId("folder-remove"));
+
+    await waitFor(() => {
+      expect(
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          "host-home",
+        ).folders,
+      ).toEqual([]);
+    });
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      expect.anything(),
     );
 
     queryClient.clear();
