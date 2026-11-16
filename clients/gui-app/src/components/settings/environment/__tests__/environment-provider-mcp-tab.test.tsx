@@ -329,6 +329,7 @@ describe("A provider's MCP tab on Personal or a team", () => {
           providerId: "claude-code",
           mutation: {
             kind: "promoteToPersonal",
+            intentOperationId: null,
             entryKind: "mcp",
             scope: "global",
             workspaceRoot: null,
