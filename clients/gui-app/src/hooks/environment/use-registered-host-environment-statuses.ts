@@ -40,8 +40,9 @@ type StatusAnswer = ResponseOfMethod<HostRpcRegistry, typeof METHOD>;
 
 /**
  * Whether a computer's cached status asks for the status poll: its move is
- * running, or its move is done and its Local row has not turned over (the
- * host records `done` before it flips the planes the row is decided from).
+ * running, or its move is done and its Local row has not turned over (when
+ * the host's binding read resumes without flipping them, it records `done`
+ * before the planes the row is decided from flip).
  * The second arm applies only to a personal computer: a computer given to a
  * team answers `done` with local planes as its ordinary state, and one that
  * reports no principal yet cannot be told apart from it.
