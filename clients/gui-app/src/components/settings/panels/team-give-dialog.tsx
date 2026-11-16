@@ -86,7 +86,10 @@ export function TeamGiveDialog(props: {
   const [attempt, setAttempt] = useState<GiveAttempt | null>(null);
   const [notFinished, setNotFinished] = useState(false);
   const originAttempt =
-    attempt !== null && attempt.press.operation.onOriginSignIn()
+    attempt !== null &&
+    attempt.press.hostId === props.hostId &&
+    attempt.press.team.environmentId === team.environmentId &&
+    attempt.press.operation.onOriginSignIn()
       ? attempt
       : null;
   const { given, ended, reread } = useGiveAttempt(
@@ -144,6 +147,7 @@ export function TeamGiveDialog(props: {
       ownership.data !== "confirmed" ||
       givenOnce.current ||
       attempt === null ||
+      originAttempt === null ||
       !attempt.press.operation.onOriginSignIn()
     )
       return;
@@ -153,7 +157,7 @@ export function TeamGiveDialog(props: {
     });
     void attempt.press.runtime.directory.refresh();
     attempt.press.onGiven(attempt.press.team);
-  }, [attempt, given, ownership.data, queryClient]);
+  }, [attempt, given, originAttempt, ownership.data, queryClient]);
 
   const settle = (
     answer: EnvironmentMoveOutcomeAnswer,
