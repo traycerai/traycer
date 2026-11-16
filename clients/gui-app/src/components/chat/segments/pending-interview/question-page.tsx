@@ -13,6 +13,7 @@ import {
 } from "@/components/chat/segments/interview-visuals";
 import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
@@ -90,10 +91,15 @@ export function QuestionPage(props: QuestionPageProps) {
   // On the installed mobile app it does nothing: a question rendering, or its
   // tab becoming active, is not a tap, and a phone keyboard must be summoned by
   // a tap. Tapping the field there focuses it the ordinary way.
+  // It yields to the pane's focus intent, as the card and the composer do, so
+  // a field seated by a chat's first transcript leaves alone the menu or
+  // rename the reader opened while it loaded.
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
       if (!focusActive || disabled || node === null || isMobileApp()) return;
       const frame = window.requestAnimationFrame(() => {
+        if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
         node.focus({ preventScroll: true });
       });
       return () => window.cancelAnimationFrame(frame);
@@ -102,7 +108,7 @@ export function QuestionPage(props: QuestionPageProps) {
     // restores focus when a rejected action clears the busy gate: a disabled
     // field cannot take focus, and a callback ref only re-fires when its
     // identity changes, not merely when the prop it reads changes.
-    [disabled, focusActive],
+    [disabled, focusActive, paneActivationFocusIntent],
   );
 
   // A question with no options is pure free-text: a single textarea that
