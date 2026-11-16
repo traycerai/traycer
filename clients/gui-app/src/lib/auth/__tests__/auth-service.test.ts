@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { putConfigurationMcpServer } from "@traycer-clients/shared/environment/configuration-settings";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type { SlackAppWriteResult } from "@traycer-clients/shared/host-client/slack-app";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
   authRetryDelayMs,
@@ -14,6 +19,12 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import {
   DEFAULT_SKEW_ENTER_MS,
   DEFAULT_SKEW_EXIT_MS,
@@ -541,6 +552,75 @@ describe("AuthService", () => {
     useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
+  });
+
+  it("forwards all bot setup writes on the verified bearer and makes no signed-out call", async () => {
+    const { service, host } = makeService();
+    const runSettings: BotUpdateRunSettingsRequest = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+    };
+    const replyMode: BotUpdateReplyModeRequest = {
+      botId: runSettings.botId,
+      replyMode: "direct",
+    };
+    const deleteRequest: BotDeleteRequest = { botId: runSettings.botId };
+    const slackRequest: SlackAppRegisterRequest = {
+      botId: runSettings.botId,
+      appId: "A07K2M9QX4T",
+      clientId: "123.456",
+      clientSecret: "client-secret",
+      signingSecret: "signing-secret",
+    };
+    const run = vi.spyOn(host, "updateBotRunSettings").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const reply = vi.spyOn(host, "updateBotReplyMode").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const deletion = vi.spyOn(host, "deleteBot").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotDeleteResult);
+    const slack = vi.spyOn(host, "registerSlackApp").mockResolvedValue({
+      kind: "network-error",
+      detail: "test",
+    } satisfies SlackAppWriteResult);
+
+    await expect(service.updateBotRunSettings(runSettings)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.updateBotReplyMode(replyMode)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.deleteBot(deleteRequest)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.registerSlackApp(slackRequest)).resolves.toEqual({
+      kind: "unauthorized",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    expect(deletion).not.toHaveBeenCalled();
+    expect(slack).not.toHaveBeenCalled();
+
+    await host.tokenStore.signIn(
+      { token: "verified-bearer", refreshToken: "refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+
+    await service.updateBotRunSettings(runSettings);
+    await service.updateBotReplyMode(replyMode);
+    await service.deleteBot(deleteRequest);
+    await service.registerSlackApp(slackRequest);
+
+    expect(run).toHaveBeenCalledWith("verified-bearer", runSettings);
+    expect(reply).toHaveBeenCalledWith("verified-bearer", replyMode);
+    expect(deletion).toHaveBeenCalledWith("verified-bearer", deleteRequest);
+    expect(slack).toHaveBeenCalledWith("verified-bearer", slackRequest);
   });
 
   it("rehydrates a persisted token after AuthnV3 validation succeeds", async () => {

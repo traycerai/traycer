@@ -7,6 +7,20 @@ export const authQueryKeys = {
     userId: string | null,
     hostId: string | null,
   ): readonly unknown[] => ["auth", "host-ownership", auth, userId, hostId],
+  // A give's readback cannot reuse the Overview answer from before the move.
+  hostOwnershipAfterMove: (
+    auth: object | null,
+    userId: string | null,
+    hostId: string | null,
+    attemptId: string | null,
+  ): readonly unknown[] => [
+    "auth",
+    "host-ownership-after-move",
+    auth,
+    userId,
+    hostId,
+    attemptId,
+  ],
   hostOwnershipAll: (): readonly unknown[] => ["auth", "host-ownership"],
   teamComputers: (
     auth: object | null,
@@ -18,6 +32,17 @@ export const authQueryKeys = {
     auth,
     userId,
     environmentId,
+  ],
+  teamChatAutoArchive: (
+    auth: object | null,
+    userId: string | null,
+    teamId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "team-chat-auto-archive",
+    auth,
+    userId,
+    teamId,
   ],
   // One team's claimed computers (`AuthService.listClaimedComputers`), the
   // reader's answer as it is: a claimed computer's cover and the team's own

@@ -6,7 +6,17 @@ import { createDesktopHostTokenSource } from "./desktop-host-tokens";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -190,6 +200,15 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -283,6 +302,14 @@ export interface DesktopPreloadBridge {
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -356,6 +383,18 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -500,6 +539,17 @@ export interface DesktopPreloadBridge {
    */
   selectionAuthority: SelectionAuthorityClient;
   refreshSelectionFleet: () => Promise<void>;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -1355,6 +1405,20 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.listEnvironments(bearerToken);
   }
 
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return this.bridge.saveAutoPolicy(bearerToken, body);
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return this.bridge.attachTaskEnvironment(bearerToken, request);
+  }
+
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return this.bridge.getSandboxCosts(bearerToken);
   }
@@ -1500,6 +1564,27 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.setSlackAppDms(bearerToken, request);
   }
 
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return this.bridge.updateBotRunSettings(bearerToken, request);
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return this.bridge.updateBotReplyMode(bearerToken, request);
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return this.bridge.deleteBot(bearerToken, request);
+  }
+
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1621,6 +1706,21 @@ export class DesktopRunnerHost implements IRunnerHost {
     }
     this.localHostHandlers.clear();
     this.systemResumedHandlers.clear();
+  }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return this.bridge.getTeamChatAutoArchive(bearerToken, teamId);
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return this.bridge.setTeamChatAutoArchive(bearerToken, teamId, request);
   }
 }
 

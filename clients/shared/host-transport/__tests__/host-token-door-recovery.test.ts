@@ -324,9 +324,17 @@ describe("host-token refusal recovery", () => {
       expect(stateCalls).toEqual([]);
       expect(transport.session.isClosed()).toBe(false);
 
+      // The peer records OPEN before its awaited FATAL delivery completes.
+      // Wait for the handled refusal so backoff is armed before advancing time.
+      await vi.waitFor(() =>
+        expect(relayPeer.closeReasons).toContainEqual({
+          code: 1000,
+          reason: "session-fatal-retryable",
+        }),
+      );
       await vi.advanceTimersByTimeAsync(RECONNECT_INITIAL_BACKOFF_MS * 2);
-      await vi.waitFor(() => expect(relayPeer.openCount).toBe(2));
       await vi.waitFor(() => expect(transport.session.isReady()).toBe(true));
+      expect(relayPeer.openCount).toBe(2);
 
       expect(mintCalls).toEqual([]);
       expect(stateCalls).toEqual([]);

@@ -245,11 +245,15 @@ describe("new methods are off every released floor", () => {
     );
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
-        ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
-          ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
-          : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
-            ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
-            : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
+        name === "environment.status"
+          ? `${name}: degrade=unsupported majors=1 latestMinor=3 minors=0,1,2,3`
+          : name === "host.remoteAccess.set"
+            ? `${name}: degrade=unsupported majors=1,2 latestMinor=0 minors=0`
+            : ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
+              ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
+              : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
+                ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
+                : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
       ),
     );
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({

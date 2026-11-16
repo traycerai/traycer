@@ -19,6 +19,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useRemoteAccessSetMutation } from "@/hooks/environment/use-remote-access-set-mutation";
+import { useRemoteAccessTurnOnMutation } from "@/hooks/environment/use-remote-access-turn-on-mutation";
 import { useCanSetRemoteAccess } from "@/hooks/environment/use-can-set-remote-access";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -26,9 +27,8 @@ import type { HostRpcRegistry } from "@/lib/host";
  * Remote access on the picked host: whether other devices and agents on the
  * person's account or team can reach this computer, and the switch.
  *
- * Off is visible while it happens: the host answers `turning_off` until it
- * has closed every session (within 30 seconds), and the section says so until
- * the host's own status reports `off`.
+ * Off is visible while it happens: once the host has taken it, the section
+ * says "turning off" until the host's own status reports `off`.
  */
 export function RemoteAccessSection(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -43,13 +43,17 @@ export function RemoteAccessSection(props: {
     props.principal,
     true,
   );
-  // The host's last answer to a switch made here.
+  // An Off pressed here, which the host has taken.
   const [lastAnswer, setLastAnswer] = useState<RemoteAccessState | null>(null);
   // Once the host reports `off`, the answer has done its job.
   if (lastAnswer === "turning_off" && props.status === "off") {
     setLastAnswer(null);
   }
-  const set = useRemoteAccessSetMutation(props.client, setLastAnswer);
+  const set = useRemoteAccessSetMutation(props.client, () =>
+    setLastAnswer("turning_off"),
+  );
+  const turnOn = useRemoteAccessTurnOnMutation(props.client, props.hostId);
+  const failure = turnOn.error ?? set.error;
   const shown = shownRemoteAccess(props.status, lastAnswer);
   return (
     <SettingsGroup
@@ -71,15 +75,18 @@ export function RemoteAccessSection(props: {
           {!writable ? null : (
             <RemoteAccessControl
               shown={shown}
-              pending={set.isPending}
-              onSet={(enabled) => set.mutate({ enabled })}
+              pending={set.isPending || turnOn.isPending}
+              onSet={(enabled) => {
+                if (enabled) turnOn.mutate();
+                else set.mutate({});
+              }}
             />
           )}
         </div>
       </RemoteAccessQuestion>
-      {set.error !== null ? (
+      {failure !== null ? (
         <p role="alert" className="px-5 py-3 text-ui-sm text-destructive">
-          {remoteAccessFailureText(set.error.code)}
+          {remoteAccessFailureText(failure.code)}
         </p>
       ) : null}
     </SettingsGroup>

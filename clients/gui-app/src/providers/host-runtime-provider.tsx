@@ -411,6 +411,9 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         onHostTokenRenewal: noteHostTokenRenewal,
         registry,
         messenger,
+        // Below both resending layers above: a call made through
+        // `requestSingleAttemptFor` is sent once and never again.
+        singleAttemptMessenger: rawMessenger,
         requestContextProvider: auth.getRequestContextProvider(),
         directory,
         invalidator,

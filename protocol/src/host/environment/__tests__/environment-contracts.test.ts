@@ -83,6 +83,9 @@ import {
   environmentMovePlanV10,
   environmentMovePlanV11,
   environmentMovePlanV12,
+  environmentMoveStageV10,
+  environmentMoveStartV10,
+  environmentMoveOutcomeV10,
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
@@ -141,6 +144,19 @@ describe("environment.list protocol contract", () => {
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       environmentListUpgradeV10ToV11,
     );
+  });
+});
+
+describe("retired team provider profile methods", () => {
+  it("does not register retired provider profile calls on the real host registry", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(hostRpcRegistry, method)).toBe(false);
+    }
   });
 });
 
@@ -839,6 +855,24 @@ const ITEM_ADDRESS = {
   revision: 3,
 };
 
+const STAGED_MOVE = {
+  evidence: {
+    attemptId: "123e4567-e89b-42d3-a456-426614174000",
+    planHash: "a".repeat(64),
+    planRevision: 2,
+    hostVersion: "1.4.0",
+    itemCount: 1,
+    keyChoices: [{ key: "API_BASE", choice: "stays" }],
+    sourceHostId: "223e4567-e89b-42d3-a456-426614174000",
+    sharingGeneration: 1,
+    targetKind: "personal",
+    environmentId: PERSONAL.environmentId,
+    disclosureVersion: 1,
+  },
+  authorization: { manifestHash: "b".repeat(64) },
+};
+const MOVE_ACCEPTANCE_ID = "323e4567-e89b-42d3-a456-426614174000";
+
 const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
   {
     method: "environment.configuration.revision",
@@ -887,6 +921,67 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     },
     response: { outcome: "accepted", attemptId: "a1", consentId: "c1" },
     badResponse: { outcome: "accepted", attemptId: "a1" },
+  },
+  {
+    method: "environment.move.stage",
+    contract: environmentMoveStageV10,
+    request: {
+      target: { kind: "personal", environmentId: PERSONAL.environmentId },
+      keyChoices: [{ key: "API_BASE", choice: "stays" }],
+      personal: {
+        items: [
+          {
+            kind: "variable",
+            key: "API_BASE",
+            os: null,
+            value: "https://api.example.com",
+          },
+        ],
+        holdsSecrets: false,
+      },
+    },
+    badRequest: {
+      target: { kind: "personal", environmentId: PERSONAL.environmentId },
+      keyChoices: [{ key: "API_BASE", choice: "moves" }],
+      personal: { items: [], holdsSecrets: false },
+    },
+    response: STAGED_MOVE,
+    badResponse: {
+      ...STAGED_MOVE,
+      authorization: { manifestHash: "not-a-sha256-hash" },
+    },
+  },
+  {
+    method: "environment.move.start",
+    contract: environmentMoveStartV10,
+    request: {
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      planHash: STAGED_MOVE.evidence.planHash,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+    badRequest: {
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      planHash: STAGED_MOVE.evidence.planHash,
+      acceptanceId: "not-a-uuid",
+    },
+    response: {
+      state: "running",
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+    badResponse: {
+      state: "retry",
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+  },
+  {
+    method: "environment.move.outcome",
+    contract: environmentMoveOutcomeV10,
+    request: { attemptId: "ended-attempt" },
+    badRequest: { attemptId: "" },
+    response: { state: "not_found", attemptId: "ended-attempt" },
+    badResponse: { state: "not_found", attemptId: "" },
   },
   {
     method: "environment.move.stopPreview",
@@ -1452,18 +1547,19 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
 
 describe("the environments redesign's new @1.0 methods", () => {
   it.each(REDESIGN_WIRE_CASES.map((c) => [c.method, c] as const))(
-    "%s is registered off the released floor with degrade unsupported, major 1 only",
+    "%s is registered off the released floor with its current majors and frozen major 1",
     (_method, wire) => {
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(wire.method);
       const entry = hostRpcRegistry[wire.method];
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(Object.keys(entry).filter((key) => /^\d+$/.test(key))).toEqual([
-        "1",
-      ]);
+      expect(Object.keys(entry).filter((key) => /^\d+$/.test(key))).toEqual(
+        wire.method === "environment.move.plan" ? ["1", "2"] : ["1"],
+      );
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan"
+        wire.method === "environment.move.plan" ||
+          wire.method === "environment.move.stopPreview"
           ? 2
-          : wire.method === "environment.move.stopPreview" ||
+          : wire.method === "environment.move.stop" ||
               wire.method === "environment.configuration.mcpServers.put" ||
               wire.method === "environment.configuration.guide.get" ||
               wire.method === "environment.configuration.skills.list" ||

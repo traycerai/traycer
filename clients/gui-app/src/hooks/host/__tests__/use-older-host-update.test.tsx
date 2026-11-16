@@ -308,6 +308,7 @@ async function renderSignedIn(
     runnerHost,
     onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `older-host-${++requestSeq}`,

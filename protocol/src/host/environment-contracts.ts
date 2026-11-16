@@ -256,16 +256,49 @@ export const environmentStatusUpgradeV12ToV13 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, move: null }),
 });
 
+/** `host.remoteAccess.set@1.0`: On and Off, through the host. */
+export const hostRemoteAccessSetV10 = defineRpcContract({
+  method: "host.remoteAccess.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostRemoteAccessSetRequestSchema,
+  responseSchema: schemas.hostRemoteAccessSetResponseSchema,
+});
+
 /**
- * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays as registered below.
- * Defined and not registered: it registers with the host slice that serves
- * it and its first caller. Not an agent capability.
+ * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays registered beside it.
+ * Not an agent capability.
  */
 export const hostRemoteAccessSetV20 = defineRpcContract({
   method: "host.remoteAccess.set",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: schemas.hostRemoteAccessSetRequestSchemaV20,
   responseSchema: schemas.hostRemoteAccessSetResponseSchemaV20,
+});
+
+/**
+ * Required by the registry for a new major, and never run: `@2.0` has no
+ * downgrade to `@1.0`, so a host refuses a `@1.0` caller before upgrading
+ * anything, and an app meets a `@1.0`-only host as unsupported. Neither side
+ * can be carried honestly: `{ enabled: true }` has no `@2.0` form, because
+ * turning remote access on is the app's call to authn, and `@1.0`'s
+ * `turning_off` is not `@2.0`'s `off`.
+ */
+export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
+  typeof hostRemoteAccessSetV10,
+  typeof hostRemoteAccessSetV20
+>({
+  from: hostRemoteAccessSetV10.schemaVersion,
+  to: hostRemoteAccessSetV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 requests cannot be upgraded to v2.0: v2.0 only turns remote access off",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 responses cannot be upgraded to v2.0: v1.0's state is not v2.0's off",
+    );
+  },
 });
 
 /**
@@ -1053,13 +1086,18 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "host.remoteAccess.set",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.hostRemoteAccessSetRequestSchema,
-            responseSchema: schemas.hostRemoteAccessSetResponseSchema,
-          }),
+          contract: hostRemoteAccessSetV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRemoteAccessSetV20,
+          upgradeFromPreviousVersion: hostRemoteAccessSetUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},

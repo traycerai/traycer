@@ -26,6 +26,7 @@ import {
   useBotSlackInstallUrlMutation,
   useBotSlackRegisterMutation,
 } from "@/hooks/bots/use-bot-slack-mutations";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useOpenLink } from "@/lib/links/open-link";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
@@ -44,10 +45,16 @@ const COPIED_RESET_MS = 2_000;
  *   disconnect.
  *
  * Rendered from the server's app read alone; every write refreshes that read.
- * Each refusal is shown in place, under the control that made it.
+ * Each refusal is shown in place, under the control that made it. The
+ * registration form is drawn only where the role may change the bot's
+ * environment (`useBotMayChange`), and not while that role is unknown.
  */
-export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
+export function BotSlackSettings(props: {
+  readonly botId: string;
+  readonly environmentId: string;
+}): ReactNode {
   const { botId } = props;
+  const mayRegister = useBotMayChange(props.environmentId);
   const appQuery = useBotSlackAppQuery(botId);
   const app = appQuery.data;
   const error = appQuery.error;
@@ -64,11 +71,11 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
       />
     );
   } else if (app === null) {
-    body = <BotSlackNotConnected botId={botId} />;
+    body = <BotSlackNotConnected botId={botId} mayRegister={mayRegister} />;
   } else if (app.installState === "installed") {
     body = <BotSlackConnected app={app} />;
   } else {
-    body = <BotSlackRegistered app={app} />;
+    body = <BotSlackRegistered app={app} mayRegister={mayRegister} />;
   }
   // A read that failed after one succeeded keeps the app the last one read,
   // and says so under it.
@@ -118,7 +125,10 @@ function BotSlackUnavailable(props: { readonly line: string }): ReactNode {
   );
 }
 
-function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
+function BotSlackNotConnected(props: {
+  readonly botId: string;
+  readonly mayRegister: boolean;
+}): ReactNode {
   const { botId } = props;
   const manifest = useBotSlackManifestQuery(botId);
   const openLink = useOpenLink();
@@ -173,7 +183,7 @@ function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
           Open api.slack.com/apps
         </Button>
       </div>
-      <BotSlackRegisterForm botId={botId} />
+      {props.mayRegister ? <BotSlackRegisterForm botId={botId} /> : null}
     </div>
   );
 }
@@ -272,7 +282,10 @@ function BotSlackRegisterForm(props: { readonly botId: string }): ReactNode {
 }
 
 /** Registered and not installed: never installed, or removed from its workspace since. */
-function BotSlackRegistered(props: { readonly app: SlackAppView }): ReactNode {
+function BotSlackRegistered(props: {
+  readonly app: SlackAppView;
+  readonly mayRegister: boolean;
+}): ReactNode {
   const { app } = props;
   return (
     <div
@@ -289,7 +302,7 @@ function BotSlackRegistered(props: { readonly app: SlackAppView }): ReactNode {
         {registeredNextStepLine(app)}
       </p>
       <BotSlackInstall app={app} label="Install to workspace" />
-      <BotSlackRegisterForm botId={app.botId} />
+      {props.mayRegister ? <BotSlackRegisterForm botId={app.botId} /> : null}
     </div>
   );
 }
@@ -428,7 +441,9 @@ function BotSlackInstall(props: {
             install.mutate(
               { baselineInstalledAt: app.installedAt },
               {
-                onSuccess: (minted) => void openLink(minted.url, "auth", event),
+                onSuccess: (minted) => {
+                  if (minted !== null) void openLink(minted.url, "auth", event);
+                },
               },
             )
           }

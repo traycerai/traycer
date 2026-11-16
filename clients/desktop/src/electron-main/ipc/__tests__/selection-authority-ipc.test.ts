@@ -20,6 +20,7 @@ import {
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
   CredentialsMigrationOutcome,
@@ -61,6 +62,12 @@ import type {
   UninstallOk,
 } from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import {
+  createSigningKey,
+  jwksResponse,
+  userBearerClaims,
+  type BearerSigningKey,
+} from "../../auth/__tests__/jws-fixture";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -595,7 +602,7 @@ interface Snapshot {
   readonly preferredHostId: string | null;
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
-  readonly leases: readonly unknown[];
+  readonly leases: readonly HostLeaseSnapshot[];
 }
 
 type AttachResult =
@@ -899,31 +906,43 @@ function refreshFleetHandler(): InvokeHandler {
   return handler;
 }
 
+/**
+ * This machine's own host, running and enrolled: what a cold start finds on
+ * disk before any account call is possible.
+ */
+async function runningLocalHost(): Promise<{
+  readonly host: FakeHost;
+  readonly directory: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
+  const enrollmentFile = join(directory, "identity", "enrollment.json");
+  await mkdir(dirname(enrollmentFile), { recursive: true });
+  await writeFile(
+    enrollmentFile,
+    JSON.stringify({ hostId: "local-host" }),
+    "utf8",
+  );
+  const host = new FakeHost();
+  host.identityEnrollmentFile = enrollmentFile;
+  host.setSnapshot({
+    hostId: "local-host",
+    websocketUrl: "ws://127.0.0.1:1",
+    version: MINIMUM_HOST_VERSION,
+    pid: 123,
+    systemHostName: "test-host",
+    displayName: "Test Host",
+    availability: "available",
+  });
+  return { host, directory };
+}
+
 describe("local auth-session restore", () => {
   it("restores a matching file identity into an empty main and selects its available local host without cloud access", async () => {
     const webSocketConstructor = vi.fn(function WebSocketConstructor() {
       throw new Error("unexpected local inventory connection");
     });
     vi.stubGlobal("WebSocket", webSocketConstructor);
-    const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
-    const enrollmentFile = join(directory, "identity", "enrollment.json");
-    await mkdir(dirname(enrollmentFile), { recursive: true });
-    await writeFile(
-      enrollmentFile,
-      JSON.stringify({ hostId: "local-host" }),
-      "utf8",
-    );
-    const host = new FakeHost();
-    host.identityEnrollmentFile = enrollmentFile;
-    host.setSnapshot({
-      hostId: "local-host",
-      websocketUrl: "ws://127.0.0.1:1",
-      version: MINIMUM_HOST_VERSION,
-      pid: 123,
-      systemHostName: "test-host",
-      displayName: "Test Host",
-      availability: "available",
-    });
+    const { host, directory } = await runningLocalHost();
     const stored = buildStoredCredentials("user-a", "stored-token");
     const tokenStore = new FakeAuthTokenStore(async () => stored);
     const { bridge, registry, authSession } = await buildBridge({
@@ -1305,6 +1324,248 @@ describe("local auth-session restore", () => {
       bridge.dispose();
     }
   });
+});
+
+/**
+ * A cold start with no network, through main's own handlers: the real
+ * `authSessionSet` with the real bearer verifier (its key source a fetch that
+ * fails, then answers), the real `authSessionRestoreLocal` over a credentials
+ * file double, and the real selection authority listing what main holds.
+ */
+describe("an offline start", () => {
+  const USER_ID = "user-a";
+  const PROFILE = {
+    userId: USER_ID,
+    userName: USER_ID,
+    email: `${USER_ID}@example.com`,
+  };
+  const START = new Date("2026-11-16T00:00:00.000Z");
+  const COOLDOWN_MS = 61_000;
+
+  function handOver(token: string): DesktopAuthSessionSnapshot {
+    return { status: "signed-in", token, profile: PROFILE };
+  }
+
+  function invokeHandler(channel: string): InvokeHandler {
+    const handler = ipcMainState.handlers.get(channel);
+    if (handler === undefined) throw new Error(`${channel} handler missing`);
+    return handler;
+  }
+
+  /** The key source: down until `answer()`, then authn's published keys. */
+  function recordedKeySource(publicJwk: Record<string, unknown>): {
+    readonly answer: () => void;
+    readonly attempts: () => number;
+  } {
+    let up = false;
+    const fetchMock = vi.fn(() =>
+      up
+        ? Promise.resolve(jwksResponse([publicJwk]))
+        : Promise.reject(new TypeError("fetch failed")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      answer: () => {
+        up = true;
+      },
+      attempts: () => fetchMock.mock.calls.length,
+    };
+  }
+
+  async function listedHostIds(webContentsId: number): Promise<string[]> {
+    const seq = invokeSyncWithSender(
+      RunnerHostSync.selectionAttachSeq,
+      webContentsId,
+    );
+    const attached = await attachOk(attachHandler(), webContentsId, seq, []);
+    return attached.snapshot.leases.map((lease) => lease.hostId);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(START);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("lists the local computer with the keys unreachable, keeps the hold, and verifies once the keys answer, for every window", async () => {
+    const { host, directory } = await runningLocalHost();
+    const key = createSigningKey("kid-1", "bearer");
+    const keys = recordedKeySource(key.publicJwk);
+    const token = key.sign(userBearerClaims(USER_ID, Date.now() + 3_600_000));
+    const stored = buildStoredCredentials(USER_ID, token);
+    const tokenStore = new FakeAuthTokenStore(() => Promise.resolve(stored));
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+      host,
+    });
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, buildWindow());
+    bridge.install();
+    await flushIo();
+    const registryReadsAtStart = fetchRegisteredHostsMock.mock.calls.length;
+
+    try {
+      // The ordinary hand-over: main cannot reach its keys, adopts nothing,
+      // and lists no computer at all.
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "key-source-unavailable",
+      });
+      expect(authSession.get().status).toBe("signed-out");
+      expect(await listedHostIds(101)).toEqual([]);
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the refusal",
+      ).toBe(registryReadsAtStart);
+
+      // The fallback: the local computer only, from disk, no account call.
+      await expect(
+        restoreLocalHandler()(sender(101), { userId: USER_ID, token }),
+      ).resolves.toBe("restored");
+      // The identity is the credentials file's, never the window's claim.
+      expect(authSession.get()).toEqual({
+        status: "unverified",
+        token,
+        profile: {
+          userId: USER_ID,
+          userName: stored.user.name,
+          email: stored.user.email,
+        },
+        verified: false,
+      });
+      await awaitSelectionTarget(windowA, "local-host");
+      expect(await listedHostIds(101)).toEqual(["local-host"]);
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the local restore",
+      ).toBe(registryReadsAtStart);
+      // A second window is not signed out and lists the same computer.
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionGet)(sender(202)),
+      ).resolves.toMatchObject({ status: "unverified", token });
+      expect(await listedHostIds(202)).toEqual(["local-host"]);
+
+      // The resend inside the verifier's cooldown is refused again, makes no
+      // new attempt on authn, and leaves the local hold as it is.
+      const attemptsBefore = keys.attempts();
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "key-source-unavailable",
+      });
+      expect(keys.attempts()).toBe(attemptsBefore);
+      expect(authSession.get()).toMatchObject({
+        status: "unverified",
+        verified: false,
+      });
+
+      // The way back: the keys answer, the same session is handed over again.
+      keys.answer();
+      vi.setSystemTime(Date.now() + COOLDOWN_MS);
+      fetchRegisteredHostsMock.mockResolvedValue({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            buildHostListItem("team-host"),
+          ],
+        },
+      });
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({ outcome: "accepted" });
+      expect(authSession.get()).toEqual({ ...handOver(token), verified: true });
+      await refreshFleetHandler()(sender(101));
+      await flushIo();
+      expect(await listedHostIds(101)).toEqual(
+        expect.arrayContaining(["local-host", "team-host"]),
+      );
+    } finally {
+      bridge.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "a wrong signature",
+      reason: "bad-signature" as const,
+      tokenFor: (_key: BearerSigningKey) =>
+        createSigningKey("kid-1", "bearer").sign(
+          userBearerClaims(USER_ID, Date.now() + 3_600_000),
+        ),
+    },
+    {
+      label: "an unknown signing key",
+      reason: "unknown-signing-key" as const,
+      tokenFor: (_key: BearerSigningKey) =>
+        createSigningKey("kid-unpublished", "bearer").sign(
+          userBearerClaims(USER_ID, Date.now() + 3_600_000),
+        ),
+    },
+    {
+      label: "an expired token",
+      reason: "expired" as const,
+      tokenFor: (key: BearerSigningKey) =>
+        key.sign(userBearerClaims(USER_ID, Date.now() - 120_000)),
+    },
+  ])(
+    "adopts nothing and lists no computer for $label, with the keys reachable",
+    async ({ reason, tokenFor }) => {
+      const { host, directory } = await runningLocalHost();
+      const key = createSigningKey("kid-1", "bearer");
+      const keys = recordedKeySource(key.publicJwk);
+      keys.answer();
+      const token = tokenFor(key);
+      const tokenStore = new FakeAuthTokenStore(() =>
+        Promise.resolve(buildStoredCredentials(USER_ID, token)),
+      );
+      const { bridge, registry, authSession } = await buildBridge({
+        authTokenStore: tokenStore,
+        host,
+      });
+      registry.add("window-a", 101, buildWindow());
+      bridge.install();
+
+      try {
+        await expect(
+          invokeHandler(RunnerHostInvoke.authSessionSet)(
+            sender(101),
+            handOver(token),
+          ),
+        ).resolves.toEqual({ outcome: "refused", reason });
+
+        expect(authSession.get()).toEqual({
+          status: "signed-out",
+          token: null,
+          profile: null,
+          verified: false,
+        });
+        expect(await listedHostIds(101)).toEqual([]);
+        expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
+      } finally {
+        bridge.dispose();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("selection authority IPC binding", () => {

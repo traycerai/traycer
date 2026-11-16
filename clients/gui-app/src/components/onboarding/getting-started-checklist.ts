@@ -8,12 +8,12 @@ import {
 } from "lucide-react";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
+import { useHostOwnEnvironment } from "@/hooks/environment/use-host-own-environment";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
-import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
-import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useOptionalHostClient } from "@/lib/host";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
 import {
   sandboxIsStagedInThisWindow,
@@ -184,16 +184,16 @@ export function useGettingStartedFacts(): GettingStartedFacts {
     enabled: client !== null,
     subscribed: true,
   });
-  const secretsSupported = useHostMethodSupport(
-    hostId,
-    "environment.secrets.list",
-  );
-  const secrets = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: undefined,
-    client,
+  // The secrets of the environment the window's host runs, read from authn
+  // on the person's sign-in.
+  const ownEnvironment = useHostOwnEnvironment(client, hostId, true);
+  const secrets = useEnvironmentCloudQuery({
     method: "environment.secrets.list",
-    params: { environmentId: null },
-    options: { enabled: secretsSupported === true },
+    params: { environmentId: ownEnvironment.environmentId },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: ownEnvironment.resolved,
+    poll: false,
   });
   const { tasks } = useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
     enabled: true,

@@ -12,7 +12,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
-import { useRemoteAccessSetMutation } from "@/hooks/environment/use-remote-access-set-mutation";
+import { useRemoteAccessTurnOnMutation } from "@/hooks/environment/use-remote-access-turn-on-mutation";
 import { useCanSetRemoteAccess } from "@/hooks/environment/use-can-set-remote-access";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
@@ -46,7 +46,7 @@ export function RemoteAccessQuestion(props: {
     status.data?.principal ?? null,
     props.enabled && eligible,
   );
-  const set = useRemoteAccessSetMutation(props.client, () => undefined);
+  const turnOn = useRemoteAccessTurnOnMutation(props.client, props.hostId);
   if (!props.enabled || !writable || props.hostId === null || !eligible) {
     return props.children ?? null;
   }
@@ -67,11 +67,11 @@ export function RemoteAccessQuestion(props: {
         <Button
           type="button"
           size="sm"
-          disabled={set.isPending}
-          onClick={() => set.mutate({ enabled: true })}
+          disabled={turnOn.isPending}
+          onClick={() => turnOn.mutate()}
         >
           On
-          {set.isPending ? (
+          {turnOn.isPending ? (
             <AgentSpinningDots
               className={undefined}
               testId={undefined}
@@ -84,15 +84,15 @@ export function RemoteAccessQuestion(props: {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={set.isPending}
+          disabled={turnOn.isPending}
           onClick={() => answerRemoteAccess(hostId)}
         >
           Not now
         </Button>
       </div>
-      {set.error !== null ? (
+      {turnOn.error !== null ? (
         <p role="alert" className="w-full text-destructive">
-          {remoteAccessFailureText(set.error.code)}
+          {remoteAccessFailureText(turnOn.error.code)}
         </p>
       ) : null}
     </div>

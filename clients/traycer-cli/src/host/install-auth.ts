@@ -64,51 +64,17 @@ import type { CommandContext } from "../runner/runner";
 import { config } from "../config";
 import { probeHostHealth } from "../service/health-probe";
 
-// The sign-in pre-flight and post-start credential provisioning shared by
-// every command that STARTS a host (client/host token split): the started
-// host reads its owner from the shared credentials file, so starting one
-// while signed out stands up a host that denies every connection
-// ("unprovisioned"). Three commands start hosts - `host install` (unless
-// `--no-service-register`), `host service install` (the deferred half of
-// the documented split flow), and `host ensure` (the idempotent
-// install+register+start) - and all three must own the same two steps, or
-// any one of them silently recreates the unprovisioned-host regression the
-// combined flow fixed.
+// Install, ensure and service-install share the sign-in pre-flight and the
+// advisory post-start credential probe. Ensure probes only when it actually
+// starts a host; a bytes-only install starts nothing and leaves that step to
+// the later explicit start.
 //
-// `host ensure` differs from the other two in one way that matters here:
-// it is idempotent, so it alone has an action that starts NOTHING. `host
-// install` always stages and swaps bytes, and `host service install`
-// always registers + starts, so running the pre-flight unconditionally is
-// right for both - whatever it reports is a fact about a host that command
-// just started. Ensure's no-op has no such standing, so it hangs the
-// pre-flight on `provisionHost`'s `beforeMutate` hook and reports
-// `not-checked` when nothing ran. Wiring a start-capable command below,
-// or giving one of the two above a no-op fast path, means answering the
-// same question: does this run actually start a host?
-//
-// Deliberately NOT wired into the remaining start-capable commands, so this
-// boundary is a decision rather than an omission:
-//   - `host start` is the service manager's own entrypoint (what launchd/
-//     systemd exec) - headless by contract, nothing to prompt, and a probe
-//     there would have the starting host dial itself;
-//   - `host restart` / `host free-port-and-restart` cycle an EXISTING
-//     host whose provisioning state was set by whichever command installed
-//     it - they create no new unprovisioned host. A host that was already
-//     unprovisioned stays that way until a minting client connects, and on
-//     a machine without Desktop nothing does on its own: `traycer login`
-//     is the CLI's way to credential a host that is already running
-//     (`provisionRunningHostCredential` below).
-//
-// A fourth entry used to sit here: `maybeAutoBootstrap`, which started a
-// host implicitly off `traycer host status`. It was excluded on the grounds
-// that a device-flow login inside a status read is indefensible - and the
-// note called itself "the weakest exclusion of the four and the one to
-// revisit first". Revisiting it settled the question the other way round:
-// the problem was never that auto-bootstrap sat outside this pre-flight, it
-// was that a read installed software at all. The path is gone (audit finding
-// CLI-001), so every remaining host-starting entry point is either an
-// explicit lifecycle command that runs the pre-flight, or one of the three
-// exclusions above.
+// Explicit starts and service cycles reuse the probe with stored sign-in only,
+// without prompting. The supervisor entrypoint excludes invocations carrying
+// existing service identity flags. Legacy unlabelled service starts cannot be
+// distinguished from a manual start and use the same stored-sign-in-only rule.
+// The host receives only its delegated credential; the person's sign-in stays
+// at the CLI's authn boundary. A host already reporting active is not reminted.
 //
 // Without --team, a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
@@ -190,9 +156,12 @@ export async function resolveHostAuthOrNull(
       {
         environment: ctx.runtime.environment,
         stage,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host install could not read the stored credentials; treating as signed out",
+      { errorName: error.name, errorMessage: error.message },
     );
     return null;
   }
@@ -292,7 +261,7 @@ const CREDENTIAL_PROVISION_DEADLINE_MS = 30_000;
 export async function maybeProvisionCredential(
   ctx: CommandContext,
   postSwapAction: "start" | "install" | "none",
-  authPreflight: HostInstallAuthPreflight,
+  authPreflight: HostInstallAuthPreflight | null,
 ): Promise<HostCredentialProvisionOutcome | null> {
   // Nothing was started, so there is nothing to dial - the one gate that
   // does not depend on the operator's auth state at all. Bytes-only lands
@@ -302,8 +271,8 @@ export async function maybeProvisionCredential(
     return null;
   }
   const preflightSawSignIn =
-    authPreflight.state === "signed-in" ||
-    authPreflight.state === "signed-in-inline";
+    authPreflight?.state === "signed-in" ||
+    authPreflight?.state === "signed-in-inline";
   // Re-read rather than trusting the pre-flight's verdict in EITHER
   // direction. It was taken before a stage + install that can run for
   // minutes, and the credentials file moves both ways across that window:
@@ -411,10 +380,12 @@ async function provisionWithStoredAuth(
     ctx.runtime.logger.warn(
       "Host credential provisioning threw; the command itself was unaffected",
       {
-        environment: ctx.runtime.environment,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host credential provisioning threw; the command itself was unaffected",
+      { errorName: error.name, errorMessage: error.message },
     );
     outcome = { kind: "error", message: error.message };
   }
@@ -423,6 +394,17 @@ async function provisionWithStoredAuth(
     outcome: outcome.kind,
   });
   return outcome;
+}
+
+interface HostCredentialProvisionSummary {
+  readonly kind: HostCredentialProvisionOutcome["kind"];
+}
+
+/** Only a fixed outcome kind crosses the new command-result boundary. */
+export function credentialProvisionForResult(
+  outcome: HostCredentialProvisionOutcome | null,
+): HostCredentialProvisionSummary | null {
+  return outcome === null ? null : { kind: outcome.kind };
 }
 
 // Terminal-line rendering of the provisioning outcome. `null` (not attempted)

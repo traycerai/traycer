@@ -14,7 +14,7 @@ import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-d
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
@@ -23,18 +23,21 @@ import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import {
+  useTeamComputerWorkNow,
+  type TeamComputerWorkNow,
+} from "@/hooks/environment/use-team-computer-work-now";
 import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
-  readonly adminNames: readonly string[];
 }): ReactNode {
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
-  const canAdminister = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
   // Linking goes through this window's host, and a team's computer cannot
   // check the caller's seat for it, so it is not offered through one, nor
   // until the registry has said whose computer this is.
@@ -80,9 +83,8 @@ export function TeamPlans(props: {
       <PlansCard
         teamName={name}
         plans={plans}
-        canAdminister={canAdminister}
+        canEdit={canEdit}
         linkReachable={linkReachable}
-        adminNames={props.adminNames}
         isPending={target !== null}
         onLink={() => {
           if (source.kind === "pool")
@@ -96,7 +98,7 @@ export function TeamPlans(props: {
           setTarget({ plan, previewId: crypto.randomUUID() })
         }
       />
-      {target !== null && canAdminister ? (
+      {target !== null && canEdit ? (
         <TeamPlanUnlink
           key={target.previewId}
           plan={target.plan}
@@ -108,6 +110,24 @@ export function TeamPlans(props: {
       <ProviderLinkDialog />
     </>
   );
+}
+
+/**
+ * The turns running on the plan where the window's own team computer counted
+ * them. No answer, or that computer's "cannot count", is no count.
+ */
+function countedPlanWork(
+  workNow: TeamComputerWorkNow,
+): { readonly activeTurns: number; readonly hostId: string } | null {
+  if (
+    workNow.status !== "settled" ||
+    workNow.hostId === null ||
+    workNow.answer === null ||
+    workNow.answer.activeTurns === null
+  ) {
+    return null;
+  }
+  return { activeTurns: workNow.answer.activeTurns, hostId: workNow.hostId };
 }
 
 function TeamPlanUnlink(props: {
@@ -122,8 +142,27 @@ function TeamPlanUnlink(props: {
     props.plan.id,
     props.previewId,
   );
+  const environmentId = source.kind === "pool" ? source.environmentId : "";
+  // The turns running on the plan, from the window's own team computer; the
+  // confirm waits for its one answer rather than say they could not be
+  // counted while they are being counted.
+  const workNow = useTeamComputerWorkNow({
+    environmentId,
+    subject: props.plan.id,
+    read: {
+      method: "environment.previewLocalFacts",
+      paramsFor: (profileId) => ({
+        environmentId,
+        subject: { kind: "plan", profileId },
+      }),
+    },
+  });
   const unlink = useConfigurationPlanUnlinkMutation();
-  if (preview.isPending || preview.isFetching)
+  if (
+    preview.isPending ||
+    preview.isFetching ||
+    (!preview.isError && workNow.status === "pending")
+  )
     return (
       <div className="flex items-center gap-2">
         <MutedAgentSpinner />
@@ -158,43 +197,37 @@ function TeamPlanUnlink(props: {
         </div>
       </div>
     );
+  const counted = countedPlanWork(workNow);
   return (
-    <>
-      <PlanUnlinkPreview
-        teamName={props.teamName}
-        plan={props.plan}
-        activeTurns={preview.data.activeTurns}
-        activeHostName={
-          preview.data.localHostId === null
-            ? null
-            : (environmentReadData(scope.hosts)?.hosts.find(
-                (host) => host.hostId === preview.data.localHostId,
-              )?.hostLabel ?? "the serving host")
-        }
-        remainingAccess={preview.data.keepsWorking}
-        isPending={unlink.isPending}
-        onClose={props.onClose}
-        onConfirm={() => {
-          if (source.kind !== "pool") return;
-          unlink.mutate(
-            {
-              environmentId: source.environmentId,
-              profileId: props.plan.id,
-              expectedBindingVersion: props.plan.bindingVersion ?? null,
+    <PlanUnlinkPreview
+      teamName={props.teamName}
+      plan={props.plan}
+      activeTurns={counted === null ? null : counted.activeTurns}
+      activeHostName={
+        counted === null
+          ? null
+          : (environmentReadData(scope.hosts)?.hosts.find(
+              (host) => host.hostId === counted.hostId,
+            )?.hostLabel ?? "the serving host")
+      }
+      remainingAccess={preview.data.keepsWorking}
+      isPending={unlink.isPending}
+      onClose={props.onClose}
+      onConfirm={() => {
+        if (source.kind !== "pool") return;
+        unlink.mutate(
+          {
+            environmentId: source.environmentId,
+            profileId: props.plan.id,
+            expectedBindingVersion: props.plan.bindingVersion ?? null,
+          },
+          {
+            onSuccess: (result) => {
+              if (result.outcome !== "forbidden") props.onClose();
             },
-            {
-              onSuccess: (result) => {
-                if (result.outcome !== "forbidden") props.onClose();
-              },
-            },
-          );
-        }}
-      />
-      {unlink.data?.outcome === "forbidden" ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Admins unlink plans.
-        </p>
-      ) : null}
-    </>
+          },
+        );
+      }}
+    />
   );
 }

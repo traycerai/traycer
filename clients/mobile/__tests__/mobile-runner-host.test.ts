@@ -7,7 +7,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { PluginListenerHandle } from "@capacitor/core";
+import type { HttpOptions, PluginListenerHandle } from "@capacitor/core";
 import type {
   DeviceFlowResult,
   SystemSuspendCause,
@@ -36,6 +36,7 @@ import {
 
 const nativeMocks = vi.hoisted(() => ({
   browserOpen: vi.fn(),
+  httpRequests: new Array<HttpOptions>(),
   storageKeys: vi.fn(),
   storageGet: vi.fn(),
   storageSet: vi.fn(),
@@ -121,6 +122,18 @@ vi.mock("@capacitor/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@capacitor/core")>();
   return {
     ...actual,
+    CapacitorHttp: {
+      ...actual.CapacitorHttp,
+      request: async (options: HttpOptions) => {
+        nativeMocks.httpRequests.push(options);
+        return {
+          status: 302,
+          data: "",
+          headers: {},
+          url: options.url,
+        };
+      },
+    },
     Capacitor: {
       ...actual.Capacitor,
       getPlatform: () => capacitorEventMocks.platform,
@@ -608,6 +621,7 @@ describe("MobileRunnerHost", () => {
     capacitorEventMocks.holdNetworkSeed = false;
     capacitorEventMocks.pendingSeedReleases.length = 0;
     nativeMocks.storage.clear();
+    nativeMocks.httpRequests.length = 0;
     nativeMocks.storageKeys.mockImplementation(async () => ({
       value: [...nativeMocks.storage.keys()],
     }));
@@ -637,6 +651,52 @@ describe("MobileRunnerHost", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("sends each bot setup write through native HTTP with redirects disabled", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => {
+      throw new Error("the patched fetch must not carry bot setup writes");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const host = runner(null);
+
+    await expect(
+      host.updateBotRunSettings("bearer-1", {
+        botId: "bot-1",
+        harness: "claude",
+        model: "model-1",
+        effort: null,
+        profile: null,
+      }),
+    ).resolves.toMatchObject({ kind: "unavailable" });
+    await expect(
+      host.updateBotReplyMode("bearer-1", {
+        botId: "bot-1",
+        replyMode: "thread",
+      }),
+    ).resolves.toMatchObject({ kind: "unavailable" });
+    await expect(
+      host.deleteBot("bearer-1", { botId: "bot-1" }),
+    ).resolves.toMatchObject({
+      kind: "unavailable",
+    });
+    await expect(
+      host.registerSlackApp("bearer-1", {
+        botId: "bot-1",
+        appId: "A07K2M9QX4T",
+        clientId: "123.456",
+        clientSecret: "client-secret",
+        signingSecret: "signing-secret",
+      }),
+    ).resolves.toMatchObject({ kind: "network-error" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(nativeMocks.httpRequests).toHaveLength(4);
+    for (const request of nativeMocks.httpRequests) {
+      expect(request.disableRedirects).toBe(true);
+      expect(request.method).toBe("POST");
+      expect(request.responseType).toBe("text");
+    }
   });
 
   it("treats an absent secure-storage key as a signed-out session", async () => {

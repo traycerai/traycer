@@ -1,7 +1,17 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
+import type { AutoPolicySaveResult } from "../host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "../host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import type { HostTokenSource } from "../auth/host-token-source";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "../host-client/team-chat-auto-archive";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
@@ -66,6 +76,15 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "../host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -516,6 +535,26 @@ export interface IRunnerHost {
    * shell's other traycer-server calls run, for the same reason. Never throws.
    */
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  /**
+   * Saves the account's auto-approve policy on traycer-server
+   * (`PUT /api/traycer/auto-policy`) with the user bearer, as
+   * `host-client/auto-policy-save.ts` sends it. Run where the shell's other
+   * traycer-server calls run, for the same reason. Never throws.
+   */
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  /**
+   * Attaches a task to a team's environment on traycer-server
+   * (`POST /api/tasks/environment-attachment`) with the user bearer, as
+   * `host-client/task-environment-attachment.ts` sends it. Run where the
+   * shell's other traycer-server calls run, for the same reason. Never throws.
+   */
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -620,6 +659,24 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  /**
+   * A bot's settings (traycer-server `/api/bots/*`) with the person's bearer,
+   * with no host in the path. Same placement as the Slack app above, sent
+   * once and following no redirect. See `host-client/bot-setup.ts`. Never
+   * throw.
+   */
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
@@ -1104,6 +1161,23 @@ export interface IRunnerHost {
    * shell; `null` everywhere else, since no other platform has the gesture.
    */
   readonly statusBarTap: IStatusBarTapHost | null;
+
+  /**
+   * A team's chat auto-archive setting on traycer-server
+   * (`/api/traycer/chat-auto-archive/teams/:teamId`) with the user bearer,
+   * sent where the shell's other traycer-server calls are sent, through a
+   * request that follows no redirect. Never throw.
+   */
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 /**

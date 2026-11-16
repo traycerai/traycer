@@ -62,9 +62,16 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import * as environmentArms from "@/hooks/environment/use-environment-arms";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import {
+  createLandingAttachmentFixture,
+  landingTeamEnvironment,
+  type LandingAttachmentFixture,
+} from "./landing-attachment-fixture";
 
 interface CapturedNavigation {
   readonly search?: (
@@ -76,6 +83,7 @@ const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
+  toastError: vi.fn<(message: string) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
@@ -137,7 +145,7 @@ function useTestPlacementTarget(): LandingPlacementTarget {
 
 vi.mock("sonner", () => ({
   toast: {
-    error: vi.fn(),
+    error: landingMocks.toastError,
     info: vi.fn(),
   },
 }));
@@ -194,10 +202,13 @@ const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 const SIGN_IN_FOR_ACME = "Sign in to create a task for acme.";
 const NOT_ON_TEAM_SANDBOXES = "Not available on team sandboxes.";
+const STAGED_TEAM_ENVIRONMENT = landingTeamEnvironment("t2");
 const LOCAL_OWNERSHIP_ERA: AuthEra = {
   identity: "user-landing",
   credentialGeneration: 1,
 };
+
+const attachmentFixtureDisposers: Array<() => void> = [];
 
 interface LandingAuthBinding {
   readonly directory: {
@@ -206,6 +217,7 @@ interface LandingAuthBinding {
   };
   readonly auth: {
     currentAuthEra(): AuthEra;
+    environmentCloud(): EnvironmentCloud;
     readHostOwnership(
       hostId: string,
       era: AuthEra,
@@ -254,6 +266,15 @@ function createPendingLocalOwnership(): PendingLocalOwnership {
     },
     auth: {
       currentAuthEra: () => LOCAL_OWNERSHIP_ERA,
+      environmentCloud: () => ({
+        authnBaseUrl: "https://authn.traycer.invalid",
+        bearer: {
+          kind: "cloud",
+          getBearerToken: () => "landing-token-a",
+        },
+        transport: () => Promise.resolve({ status: 200, text: "" }),
+        onOriginSignIn: () => true,
+      }),
       readHostOwnership: (hostId, era) => {
         reads.push({ hostId, era });
         return reads.length === 1 ? deferred.promise : refreshed.promise;
@@ -307,6 +328,18 @@ function hasEpicCreateRequest(): boolean {
   );
 }
 
+function holdCreateAndPrepareAttachment(
+  createResponse: Promise<unknown>,
+): void {
+  landingMocks.request.mockImplementation((method: string) => {
+    if (method === "epic.create") return createResponse;
+    if (method === "epic.attachEnvironment") {
+      return Promise.resolve({ prepared: true });
+    }
+    return Promise.resolve({});
+  });
+}
+
 function epicCreatePayload(): unknown {
   return landingMocks.request.mock.calls.find(
     (call) => call[0] === "epic.create",
@@ -335,6 +368,20 @@ function newQueryClient(): QueryClient {
   });
 }
 
+async function reenterLandingAccount(
+  fixture: LandingAttachmentFixture,
+): Promise<void> {
+  useAuthStore.getState().setSignedOut();
+  await fixture.signInAs("user-landing", "landing-token-a-again");
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-landing", userName: "U", email: "u@example.com" },
+      { userId: "user-landing", username: "U" },
+      [],
+    );
+}
+
 describe("useLandingComposerActions team owner and team sandbox refusals", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
@@ -350,6 +397,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
+    landingMocks.toastError.mockReset();
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
@@ -409,6 +457,9 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    for (const dispose of attachmentFixtureDisposers.splice(0)) dispose();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     resetHostConnectionRegistryForTest();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
@@ -983,6 +1034,163 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         ([method]) => method === "epic.attachEnvironment",
       ),
     ).toBe(false);
+    queryClient.clear();
+  });
+
+  it("does not attach or hand off a staged task when the same account signs in again during its create", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    const fixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [STAGED_TEAM_ENVIRONMENT],
+    });
+    attachmentFixtureDisposers.push(fixture.dispose);
+    landingMocks.getHostBinding.mockReturnValue(fixture.binding);
+    const createResponse = deferredValue<unknown>();
+    holdCreateAndPrepareAttachment(createResponse.promise);
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    const pressedIdentityGeneration = fixture.auth.getIdentityGeneration();
+    let confirmed = false;
+    let givenBack = false;
+    let refusal: { readonly message: string } | null = null;
+
+    act(() => {
+      refusal = result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "t2",
+        text: SUBMITTED_PROMPT,
+        hand: () => ({
+          isCurrent: () => true,
+          confirm: () => {
+            confirmed = true;
+          },
+          giveBack: () => {
+            givenBack = true;
+            return null;
+          },
+        }),
+      });
+    });
+
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+    await waitFor(() => expect(result.current.isPending).toBe(true));
+    expect(refusal).toBeNull();
+    await reenterLandingAccount(fixture);
+    expect(fixture.auth.getIdentityGeneration()).not.toBe(
+      pressedIdentityGeneration,
+    );
+    await act(async () => {
+      createResponse.resolve({ roomInfo: null });
+      await createResponse.promise;
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    expect(
+      landingMocks.request.mock.calls.some(
+        ([method]) => method === "epic.attachEnvironment",
+      ),
+    ).toBe(false);
+    expect(fixture.authnCalls).toEqual([]);
+    expect(confirmed).toBe(false);
+    expect(givenBack).toBe(false);
+    expect(landingMocks.toastError).not.toHaveBeenCalled();
+    expect(reopenArms).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("continues the staged landing handoff when the bearer rotates on the same sign-in during its create", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    const fixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [STAGED_TEAM_ENVIRONMENT],
+    });
+    attachmentFixtureDisposers.push(fixture.dispose);
+    landingMocks.getHostBinding.mockReturnValue(fixture.binding);
+    const createResponse = deferredValue<unknown>();
+    holdCreateAndPrepareAttachment(createResponse.promise);
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    const identityGeneration = fixture.auth.getIdentityGeneration();
+    const session = fixture.auth.getCurrentSessionSnapshot();
+    let confirmed = false;
+    let refusal: { readonly message: string } | null = null;
+
+    act(() => {
+      refusal = result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "t2",
+        text: SUBMITTED_PROMPT,
+        hand: () => ({
+          isCurrent: () => true,
+          confirm: () => {
+            confirmed = true;
+          },
+          giveBack: () => null,
+        }),
+      });
+    });
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+    await waitFor(() => expect(result.current.isPending).toBe(true));
+    await fixture.auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "landing-token-a-rotated",
+    });
+    expect(fixture.auth.getIdentityGeneration()).toBe(identityGeneration);
+
+    await act(async () => {
+      createResponse.resolve({ roomInfo: null });
+      await createResponse.promise;
+    });
+    await waitFor(() => expect(confirmed).toBe(true));
+
+    expect(refusal).toBeNull();
+    const attachmentCall = landingMocks.request.mock.calls.find(
+      ([method]) => method === "epic.attachEnvironment",
+    );
+    if (attachmentCall === undefined) {
+      throw new Error("expected the task attachment to reach its host");
+    }
+    const attachmentPayload = attachmentCall[1];
+    if (
+      typeof attachmentPayload !== "object" ||
+      attachmentPayload === null ||
+      !("epicId" in attachmentPayload) ||
+      typeof attachmentPayload.epicId !== "string"
+    ) {
+      throw new Error("expected the host attachment to contain its task id");
+    }
+    expect(attachmentPayload).toEqual({ epicId: attachmentPayload.epicId });
+    expect(fixture.authnCalls).toEqual([
+      { kind: "list", bearer: "landing-token-a-rotated" },
+      {
+        kind: "attach",
+        bearer: "landing-token-a-rotated",
+        request: {
+          taskId: attachmentPayload.epicId,
+          environmentId: STAGED_TEAM_ENVIRONMENT.environmentId,
+        },
+      },
+    ]);
+    expect(landingMocks.toastError).not.toHaveBeenCalled();
+    expect(reopenArms).toHaveBeenCalledOnce();
     queryClient.clear();
   });
 

@@ -19,7 +19,6 @@ import {
   useEnvironmentInvitationsEntryHash,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 import {
   moveEnvironmentPick,
   moveEnvironmentSurface,
@@ -53,9 +52,9 @@ function leftToastId(environmentId: string): string {
  * asked for, and which cache ENTRY answered it. Both have to still hold for the
  * answer to be evidence about what the page is rendering now.
  *
- * The entry and not the route's slot, because a slot holds one entry per host
- * scope: a question certified while one entry served would otherwise survive a
- * move to another entry of the same slot, and that entry's stale list would be
+ * The entry and not the read as a whole, because the read holds one entry per
+ * sign-in and viewer: a question certified while one entry served would
+ * otherwise survive a move to another, and that entry's stale list would be
  * read as the answer to a question it predates.
  */
 interface AnsweredQuestion {
@@ -119,6 +118,7 @@ export function ConfigurationSourceBoundary(props: {
         entry.ownerKind === "organization"
       : entry.ownerKind === "user",
   );
+  const listFailed = list.isError;
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
     const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
@@ -128,13 +128,18 @@ export function ConfigurationSourceBoundary(props: {
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
-      effectiveRole: configurationRoleOf(descriptor),
+      // A team role is the list's answer, so a failed re-read makes it not
+      // known, whatever an earlier answer said. Personal's is not read.
+      effectiveRole:
+        listFailed && configuration === "team"
+          ? null
+          : configurationRoleOf(descriptor),
       transportReadOnly: personalReadOnlyOnTeamComputer(
         configuration,
         onTeamComputer,
       ),
     };
-  }, [descriptor, onTeamComputer]);
+  }, [descriptor, listFailed, onTeamComputer]);
   useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
@@ -271,9 +276,8 @@ function useGoneConfiguration(input: {
   readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
   const { target, listed, settled, listedAt, section } = input;
-  const client = useHostClient();
-  const invitations = useEnvironmentInvitationsQuery(client);
-  const entryHash = useEnvironmentInvitationsEntryHash(client);
+  const invitations = useEnvironmentInvitationsQuery();
+  const entryHash = useEnvironmentInvitationsEntryHash();
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
@@ -316,12 +320,10 @@ function useGoneConfiguration(input: {
   // produces, and nothing recovers from, because a page that cannot be read
   // writes nothing and so has no next membership answer to ask again on.
   //
-  // NOT a count over a ROUTE, by either name. A count across both slots credits
-  // an answer the page is not reading at all; a count scoped to the serving
-  // slot still credits the wrong entry, because a slot holds one entry per host
-  // scope and the serving host can move inside it. Both leave the same hole:
-  // the question stays certified while the data under it changes, and the entry
-  // moved TO has a cached list predating the question entirely.
+  // NOT a count across every invitations entry. That credits an answer the
+  // page is not reading at all, because the read holds one entry per sign-in
+  // and viewer: the question stays certified while the data under it changes,
+  // and the entry moved TO has a cached list predating the question entirely.
   //
   // It is the answer count of the one entry the page is reading, held against
   // that ENTRY's identity — which comes from the same options the read is made
@@ -379,8 +381,7 @@ function useGoneConfiguration(input: {
   // The question is named by the membership answer it was asked for, so one
   // answered for an EARLIER membership answer says nothing about this one —
   // and by the ENTRY that answered it, so an answer stops being evidence the
-  // moment the page starts rendering a different entry's data — whichever slot
-  // that entry belongs to.
+  // moment the page starts rendering a different entry's data.
   const answered =
     answeredQuestion !== null &&
     answeredQuestion.listedAt === listedAt &&
@@ -399,8 +400,7 @@ function useGoneConfiguration(input: {
   // plain removal: the toast names the team, the selection moves to Personal,
   // and the Accept this page would have offered is not offered. The offer
   // returns without a reload, from the environment picker, bounded by that
-  // read's own staleness: neither route of the invitations read sets a
-  // `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
+  // read's own staleness: the invitations read sets no `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
   // the picker's dropdown content, which mounts afresh on each open. An open
   // within 60s of the racing reply is served that reply from cache and shows
   // the same list; the first open after that reads invitations again, and the

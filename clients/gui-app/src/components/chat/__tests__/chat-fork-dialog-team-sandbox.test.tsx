@@ -1,4 +1,5 @@
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 /**
  * The chat fork dialog holds Fork shut on a harness a team sandbox does not
  * offer.
@@ -19,6 +20,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import type { ReactNode } from "react";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   hostRpcRegistry,
@@ -29,6 +32,15 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const TAB_HOST_ID = "tab-host-id";
+const runnerHost = createFakeRunnerHost({});
+
+function TestProviders(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <RunnerHostProvider runnerHost={runnerHost}>
+      <WithTestQueryClient>{props.children}</WithTestQueryClient>
+    </RunnerHostProvider>
+  );
+}
 
 interface BlockedInput {
   readonly hostId: string | null;
@@ -118,16 +130,25 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 // The attachment before a fork onto a team's host: passed straight through,
 // so every fork here goes on to `epic.createChat` as it did before.
-vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
-  isAttachEnvironmentUnsupported: () => false,
-  toastAttachEnvironmentNeedsOwnHost: () => undefined,
-  useEpicAttachEnvironment: () => ({
-    isPending: false,
-    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
-      options.onSuccess();
-    },
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    isAttachEnvironmentUnsupported: () => false,
+    toastAttachEnvironmentNeedsOwnHost: () => undefined,
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutate: (
+        _input: unknown,
+        options: { readonly onSuccess: () => void },
+      ) => {
+        options.onSuccess();
+      },
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method?: string }) => {
@@ -368,7 +389,7 @@ function renderDialog(): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
-    { wrapper: WithTestQueryClient },
+    { wrapper: TestProviders },
   );
 }
 

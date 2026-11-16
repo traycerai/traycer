@@ -11,7 +11,12 @@ import userEvent from "@testing-library/user-event";
 import { EditorView } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
+import { HostRpcError } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  type EnvironmentHostListResponseV12,
+  type EnvironmentHostRecordV12,
+  type EnvironmentPreviewLocalFactsResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
@@ -19,6 +24,8 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { negotiateMethods } from "./mcp-skills-test-support";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   answerTeamHostList,
   authnAnswer,
@@ -50,7 +57,9 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === null ? null : requireTeamHostClient(),
+    hostId === null
+      ? null
+      : requireTeamHostClient().createRequesterForHostId(hostId),
 }));
 
 // Opening a URL is the external egress; the link dialog only needs the opener.
@@ -69,10 +78,11 @@ afterEach(() => {
   resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({ pick: null });
   useProviderLinkDialogStore.setState({ target: null });
+  useSelectionAuthorityStore.getState().reset();
 });
 
 const host: EnvironmentHostRecordV12 = {
-  hostId: "host-a",
+  hostId: mockLocalHostEntry.hostId,
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
   enrolledByUserId: "u-1",
@@ -148,7 +158,7 @@ describe("TeamPlans", () => {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -168,40 +178,121 @@ describe("TeamPlans", () => {
     expect(screen.getAllByText(/ plan$/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("gives a viewer no Link, Unlink or Add a profile verbs, and names the admins", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.plans.list": () => plans,
-      "environment.list": () => environmentList,
-    });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
-      wrapper: harness.Wrapper,
-    });
+  it.each([
+    ["Viewer", poolSource("viewer")],
+    ["unrecognized role", { ...poolSource("viewer"), effectiveRole: null }],
+  ] as const)(
+    "gives a %s no Link, Unlink or Add a profile verbs",
+    async (_role, source) => {
+      const harness = mountTeamPage(source, {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
 
-    await screen.findByText(/Ada.s .* plan/);
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
-    expect(screen.queryByText(/add a profile/i)).toBeNull();
-    expect(
-      screen.getByText("Only an admin can link a plan: ask Ada."),
-    ).toBeTruthy();
-  });
+      await screen.findByText(/Ada.s .* plan/);
+      expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
+      expect(screen.queryByText(/add a profile/i)).toBeNull();
+      expect(screen.queryByText(/Only an admin/)).toBeNull();
+    },
+  );
+
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s unlink after its preview resolves",
+    async (role) => {
+      let resolvePreview: (
+        value: EnvironmentPreviewLocalFactsResponse,
+      ) => void = () => undefined;
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+        "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+        "environment.configuration.items": () => ({ items: [] }),
+        "environment.host.list": () => ({ hosts: [host] }),
+        "environment.previewLocalFacts": () =>
+          new Promise((resolve) => {
+            resolvePreview = resolve;
+          }),
+        "environment.plans.unlink": () => ({ outcome: "unlinked" }),
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const card = await screen.findByRole("region", { name: "Plans" });
+      await userEvent.click(
+        within(card).getAllByRole("button", { name: "Unlink" })[0],
+      );
+
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.previewLocalFacts")).toEqual([
+          {
+            environmentId: "env-a",
+            subject: { kind: "plan", profileId: "prof-1" },
+          },
+        ]);
+      });
+      // The consequences are not known yet: no confirm, no unlink.
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
+
+      act(() => {
+        resolvePreview({
+          activeTurns: 2,
+          terminals: null,
+        });
+      });
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
+      expect(dialog.textContent).toContain(
+        "Acme's Claude Code plan was unlinked. A host that has not confirmed keeps the unlink pending.",
+      );
+      expect(dialog.textContent).not.toContain("An admin can link one.");
+      expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
+
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Unlink" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.plans.unlink")).toEqual([
+          {
+            environmentId: "env-a",
+            profileId: "prof-1",
+            expectedBindingVersion: 7,
+          },
+        ]);
+      });
+    },
+  );
 
   it("holds Unlink until its preview resolves, then unlinks the picked profile in this team", async () => {
-    let resolvePreview: (value: {
-      activeTurns: number | null;
-      localHostId: string | null;
-      keepsWorking: string[];
-    }) => void = () => undefined;
+    let resolveLocalFacts:
+      | ((value: EnvironmentPreviewLocalFactsResponse) => void)
+      | null = null;
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
-      "environment.plans.unlinkPreview": () =>
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => ({
+        hosts: [{ ...host, hostId: mockLocalHostEntry.hostId }],
+      }),
+      "environment.previewLocalFacts": () =>
         new Promise((resolve) => {
-          resolvePreview = resolve;
+          resolveLocalFacts = resolve;
         }),
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -211,23 +302,37 @@ describe("TeamPlans", () => {
     );
 
     await waitFor(() => {
-      expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([
-        { environmentId: "env-a", profileId: "prof-1" },
+      expect(harness.paramsOf("environment.previewLocalFacts")).toEqual([
+        {
+          environmentId: "env-a",
+          subject: { kind: "plan", profileId: "prof-1" },
+        },
       ]);
     });
-    // The consequences are not known yet: no confirm, no unlink.
+    // The count is still being read: the confirm stays in its loading state.
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      within(card).getByRole<HTMLButtonElement>("button", { name: "Unlink" })
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
     expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 
     act(() => {
-      resolvePreview({
-        activeTurns: 2,
-        localHostId: null,
-        keepsWorking: ["Team key"],
+      if (resolveLocalFacts === null) {
+        throw new Error("local facts request was not held");
+      }
+      resolveLocalFacts({
+        activeTurns: 3,
+        terminals: null,
       });
     });
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
+    expect(within(dialog).getByText(/3 active turns/)).toBeTruthy();
+    expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([]);
     expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 
     await userEvent.click(
@@ -242,6 +347,376 @@ describe("TeamPlans", () => {
         },
       ]);
     });
+  });
+
+  it("does not show an admin-only refusal when an Editor's unlink is forbidden", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 0,
+        localHostId: null,
+        keepsWorking: [],
+      }),
+      "environment.plans.unlink": () => ({ outcome: "forbidden" }),
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Unlink" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.plans.unlink")).toEqual([
+        {
+          environmentId: "env-a",
+          profileId: "prof-1",
+          expectedBindingVersion: 7,
+        },
+      ]);
+    });
+    expect(screen.queryByText("Admins unlink plans.")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("keeps the Unlink preview loading while the team's host list is pending, then waits for that host's count", async () => {
+    let resolveHostList:
+      | ((value: EnvironmentHostListResponseV12) => void)
+      | null = null;
+    let resolveLocalFacts:
+      | ((value: EnvironmentPreviewLocalFactsResponse) => void)
+      | null = null;
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () =>
+        new Promise((resolve) => {
+          resolveHostList = resolve;
+        }),
+      "environment.previewLocalFacts": () =>
+        new Promise((resolve) => {
+          resolveLocalFacts = resolve;
+        }),
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.host.list")).toContainEqual({
+        environmentId: "env-a",
+      });
+    });
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(0);
+
+    act(() => {
+      if (resolveHostList === null) {
+        throw new Error("team host list was not held");
+      }
+      resolveHostList({
+        hosts: [{ ...host, hostId: mockLocalHostEntry.hostId }],
+      });
+    });
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.previewLocalFacts")).toEqual([
+        {
+          environmentId: "env-a",
+          subject: { kind: "plan", profileId: "prof-1" },
+        },
+      ]);
+    });
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
+
+    act(() => {
+      if (resolveLocalFacts === null) {
+        throw new Error("local facts request was not held");
+      }
+      resolveLocalFacts({ activeTurns: 3, terminals: null });
+    });
+    expect(
+      within(await screen.findByRole("dialog")).getByText(/3 active turns/),
+    ).toBeTruthy();
+  });
+
+  it.each([
+    "not-in-team-list",
+    "team-list-failed",
+    "not-ready",
+    "null-count",
+    "refused",
+    "unsupported",
+  ] as const)(
+    "draws the unavailable count without retrying when the serving computer cannot answer (%s)",
+    async (scenario) => {
+      const selectedHostId =
+        scenario === "not-ready" ? "host-not-ready" : mockLocalHostEntry.hostId;
+      useSelectionAuthorityStore.setState({ effectiveHostId: selectedHostId });
+      const previewLocalFacts = vi.fn(() => {
+        if (scenario === "refused") throw new Error("host refused the count");
+        if (scenario === "unsupported") {
+          throw new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message: "The computer does not serve this count.",
+            requestId: "req-plan-work-now",
+            method: "environment.previewLocalFacts",
+            fatalDetails: null,
+          });
+        }
+        return { activeTurns: null, terminals: null };
+      });
+      let listedHostId: string | null = mockLocalHostEntry.hostId;
+      if (scenario === "not-in-team-list") {
+        listedHostId = null;
+      } else if (scenario === "not-ready") {
+        listedHostId = selectedHostId;
+      }
+      const harness = mountTeamPage(poolSource("admin"), {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+        "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+        "environment.configuration.items": () => ({ items: [] }),
+        "environment.host.list": () => ({
+          hosts:
+            listedHostId === null ? [] : [{ ...host, hostId: listedHostId }],
+        }),
+        "environment.previewLocalFacts": previewLocalFacts,
+      });
+      if (scenario === "team-list-failed") {
+        harness.cloudResponses.set(
+          "GET /api/v3/environments/env-a/hosts",
+          () => ({ status: 500, text: "{}" }),
+        );
+      }
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const card = await screen.findByRole("region", { name: "Plans" });
+      await userEvent.click(
+        within(card).getAllByRole("button", { name: "Unlink" })[0],
+      );
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByText(/Active turns could not be counted\./),
+      ).toBeTruthy();
+      expect(
+        within(dialog).queryByRole("button", { name: "Retry" }),
+      ).toBeNull();
+      expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(
+        scenario === "null-count" ||
+          scenario === "refused" ||
+          scenario === "unsupported"
+          ? 1
+          : 0,
+      );
+      expect(previewLocalFacts).toHaveBeenCalledTimes(
+        scenario === "null-count" ||
+          scenario === "refused" ||
+          scenario === "unsupported"
+          ? 1
+          : 0,
+      );
+    },
+  );
+
+  it("settles unavailable when the listed team computer is not ready to receive its count", async () => {
+    const unavailableHostId = "host-not-ready";
+    useSelectionAuthorityStore.setState({ effectiveHostId: unavailableHostId });
+    const previewLocalFacts = vi.fn(() => ({
+      activeTurns: 3,
+      terminals: null,
+    }));
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => ({
+        hosts: [{ ...host, hostId: unavailableHostId }],
+      }),
+      "environment.previewLocalFacts": previewLocalFacts,
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/Active turns could not be counted\./),
+    ).toBeTruthy();
+    expect(previewLocalFacts).not.toHaveBeenCalled();
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(0);
+  });
+
+  it("keeps an authn preview failure visible while its computer count is pending", async () => {
+    let resolveLocalFacts:
+      | ((value: EnvironmentPreviewLocalFactsResponse) => void)
+      | null = null;
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => ({
+        hosts: [{ ...host, hostId: mockLocalHostEntry.hostId }],
+      }),
+      "environment.previewLocalFacts": () =>
+        new Promise((resolve) => {
+          resolveLocalFacts = resolve;
+        }),
+    });
+    harness.cloudResponses.set(
+      "GET /api/v3/environments/env-a/secrets",
+      () => ({ status: 500, text: "{}" }),
+    );
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    const failure = await screen.findByText(
+      "Couldn't preview unlinking this plan.",
+    );
+    expect(
+      within(failure.parentElement ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    act(() => {
+      if (resolveLocalFacts === null) {
+        throw new Error("local facts request was not held");
+      }
+      resolveLocalFacts({ activeTurns: 3, terminals: null });
+    });
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    expect(
+      screen.getByText("Couldn't preview unlinking this plan."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/3 active turns/)).toBeNull();
+  });
+
+  it("asks once per opening, rejects a previous opening's count, and holds the settled answer through refreshes", async () => {
+    const requests: Array<{
+      readonly promise: Promise<EnvironmentPreviewLocalFactsResponse>;
+      readonly resolve: (value: EnvironmentPreviewLocalFactsResponse) => void;
+    }> = [];
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => ({
+        hosts: [{ ...host, hostId: mockLocalHostEntry.hostId }],
+      }),
+      "environment.previewLocalFacts": () => {
+        let resolveRequest: (
+          value: EnvironmentPreviewLocalFactsResponse,
+        ) => void = () => undefined;
+        const promise = new Promise<EnvironmentPreviewLocalFactsResponse>(
+          (resolve) => {
+            resolveRequest = resolve;
+          },
+        );
+        requests.push({ promise, resolve: resolveRequest });
+        return promise;
+      },
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const previousOpening = requests.at(0);
+    if (previousOpening === undefined) {
+      throw new Error("expected the previous opening's count request");
+    }
+    await act(async () => {
+      previousOpening.resolve({ activeTurns: 3, terminals: null });
+      await previousOpening.promise;
+    });
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(/3 active turns/)).toBeNull();
+
+    const currentOpening = requests.at(1);
+    if (currentOpening === undefined) {
+      throw new Error("expected the current opening's count request");
+    }
+    await act(async () => {
+      currentOpening.resolve({ activeTurns: 7, terminals: null });
+      await currentOpening.promise;
+    });
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/7 active turns/)).toBeTruthy();
+
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+      window.dispatchEvent(new Event("focus"));
+      requireTeamHostClient().notifyHostAvailabilityRecovered(
+        mockLocalHostEntry.hostId,
+        "reconnect",
+      );
+      useSelectionAuthorityStore.setState({ effectiveHostId: "host-away" });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
+    });
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(2);
+    expect(within(dialog).getByText(/7 active turns/)).toBeTruthy();
   });
 
   it.each([
@@ -273,16 +748,14 @@ describe("TeamPlans", () => {
           ],
         }),
         "environment.list": () => environmentList,
-        "environment.plans.unlinkPreview": () => ({
-          activeTurns: 0,
-          localHostId: null,
-          keepsWorking: [],
-        }),
+        "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+        "environment.configuration.items": () => ({ items: [] }),
+        "environment.host.list": () => ({ hosts: [] }),
         "environment.plans.unlink": () => ({ outcome: "unlinked" }),
       },
       { "environment.plans.unlink": { major: 1, minor: negotiatedMinor } },
     );
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -314,7 +787,7 @@ describe("TeamPlans", () => {
         },
         "environment.list": () => environmentList,
       });
-      render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+      render(<TeamPlans providerId="claude-code" />, {
         wrapper: harness.Wrapper,
       });
 
@@ -334,24 +807,27 @@ describe("TeamPlans", () => {
     },
   );
 
-  it("opens the link dialog on this team's environment", async () => {
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.plans.list": () => plans,
-      "environment.list": () => environmentList,
-    });
-    render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
-      wrapper: harness.Wrapper,
-    });
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s open the link dialog for this team's environment",
+    async (role) => {
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: /link a plan/i }),
-    );
-    expect(useProviderLinkDialogStore.getState().target).toMatchObject({
-      providerId: "claude-code",
-      profileId: null,
-      environmentId: "env-a",
-    });
-  });
+      await userEvent.click(
+        await screen.findByRole("button", { name: /link a plan/i }),
+      );
+      expect(useProviderLinkDialogStore.getState().target).toMatchObject({
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+      });
+    },
+  );
 });
 
 describe("TeamGuide", () => {
@@ -555,6 +1031,11 @@ describe("TeamGuide", () => {
 
 describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
   async function openUnlinkNamingMacMini() {
+    // The turns running on the plan are counted by the window's own computer,
+    // which authn's host list names Mac mini.
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.plans.list": () => ({
         plans: [
@@ -568,14 +1049,15 @@ describe("TeamPlans' unlink sheet when authn answers the host list again", () =>
         ],
       }),
       "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
       "environment.host.list": () => ({ hosts: [host] }),
-      "environment.plans.unlinkPreview": () => ({
+      "environment.previewLocalFacts": () => ({
         activeTurns: 2,
-        localHostId: host.hostId,
-        keepsWorking: [],
+        terminals: null,
       }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
     const card = await screen.findByRole("region", { name: "Plans" });

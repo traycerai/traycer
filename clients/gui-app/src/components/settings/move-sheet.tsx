@@ -4,8 +4,9 @@ import {
   existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
+  MOVE_DISCLOSURE_VERSION,
   MOVE_SECTIONS,
-  moveAcceptRequest,
+  moveKeyChoices,
   moveRecipientSentence,
   moveItemChoiceKey,
   moveRowChoices,
@@ -48,25 +49,25 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
+import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
+import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
-import { environmentMutationKeys } from "@/lib/query-keys";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
 } from "@/stores/settings/move-sheet-store";
 
-const EMPTY_PARAMS = {};
-
 /**
  * The move sheet: everything a computer that has not moved would send to
  * Personal, computed by that computer (`environment.move.plan`), shown
- * before anything leaves it. `Move to Personal` accepts this list as shown
- * (`environment.move.accept` with the plan's hash and the key choices);
+ * before anything leaves it. `Move to Personal` accepts this list as shown:
+ * the computer stages it, the person's sign-in records the acceptance at
+ * authn, and the computer then moves itself (`runEnvironmentMove`).
  * `Not now` closes and records nothing. A plan that moves nothing says so in
  * one line and offers the same two: the computer moves to Personal all the
  * same, with an acceptance that carries no items.
@@ -106,27 +107,41 @@ function MoveSheetBody(props: {
   // Read only while the sheet is open: the same reads the Environment
   // dropdown makes, which the app-wide mount must not hold open otherwise.
   const runningPersonal = useHostsRunningPersonal(true);
+  // The same `environment.list` read the host list waits on, so its failure
+  // is the host list's, with that list's Retry.
+  const personal = usePersonalEnvironment(true);
   const client = useHostClientForHostId(target.hostId);
   const supported = useHostMethodSupport(
     target.hostId,
     "environment.move.plan",
   );
+  // The computer draws the sheet against what this app read of Personal, on
+  // the person's own sign-in; the plan waits for that read.
+  const personalRead = usePersonalForMoveQuery(supported === true);
+  const personalItems = personalRead.data ?? null;
   const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
     cacheKeyIdentity: undefined,
     client,
     method: "environment.move.plan",
-    params: EMPTY_PARAMS,
-    options: { enabled: supported === true, refetchOnWindowFocus: false },
+    params: {
+      target: { kind: "personal", environmentId: personal.environmentId ?? "" },
+      personal: personalItems,
+    },
+    options: {
+      enabled:
+        supported === true &&
+        personal.environmentId !== null &&
+        personalRead.data !== undefined,
+      refetchOnWindowFocus: false,
+    },
   });
   const [choices, setChoices] = useState<MoveChoices>(() => new Map());
   const [planChanged, setPlanChanged] = useState(false);
   const [notAwaiting, setNotAwaiting] = useState(false);
-  const accept = useHostScopedMutationForClient(client, {
-    method: "environment.move.accept",
-    mutationKey: environmentMutationKeys.moveAccept(),
-    errorMessage: "Couldn't start the move.",
-    invalidateMethods: ["environment.status", "environment.move.plan"],
-  });
+  const accept = useEnvironmentMoveStartMutation(
+    client,
+    "Couldn't start the move.",
+  );
   // `null` takes a Moves row's choice back: it moves as planned.
   const choose = (key: string, choice: MoveKeyChoice | null): void => {
     setChoices((current) => {
@@ -136,23 +151,47 @@ function MoveSheetBody(props: {
       return next;
     });
   };
-  const send = (data: MovePlan): void => {
-    accept.mutate(moveAcceptRequest(data, choices), {
-      onSuccess: (response) => {
-        if (response.outcome === "plan_changed") {
-          // The accept's success invalidates `environment.move.plan`, which
-          // re-reads the plan the sheet shows.
-          setPlanChanged(true);
-          setChoices(new Map());
-          return;
-        }
-        if (response.outcome === "not_awaiting") {
-          setNotAwaiting(true);
-          return;
-        }
-        props.onClose();
+  const send = (data: MovePlan, environmentId: string): void => {
+    accept.mutate(
+      {
+        hostId: target.hostId,
+        target: { kind: "personal", environmentId },
+        planHash: data.planHash,
+        keyChoices: moveKeyChoices(data, choices),
+        personal: personalItems,
       },
-    });
+      {
+        onSuccess: (result) => {
+          if (result.kind === "sign_in_changed") return;
+          if (result.kind === "plan_changed" || result.kind === "refused") {
+            // Personal is read again, and the plan with it; authn refusing the
+            // acceptance is the same ask: read the list again.
+            void personalRead.refetch().catch(ignoreError);
+            setPlanChanged(true);
+            setChoices(new Map());
+            return;
+          }
+          if (result.kind === "not_awaiting") {
+            setNotAwaiting(true);
+            return;
+          }
+          props.onClose();
+        },
+      },
+    );
+  };
+  // A plan refused for want of Personal is asked again only with Personal
+  // read again: rows read now give the plan a new request, which it reads by
+  // itself; a read that fails again asks the same plan again.
+  const retryPlan = (): void => {
+    if (personalRead.data !== null) {
+      void plan.refetch().catch(ignoreError);
+      return;
+    }
+    void personalRead
+      .refetch()
+      .then((reread) => (reread.data === null ? plan.refetch() : undefined))
+      .catch(ignoreError);
   };
   const reachedHostNames = runningPersonal.hosts
     .filter((host) => host.hostId !== target.hostId)
@@ -160,6 +199,8 @@ function MoveSheetBody(props: {
   // Who the settings reach is said, and the plan offered, only once the
   // host list has answered: an unread list is not "no other computer".
   const shownPlan = planOnceReachKnown(runningPersonal, plan.data);
+  const environmentId = personal.environmentId;
+  const versionDiffers = disclosureDiffers(shownPlan);
   return (
     <>
       <SheetHeader>
@@ -172,7 +213,7 @@ function MoveSheetBody(props: {
         className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4"
         data-testid="move-sheet"
       >
-        {supported === false ? (
+        {supported === false || versionDiffers ? (
           <p className="text-ui-sm text-muted-foreground">
             {needsUpdateSubtitle(target.hostName)}
           </p>
@@ -183,12 +224,7 @@ function MoveSheetBody(props: {
             className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
           >
             <span className="min-w-0">{plan.error.message}</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => void plan.refetch().catch(ignoreError)}
-            >
+            <Button type="button" size="sm" variant="ghost" onClick={retryPlan}>
               Retry
             </Button>
           </div>
@@ -242,26 +278,54 @@ function MoveSheetBody(props: {
         >
           Not now
         </Button>
-        <Button
-          type="button"
-          data-testid="move-sheet-accept"
-          disabled={shownPlan === null || accept.isPending}
-          onClick={() => {
-            if (shownPlan !== null) send(shownPlan);
-          }}
-        >
-          Move to Personal
-          {accept.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : null}
-        </Button>
+        <MoveAcceptButton
+          plan={shownPlan}
+          environmentId={environmentId}
+          pending={accept.isPending}
+          onAccept={send}
+        />
       </SheetFooter>
     </>
+  );
+}
+
+/** A plan whose disclosure is another version than {@link MOVE_DISCLOSURE}'s. */
+function disclosureDiffers(plan: MovePlan | null): boolean {
+  return plan !== null && plan.disclosureVersion !== MOVE_DISCLOSURE_VERSION;
+}
+
+/**
+ * Move to Personal: disabled until the plan is read, and absent for a plan
+ * whose disclosure this app cannot draw.
+ */
+function MoveAcceptButton(props: {
+  readonly plan: MovePlan | null;
+  readonly environmentId: string | null;
+  readonly pending: boolean;
+  readonly onAccept: (plan: MovePlan, environmentId: string) => void;
+}): ReactNode {
+  const { plan, environmentId } = props;
+  if (disclosureDiffers(plan)) return null;
+  return (
+    <Button
+      type="button"
+      data-testid="move-sheet-accept"
+      disabled={plan === null || environmentId === null || props.pending}
+      onClick={() => {
+        if (plan !== null && environmentId !== null)
+          props.onAccept(plan, environmentId);
+      }}
+    >
+      Move to Personal
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </Button>
   );
 }
 
@@ -317,7 +381,7 @@ function MovePlanRows(props: {
         </p>
       ) : null}
       {moving.length === 0 ? null : (
-        <MovesSection plan={plan} rows={moving} onChoose={props.onChoose} />
+        <MovesSection rows={moving} onChoose={props.onChoose} />
       )}
       {MOVE_SECTIONS.map((section) => {
         // Stays lists the rows the person left here after the plan's own.
@@ -396,12 +460,8 @@ function disclosureText(
   return MOVE_ACCEPTS_AS_SHOWN;
 }
 
-/**
- * Moves as counts, with `Show all <n>` opening every row; on a host that
- * honours them, each row has its own choices.
- */
+/** Moves as counts, with `Show all <n>` opening every row and its choices. */
 function MovesSection(props: {
-  readonly plan: MovePlan;
   readonly rows: readonly MovesSectionRow[];
   readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
 }): ReactNode {
@@ -423,7 +483,6 @@ function MovesSection(props: {
             {props.rows.map((entry) => (
               <MovesRow
                 key={`${entry.row.kind}:${entry.row.key}:${entry.row.os ?? ""}`}
-                plan={props.plan}
                 entry={entry}
                 onChoose={(choice) => props.onChoose(entry.choiceKey, choice)}
               />
@@ -435,17 +494,13 @@ function MovesSection(props: {
   );
 }
 
-/**
- * One Moves row: its name and its one choice. A row a host does not let the
- * person choose for has none.
- */
+/** One Moves row: its name and, on a row the person may keep here, its choice. */
 function MovesRow(props: {
-  readonly plan: MovePlan;
   readonly entry: MovesSectionRow;
   readonly onChoose: (choice: MoveKeyChoice | null) => void;
 }): ReactNode {
   const { entry } = props;
-  const offers = moveRowChoices(props.plan, entry.row);
+  const offers = moveRowChoices(entry.row);
   return (
     <li className="flex flex-col gap-1" data-testid="move-sheet-moves-row">
       <span className="text-ui-sm">

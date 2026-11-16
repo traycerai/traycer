@@ -1,8 +1,4 @@
-import {
-  useMutation,
-  useQueryClient,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { EnvironmentSecretRemoval } from "@traycer/protocol/host/environment-schemas";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -10,8 +6,8 @@ import type { DetailsItemRetry } from "@/components/settings/details/details-dra
 import {
   ENVIRONMENT_CLOUD_QUERY_SCOPE,
   invalidateEnvironmentReads,
-  useEnvironmentCloudOperation,
 } from "@/hooks/environment/use-environment-cloud";
+import { useSecretsOperationMutation } from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -81,17 +77,11 @@ function hasKnownCleanupFailure(
  */
 export function useSecretRemovalRetry(): DetailsItemRetry {
   const queryClient = useQueryClient();
-  // A Details subject always names its environment, so its secrets are the
-  // app's own calls to authn.
-  const begin = useEnvironmentCloudOperation();
   // One mutation keeps the reads and the destroy in sequence, with a shared
   // pending and refusal state. Success marks every scope's secret reads stale.
-  const retry = useMutation({
+  const retry = useSecretsOperationMutation<string | null, DetailsSubject>({
     mutationKey: settingsDetailsMutationKeys.secretRemovalRetry(),
-    mutationFn: async (subject: DetailsSubject): Promise<string | null> => {
-      // One sign-in for the whole Retry: the destroy and the confirmation
-      // never go on a later sign-in than the read that chose the version.
-      const send = begin();
+    mutationFn: async (subject, send) => {
       const versions = await send("environment.secrets.versions", {
         environmentId: subject.environmentId,
         secretId: subject.key,

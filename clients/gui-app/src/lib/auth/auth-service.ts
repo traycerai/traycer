@@ -4,6 +4,11 @@ import {
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -70,9 +75,23 @@ import {
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -229,6 +248,15 @@ export type LinkLoginSignInResult =
  * up locally. Matches the server's claim window; the record is gone by then.
  */
 const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
+
+/**
+ * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
+ * write sent later can tell an ended sign-in from a refreshed token.
+ */
+export interface ChosenSignIn {
+  readonly identityGeneration: number;
+  readonly userId: string | null;
+}
 
 /**
  * Thrown when a read is asked for on behalf of a credential era that is no
@@ -2114,9 +2142,10 @@ export class AuthService {
    * service is not disposed). Async credential tails capture the generation
    * before their first await and re-check through this after each one, so a
    * newer `signIn()` / `signOut()` / `dispose()` always wins over an
-   * already-started save/rotate/provision.
+   * already-started save/rotate/provision. A direct bot write's caller fences
+   * its own later steps the same way (`hooks/bots/bot-write-sign-in.ts`).
    */
-  private isIdentityCurrent(generation: number): boolean {
+  isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
   }
 
@@ -3174,21 +3203,11 @@ export class AuthService {
     hostId: string,
     era: AuthEra,
   ): Promise<HostOwnershipResult> {
-    const before = this.currentAuthEra();
-    if (
-      before.identity !== era.identity ||
-      before.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+    this.assertLiveAuthEra(era);
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     const result = await this.runnerHost.readHostOwnership(bearer, hostId);
-    const after = this.currentAuthEra();
-    if (
-      after.identity !== era.identity ||
-      after.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+    this.assertLiveAuthEra(era);
     return result;
   }
 
@@ -3197,6 +3216,22 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.listEnvironments(bearer);
+  }
+
+  /** Saves the account's auto-approve policy on traycer-server, on the signed-in person's bearer. */
+  async saveAutoPolicy(body: string): Promise<AutoPolicySaveResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.saveAutoPolicy(bearer, body);
+  }
+
+  /** Attaches a task to a team's environment on traycer-server, on the signed-in person's bearer. */
+  async attachTaskEnvironment(
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.attachTaskEnvironment(bearer, request);
   }
 
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
@@ -3292,6 +3327,71 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getSandboxCatalogue(bearer, context);
+  }
+
+  /**
+   * A team's chat auto-archive setting on traycer-server, on the sign-in
+   * `era` names. A build that cannot reach traycer-server reads it as a
+   * failure; an era that is no longer the live one throws
+   * {@link SupersededAuthEraError}, before the request or after its answer.
+   */
+  async getTeamChatAutoArchive(
+    teamId: string,
+    era: AuthEra,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    this.assertLiveAuthEra(era);
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.getTeamChatAutoArchive(bearer, teamId);
+    this.assertLiveAuthEra(era);
+    return result;
+  }
+
+  /** The sign-in a write is chosen under, read at the press. */
+  chosenSignIn(): ChosenSignIn {
+    return {
+      identityGeneration: this.identityGeneration,
+      userId: this.currentProfile?.userId ?? null,
+    };
+  }
+
+  /**
+   * Saves a team's setting with the bearer of the sign-in that made the
+   * choice. A save queued behind another one is sent later, so `chosenBy` is
+   * read when the person chose. A sign-in that has ended since throws
+   * {@link SupersededAuthEraError} instead of sending it as someone else; a
+   * same-user token refresh has not ended it, and the save goes out with the
+   * refreshed token. The user check covers a switch projected from another
+   * window, which leaves the identity generation where it was; the profile
+   * is committed with the bearer (`commitLiveCredential`), so it names the
+   * bearer's owner.
+   */
+  async setTeamChatAutoArchive(
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+    chosenBy: ChosenSignIn,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    if (
+      !this.isIdentityCurrent(chosenBy.identityGeneration) ||
+      (this.currentProfile?.userId ?? null) !== chosenBy.userId
+    )
+      throw new SupersededAuthEraError();
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setTeamChatAutoArchive(bearer, teamId, request);
+  }
+
+  private assertLiveAuthEra(era: AuthEra): void {
+    const live = this.currentAuthEra();
+    if (
+      live.identity !== era.identity ||
+      live.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
   }
 
   async getTraycerModels(): Promise<TraycerModelsFetchResult> {
@@ -3535,6 +3635,33 @@ export class AuthService {
       environmentId,
       signal,
     );
+  }
+
+  /**
+   * A bot's settings on traycer-server with the person's bearer: the app's
+   * own call, with no host in the path. Signed out, it answers `no_response`
+   * without a request, as an environment call does.
+   */
+  async updateBotRunSettings(
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotRunSettings(bearer, request);
+  }
+
+  async updateBotReplyMode(
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotReplyMode(bearer, request);
+  }
+
+  async deleteBot(request: BotDeleteRequest): Promise<BotDeleteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.deleteBot(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

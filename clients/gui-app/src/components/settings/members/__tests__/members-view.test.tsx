@@ -234,7 +234,9 @@ function renderView(options: {
           invitePending={false}
           setRolePending={false}
           removePending={false}
-          hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
+          hostLabel={(hostId) =>
+            hostId === mockLocalHostEntry.hostId ? "This Mac" : null
+          }
           onNoticeSeen={onNoticeSeen}
         />
       </RunnerHostContext.Provider>
@@ -280,19 +282,32 @@ interface DeferredPreviews {
  * change nothing can wait for it before asserting that nothing changed.
  */
 function deferredPreviews(): DeferredPreviews {
+  const answers = new Map<
+    string,
+    Promise<EnvironmentMembersRemovePreviewResponse>
+  >();
   const pending = new Map<
     string,
     (preview: EnvironmentMembersRemovePreviewResponse) => void
   >();
   const delivered = new Set<string>();
   return {
-    answer: (userId) =>
-      new Promise<EnvironmentMembersRemovePreviewResponse>((resolve) => {
-        pending.set(userId, resolve);
-      }).then((preview) => {
+    answer: (userId) => {
+      const existing = answers.get(userId);
+      if (existing !== undefined) return existing;
+      // Authn's preview and the computer's counts ask separately. Both
+      // consume the member's held answer without replacing its resolver.
+      const answer = new Promise<EnvironmentMembersRemovePreviewResponse>(
+        (resolve) => {
+          pending.set(userId, resolve);
+        },
+      ).then((preview) => {
         delivered.add(userId);
         return preview;
-      }),
+      });
+      answers.set(userId, answer);
+      return answer;
+    },
     resolve: (userId, preview) => {
       const settle = pending.get(userId);
       if (settle === undefined) throw new Error(`no preview for ${userId}`);
@@ -362,21 +377,27 @@ describe("MembersView", () => {
     ).toBeTruthy();
   });
 
-  it("shows a non-admin the list without controls and a pending summary, not the address", () => {
-    renderView({
-      ...BASE,
-      viewerRole: "viewer",
-      currentUserId: "u-editor",
-      members: [ADMIN, EDITOR, PENDING],
-    });
-    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.queryByText("new@acme.test")).toBeNull();
-    const summary = screen.getByTestId("members-pending-summary");
-    expect(within(summary).getByText("Invited · 1 pending")).toBeTruthy();
-  });
+  it.each([
+    ["Editor", "editor"],
+    ["Viewer", "viewer"],
+  ] as const)(
+    "shows a %s seat no membership mutation controls and a pending summary",
+    (_label, viewerRole) => {
+      renderView({
+        ...BASE,
+        viewerRole,
+        currentUserId: "u-editor",
+        members: [ADMIN, EDITOR, PENDING],
+      });
+      expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.queryByText("new@acme.test")).toBeNull();
+      const summary = screen.getByTestId("members-pending-summary");
+      expect(within(summary).getByText("Invited · 1 pending")).toBeTruthy();
+    },
+  );
 
   it("refuses the last admin with the remedy, no role select and no Remove", () => {
     renderView({ ...BASE, viewerRole: "admin", members: [ADMIN, EDITOR] });

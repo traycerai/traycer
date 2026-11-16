@@ -2,9 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import {
+  useSecretsEnvironment,
   useSecretsRead,
   useSecretsWrite,
 } from "@/hooks/environment/use-environment-secrets-calls";
@@ -18,11 +18,10 @@ export function useSecretRowActions(props: {
   readonly removing: boolean;
   readonly onChanged: () => void;
 }) {
-  const { environmentId, resolved } = useAddressedEnvironment();
+  const { environmentId, resolved } = useSecretsEnvironment(props.client);
   const queryClient = useQueryClient();
   const [polling, setPolling] = useState(props.removing);
   const versions = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: props.secret.secretId, environmentId },
     enabled: resolved,
@@ -34,20 +33,12 @@ export function useSecretRowActions(props: {
     (props.removing || (removal !== undefined && removal !== null));
   if (polling !== unfinished) setPolling(unfinished);
   const verify = useSecretsWrite({
-    client: props.client,
     method: "environment.secrets.verify",
-    hostOwnFloor: null,
     mutationKey: settingsDetailsMutationKeys.secretVerify(),
   });
-  // Remove targets the current version: @1.0 refuses it, @1.1 revokes it,
-  // whatever the environment scope.
+  // Remove targets the current version, which authn revokes.
   const remove = useSecretsWrite({
-    client: props.client,
     method: "environment.secrets.destroy",
-    hostOwnFloor: {
-      method: "environment.secrets.destroy",
-      version: { major: 1, minor: 1 },
-    },
     mutationKey: settingsDetailsMutationKeys.secretDestroy(),
     onSuccess: async (answer) => {
       if (answer.outcome === "refused") return;

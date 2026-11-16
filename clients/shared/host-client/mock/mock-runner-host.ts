@@ -1,5 +1,14 @@
 import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "../auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "../task-environment-attachment";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "../environment-directory";
@@ -42,6 +51,13 @@ import {
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
+import {
+  fetchTeamChatAutoArchiveViaHttp,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveReadResult,
+  type TeamChatAutoArchiveSetRequest,
+  type TeamChatAutoArchiveWriteResult,
+} from "../team-chat-auto-archive";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
@@ -55,6 +71,18 @@ import {
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
+import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
+  type BotSetupWriteResult,
+} from "../bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
@@ -766,6 +794,32 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
@@ -1036,6 +1090,46 @@ export class MockRunnerHost implements IRunnerHost {
     const next: SlackAppView = { ...app, dmsEnabled: request.dmsEnabled };
     this.slackApps.set(request.botId, next);
     return { kind: "ok", app: next };
+  }
+
+  // A bot's settings: same no-CORS-boundary parity as `listEnvironments`.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
   }
 
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */
@@ -1641,6 +1735,34 @@ export class MockRunnerHost implements IRunnerHost {
     for (const handler of this.notificationClickHandlers) {
       handler(payload);
     }
+  }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return fetchTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+    );
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return putTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+      request,
+    );
   }
 }
 

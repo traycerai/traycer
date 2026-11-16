@@ -100,8 +100,6 @@ describe("dormant move call contracts", () => {
           staysOnThisComputer: [],
           alreadyInPersonal: [],
           differsMasked: [],
-          looksLikeAKey: [],
-          sameNameInPersonal: [],
         },
         guideDiffers: false,
         personalHoldsSecrets: false,
@@ -116,8 +114,6 @@ describe("dormant move call contracts", () => {
         staysOnThisComputer: [],
         alreadyInPersonal: [],
         differsMasked: [],
-        looksLikeAKey: [],
-        sameNameInPersonal: [],
       },
       guideDiffers: false,
       personalHoldsSecrets: false,
@@ -499,8 +495,6 @@ describe("dormant move call contracts", () => {
         staysOnThisComputer: [],
         alreadyInPersonal: [],
         differsMasked: [],
-        looksLikeAKey: [],
-        sameNameInPersonal: [],
       },
       guideDiffers: false,
       personalHoldsSecrets: false,
@@ -532,8 +526,6 @@ describe("dormant move call contracts", () => {
       "staysOnThisComputer",
       "alreadyInPersonal",
       "differsMasked",
-      "looksLikeAKey",
-      "sameNameInPersonal",
     ] as const) {
       const missing = { ...response, rows: { ...response.rows } };
       Reflect.deleteProperty(missing.rows, field);
@@ -548,6 +540,32 @@ describe("dormant move call contracts", () => {
         environmentMovePlanV20.responseSchema.parse(missing),
       ).toThrow();
     }
+  });
+
+  it("parses a 2.0 plan answer with no looksLikeAKey or sameNameInPersonal, and drops them from one that carries them", () => {
+    const rows = {
+      moves: [],
+      staysOnThisComputer: [],
+      alreadyInPersonal: [],
+      differsMasked: [],
+    };
+    const answer = {
+      planHash: HASH,
+      planRevision: 1,
+      hostVersion: "1.2.3",
+      disclosureVersion: 2,
+      rows,
+      guideDiffers: false,
+      personalHoldsSecrets: false,
+    };
+    expect(environmentMovePlanV20.responseSchema.parse(answer).rows).toEqual(
+      rows,
+    );
+    const stale = environmentMovePlanV20.responseSchema.parse({
+      ...answer,
+      rows: { ...rows, looksLikeAKey: [], sameNameInPersonal: [] },
+    });
+    expect(Object.keys(stale.rows).sort()).toEqual(Object.keys(rows).sort());
   });
 
   it("refuses an enabled key and any state but off on remote access set@2.0", () => {
