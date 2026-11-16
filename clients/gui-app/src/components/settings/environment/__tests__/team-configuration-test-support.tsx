@@ -246,6 +246,11 @@ export function teamProfileRecordsBody(
   };
 }
 
+const DEFAULT_TEAM_PROFILE_ITEMS: TeamProfileRecordHttpAnswer = {
+  status: 200,
+  body: { items: [] },
+};
+
 export const teamProfileRecordHttpBoundary: {
   list: TeamProfileRecordHttpAnswer;
   nextListAnswer: DeferredTeamProfileRecordAnswer | null;
@@ -261,7 +266,7 @@ export const teamProfileRecordHttpBoundary: {
 } = {
   list: { status: 200, body: { enabled: false } },
   nextListAnswer: null,
-  items: { status: 200, body: { items: [] } },
+  items: DEFAULT_TEAM_PROFILE_ITEMS,
   action: {
     status: 200,
     body: {
@@ -779,20 +784,32 @@ function teamAuthnResponse(url: URL): Promise<Response> | null {
     return teamHttpResponse(teamProfileRecordHttpBoundary.action);
   if (url.pathname.endsWith("/provider-keys/cursor"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.keyAction);
-  if (url.pathname.endsWith("/harness-connections"))
+  if (
+    url.pathname.endsWith("/harness-connections") &&
+    !url.pathname.endsWith("/secrets/harness-connections")
+  )
     return teamHttpResponse(teamProfileRecordHttpBoundary.connections);
   if (
     url.pathname.includes("/harness-connections/") &&
     url.pathname.endsWith("/connect")
   )
     return teamHttpResponse(teamProfileRecordHttpBoundary.replaceKey);
-  if (url.pathname.endsWith("/items/managed_profile"))
+  if (
+    url.pathname.endsWith("/items/managed_profile") &&
+    (verifiedSettingsTransport === null ||
+      teamProfileRecordHttpBoundary.items !== DEFAULT_TEAM_PROFILE_ITEMS ||
+      teamProfileRecordHttpBoundary.itemWriteStatus !== 200)
+  )
     return Promise.resolve(
       new Response(null, {
         status: teamProfileRecordHttpBoundary.itemWriteStatus,
       }),
     );
-  if (url.pathname.endsWith("/items"))
+  if (
+    url.pathname.endsWith("/items") &&
+    (verifiedSettingsTransport === null ||
+      teamProfileRecordHttpBoundary.items !== DEFAULT_TEAM_PROFILE_ITEMS)
+  )
     return teamHttpResponse(teamProfileRecordHttpBoundary.items);
   return null;
 }
@@ -1388,8 +1405,10 @@ function buildVerifiedTeamProvidersPage(
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
   teamWindowRegistered = false;
   const authHarness = buildTeamAuthRuntime(queryClient);
-  void startVerifiedTeamAuth(authHarness);
   const assembly = assembleTeamPage(options, queryClient, authHarness);
+  void startVerifiedTeamAuth(authHarness).then(() =>
+    authHarness.auth.listEnvironments(),
+  );
   return createTeamPageHarness(assembly, (props) => (
     <RunnerHostProvider runnerHost={assembly.runnerHost}>
       <HostRuntimeContext.Provider value={assembly.binding}>
@@ -1593,7 +1612,7 @@ export function resetTeamPageHarness(): void {
     body: { enabled: false },
   };
   teamProfileRecordHttpBoundary.nextListAnswer = null;
-  teamProfileRecordHttpBoundary.items = { status: 200, body: { items: [] } };
+  teamProfileRecordHttpBoundary.items = DEFAULT_TEAM_PROFILE_ITEMS;
   teamProfileRecordHttpBoundary.action = {
     status: 200,
     body: {
