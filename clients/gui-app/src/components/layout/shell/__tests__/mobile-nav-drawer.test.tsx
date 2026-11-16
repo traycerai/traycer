@@ -544,6 +544,17 @@ describe("MobileNavDrawer", () => {
       ).toBeNull();
     });
 
+    it("draws no mark on the Notifications row while the status is unavailable, as the phone's bell draws none", async () => {
+      testState.bellState = { kind: "unknown" };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, status unavailable",
+      });
+      expect(row.textContent).toBe("Notifications");
+      expect(row.querySelectorAll("[aria-hidden]:not(svg)")).toHaveLength(0);
+    });
+
     it("opens History from the All tasks row and closes the drawer", async () => {
       renderDrawer();
 

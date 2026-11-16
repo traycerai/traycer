@@ -343,10 +343,10 @@ export function MobileNavDrawer(): ReactNode {
 
 /**
  * The strip's Notifications row in the drawer: it opens the notifications sheet
- * and picks its mark as the header's bell does (the count of what needs
- * attention, else a dot for anything unread, else the status-unavailable
- * dot), drawn neutral as the strip's row draws it, and it is gated as the
- * strip's row is.
+ * and picks its mark as the phone header's bell does (the count of what
+ * needs attention, else a dot for anything unread, and none while the status
+ * is unavailable, which its name alone says), drawn neutral as the strip's
+ * row draws it, and it is gated as the strip's row is.
  */
 function MobileNavNotificationsRow(props: {
   readonly onOpen: () => void;
@@ -386,13 +386,6 @@ function MobileNavNotificationsRow(props: {
           aria-hidden
           data-testid="mobile-nav-notifications-quiet-dot"
           className="size-2 shrink-0 rounded-full bg-primary"
-        />
-      ) : null}
-      {bellState.kind === "unknown" ? (
-        <span
-          aria-hidden
-          data-testid="mobile-nav-notifications-unknown-indicator"
-          className="size-2 shrink-0 rounded-full border border-muted-foreground/70"
         />
       ) : null}
     </Button>
