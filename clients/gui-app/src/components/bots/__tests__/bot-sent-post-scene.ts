@@ -57,11 +57,11 @@ export const scene = {
   panelKinds: [] as string[],
   /** The `sent` each call of `threadOriginRow` was given, in order. */
   originSents: [] as Array<BotSentPost | null>,
-  /** The line the host negotiated for `bot.conversation.send`. */
+  /** The line the host negotiated for `bot.conversation.send`; `null` while none is read. */
   sendLine: { major: 1, minor: 7 } as {
     readonly major: number;
     readonly minor: number;
-  },
+  } | null,
 };
 
 /**

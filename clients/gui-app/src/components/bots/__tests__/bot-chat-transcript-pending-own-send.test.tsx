@@ -40,6 +40,7 @@ import {
 } from "@/components/bots/__tests__/bot-windowed-session-test-support";
 import { storedRowOfSend } from "@/components/bots/__tests__/bot-send-identity-test-support";
 import {
+  negotiateBotSend,
   resetBotFailedRequestSupport,
   signInViewer,
   VIEWER_USER_ID,
@@ -49,6 +50,7 @@ import {
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
+import { BOT_CONVERSATION_NONCE_VERSION } from "@/hooks/bots/use-bot-send-version";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { ChatMessages } from "@/components/chat/chat-messages";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
@@ -159,7 +161,7 @@ function channelSurface(): BotTranscriptSurface {
 let session: WindowedSession;
 
 /** The channel mounted over `session`, with the bot's binding the send was made for. */
-function mountChannel(): void {
+function mountChannel(sendBinding: typeof BINDING | null): void {
   mocks.handle = session.handle;
   render(
     <StrictMode>
@@ -180,7 +182,7 @@ function mountChannel(): void {
               header={null}
               landOn={null}
               flow={null}
-              sendBinding={BINDING}
+              sendBinding={sendBinding}
             />
           </BotIdentityContext>
         </TooltipProvider>
@@ -242,6 +244,8 @@ beforeEach(() => {
   installLegendListTestClock();
   installLegendListViewportMetrics();
   signInViewer(VIEWER_USER_ID);
+  // A held send exists only where the host took its nonce.
+  negotiateBotSend(HOST_ID, BOT_CONVERSATION_NONCE_VERSION);
   session = createWindowedSession(IDS);
   openWindowedChat(session, IDS, {
     messages: [EARLIER],
@@ -264,7 +268,7 @@ afterEach(() => {
 
 describe("a member's own send in the channel's windowed list, drawn before its host answers", () => {
   it("stays one row, the same row, with its text, from the press through the index naming it to its body arriving by the range the list asks for", async () => {
-    mountChannel();
+    mountChannel(BINDING);
     await settleLegendList();
     const { rowId, request } = pressSend();
     await settleLegendList();
@@ -319,8 +323,24 @@ describe("a member's own send in the channel's windowed list, drawn before its h
     expect(order[1]).toContain(TEXT);
   });
 
+  it("CONTROL: offers no Retry to an unconfirmed send when the channel has no binding to send under", async () => {
+    mountChannel(null);
+    await settleLegendList();
+    const { rowId } = pressSend();
+    act(() => {
+      settlePendingSend(rowId, "uncertain");
+    });
+    await settleLegendList();
+
+    const row = theRow("unconfirmed, no binding");
+    expect(row.textContent).toMatch(/Not confirmed/);
+    const retry = within(row).getByTestId("bot-message-unconfirmed-retry");
+    if (!(retry instanceof HTMLButtonElement)) throw new Error("no Retry");
+    expect(retry.disabled, "Retry was offered with no binding").toBe(true);
+  });
+
   it("keeps an unconfirmed send's Retry drawn, enabled and the same, at every step, and one row after its body arrives as a live record", async () => {
-    mountChannel();
+    mountChannel(BINDING);
     await settleLegendList();
     const { rowId, request } = pressSend();
     act(() => {
@@ -430,7 +450,7 @@ describe("a member's own send held while the transcript window is void", () => {
   }
 
   it("V1: stays one row, the same row, with its text, while the replacement is held, and is the host's one row after it is answered", async () => {
-    mountChannel();
+    mountChannel(BINDING);
     await settleLegendList();
     const { rowId, request } = pressSend();
     await settleLegendList();
@@ -457,7 +477,7 @@ describe("a member's own send held while the transcript window is void", () => {
   });
 
   it("V2: keeps an unconfirmed send's Retry drawn and enabled while the replacement is held, and one host row after it is answered", async () => {
-    mountChannel();
+    mountChannel(BINDING);
     await settleLegendList();
     const { rowId, request } = pressSend();
     act(() => {
@@ -486,7 +506,7 @@ describe("a member's own send held while the transcript window is void", () => {
   });
 
   it("V4: a void before any index entry names the row keeps the send as one row with its text, and one host row after recovery", async () => {
-    mountChannel();
+    mountChannel(BINDING);
     await settleLegendList();
     const { request } = pressSend();
     await settleLegendList();

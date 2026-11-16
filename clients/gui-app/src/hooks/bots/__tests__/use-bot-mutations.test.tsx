@@ -6,6 +6,7 @@
  *
  * Real hook over two hosts' mock messengers sharing one query client.
  */
+import { botSendAttemptOutcome } from "@/lib/bots/bot-send-attempt-outcome";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -660,6 +661,43 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
     expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
       method: "bot.conversation.send",
       version: { major: 1, minor: 6 },
+    });
+  });
+
+  const V17: SchemaVersion = { major: 1, minor: 7 };
+
+  /** A send as the app builds one that is drawn at Send: its nonce, and the authority it was made under. */
+  const NONCED: BotConversationSendRequest = {
+    ...SEND,
+    sendNonce: "6f1d6a54-5b0a-4c2e-9d57-0e3b7c1a2f48",
+    authority: { hostId: "host-1", hostEpoch: 1 },
+  };
+
+  it("refuses a send that carries its nonce on a host that negotiated 1.6 before it leaves, so its id is never minted by an older host", async () => {
+    const f = floorFixture(V16);
+
+    const failure = await act(() => f.send(NONCED));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(
+      botSendAttemptOutcome(failure),
+      "the refusal is not read as a send that never left",
+    ).toBe("refused");
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a send that carries its nonce, floor attached, to a host that negotiated 1.7", async () => {
+    const f = floorFixture(V17);
+
+    const failure = await act(() => f.send(NONCED));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([NONCED]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 7 },
     });
   });
 

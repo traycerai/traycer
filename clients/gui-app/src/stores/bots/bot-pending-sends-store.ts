@@ -30,8 +30,8 @@ export interface BotPendingSend {
   readonly row: Message;
   /**
    * The request as it was sent, its nonce and the binding it was made for
-   * (`authority`) included. Retry sends it again unchanged, and is offered
-   * only while that binding holds.
+   * (`authority`) included. Retry sends it again unchanged, offered only
+   * through the host that authority names (`usePendingSendRows`).
    */
   readonly request: BotConversationSendRequest;
   /**
@@ -50,6 +50,14 @@ export interface BotPendingSend {
   readonly inFlight: boolean;
   /** How many attempts of the send have started, the first included. */
   readonly attempts: number;
+  /**
+   * The bound epoch read when a Retry started that its host refused because
+   * the bot's binding moved, the latest such; `null` while none was. No
+   * Retry is offered under that epoch or an older one, and a newer one
+   * offers it again. It says nothing of whether an earlier attempt was
+   * written.
+   */
+  readonly movedAtEpoch: number | null;
   /**
    * The attempt whose uncertain outcome still owes the send's chat one
    * subscribe again, `null` when none is owed: a channel the host had not
@@ -123,7 +131,12 @@ export function useHeldPendingSends(
 export function holdPendingSend(
   send: Omit<
     BotPendingSend,
-    "state" | "everUncertain" | "inFlight" | "attempts" | "owedResubscribe"
+    | "state"
+    | "everUncertain"
+    | "inFlight"
+    | "attempts"
+    | "owedResubscribe"
+    | "movedAtEpoch"
   >,
 ): void {
   if (send.sentAs.lifetime !== currentBotLifetime()) return;
@@ -141,6 +154,7 @@ export function holdPendingSend(
               inFlight: true,
               attempts: 1,
               owedResubscribe: null,
+              movedAtEpoch: null,
             },
           },
         },
@@ -175,6 +189,28 @@ export function settlePendingSend(
   messageId: string,
   outcome: "accepted" | "refused" | "uncertain",
 ): BotPendingSendFate {
+  return settle(messageId, outcome, null);
+}
+
+/**
+ * Settles a Retry of the send drawn as `messageId` that its host refused
+ * because the bot's binding moved, as `settlePendingSend` does, and records
+ * `observedEpoch`, the bound epoch read when that Retry started, in the same
+ * write (`movedAtEpoch`). A send already stored or gone records nothing.
+ */
+export function settleMovedRetry(
+  messageId: string,
+  outcome: "refused" | "uncertain",
+  observedEpoch: number,
+): BotPendingSendFate {
+  return settle(messageId, outcome, observedEpoch);
+}
+
+function settle(
+  messageId: string,
+  outcome: "accepted" | "refused" | "uncertain",
+  movedAtEpoch: number | null,
+): BotPendingSendFate {
   const state = useBotPendingSendsStore.getState();
   if (state.stored.has(messageId)) return "stored";
   const entry = state.entries[messageId];
@@ -201,6 +237,7 @@ export function settlePendingSend(
     everUncertain: true,
     inFlight: false,
     owedResubscribe: entry.attempts,
+    movedAtEpoch: movedAtEpoch ?? entry.movedAtEpoch,
   });
   return "kept";
 }

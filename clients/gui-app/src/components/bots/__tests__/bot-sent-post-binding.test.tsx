@@ -41,6 +41,7 @@ import {
   heldHost,
   notificationMarkReadMock,
   resolvedThemeMock,
+  scene,
   sendLineScripted,
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
@@ -56,6 +57,7 @@ import {
 import {
   authorityMovedRefusal,
   sendNonceOf,
+  storedRowOfSend,
   unmarkedRefusal,
 } from "@/components/bots/__tests__/bot-send-identity-test-support";
 import { textOf } from "@/components/bots/__tests__/bot-box-test-support";
@@ -74,7 +76,9 @@ import {
   EARLIER_POST,
   TEXT_A,
   USER_A,
+  USER_B,
   bindBot,
+  changeAccount,
   channelBox,
   endCase,
   mountSurfaceAs,
@@ -83,6 +87,7 @@ import {
   pressSend,
   redrawSurface,
   setSendLine,
+  setSendLineUnknown,
   startCase,
   type BotBinding,
 } from "@/components/bots/__tests__/bot-sent-post-test-support";
@@ -500,28 +505,22 @@ describe("Retry of an unconfirmed send follows the binding it was made under", (
     expect(sendAt(1)).toEqual(sendAt(0));
   });
 
-  it.each<[string, BotBinding]>([
-    ["another host", { kind: "team", hostId: ELSEWHERE, epoch: 1 }],
-    ["the same host at a newer epoch", { ...HERE, epoch: 2 }],
-  ])(
-    "offers no Retry, and keeps the row unconfirmed with its text, once the bot is bound to %s, and sends nothing",
-    async (_moved, binding) => {
-      await mountBoundAs(HERE);
-      await aSends(TEXT_A);
-      await theSendTurnsUncertain();
-      expect(
-        screen.queryByRole("button", { name: "Retry" }),
-        "Retry was not offered while the binding was unchanged",
-      ).not.toBeNull();
+  it("offers no Retry, and keeps the row unconfirmed with its text, once the bot is bound to another host, and sends nothing", async () => {
+    await mountBoundAs(HERE);
+    await aSends(TEXT_A);
+    await theSendTurnsUncertain();
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+      "Retry was not offered while the binding was unchanged",
+    ).not.toBeNull();
 
-      bindNow(binding);
+    bindNow({ kind: "team", hostId: ELSEWHERE, epoch: 1 });
 
-      await expectRetryWithheldAndInert();
-      expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
-      expect(rowsOf(TEXT_A)).toHaveLength(1);
-      expect(loggedSends()).toHaveLength(1);
-    },
-  );
+    await expectRetryWithheldAndInert();
+    expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
+    expect(rowsOf(TEXT_A)).toHaveLength(1);
+    expect(loggedSends()).toHaveLength(1);
+  });
 });
 
 describe("a held send when the tab is rebound to another host", () => {
@@ -604,12 +603,284 @@ describe("a send the host refused as moved, by how many attempts it has made", (
       "the bot was not read again after the refusal",
     ).toBeGreaterThan(resubscribes);
 
-    bindNow({ ...HERE, epoch: 2 });
+    // The same observed binding: nothing to retry against.
+    bindNow(HERE);
 
     await expectRetryWithheldAndInert();
     expect(
       loggedSends(),
       "a send went out after the refusal: only the first attempt and the Retry should be logged",
     ).toHaveLength(2);
+  });
+});
+
+/** The Retry of the unconfirmed row, enabled: or a failure that says what the row offers. */
+function offeredRetry(step: string): HTMLButtonElement {
+  const retry = screen.queryByRole("button", { name: "Retry" });
+  if (!(retry instanceof HTMLButtonElement)) {
+    throw new Error(`${step}: no Retry is drawn: ${pageDescription()}`);
+  }
+  expect(retry.disabled, `${step}: Retry is withheld`).toBe(false);
+  return retry;
+}
+
+/** Presses the offered Retry, and waits for the host to hold its request. */
+async function pressRetry(step: string): Promise<void> {
+  const before = loggedSends().length;
+  fireEvent.click(offeredRetry(step));
+  await waitFor(() => expect(loggedSends()).toHaveLength(before + 1));
+}
+
+/** The host answers the send it holds at `index` as refused because the binding moved. */
+async function refuseAsMoved(index: number): Promise<void> {
+  await act(async () => {
+    heldHost().sends[index].reject(authorityMovedRefusal("the bot moved"));
+    await Promise.resolve();
+  });
+}
+
+/** The channel's transcript now holds the host's stored row of `request`. */
+function storedRowArrives(request: BotConversationSendRequest): void {
+  const channel = scene.channelHandle;
+  if (channel === null) throw new Error("no channel in this case");
+  act(() => {
+    channel.store.setState({
+      messages: [
+        EARLIER_POST,
+        storedRowOfSend(request, USER_A, Date.UTC(2020, 0, 2)),
+      ],
+    });
+  });
+}
+
+/** A's uncertain send at the original binding `HERE` (epoch 1), the host holding its request. */
+async function anUncertainSend(): Promise<void> {
+  await mountBoundAs(HERE);
+  await aSends(TEXT_A);
+  await theSendTurnsUncertain();
+}
+
+describe("Retry of an unconfirmed send when the same host claims the bot again", () => {
+  it("offers Retry at a newer epoch of the same host, and sends the request unchanged, authority and nonce included", async () => {
+    await anUncertainSend();
+
+    bindNow({ ...HERE, epoch: 2 });
+    await pressRetry("the same host at epoch 2");
+
+    expect(sendAt(1)).toEqual(sendAt(0));
+    expect(authorityOf(sendAt(1))).toEqual({ hostId: TAB_HOST, hostEpoch: 1 });
+  });
+
+  it("withholds Retry, sending nothing, while the bot is bound to another host, and offers it unchanged when the same host has it again at a newer epoch", async () => {
+    await anUncertainSend();
+
+    bindNow({ kind: "team", hostId: ELSEWHERE, epoch: 2 });
+    await expectRetryWithheldAndInert();
+    expect(loggedSends()).toHaveLength(1);
+
+    bindNow({ ...HERE, epoch: 3 });
+    await pressRetry("back on the same host at epoch 3");
+
+    expect(sendAt(1)).toEqual(sendAt(0));
+  });
+
+  it("CONTROL: offers no Retry to a send made at a newer epoch than the one the app observes now", async () => {
+    await mountBoundAs({ ...HERE, epoch: 3 });
+    await aSends(TEXT_A);
+    await theSendTurnsUncertain();
+
+    bindNow({ ...HERE, epoch: 2 });
+
+    await expectRetryWithheldAndInert();
+    expect(loggedSends()).toHaveLength(1);
+  });
+});
+
+describe("Retry of an unconfirmed send after the host refused an attempt as moved", () => {
+  /** A retry at observed epoch 2 is answered E_BOT_AUTHORITY_MOVED. */
+  async function theRetryAtEpoch2IsRefused(): Promise<void> {
+    await anUncertainSend();
+    bindNow({ ...HERE, epoch: 2 });
+    await pressRetry("the same host at epoch 2");
+    await refuseAsMoved(1);
+  }
+
+  it("keeps one unconfirmed row with the box empty, reads the bot once, and offers no Retry after a redraw, a remount or a same-epoch refresh", async () => {
+    await anUncertainSend();
+    bindNow({ ...HERE, epoch: 2 });
+    await pressRetry("the same host at epoch 2");
+    const reads = botReadsSoFar();
+
+    await refuseAsMoved(1);
+
+    expect(rowsOf(TEXT_A), pageDescription()).toHaveLength(1);
+    expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
+    expect(textOf(channelBox()), "the refusal gave the text back").toBe("");
+    expect(
+      botReadsSoFar(),
+      "the bot was not read exactly once after the refusal",
+    ).toBe(reads + 1);
+    await expectRetryWithheldAndInert();
+
+    act(() => redrawSurface(view, queryClient));
+    await expectRetryWithheldAndInert();
+
+    view.unmount();
+    view = await mountSurfaceAs(USER_A, queryClient);
+    await expectRetryWithheldAndInert();
+
+    bindNow({ ...HERE, epoch: 2 });
+    await expectRetryWithheldAndInert();
+    expect(loggedSends(), "a request went out after the refusal").toHaveLength(
+      2,
+    );
+    expect(botReadsSoFar(), "the refusal set off more than one read").toBe(
+      reads + 1,
+    );
+  });
+
+  it("still settles the send when its stored row arrives after the refusal", async () => {
+    await theRetryAtEpoch2IsRefused();
+
+    storedRowArrives(sendAt(0));
+
+    expect(screen.queryAllByText(/not confirmed/i)).toHaveLength(0);
+    expect(rowsOf(TEXT_A)).toHaveLength(1);
+    expect(heldIds()).toEqual([]);
+  });
+
+  it("offers Retry once at a newer epoch, with the request unchanged", async () => {
+    await theRetryAtEpoch2IsRefused();
+
+    bindNow({ ...HERE, epoch: 3 });
+    await pressRetry("the same host at epoch 3");
+
+    expect(loggedSends()).toHaveLength(3);
+    expect(sendAt(2)).toEqual(sendAt(0));
+  });
+
+  it("CONTROL: does not stamp a transport failure of a retry at the original epoch: Retry is offered again", async () => {
+    await anUncertainSend();
+    await pressRetry("the retry at the original binding");
+
+    await act(async () => {
+      heldHost().sends[1].reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
+    await pressRetry("after a transport failure at the original epoch");
+    expect(sendAt(2)).toEqual(sendAt(0));
+  });
+
+  it("does not stamp a transport failure: Retry is still offered at the same epoch", async () => {
+    await anUncertainSend();
+    bindNow({ ...HERE, epoch: 2 });
+    await pressRetry("the same host at epoch 2");
+
+    await act(async () => {
+      heldHost().sends[1].reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
+    await pressRetry("after a transport failure at epoch 2");
+    expect(sendAt(2)).toEqual(sendAt(0));
+  });
+});
+
+describe("a refusal that arrives after the app moved on", () => {
+  it("stamps the epoch the attempt started at, not the one the app reads when it is refused: epoch 3 stays eligible", async () => {
+    await anUncertainSend();
+    bindNow({ ...HERE, epoch: 2 });
+    await pressRetry("the same host at epoch 2");
+
+    bindNow({ ...HERE, epoch: 3 });
+    await refuseAsMoved(1);
+
+    await pressRetry("the same host at epoch 3, after epoch 2's late refusal");
+    expect(sendAt(2)).toEqual(sendAt(0));
+  });
+
+  it("does not re-arm on the same or an earlier observation, and does on a newer one", async () => {
+    await anUncertainSend();
+    bindNow({ ...HERE, epoch: 3 });
+    await pressRetry("the same host at epoch 3");
+    await refuseAsMoved(1);
+
+    await expectRetryWithheldAndInert();
+    bindNow({ ...HERE, epoch: 3 });
+    await expectRetryWithheldAndInert();
+    bindNow({ ...HERE, epoch: 2 });
+    await expectRetryWithheldAndInert();
+    expect(loggedSends()).toHaveLength(2);
+
+    bindNow({ ...HERE, epoch: 4 });
+    await pressRetry("the same host at epoch 4");
+    expect(sendAt(2)).toEqual(sendAt(0));
+  });
+
+  it("CONTROL: draws no row and no Retry when the refusal arrives after the stored row was seen", async () => {
+    await anUncertainSend();
+    await pressRetry("the retry at the original binding");
+
+    storedRowArrives(sendAt(0));
+    expect(screen.queryAllByText(/not confirmed/i)).toHaveLength(0);
+    await refuseAsMoved(1);
+
+    expect(rowsOf(TEXT_A), pageDescription()).toHaveLength(1);
+    expect(screen.queryAllByText(/not confirmed/i)).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(heldIds()).toEqual([]);
+  });
+
+  it("CONTROL: draws no row and no Retry for the next account when the refusal arrives after an account change", async () => {
+    await anUncertainSend();
+    await pressRetry("the retry at the original binding");
+
+    await changeAccount(USER_B);
+    await refuseAsMoved(1);
+
+    expect(rowsOf(TEXT_A), pageDescription()).toHaveLength(0);
+    expect(screen.queryAllByText(/not confirmed/i)).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(heldIds()).toEqual([]);
+  });
+});
+
+describe("Retry of an unconfirmed send by what the tab's host takes", () => {
+  it.each<[string, () => void]>([
+    ["a line below the nonce floor", () => setSendLine(OLD_HOST)],
+    ["a line that is not read", () => setSendLineUnknown()],
+  ])(
+    "offers no Retry, and keeps the row unconfirmed with its text, when the host's send line is %s, and sends nothing",
+    async (_line, setLine) => {
+      await anUncertainSend();
+      expect(
+        screen.queryByRole("button", { name: "Retry" }),
+        "Retry was not offered while the line took the nonce",
+      ).not.toBeNull();
+
+      setLine();
+      bindNow(HERE);
+
+      await expectRetryWithheldAndInert();
+      expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
+      expect(rowsOf(TEXT_A)).toHaveLength(1);
+      expect(loggedSends()).toHaveLength(1);
+    },
+  );
+
+  it("offers Retry again, with the request unchanged, once the host's line takes the nonce again", async () => {
+    await anUncertainSend();
+    setSendLine(OLD_HOST);
+    bindNow(HERE);
+    await expectRetryWithheldAndInert();
+
+    setSendLine(NONCE_HOST);
+    bindNow(HERE);
+    await pressRetry("the line takes the nonce again");
+
+    expect(sendAt(1)).toEqual(sendAt(0));
   });
 });

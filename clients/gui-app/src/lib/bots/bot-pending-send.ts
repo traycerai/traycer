@@ -44,7 +44,8 @@ export interface BotPendingSendStart {
  * The bot's binding as a surface reads it now, which a member's send from it
  * is made for and offered again under: a send carries a nonce, and is drawn,
  * only through the tab's host while that host is the bot's bound host; a held
- * send is offered again only while the binding is the one it was made for.
+ * send is offered again only through the host it was made for, at the epoch
+ * it was made for or a newer one.
  */
 export interface BotSendBinding {
   /** The host serving the tab, through which a send and its retries go. */

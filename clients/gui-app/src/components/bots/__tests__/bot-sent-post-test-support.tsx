@@ -362,6 +362,11 @@ export function setSendLine(line: {
   negotiateBotSend(TAB_HOST, line);
 }
 
+/** The line is not read: the tab's host has none recorded for `bot.conversation.send`. */
+export function setSendLineUnknown(): void {
+  scene.sendLine = null;
+}
+
 export function endCase(): void {
   scene.host = null;
   scene.channelHandle = null;

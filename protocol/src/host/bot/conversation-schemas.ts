@@ -290,13 +290,15 @@ export const botConversationSendRequestSchemaV16 = lazySchema(() =>
  * (`botSendRequestId`), which is never derived again under another binding.
  *
  * An old authority is not refused on sight. The bound host looks the request
- * up before it compares: when it already holds this member's row of the
- * request in the send's chat, it answers from that row whatever the
- * authority, so a Retry across a re-claim by the same host finds its one
- * row. Only on a miss does it compare the authority with its binding, and
- * refuse one that is no longer the bot's with `E_BOT_AUTHORITY_MOVED`,
- * before writing anything (`notWritten`). A host the bot is not bound to
- * takes no nonce send and refuses it the same way.
+ * up before it compares: when the send's chat, as it holds it under the
+ * binding it restored and verified, has this member's row of the request,
+ * it answers from that row whatever the authority, so a Retry across a
+ * re-claim by the same host can find its row. Only on a miss does it
+ * compare the authority with its binding, and refuse one that is no longer
+ * the bot's with `E_BOT_AUTHORITY_MOVED`, before writing anything
+ * (`notWritten`). The miss speaks for that attempt only: an earlier one may
+ * have been written where this host's store does not show it. A host the
+ * bot is not bound to takes no nonce send and refuses it the same way.
  */
 export const botSendAuthoritySchema = lazySchema(() =>
   z.object({
