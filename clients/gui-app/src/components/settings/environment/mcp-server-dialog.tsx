@@ -28,6 +28,8 @@ import {
   useConfigurationMcpServerSave,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import type { EnvironmentMcpServerCredentialV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useHostClient } from "@/lib/host";
 import {
   useConfigurationIsPersonal,
@@ -90,15 +92,22 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, true);
-  // Read again when the save is sent, so a typed value is never the
-  // mutation's variables.
-  const put = useConfigurationMcpServerSave(() =>
-    mcpServerCredential(form, server !== null, true),
-  );
+  // The credential pressed is handed over once, when the save is sent, so a
+  // typed value is never the mutation's variables and the mutation holds no
+  // reference to the form.
+  const submittedCredential =
+    useSubmittedSecretInput<EnvironmentMcpServerCredentialV11>(
+      "MCP server input is unavailable.",
+    );
+  const put = useConfigurationMcpServerSave(submittedCredential.read);
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
+    const serverName = form.name.trim();
+    const refusalSecret = refusedSecret(form, server, secretList);
+    submittedCredential.set(credential);
     put.mutate(mcpServerSave(form, server, source.environmentId), {
+      onSettled: submittedCredential.clear,
       onSuccess: (result) => {
         if (result.outcome === "saved") props.onClose();
         else if (result.outcome === "forbidden")
@@ -107,8 +116,8 @@ export function McpServerDialog(props: {
           setProblem(
             serverRefusal(result.reason, {
               configuration: name,
-              server: form.name.trim(),
-              secret: refusedSecret(form, server, secretList),
+              server: serverName,
+              secret: refusalSecret,
             }),
           );
       },
