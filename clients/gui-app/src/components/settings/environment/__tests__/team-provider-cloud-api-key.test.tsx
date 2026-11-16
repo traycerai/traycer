@@ -177,7 +177,25 @@ function routeRequest(
   request: OwnEnvironmentTransportRequest,
   state: TransportFixtureState,
 ): Response | Promise<Response> | undefined {
-  return authValidationRequest(request) ?? environmentRequest(request, state);
+  return (
+    authValidationRequest(request) ??
+    registeredHostsRequest(request) ??
+    environmentRequest(request, state)
+  );
+}
+
+function registeredHostsRequest(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
+  if (
+    request.url.origin !== AUTHN_BASE ||
+    request.url.pathname !== "/api/v3/hosts" ||
+    request.url.search !== "?include=sandboxState%2Cowner" ||
+    request.method !== "GET"
+  ) {
+    return undefined;
+  }
+  return jsonResponse(200, { hosts: [] });
 }
 
 function authValidationRequest(
