@@ -131,6 +131,7 @@ function fakeStreamSession(): IStreamSession {
     onStatusChange: () => undefined,
     // Never negotiates: this fake exercises no version-dependent path.
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
   };

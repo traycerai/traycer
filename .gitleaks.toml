@@ -137,9 +137,7 @@ id = "generic-api-key"
 description = "Synthetic bearer token returned by the stubbed refresh endpoint in the CLI install-auth test. Its exact value is a fixture, not a credential. The full-history Secret scan reads the unmerged branch that introduced it, so main needs this exception before that branch lands."
 condition = "AND"
 regexTarget = "secret"
-paths = [
-  '''^clients/traycer-cli/src/host/__tests__/install-auth\.test\.ts$''',
-]
+paths = ['''^clients/traycer-cli/src/host/__tests__/install-auth\.test\.ts$''']
 regexes = ['''^second-401-rotated$''']
 [[rules.allowlists]]
 description = "The `EnvironmentSecretV12` TYPE NAME in the environment-secret test suites: a fixture declared as `const secret: EnvironmentSecretV12 = {` (or `secretSettingIt:` / `readonly secret:`) reads to the generic-api-key rule as a key named `secret` with the value `EnvironmentSecretV12`. A type annotation is never a credential. Scoped to the exact type name and the suites that declare such a fixture so unrelated findings stay reportable."

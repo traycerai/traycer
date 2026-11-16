@@ -301,22 +301,23 @@ describe("SideStripNavRows", () => {
     ).not.toBe(0);
   });
 
-  it("Layered view: the amber pill is the Needs you task count, the muted one the unread total while no task needs you, hidden at 0", async () => {
+  it("Layered view: unread with nothing to count is a dot, and the amber pill is the Needs you task count", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+    expect(screen.queryByTestId("side-strip-inbox-quiet-dot")).toBeNull();
 
     seedFeed(0, 3);
-    const unread = screen.getByTestId("side-strip-inbox-count");
-    expect(unread.textContent).toBe("3");
-    expect(unread.dataset.needsYou).toBe("false");
+    expect(screen.getByTestId("side-strip-inbox-quiet-dot")).toBeTruthy();
+    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
 
     // Amber says Needs you, so it never carries the unread total.
     seedFeed(2, 5);
     const needsYou = screen.getByTestId("side-strip-inbox-count");
     expect(needsYou.textContent).toBe("2");
     expect(needsYou.dataset.needsYou).toBe("true");
+    expect(screen.queryByTestId("side-strip-inbox-quiet-dot")).toBeNull();
   });
 
   it("Layered view: with no task waiting, failures keep a red count over the unread total", async () => {
@@ -341,19 +342,22 @@ describe("SideStripNavRows", () => {
     ).toBe("Notifications, 2 need attention, 5 unread");
   });
 
-  it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
+  it("Activity view: with no task waiting, the pill is the red attention count, as in the Layered view", async () => {
     activateActivityView();
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
-    // Unread with nothing waiting: the Layered view would show a muted "3".
-    seedFeed(0, 3);
-    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
 
-    seedFeed(2, 5);
-    const badge = screen.getByTestId("side-strip-inbox-count");
-    expect(badge.textContent).toBe("2");
-    expect(badge.dataset.needsYou).toBe("true");
+    const pill = screen.getByTestId("side-strip-inbox-count");
+    expect(pill.textContent).toBe("2");
+    expect(pill.dataset.tone).toBe("attention");
   });
 
   it("collapsed: shows one amber corner badge sized by the Needs you task count", async () => {
@@ -366,6 +370,36 @@ describe("SideStripNavRows", () => {
       screen.getByTestId("side-strip-inbox-needs-you-badge").textContent,
     ).toBe("3");
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+  });
+
+  it("collapsed: with no task waiting, the corner badge is the red attention count", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
+
+    expect(
+      screen.getByTestId("side-strip-inbox-attention-badge").textContent,
+    ).toBe("2");
+    expect(screen.queryByTestId("side-strip-inbox-needs-you-badge")).toBeNull();
+  });
+
+  it("collapsed: unread with nothing to count is a dot in the corner", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    seedFeed(0, 3);
+
+    expect(screen.getByTestId("side-strip-inbox-quiet-dot")).toBeTruthy();
+    expect(screen.queryByTestId("side-strip-inbox-attention-badge")).toBeNull();
   });
 
   it("collapsed: shows no badge with nothing waiting", async () => {
