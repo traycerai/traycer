@@ -4,10 +4,7 @@ import {
   type SettingsSaveOrigin,
 } from "@/lib/environment/settings-save-origin";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  Query,
-  UseMutationResult,
-} from "@tanstack/react-query";
+import type { Query, UseMutationResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -207,7 +204,10 @@ export function useProvidersMcpMutate(): UseMutationResult<
         // Full mutation responses are applied in completion order. A late
         // response can replace newer rows until a complete read reconciles them.
         // A confirmed config write does not clear a failed list-read warning.
-        queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
+        queryClient.setQueryData<McpListData>(listKey, {
+          ...data,
+          refreshError,
+        });
         const writtenQuery = queryClient.getQueryCache().find({
           queryKey: listKey,
           exact: true,
@@ -237,7 +237,10 @@ export function useProvidersMcpMutate(): UseMutationResult<
           // The cache now has full data even if an initial read was pending,
           // so default invalidation can replace that read. Do not hold mutation
           // settlement (or the row's pending UI) open for another host round trip.
-          void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
+          void queryClient.invalidateQueries({
+            queryKey: listKey,
+            exact: true,
+          });
         }
       },
       onError: (error, variables, ctx) => {
@@ -256,7 +259,10 @@ export function useProvidersMcpMutate(): UseMutationResult<
             exact: true,
           });
         }
-        if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
+        if (
+          variables.suppressToast === true &&
+          isProviderNativeRpcError(error)
+        ) {
           return;
         }
         toastFromHostError(error, "Couldn't update MCP server.");
