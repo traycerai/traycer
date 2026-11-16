@@ -118,6 +118,9 @@ function createReviewHarness(
     "environment.configuration.items": () => ({ items: [] }),
   };
   const harness = mountTeamPage(poolSource(initialRole), handlers);
+  harness.auth.environmentCloud = AuthService.prototype.environmentCloud.bind(
+    harness.auth,
+  );
   harness.auth.applyExternalSession(
     authSessionForUser(VIEWER_ID, "user-1-token"),
   );
@@ -1157,9 +1160,6 @@ describe("Team Review through the addressed page", () => {
     });
     const { harness } = createReviewHarness("admin", [row]);
     const gate = holdNextReviewMutation(harness, () => undefined);
-    harness.auth.environmentCloud = AuthService.prototype.environmentCloud.bind(
-      harness.auth,
-    );
     renderTeamPage(harness);
     const dialog = await openReview();
     const reviewRow = await within(dialog).findByTestId(
