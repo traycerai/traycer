@@ -227,11 +227,7 @@ describe("manual redirect fetch on the phone", () => {
     const outcome = responsePromise.then(
       () => "resolved",
       (error: unknown) => {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "name" in error
-        ) {
+        if (typeof error === "object" && error !== null && "name" in error) {
           return String(error.name);
         }
         return "other error";
