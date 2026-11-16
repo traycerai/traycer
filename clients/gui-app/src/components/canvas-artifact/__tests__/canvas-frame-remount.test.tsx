@@ -18,8 +18,8 @@ afterEach(cleanup);
 function runnerHost(): IRunnerHost {
   const bridge: SandboxArtifactBridge = {
     policySource: "traycer-sandbox:",
-    artifactOrigin: ({ artifactId, mountId }) =>
-      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+    artifactOrigin: ({ artifactId }) =>
+      `traycer-sandbox://artifact-${artifactId}`,
     register: () => Promise.resolve(),
     unregister: () => Promise.resolve(),
     onRequest: () => ({ dispose: () => undefined }),

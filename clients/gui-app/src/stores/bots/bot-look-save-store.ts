@@ -6,7 +6,7 @@ export type BotLookChange = Omit<BotUpdateAppearanceRequest, "botId">;
 
 export type BotLookPart = keyof BotLookChange;
 
-export const BOT_LOOK_PARTS: readonly BotLookPart[] = [
+const BOT_LOOK_PARTS: readonly BotLookPart[] = [
   "mark",
   "color",
   "eyewear",
@@ -31,8 +31,8 @@ export interface BotLookSave {
   /** Why each part's last save was refused, until that part is chosen again. */
   readonly refusals: Readonly<Partial<Record<BotLookPart, string>>>;
   /**
-   * Which run of saves owns this entry. A run that finds another number here
-   * was retired or taken over, and neither sends nor writes again.
+   * Which run may send the next save. A retired or taken-over run queues no
+   * further saves; its in-flight save still settles the parts it owns.
    */
   readonly run: number;
   /** The host that run sends through; `null` with no run. */

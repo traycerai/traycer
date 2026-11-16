@@ -134,6 +134,8 @@ import {
   useStagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useLandingDraftNamedHostId } from "@/stores/home/landing-draft-store";
+import { landingDraftSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -966,7 +968,14 @@ export function LandingTerminalPanel(): ReactNode {
    * the strip again for one.
    */
   const deferredCreateRef = useRef<LandingDeferredTerminalCreate | null>(null);
-  const composerSurfaceKey = useComposerSurfaceHostKey();
+  // The staging surface of the draft this panel targets: a draft opened for
+  // one machine stages under its own, so `+` never takes a sandbox staged for
+  // the window's other drafts.
+  const composerSurfaceKey = landingDraftSurfaceKey(
+    useComposerSurfaceHostKey(),
+    target.draftId,
+    useLandingDraftNamedHostId(target.draftId),
+  );
   const runStaged = useStagedSandboxRunner();
   const createTerminalTab = useCallback(
     (routing: LandingTerminalTarget): string | null => {

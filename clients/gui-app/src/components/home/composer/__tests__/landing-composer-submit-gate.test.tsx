@@ -280,6 +280,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   return {
     useLandingDraftStore,
     isOpenLandingDraft: (draft: { readonly closed: boolean }) => !draft.closed,
+    // Every draft in this suite is an ordinary one: none was opened for a host.
+    useLandingDraftNamedHostId: () => null,
   };
 });
 

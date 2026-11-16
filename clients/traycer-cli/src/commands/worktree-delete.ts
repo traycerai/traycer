@@ -275,12 +275,12 @@ function runDeleteCommand(
             declined: declined ?? null,
             error: null,
           }),
-        onTargetFailed: (_worktreePath, reason, { code }) =>
+        onTargetFailed: (_worktreePath, reason, { holders, code }) =>
           finish({
             kind: "settled",
             deleted: false,
             declined: null,
-            error: deleteFailedCliError(reason, null, code),
+            error: deleteFailedCliError(reason, holders ?? null, code),
           }),
         // With one target this normally arrives after its terminal frame and
         // is a no-op under the settled guard. It matters when it does NOT: an
@@ -301,11 +301,7 @@ function runDeleteCommand(
             error: deleteFailedCliError(reason, null, undefined),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
-        onConnectionStatus: (
-          status: StreamConnectionStatus,
-          reason: StreamCloseReason | null,
-          retryCause: FatalErrorDetails | null,
-        ) => {
+        onConnectionStatus: ({ status, reason, retryCause }) => {
           if (status === "connecting" || status === "open") return;
           const admissionError = retryCause
             ? localTeamAdmissionCliError(retryCause)
@@ -523,7 +519,7 @@ function relayOutput(
  */
 function deleteFailedCliError(
   reason: string,
-  holders: WorktreeBusyHolders | null,
+  holders: Readonly<WorktreeBusyHolders> | null,
   code: "WORKTREE_BUSY" | undefined,
 ): CliError {
   const named =

@@ -1,4 +1,15 @@
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { createPortal } from "react-dom";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
+import {
   useCallback,
   useEffect,
   useEffectEvent,
@@ -156,8 +167,12 @@ import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabOpenState,
+  botTabReopenDelayMs,
+  type BotTabOpenFailure,
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
+import { useCloudRecoveryRing } from "@/hooks/host/use-cloud-recovery-ring";
+import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 import { cn } from "@/lib/utils";
 
 type BotTabView = TracyChannelView;
@@ -310,6 +325,7 @@ function TracySurfaceShell(props: {
           {threadsShown ? (
             <BotThreadsView
               hostId={hostId}
+              channelId={botId}
               channelTitle={channelTitle}
               onBack={leaveThreads}
               level2={level2}
@@ -756,23 +772,49 @@ function BotTabBody(props: {
   // shown above it instead. The answer feeds only the channel's paused,
   // failed and opening states: whatever it says, the surface stays on its
   // host.
-  const { mutate: openBot } = useBotOpenMutation(client);
+  const { mutate: openBot, isPending: openPending } =
+    useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const reopen = useCallback(
-    () =>
-      openBot(
-        { botId },
-        {
-          onSuccess: (response) => {
-            setAnswer(response);
-            setOpenError(null);
-          },
-          onError: (error) => setOpenError(error.message),
+  const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
+  // Transient failures in a row, which set the wait before the tab's own
+  // re-ask below; and whether an open is on its way, set in the step that
+  // sends it, a task before React hears it is pending. Only the latest
+  // open's callbacks run, and `bot.open` is FIFO, so its settling clears it.
+  const transientFailures = useRef(0);
+  const openInFlight = useRef(false);
+  const sendOpen = useCallback(() => {
+    openInFlight.current = true;
+    openBot(
+      { botId },
+      {
+        onSuccess: (response) => {
+          openInFlight.current = false;
+          transientFailures.current = 0;
+          setAnswer(response);
+          setOpenError(null);
         },
-      ),
-    [botId, openBot],
-  );
+        onError: (error) => {
+          openInFlight.current = false;
+          const transient = isTransientCloudFailure(error);
+          transientFailures.current = transient
+            ? transientFailures.current + 1
+            : 0;
+          setOpenError({ message: error.message, transient });
+        },
+      },
+    );
+  }, [botId, openBot]);
+  // An open the host failed only because it could not reach the cloud is
+  // asked again once on each ring of that host's cloud-recovery doorbell. The
+  // failure stands while a ring's open is in flight, so the hold does too. A
+  // ring that came after the open began, before it failed, asks once more
+  // when it does. Every open goes through `reopen`, so each forgets the rings
+  // that came before it.
+  const reopen = useCloudRecoveryRing({
+    hostId,
+    held: openError?.transient === true,
+    call: sendOpen,
+  });
   useEffect(() => {
     reopen();
   }, [reopen]);
@@ -838,12 +880,40 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  // A transient failure is also asked again on the tab's own backoff, since
+  // the host owes no ring for a lone 5xx. Only while the surface and the
+  // window are in view, by the rule above; coming back into view re-opens.
+  // Each failure is a new `openError`, so each arms its own wait. An open
+  // sent since the wait was armed answers for it, even one whose pending
+  // state has not rendered yet; its own failure arms the next wait.
+  useEffect(() => {
+    if (openError?.transient !== true || openPending || !paneVisible) {
+      return undefined;
+    }
+    const timer = setTimeout(
+      () => {
+        if (openInFlight.current) return;
+        if (document.visibilityState === "visible") reopen();
+      },
+      botTabReopenDelayMs(transientFailures.current, () => Math.random()),
+    );
+    return () => clearTimeout(timer);
+  }, [openError, openPending, paneVisible, reopen]);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
       <ErrorNotice
         text={`Couldn't open this bot: ${openState.message}`}
         onRetry={reopen}
+        className="m-4"
+      />
+    );
+  }
+  if (openState.kind === "reconnecting") {
+    return threadsShown ? null : (
+      <OpenReconnecting
+        onRetry={reopen}
+        pending={openPending}
         className="m-4"
       />
     );
@@ -868,8 +938,9 @@ function BotTabBody(props: {
       hostId={hostId}
       snapshot={snapshot}
       pausedReason={openState.kind === "paused" ? openState.reason : null}
-      reopenError={openError}
+      reopenFailure={openError}
       onReopen={reopen}
+      reopenPending={openPending}
       streamError={subscription.error}
       snapshotFresh={subscription.snapshotFresh}
       onRetry={resubscribe}
@@ -951,10 +1022,10 @@ function useBotTabRail(
 
 /**
  * How the channel's search opens: the header's button and ⌘F, on this bot,
- * while a host that takes it serves the tab (`null` otherwise). Each opening,
- * the column's box included, shows the channel it opened beside: Messages,
- * in place of a session or Threads. A session has its own find, and Threads
- * no channel, so ⌘F is theirs while they show.
+ * while a host that takes it serves the tab (`null` otherwise). Each opening
+ * shows the channel it opened beside: Messages, in place of a session or
+ * Threads. A session has its own find, and Threads no channel, so ⌘F is
+ * theirs while they show.
  */
 function useChannelSearchEntry(args: {
   readonly botId: string;
@@ -974,7 +1045,7 @@ function useChannelSearchEntry(args: {
     showChannel();
   }, [opens]);
   const open = useCallback(
-    () => openBotSearch(botId, { kind: "bot", botId }, null),
+    () => openBotSearch(botId, { kind: "bot", botId }),
     [botId],
   );
   const paneVisible = usePaneVisible();
@@ -987,8 +1058,8 @@ function useChannelSearchEntry(args: {
 
 /**
  * The bot's session shown in place of the channel's views,
- * and where the channel lands once it is back. A receipt, a check-in's link
- * or a thread's "Thread session" opens a session; each open is a new visit,
+ * and where the channel lands once it is back. A receipt or a check-in's
+ * link opens a session; each open is a new visit,
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
@@ -1405,15 +1476,39 @@ function useRailDrawnReport(
   }, [onRailDrawn, railDrawn]);
 }
 
+function MobileBotSessionTitle(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly title: string;
+  readonly threadsView: BotThreadsViewState;
+}): ReactNode {
+  const slot = useMobileBotHeaderSlot();
+  if (props.level2 !== "menu" && props.level2 !== "bar") return null;
+  if (!slot?.target) return null;
+  return createPortal(
+    <BotChannelTitle
+      level2={props.level2}
+      title={props.title}
+      activeBotId={props.botId}
+      hostId={props.hostId}
+      threadsView={props.threadsView}
+    />,
+    slot.target,
+  );
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly snapshot: BotSubscriptionSnapshot;
   readonly pausedReason: BotTabPausedReason | null;
   /** A re-open failed after an earlier one answered; the tab keeps that
-   * answer and says the re-open failed. */
-  readonly reopenError: string | null;
+   * answer and says the re-open failed, or is reconnecting. */
+  readonly reopenFailure: BotTabOpenFailure | null;
   readonly onReopen: () => void;
+  /** A re-open is in flight. */
+  readonly reopenPending: boolean;
   readonly streamError: string | null;
   readonly snapshotFresh: boolean;
   readonly onRetry: () => void;
@@ -1436,8 +1531,9 @@ function BotTabContent(props: {
     hostId,
     snapshot,
     pausedReason,
-    reopenError,
+    reopenFailure,
     onReopen,
+    reopenPending,
     streamError,
     snapshotFresh,
     onRetry,
@@ -1565,7 +1661,12 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
+  const activeTasks = useBotActiveTasks(
+    snapshot.tasks,
+    hostId,
+    snapshotFresh,
+    botId,
+  );
   const showMessages = useCallback(() => {
     closeSession();
     onViewChange("messages");
@@ -1618,6 +1719,13 @@ function BotTabContent(props: {
                     boundHostId: snapshot.boundHost.hostId,
                   }}
                 >
+                  <MobileBotSessionTitle
+                    level2={level2}
+                    botId={botId}
+                    hostId={hostId}
+                    title={snapshot.bot.title}
+                    threadsView={threadsView}
+                  />
                   <BotSessionView
                     key={session.chatId}
                     botId={botId}
@@ -1649,6 +1757,8 @@ function BotTabContent(props: {
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
                     onOpenSearch={openSearch}
+                    view={view}
+                    onViewChange={onViewChange}
                     activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
@@ -1660,11 +1770,11 @@ function BotTabContent(props: {
                       className="mx-4 mt-2"
                     />
                   )}
-                  {reopenError === null ? null : (
-                    <ErrorNotice
-                      text={`Couldn't open this bot: ${reopenError}`}
-                      onRetry={onReopen}
-                      className="mx-4 mt-2"
+                  {reopenFailure === null ? null : (
+                    <ReopenFailureNotice
+                      failure={reopenFailure}
+                      onReopen={onReopen}
+                      pending={reopenPending}
                     />
                   )}
                   {pausedReason === null ? null : (
@@ -1693,7 +1803,6 @@ function BotTabContent(props: {
                       openThread={openThread}
                       onOpenThread={setOpenThread}
                       onOpenTurn={openTurn}
-                      onOpenSession={openSession}
                       landOn={channelLanding}
                       openMemory={openMemory}
                       onOpenMemory={setOpenMemory}
@@ -1787,6 +1896,74 @@ function retryFailedReads(
   };
 }
 
+/** A re-open that failed over a held answer, drawn above the channel. */
+function ReopenFailureNotice(props: {
+  readonly failure: BotTabOpenFailure;
+  readonly onReopen: () => void;
+  readonly pending: boolean;
+}): ReactNode {
+  const { failure, onReopen, pending } = props;
+  if (failure.transient) {
+    return (
+      <OpenReconnecting
+        onRetry={onReopen}
+        pending={pending}
+        className="mx-4 mt-2"
+      />
+    );
+  }
+  return (
+    <ErrorNotice
+      text={`Couldn't open this bot: ${failure.message}`}
+      onRetry={onReopen}
+      className="mx-4 mt-2"
+    />
+  );
+}
+
+/**
+ * An open that failed only because the host got no verdict from the cloud,
+ * which that host's cloud-recovery doorbell and the tab's own backoff ask
+ * again: no technical text. Retry stays, to ask at once rather than after
+ * the wait, and is disabled while an open is in flight, so a second press
+ * adds no second open.
+ */
+function OpenReconnecting(props: {
+  readonly onRetry: () => void;
+  readonly pending: boolean;
+  readonly className: string;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      data-testid="bot-tab-reconnecting"
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-4 py-3 text-ui-sm text-muted-foreground",
+        props.className,
+      )}
+    >
+      <span className="flex items-center gap-2">
+        <AgentSpinningDots
+          className="shrink-0"
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+        Reconnecting…
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.pending}
+        onClick={props.onRetry}
+      >
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /** An error, with Retry unless `onRetry` is `null`: nothing to ask again. */
 function ErrorNotice(props: {
   readonly text: string;
@@ -1817,14 +1994,7 @@ function ErrorNotice(props: {
   );
 }
 
-/**
- * Slack's channel header: the bot's picture (its card on hover and click),
- * its name with the main bot's star, the ⋮ that opens the channel's settings,
- * and the channel's views under it. What the bot is for is the top of its channel; nothing else
- * sits here but, on the phone, Talk. A session started here is focused on
- * this channel. Activity's count is the tasks its list shows.
- */
-function BotChannelHeader(props: {
+type BotChannelHeaderProps = {
   readonly level2: MobileLevel2Form | null;
   readonly botId: string;
   readonly hostId: string;
@@ -1835,10 +2005,158 @@ function BotChannelHeader(props: {
   readonly onToggleSettings: () => void;
   /** Opens the channel's search; `null` where the tab's host has none. */
   readonly onOpenSearch: (() => void) | null;
-  /** How many tasks the Activity list shows. */
+  readonly view: BotTabView;
+  readonly onViewChange: (view: BotTabView) => void;
+  /** How many tasks are active, excluding recently ended tracking. */
   readonly activityCount: number;
+};
+
+function BotChannelActions({
+  header: props,
+  titleTarget,
+  settingsButtonRef,
+}: {
+  readonly header: BotChannelHeaderProps;
+  readonly titleTarget: HTMLDivElement | null;
+  readonly settingsButtonRef: React.RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { settingsOpen } = props;
+  const pendingDestination = useRef<(() => void) | null>(null);
+  // A channel departure drops its deferred action instead of opening it later.
+  useEffect(
+    () => () => {
+      pendingDestination.current = null;
+    },
+    [],
+  );
+  return titleTarget === null ? (
+    <>
+      {props.onOpenSearch === null ? null : (
+        <TooltipWrapper
+          label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Search in ${props.title}`}
+            data-testid="bot-channel-search-open"
+            className="ml-auto"
+            onClick={props.onOpenSearch}
+          >
+            <Search aria-hidden="true" />
+          </Button>
+        </TooltipWrapper>
+      )}
+      <Button
+        ref={settingsButtonRef}
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Channel settings"
+        aria-expanded={settingsOpen}
+        data-testid="bot-channel-settings-open"
+        className={props.onOpenSearch === null ? "ml-auto" : undefined}
+        onClick={props.onToggleSettings}
+      >
+        <EllipsisVertical aria-hidden="true" />
+      </Button>
+    </>
+  ) : (
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) pendingDestination.current = null;
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-touch"
+          aria-label={
+            props.activityCount > 0
+              ? `Channel actions, ${props.activityCount} active`
+              : "Channel actions"
+          }
+          data-testid="bot-channel-actions-open"
+          className="relative ml-auto"
+        >
+          <EllipsisVertical aria-hidden="true" />
+          <UnreadCountBadge
+            count={props.activityCount}
+            size="xs"
+            testId="bot-channel-actions-activity-count"
+            corner="absolute top-0 right-0"
+            noun="active"
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          const destination = pendingDestination.current;
+          pendingDestination.current = null;
+          if (destination !== null) {
+            event.preventDefault();
+            destination();
+          }
+        }}
+      >
+        <DropdownMenuRadioGroup
+          value={props.view}
+          onValueChange={(next) => {
+            if (isTracyChannelView(next)) props.onViewChange(next);
+          }}
+        >
+          <DropdownMenuRadioItem value="messages">
+            Messages
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="activity">
+            Activity
+            <UnreadCountBadge
+              count={props.activityCount}
+              size="xs"
+              testId="bot-channel-actions-menu-activity-count"
+              corner={null}
+              noun="active"
+            />
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {props.onOpenSearch === null ? null : (
+          <DropdownMenuItem
+            onSelect={() => {
+              pendingDestination.current = props.onOpenSearch;
+            }}
+          >
+            Search
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem
+          onSelect={() => {
+            if (settingsOpen) props.onToggleSettings();
+            else pendingDestination.current = props.onToggleSettings;
+          }}
+        >
+          Channel settings
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The Activity badge counts active tasks, not recent ended rows. */
+function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
+  const { settingsOpen } = props;
+  const botHeaderSlot = useMobileBotHeaderSlot();
+  const titleTarget =
+    props.level2 === "menu" || props.level2 === "bar"
+      ? (botHeaderSlot?.target ?? null)
+      : null;
   const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
@@ -1857,6 +2175,42 @@ function BotChannelHeader(props: {
     if (wasOpenRef.current && !settingsOpen) settingsButtonRef.current?.focus();
     wasOpenRef.current = settingsOpen;
   }, [settingsOpen]);
+  const titleRow = (
+    <div
+      hidden={threadHasFocus}
+      className={cn(
+        "flex min-w-0 items-center gap-2",
+        titleTarget !== null && "w-full",
+        focusOwner !== null && "min-h-11",
+      )}
+    >
+      <BotIdentityTrigger>
+        <button
+          type="button"
+          aria-label={props.title}
+          className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+          data-testid="bot-tab-avatar"
+        >
+          <ExpressiveBotAvatar size="sm" expression={expression} />
+        </button>
+      </BotIdentityTrigger>
+      <BotChannelTitle
+        level2={props.level2}
+        title={props.title}
+        activeBotId={props.botId}
+        hostId={props.hostId}
+        threadsView={props.threadsView}
+      />
+      {props.isMain ? (
+        <MainBotBadge testId="bot-tab-main" tone="muted" />
+      ) : null}
+      <BotChannelActions
+        header={props}
+        titleTarget={titleTarget}
+        settingsButtonRef={settingsButtonRef}
+      />
+    </div>
+  );
   return (
     <header
       ref={setHeader}
@@ -1866,72 +2220,13 @@ function BotChannelHeader(props: {
       style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
-        focusOwner === null && "pt-3",
+        focusOwner === null && titleTarget === null && "pt-3",
         background.className,
       )}
     >
-      <div
-        className={cn(
-          "flex min-w-0 items-center gap-2",
-          focusOwner !== null && "min-h-11",
-        )}
-      >
-        <BotIdentityTrigger>
-          <button
-            type="button"
-            aria-label={props.title}
-            className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
-            data-testid="bot-tab-avatar"
-          >
-            <ExpressiveBotAvatar size="sm" expression={expression} />
-          </button>
-        </BotIdentityTrigger>
-        <BotChannelTitle
-          level2={props.level2}
-          title={props.title}
-          activeBotId={props.botId}
-          hostId={props.hostId}
-          threadsView={props.threadsView}
-        />
-        {props.isMain ? (
-          <MainBotBadge testId="bot-tab-main" tone="muted" />
-        ) : null}
-        {props.onOpenSearch === null ? null : (
-          <TooltipWrapper
-            label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
-            side="bottom"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Search in ${props.title}`}
-              data-testid="bot-channel-search-open"
-              className="ml-auto"
-              onClick={props.onOpenSearch}
-            >
-              <Search aria-hidden="true" />
-            </Button>
-          </TooltipWrapper>
-        )}
-        <Button
-          ref={settingsButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Channel settings"
-          aria-expanded={settingsOpen}
-          data-testid="bot-channel-settings-open"
-          className={props.onOpenSearch === null ? "ml-auto" : undefined}
-          onClick={props.onToggleSettings}
-        >
-          <EllipsisVertical aria-hidden="true" />
-        </Button>
-      </div>
+      {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
       <TabsList
-        hidden={focusOwner !== null}
+        hidden={focusOwner !== null || titleTarget !== null}
         variant="line"
         aria-label="Channel view"
       >

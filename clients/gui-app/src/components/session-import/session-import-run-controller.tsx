@@ -281,6 +281,19 @@ export function SessionImportRunController(): null {
         });
         closeRun(hostId);
       },
+      // The run finished while the connection was down. Its counts are the
+      // host's `lastCompleted`, so the status is asked again rather than an
+      // empty summary shown in their place.
+      onRunEndedUnseen: () => {
+        closeRun(hostId);
+        void queryClient.invalidateQueries({
+          queryKey: sessionImportQueryKeys.status(hostId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.scope(hostId),
+        });
+        useSessionImportRunStore.getState().reset(hostId);
+      },
       onConnectionStatus: (_status, reason) => {
         if (reason === null) return;
         if (!runsRef.current.has(hostId)) return;

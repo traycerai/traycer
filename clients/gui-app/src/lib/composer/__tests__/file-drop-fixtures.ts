@@ -122,10 +122,11 @@ export const REMOTE_REFUSAL_TITLE =
 export const REMOTE_REFUSAL_DESCRIPTION =
   "This chat runs on another computer. Use the attach button.";
 
-function nodesOfType(
-  content: JsonContent,
+export function nodesOfType(
+  content: JsonContent | null,
   type: string,
 ): ReadonlyArray<JsonContent> {
+  if (content === null) return [];
   const own = content.type === type ? [content] : [];
   return [
     ...own,
@@ -134,7 +135,9 @@ function nodesOfType(
 }
 
 /** The text of every inline-code span: how a typed path sits in a document. */
-export function typedPathSpans(content: JsonContent): ReadonlyArray<string> {
+export function typedPathSpans(
+  content: JsonContent | null,
+): ReadonlyArray<string> {
   return nodesOfType(content, "text").flatMap((node) =>
     node.marks?.some((mark) => mark.type === "code") === true &&
     node.text !== undefined

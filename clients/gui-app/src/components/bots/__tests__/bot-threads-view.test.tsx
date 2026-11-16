@@ -72,6 +72,10 @@ import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-h
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   negotiateBotSend,
   signInViewer,
@@ -79,6 +83,7 @@ import {
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import {
   botReply,
+  memberPost,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -107,6 +112,7 @@ const mocks = vi.hoisted(() => ({
   unsupported: new Set<string>(),
   /** Each bot channel's posts by message id. */
   posts: {} as Record<string, Record<string, string>>,
+  /** Each bot channel's session, where a case scripts its rows in full. */
   channels: {} as Record<string, ChatSessionStoreHandle>,
   /** Each thread's reply texts by thread id, in order; its session holds them. */
   replies: {} as Record<string, string[]>,
@@ -214,8 +220,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
       );
       return mocks.threadSessions[chatId];
     }
-    if (!Object.hasOwn(mocks.posts, botId)) return null;
     if (!Object.hasOwn(mocks.channels, botId)) {
+      if (!Object.hasOwn(mocks.posts, botId)) return null;
       mocks.channels[botId] = chatSessionWithPosts(mocks.posts[botId]);
     }
     return mocks.channels[botId];
@@ -227,6 +233,18 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 }));
 vi.mock("@/lib/chats/chat-serving-witness", () => ({
   useChatServingHostId: () => "host-1",
+}));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -340,6 +358,8 @@ const FOLLOWING: BotThreadFollow = {
 
 /** The installed app's form the next mount draws in; `null` where the container decides. */
 let mountLevel2: MobileLevel2Form | null = null;
+/** Whether the next mount draws the app header beside the view, which the view portals its picker into. */
+let mountUnderHeader = false;
 /** The last mount's query client, for a case that has the host read again. */
 let queryClient = new QueryClient();
 
@@ -411,18 +431,22 @@ function mount(): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   render(
     <QueryClientProvider client={queryClient}>
-      <BotTestRunnerHost>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotThreadsView
-              level2={mountLevel2}
-              hostId="host-1"
-              channelTitle="Tracy"
-              onBack={mocks.back}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
-      </BotTestRunnerHost>
+      <MobileBotHeaderSlotProvider>
+        {mountUnderHeader ? <MobileAppHeader /> : null}
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotThreadsView
+                level2={mountLevel2}
+                hostId="host-1"
+                channelId={TRACY}
+                channelTitle="Tracy"
+                onBack={mocks.back}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
+      </MobileBotHeaderSlotProvider>
     </QueryClientProvider>,
   );
 }
@@ -504,6 +528,15 @@ function intersectTarget(
   });
 }
 
+/**
+ * Reading needs a window the person is in; jsdom's own answer depends on which
+ * cases ran before, so a case that reads says so itself.
+ */
+function foregroundWindow(): void {
+  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  onTestFinished(() => hasFocus.mockRestore());
+}
+
 /** The mark under the reply a full card's reading would acknowledge. */
 function readMark(threadId: string): HTMLElement {
   return within(card(threadId)).getByTestId("bot-chat-transcript-mark");
@@ -557,15 +590,25 @@ function screenReaderCount(threadId: string): HTMLElement | null {
   return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
 }
 
+/** What a summary card shows a sighted reader: its text without the screen-reader count. */
+function summaryVisibleText(threadId: string): string {
+  const summary = within(card(threadId)).getByTestId("bot-thread-card-summary");
+  const clone = summary.cloneNode(true);
+  if (!(clone instanceof HTMLElement))
+    throw new Error("summary is not an element");
+  for (const hidden of clone.querySelectorAll(
+    '[data-testid="bot-thread-reply-count-sr"]',
+  )) {
+    hidden.remove();
+  }
+  return clone.textContent;
+}
+
 /**
- * The thread's session as a windowed transcript of `total` replies, of which
- * the first `hydrated` have bodies and the rest are placeholders.
+ * The thread's session as a windowed transcript of `total` replies, none of
+ * them hydrated: every reply is a placeholder.
  */
-function windowedReplies(
-  threadId: string,
-  total: number,
-  hydrated: number,
-): ChatSessionStoreHandle {
+function windowedPlaceholders(threadId: string, total: number): void {
   const handle = chatSessionWithThreadRows([]);
   const derived: NonNullable<ChatSessionState["transcriptDerived"]> = {
     latestAssistantUsage: null,
@@ -577,47 +620,15 @@ function windowedReplies(
     latestAssistantAuthFailureTurnKey: null,
     setupCardWindows: [],
   };
-  handle.store.setState({ transcriptDerived: derived });
-  mocks.threadSessions[threadId] = handle;
-  hydrateReplies(threadId, total, hydrated);
-  return handle;
-}
-
-/** Seats the first `hydrated` of the thread's `total` replies as hydrated rows. */
-function hydrateReplies(
-  threadId: string,
-  total: number,
-  hydrated: number,
-): void {
-  const session = mocks.threadSessions[threadId].store;
-  const ids = Array.from(
-    { length: hydrated },
-    (_, index) => `${threadId}-reply-${String(index + 1)}`,
-  );
-  act(() => {
-    session.setState({
-      messages: ids.map((id, index) =>
-        postRow(id, `reply ${String(index + 1)}`),
-      ),
-      transcriptWindow: {
-        ...session.getState().transcriptWindow,
-        rowCount: total,
-        spans:
-          hydrated === 0
-            ? []
-            : [
-                {
-                  fromOrdinal: 0,
-                  rowIds: ids,
-                  rowContext: {},
-                  messageIds: ids,
-                  eventIds: [],
-                  contextBytes: 0,
-                },
-              ],
-      },
-    });
+  handle.store.setState({
+    transcriptDerived: derived,
+    transcriptWindow: {
+      ...handle.store.getState().transcriptWindow,
+      rowCount: total,
+      spans: [],
+    },
   });
+  mocks.threadSessions[threadId] = handle;
 }
 
 function replyTexts(count: number): string[] {
@@ -644,6 +655,7 @@ beforeEach(() => {
   );
   vi.clearAllMocks();
   mountLevel2 = null;
+  mountUnderHeader = false;
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
   mocks.botList = "listed";
   mocks.refetchBots.mockResolvedValue(undefined);
@@ -767,9 +779,12 @@ describe("<BotThreadsView />", () => {
     expect(
       team.getByTestId("bot-thread-card-summary").textContent,
     ).not.toContain("The Windows leg.");
-    expect(
-      team.getByTestId("bot-thread-card-summary-replies").textContent,
-    ).toBe("2 replies");
+    expect(team.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
+    const count = team.getByTestId("bot-thread-reply-count-sr");
+    expect(count.textContent).toBe("2 replies");
+    expect(count.classList.contains("sr-only")).toBe(true);
+    expect(count.tagName).not.toBe("BUTTON");
+    expect(summaryVisibleText("team-new")).not.toMatch(/repl(y|ies)|·/);
     expect(team.getByTestId("bot-thread-row-new-replies")).toBeTruthy();
     expect(team.getByTestId("bot-thread-row-unread-count").textContent).toBe(
       "2 unread",
@@ -785,6 +800,43 @@ describe("<BotThreadsView />", () => {
     expect(tracy.queryByTestId("bot-thread-row-new-replies")).toBeNull();
     expect(tracy.queryByTestId("bot-thread-row-unread-count")).toBeNull();
     expect(card("team-new").getAttribute("data-full")).toBe("false");
+  });
+
+  it("names a card by the first paragraph of a post that has several", async () => {
+    mocks.channels[TEAM] = chatSessionWithThreadRows([
+      memberPost({
+        messageId: conversationRequestMessageId("req-team-new"),
+        requestId: "req-team-new",
+        lines: ["First paragraph.", "Second paragraph."],
+        timestamp: 1_000,
+        resolvedBy: null,
+      }),
+    ]);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    expect(
+      within(
+        within(card("team-new")).getByTestId("bot-thread-card-summary"),
+      ).getByText("First paragraph."),
+    ).toBeTruthy();
+  });
+
+  it("keeps a thread whose post is gone as a summary with no visible reply count, only the screen-reader one", async () => {
+    mocks.hosted[TEAM].threads = mocks.hosted[TEAM].threads.map((summary) =>
+      summary.threadId === "team-new" ? { ...summary, anchor: null } : summary,
+    );
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const gone = within(card("team-new"));
+
+    expect(gone.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
+    expect(gone.getByTestId("bot-thread-reply-count-sr").textContent).toBe(
+      "2 replies",
+    );
+    expect(summaryVisibleText("team-new")).toMatch(/^Thread/);
+    expect(summaryVisibleText("team-new")).not.toMatch(/repl(y|ies)|·/);
+    expect(gone.queryByTestId("bot-thread-card-summary")).toBeTruthy();
   });
 
   it("marks a thread a call opened with a phone, and draws none on a plain thread", async () => {
@@ -994,7 +1046,7 @@ describe("<BotThreadsView />", () => {
     expect(full.queryByTestId("bot-thread-reply-count-sr")).toBeNull();
   });
 
-  it("keeps the divider and its link on a folded card, and swaps it for the assistive count once the card is unfolded", async () => {
+  it("gives a folded card no divider or link, only the unfold line and the assistive count, before and after it unfolds", async () => {
     const user = userEvent.setup();
     withReplies(TEAM, "team-new", replyTexts(8), 3_000);
     mount();
@@ -1002,53 +1054,35 @@ describe("<BotThreadsView />", () => {
     const full = within(await revealFull("team-new"));
 
     const unfold = await full.findByTestId("bot-chat-transcript-unfold");
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "8 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+    expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
 
     await user.click(unfold);
 
     await waitFor(() =>
-      expect(full.queryByTestId("bot-thread-reply-count")).toBeNull(),
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull(),
     );
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
     expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
     expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
   });
 
-  it("updates the assistive count when a reply arrives and the card still draws every one", async () => {
+  it("gives a windowed card whose replies are still placeholders no divider or link, only the assistive count", async () => {
     withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    windowedPlaceholders("team-new", 2);
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
+
     const full = within(await revealFull("team-new"));
-    await full.findByTestId("bot-thread-reply-count-sr");
 
-    await deliverReply("team-new", 3);
-
-    await waitFor(() =>
-      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
-    );
+    await full.findByTestId("bot-chat-transcript-row-loading");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+    expect(screenReaderCount("team-new")?.textContent).toBe("2 replies");
   });
 
-  it("keeps the divider hidden when a reply arrives in an unfolded card past the fold limit", async () => {
-    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
-    withReplies(TEAM, "team-new", replyTexts(5), 3_000);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-    const full = within(await revealFull("team-new"));
-    await full.findByTestId("bot-thread-reply-count-sr");
-
-    await deliverReply("team-new", 6);
-
-    await waitFor(() =>
-      expect(screenReaderCount("team-new")?.textContent).toBe("6 replies"),
-    );
-    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
-  });
-
-  it("draws the divider with its link beside the unfold line when a reply pushes a card over the fold limit", async () => {
+  it("draws the unfold line, still no divider, and the new assistive count when a reply pushes a card over the fold limit", async () => {
     withReplies(TEAM, "team-new", replyTexts(5), 3_000);
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
@@ -1058,96 +1092,9 @@ describe("<BotThreadsView />", () => {
     await deliverReply("team-new", 6);
 
     await full.findByTestId("bot-chat-transcript-unfold");
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "6 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
-  it("updates the divider's count when a reply arrives while some are hidden", async () => {
-    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-    const full = within(await revealFull("team-new"));
-    await full.findByTestId("bot-chat-transcript-unfold");
-
-    await deliverReply("team-new", 9);
-
-    await waitFor(() =>
-      expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-        "9 replies",
-      ),
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
-  it("keeps the divider and its link while every reply of a windowed card is still a placeholder", async () => {
-    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
-    windowedReplies("team-new", 2, 0);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-
-    const full = within(await revealFull("team-new"));
-
-    await full.findByTestId("bot-chat-transcript-row-loading");
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "2 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
-  it("keeps the divider and its link while a short windowed card still has a placeholder among its hydrated replies", async () => {
-    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
-    windowedReplies("team-new", 3, 2);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-
-    const full = within(await revealFull("team-new"));
-
-    await full.findByText("reply 2");
-    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "3 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
-  it("keeps the divider and its link on an unfolded long windowed card while a reply is still a placeholder", async () => {
-    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
-    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
-    windowedReplies("team-new", 8, 7);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-
-    const full = within(await revealFull("team-new"));
-
-    await full.findByText("reply 7");
-    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
-    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "8 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
-  it("swaps the divider for the assistive count once the last placeholder reply is hydrated", async () => {
-    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
-    windowedReplies("team-new", 3, 2);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-    const full = within(await revealFull("team-new"));
-    await full.findByTestId("bot-chat-transcript-row-loading");
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "3 replies",
-    );
-
-    hydrateReplies("team-new", 3, 3);
-
-    await waitFor(() =>
-      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
-    );
-    expect(full.queryByTestId("bot-chat-transcript-row-loading")).toBeNull();
+    expect(screenReaderCount("team-new")?.textContent).toBe("6 replies");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
   });
 
   it("folds a longer thread to the origin, a line counting the hidden replies and the last two replies, and the line shows the rest in place and keeps them shown", async () => {
@@ -1278,6 +1225,7 @@ describe("<BotThreadsView />", () => {
   });
 
   it("reads a card's replies only once its newest reply has stayed in view, never for the card's line or post in view", async () => {
+    foregroundWindow();
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script(
       [thread(TEAM, "team-a", 5_000), thread(TEAM, "team-b", 4_000)],
@@ -1339,6 +1287,7 @@ describe("<BotThreadsView />", () => {
   });
 
   it("acknowledges a newer reply only once it is drawn and has stayed in view itself, not on the strength of the reply seen before it", async () => {
+    foregroundWindow();
     mocks.hosted[TEAM].cursors = {
       cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
       latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
@@ -1409,6 +1358,70 @@ describe("<BotThreadsView />", () => {
       }),
     );
     expect(mocks.advances).toHaveLength(2);
+  });
+
+  it("clears a thread's new-replies mark once its newest row is read, though the list's lastReplyAt is ahead of that row, and marks a genuinely newer row again", async () => {
+    foregroundWindow();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([thread(TEAM, "team-new", 9_000)], {
+      "team-new": FOLLOWING,
+    });
+    mocks.hosted[TEAM].cursors = {
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
+    };
+    withReplies(TEAM, "team-new", replyTexts(2), 9_000);
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    expect(
+      await within(card("team-new")).findByTestId("bot-thread-row-new-replies"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("bot-threads-unread-pill").textContent).toBe(
+      "1 unread thread",
+    );
+    await within(await revealFull("team-new")).findByText("reply 2");
+    expect(readMark("team-new").getAttribute("data-mark-message-id")).toBe(
+      "team-new-reply-2",
+    );
+
+    // The whole read runs on the fake clock: the cache write's notification
+    // to the list is a zero-delay timer, lost if the clock is restored first.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark("team-new"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: "team-new",
+          messageId: "team-new-reply-2",
+          seq: 3_000,
+        },
+      ]),
+    );
+    // The advance landed in the cache the card reads: reading cleared it.
+    await vi.waitFor(() => {
+      expect(
+        within(card("team-new")).queryByTestId("bot-thread-row-new-replies"),
+      ).toBeNull();
+    });
+    expect(screen.queryByTestId("bot-threads-unread-pill")).toBeNull();
+    vi.useRealTimers();
+
+    // A row the host later names past that cursor is unread again.
+    mocks.hosted[TEAM].cursors = {
+      ...mocks.hosted[TEAM].cursors,
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 4_000 } },
+    };
+    await act(() => queryClient.invalidateQueries());
+    expect(
+      await within(card("team-new")).findByTestId("bot-thread-row-new-replies"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("bot-threads-unread-pill").textContent).toBe(
+      "1 unread thread",
+    );
   });
 
   it("opens a reply's turn from its receipt in a card, landed on the send that wrote the reply", async () => {
@@ -1712,6 +1725,101 @@ describe("<BotThreadsView /> header", () => {
     expect(screen.getByTestId("bot-threads-back").className).not.toContain(
       "@3xl",
     );
+  });
+});
+
+const TRACY_REF = { kind: "tracy", id: "tracy" } as const;
+
+function focusTracy(): void {
+  useTabsStore.setState({
+    items: [{ kind: "tab", id: tabItemId(TRACY_REF), ref: TRACY_REF }],
+    activeItemId: tabItemId(TRACY_REF),
+    stripOrder: [TRACY_REF],
+  });
+}
+
+function mountUnderTracyHeader(level2: MobileLevel2Form | null): void {
+  focusTracy();
+  mountUnderHeader = true;
+  mountLevel2 = level2;
+  mocks.hosted[TRACY] = script([], {});
+  mocks.hosted[TEAM] = script([], {});
+  mount();
+}
+
+describe("<BotThreadsView /> in the compact app header", () => {
+  afterEach(() => {
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it.each(["menu", "bar"] as const)(
+    "draws a Threads picker and the Back control in the app header at the %s form, not in the view's own header",
+    (form) => {
+      mountUnderTracyHeader(form);
+
+      const header = screen.getByTestId("app-header");
+      expect(
+        within(header).getByRole("button", { name: /^Threads$/ }),
+      ).toBeTruthy();
+      expect(
+        within(header).getByRole("button", { name: "Back to Tracy" }),
+      ).toBeTruthy();
+      expect(
+        within(screen.getByTestId("bot-threads-view")).queryByRole("button", {
+          name: /^Threads$/,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("goes back to the tab's channel from the header's Back control", async () => {
+    const user = userEvent.setup();
+    mountUnderTracyHeader("menu");
+
+    await user.click(
+      within(screen.getByTestId("app-header")).getByRole("button", {
+        name: "Back to Tracy",
+      }),
+    );
+
+    expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the bots list from the Threads picker in the header", async () => {
+    const user = userEvent.setup();
+    mountUnderTracyHeader("menu");
+
+    await user.click(
+      within(screen.getByTestId("app-header")).getByRole("button", {
+        name: /^Threads$/,
+      }),
+    );
+
+    expect(await screen.findByTestId("bot-channel-picker")).toBeTruthy();
+  });
+
+  it("draws nothing in the header beside a column, where the channel row is the way back", () => {
+    mountUnderTracyHeader({ column: 256 });
+
+    const header = screen.getByTestId("app-header");
+    expect(
+      within(header).queryByRole("button", { name: /^Threads$/ }),
+    ).toBeNull();
+    expect(
+      within(header).queryByRole("button", { name: "Back to Tracy" }),
+    ).toBeNull();
+  });
+
+  it("takes the picker and Back out of the header when the view unmounts", () => {
+    mountUnderTracyHeader("menu");
+    const header = screen.getByTestId("app-header");
+    expect(
+      within(header).getByRole("button", { name: /^Threads$/ }),
+    ).toBeTruthy();
+
+    cleanup();
+
+    expect(screen.queryByRole("button", { name: /^Threads$/ })).toBeNull();
   });
 });
 

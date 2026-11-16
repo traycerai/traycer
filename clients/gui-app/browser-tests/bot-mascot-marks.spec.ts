@@ -121,7 +121,6 @@ async function checkPixels(
   origins: ReadonlyArray<{
     readonly x: number;
     readonly y: number;
-    readonly size: number;
   }>,
 ): Promise<PixelCheck[]> {
   const shot = await page.screenshot({ type: "png", fullPage: true });

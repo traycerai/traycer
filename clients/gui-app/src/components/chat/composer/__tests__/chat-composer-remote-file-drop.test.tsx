@@ -17,6 +17,12 @@
  * this file observes.
  */
 import {
+  fileTransfer,
+  pdfFile,
+  nodesOfType,
+  typedPathSpans,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
+import {
   forwardRef,
   useCallback,
   type ComponentProps,
@@ -339,18 +345,29 @@ vi.mock("@/components/chat/composer/composer-attachment-drop-zone", () => ({
 // The shell's frame and strip are not under test; its editor slot is, and so is
 // what the toolbar is told: `attachmentPending` is the composer's own send hold
 // (every ingest the paste hook runs, or a file node still unconfirmed), and the
-// stand-in toolbar below shows it.
-vi.mock("@/components/home/composer/composer-shell", () => ({
-  ComposerShell: (props: {
-    readonly editor: ReactNode;
-    readonly toolbar: ReactNode;
-  }) => (
-    <>
-      {props.editor}
-      {props.toolbar}
-    </>
-  ),
-}));
+// stand-in toolbar below shows it. The frame's own drop affordance is marked, so
+// a test can see whether the composer drew one of its own.
+vi.mock(
+  "@/components/home/composer/composer-shell",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/home/composer/composer-shell")
+    >()),
+    ComposerShell: (props: {
+      readonly editor: ReactNode;
+      readonly toolbar: ReactNode;
+      readonly dragOverlayVariant: string | null;
+    }) => (
+      <>
+        {props.dragOverlayVariant === null ? null : (
+          <span data-testid="composer-frame-overlay" />
+        )}
+        {props.editor}
+        {props.toolbar}
+      </>
+    ),
+  }),
+);
 vi.mock("@/components/chat/composer/chat-composer-toolbar-slot", () => ({
   ChatComposerToolbarSlot: (props: { readonly attachmentPending: boolean }) => (
     <span
@@ -363,6 +380,8 @@ vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
   SteerSettingsConflictDialog: () => null,
 }));
 
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
+import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import { ChatComposer } from "@/components/chat/composer/chat-composer";
 
@@ -425,46 +444,52 @@ afterEach(() => {
   cleanup();
 });
 
+function composerElement(restingSandbox: RestingChatSandbox | null) {
+  return (
+    <ChatComposer
+      taskId="chat-remote-drop"
+      isActive
+      sendDisabled={false}
+      sendDisabledHint={null}
+      mentionRoots={[]}
+      runWorkingDirectory={null}
+      fallbackToGlobalMentionRoots={false}
+      currentEpicId="epic-1"
+      viewTabId="tab-1"
+      settingsSeed={SETTINGS}
+      fallbackSettingsSeed={null}
+      providerFallback={NO_PROVIDER_FALLBACK}
+      onSubmitMessage={() => true}
+      onSideChat={null}
+      onSettingsChange={null}
+      activeTurnStatus={null}
+      steerCapable={false}
+      steerProtocolSupported
+      autoPermissionModeProtocolSupported={null}
+      ultracodeProtocolSupported={false}
+      getDraftBlobBridgeSupported={() => false}
+      getActiveTurnForSteer={() => null}
+      editingQueueItemId={null}
+      onCancelQueueEdit={null}
+      hasPendingApprovals={false}
+      stopDisabled
+      onStopTurn={null}
+      workspaceControls={null}
+      workspaceAvailability={{ status: "ready", disabledHint: null }}
+      topSpacing="normal"
+      topSlot={null}
+      suggestedPrompt={undefined}
+      restingSandbox={restingSandbox}
+    />
+  );
+}
+
 async function mountComposer(
   restingSandbox: RestingChatSandbox | null,
 ): Promise<HTMLElement> {
   render(
     <QueryClientProvider client={queryClient}>
-      <ChatComposer
-        taskId="chat-remote-drop"
-        isActive
-        sendDisabled={false}
-        sendDisabledHint={null}
-        mentionRoots={[]}
-        runWorkingDirectory={null}
-        fallbackToGlobalMentionRoots={false}
-        currentEpicId="epic-1"
-        viewTabId="tab-1"
-        settingsSeed={SETTINGS}
-        fallbackSettingsSeed={null}
-        providerFallback={NO_PROVIDER_FALLBACK}
-        onSubmitMessage={() => true}
-        onSideChat={null}
-        onSettingsChange={null}
-        activeTurnStatus={null}
-        steerCapable={false}
-        steerProtocolSupported
-        autoPermissionModeProtocolSupported={null}
-        ultracodeProtocolSupported={false}
-        getDraftBlobBridgeSupported={() => false}
-        getActiveTurnForSteer={() => null}
-        editingQueueItemId={null}
-        onCancelQueueEdit={null}
-        hasPendingApprovals={false}
-        stopDisabled
-        onStopTurn={null}
-        workspaceControls={null}
-        workspaceAvailability={{ status: "ready", disabledHint: null }}
-        topSpacing="normal"
-        topSlot={null}
-        suggestedPrompt={undefined}
-        restingSandbox={restingSandbox}
-      />
+      {composerElement(restingSandbox)}
     </QueryClientProvider>,
   );
   const editor = await screen.findByTestId("composer-editor");
@@ -472,46 +497,28 @@ async function mountComposer(
   return editor;
 }
 
-function pdfTransfer() {
-  const file = new File([crypto.randomUUID()], "report.pdf", {
-    type: "application/pdf",
-  });
-  return {
-    files: [file],
-    types: ["Files"],
-    items: [{ kind: "file", type: file.type, getAsFile: () => file }],
-    getData: () => "",
-  };
+/** A pane that is one drop zone for the composer inside it, with a transcript beside it. */
+function DropPane(props: { readonly children: ReactNode }) {
+  const scope = useComposerDropScope();
+  return (
+    <div data-testid="pane" className="relative" {...scope.zoneProps}>
+      <div data-testid="transcript" />
+      {scope.provide(props.children)}
+      {scope.overlay}
+    </div>
+  );
 }
 
 function dropReport(editor: HTMLElement): void {
-  fireEvent.drop(editor, { dataTransfer: pdfTransfer() });
+  fireEvent.drop(editor, {
+    dataTransfer: fileTransfer([pdfFile("report.pdf")]),
+  });
 }
 
 function pasteReport(editor: HTMLElement): void {
-  fireEvent.paste(editor, { clipboardData: pdfTransfer() });
-}
-
-function nodesOfType(
-  content: JsonContent | null,
-  type: string,
-): ReadonlyArray<JsonContent> {
-  if (content === null) return [];
-  const own = content.type === type ? [content] : [];
-  return [
-    ...own,
-    ...(content.content ?? []).flatMap((child) => nodesOfType(child, type)),
-  ];
-}
-
-/** The text of every inline-code span: how a typed path sits in the editor. */
-function codeSpans(content: JsonContent | null): ReadonlyArray<string> {
-  return nodesOfType(content, "text").flatMap((node) =>
-    node.marks?.some((mark) => mark.type === "code") === true &&
-    node.text !== undefined
-      ? [node.text]
-      : [],
-  );
+  fireEvent.paste(editor, {
+    clipboardData: fileTransfer([pdfFile("report.pdf")]),
+  });
 }
 
 /**
@@ -557,7 +564,7 @@ async function expectUploaded(): Promise<void> {
     ).toEqual(["report.pdf"]),
   );
   await settled();
-  expect(codeSpans(answers.document)).toEqual([]);
+  expect(typedPathSpans(answers.document)).toEqual([]);
   expect(toasts.error).not.toHaveBeenCalled();
 }
 
@@ -569,7 +576,7 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     dropReport(editor);
 
     await waitFor(() =>
-      expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
+      expect(typedPathSpans(answers.document)).toEqual([REPORT_PATH]),
     );
     await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);
@@ -587,7 +594,6 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
   });
 
   it("is uploaded when this renderer knows no local host at all", async () => {
-    answers.localHostId = null;
     const editor = await mountComposer(null);
 
     dropReport(editor);
@@ -620,10 +626,35 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     pasteReport(editor);
 
     await waitFor(() =>
-      expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
+      expect(typedPathSpans(answers.document)).toEqual([REPORT_PATH]),
     );
     await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);
     expect(host.requestWithOptions).not.toHaveBeenCalled();
+  });
+
+  it("is uploaded when it is dropped on the pane's transcript, outside the composer, with only the pane drawing the affordance", async () => {
+    answers.localHostId = "host-elsewhere";
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DropPane>{composerElement(null)}</DropPane>
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("composer-editor");
+    await waitFor(() => expect(answers.editorHandle?.isReady()).toBe(true));
+    const transcript = screen.getByTestId("transcript");
+
+    fireEvent.dragEnter(transcript, {
+      dataTransfer: fileTransfer([pdfFile("report.pdf")]),
+    });
+
+    expect(
+      screen.getAllByText(FILE_DROP_OVERLAY_CONTENT.files.title),
+    ).toHaveLength(1);
+    expect(screen.queryByTestId("composer-frame-overlay")).toBeNull();
+
+    dropReport(transcript);
+
+    await expectUploaded();
   });
 });

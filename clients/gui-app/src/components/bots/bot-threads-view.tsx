@@ -1,3 +1,6 @@
+import { createPortal } from "react-dom";
+import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
   useCallback,
   useEffect,
@@ -69,7 +72,6 @@ import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { cn } from "@/lib/utils";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
@@ -82,6 +84,8 @@ const NO_TASKS: ReadonlyArray<BotTaskEntry> = [];
 const MESSAGES_IN_FULL = 6;
 /** The replies a folded card shows under its fold: the newest. */
 const FOLDED_TAIL = 2;
+
+function stayOnThreads(): void {}
 
 /**
  * Threads, in place of a bot's channel (Tracy Bots, decisions 149 and 184):
@@ -102,6 +106,7 @@ const FOLDED_TAIL = 2;
  */
 export function BotThreadsView(props: {
   readonly hostId: string;
+  readonly channelId: string | null;
   /** The tab's channel, which the back control names. */
   readonly channelTitle: string;
   readonly onBack: () => void;
@@ -110,30 +115,68 @@ export function BotThreadsView(props: {
 }): ReactNode {
   const { level2 } = props;
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const mobilePicker = level2 === "menu" || level2 === "bar";
+  const botHeaderSlot = useMobileBotHeaderSlot();
+  const titleTarget = mobilePicker ? (botHeaderSlot?.target ?? null) : null;
+  const threadsTitle = (
+    <div className="flex min-w-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-touch"
+        aria-label={`Back to ${props.channelTitle}`}
+        data-testid="bot-threads-back"
+        onClick={props.onBack}
+      >
+        <ArrowLeft aria-hidden="true" />
+      </Button>
+      <BotChannelTitle
+        level2={level2}
+        title="Threads"
+        activeBotId={props.channelId}
+        hostId={props.hostId}
+        threadsView={{
+          shown: true,
+          onShow: stayOnThreads,
+          onLeave: props.onBack,
+        }}
+      />
+    </div>
+  );
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-testid="bot-threads-view"
     >
-      <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
-        {level2 !== null && typeof level2 === "object" ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={cn("self-start", level2 === null && "@3xl:hidden")}
-            data-testid="bot-threads-back"
-            onClick={props.onBack}
-          >
-            <ArrowLeft aria-hidden="true" />
-            {`Back to ${props.channelTitle}`}
-          </Button>
-        )}
-        <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
-        <p className="text-ui-xs text-muted-foreground">
-          Threads you follow, across every bot.
-        </p>
-      </header>
+      {mobilePicker && titleTarget === null ? (
+        <header className="flex shrink-0 items-center px-4 py-2">
+          {threadsTitle}
+        </header>
+      ) : null}
+      {mobilePicker && titleTarget !== null
+        ? createPortal(threadsTitle, titleTarget)
+        : null}
+      {!mobilePicker ? (
+        <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
+          {level2 !== null && typeof level2 === "object" ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-start @3xl:hidden"
+              data-testid="bot-threads-back"
+              onClick={props.onBack}
+            >
+              <ArrowLeft aria-hidden="true" />
+              {`Back to ${props.channelTitle}`}
+            </Button>
+          )}
+          <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
+          <p className="text-ui-xs text-muted-foreground">
+            Threads you follow, across every bot.
+          </p>
+        </header>
+      ) : null}
       <div
         ref={setScroller}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4"
@@ -360,14 +403,9 @@ function ThreadCard(props: {
           resolveMember={directory.resolve}
           scroller={scroller}
           onShowPost={showPost}
-          onOpenThread={openThread}
         />
       ) : (
-        <ThreadSummary
-          hostId={hostId}
-          entry={entry}
-          onOpenThread={openThread}
-        />
+        <ThreadSummary hostId={hostId} entry={entry} />
       )}
     </li>
   );
@@ -678,27 +716,20 @@ function threadWriters(
 
 /**
  * A card before it has come near the view: its post's first line (with a
- * phone in the channel line for a thread a call opened) and its replies, as
- * the list's row was. The post is read from what the bot's channel has
- * loaded; an older one is named "Thread". The replies open the thread beside
- * its channel.
+ * phone in the channel line for a thread a call opened) and when its latest
+ * reply landed. The post is read from what the bot's channel has loaded; an
+ * older one is named "Thread". How many replies it has is told to assistive
+ * technology alone, as on the card in full.
  */
 function ThreadSummary(props: {
   readonly hostId: string;
   readonly entry: BotFollowedThread;
-  readonly onOpenThread: (() => void) | null;
 }): ReactNode {
-  const { hostId, entry, onOpenThread } = props;
+  const { hostId, entry } = props;
   const { bot, thread } = entry;
   const anchor = thread.anchor;
   if (anchor === null) {
-    return (
-      <ThreadSummaryBody
-        thread={thread}
-        title="Thread"
-        onOpenThread={onOpenThread}
-      />
-    );
+    return <ThreadSummaryBody thread={thread} title="Thread" />;
   }
   return (
     <ChannelPost
@@ -714,7 +745,6 @@ function ThreadSummary(props: {
           title={
             row === null ? "Thread" : (firstLineOf(postTextOf(row)) ?? "Thread")
           }
-          onOpenThread={onOpenThread}
         />
       )}
     </ChannelPost>
@@ -724,9 +754,8 @@ function ThreadSummary(props: {
 function ThreadSummaryBody(props: {
   readonly thread: BotThreadSummary;
   readonly title: string;
-  readonly onOpenThread: (() => void) | null;
 }): ReactNode {
-  const { thread, title, onOpenThread } = props;
+  const { thread, title } = props;
   const replies =
     thread.replyCount === 1 ? "1 reply" : `${thread.replyCount} replies`;
   return (
@@ -737,24 +766,14 @@ function ThreadSummaryBody(props: {
       <span className="min-w-0 truncate text-ui-sm text-foreground">
         {title}
       </span>
-      <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-        {onOpenThread === null ? (
-          <span>{replies}</span>
-        ) : (
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            data-testid="bot-thread-card-summary-replies"
-            onClick={onOpenThread}
-          >
-            {replies}
-          </Button>
-        )}
-        {thread.lastReplyAt === null ? null : (
-          <ReplyTime at={thread.lastReplyAt} />
-        )}
-      </span>
+      {thread.replyCount === 0 ? null : (
+        <span className="sr-only" data-testid="bot-thread-reply-count-sr">
+          {replies}
+        </span>
+      )}
+      {thread.lastReplyAt === null ? null : (
+        <ReplyTime at={thread.lastReplyAt} />
+      )}
     </div>
   );
 }
@@ -762,7 +781,11 @@ function ThreadSummaryBody(props: {
 /** When the thread's latest reply landed, on the shared minute clock. */
 function ReplyTime(props: { readonly at: number }): ReactNode {
   const label = useRelativeTimestamp(props.at);
-  return <span className="shrink-0">{`· ${label}`}</span>;
+  return (
+    <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+      {label}
+    </span>
+  );
 }
 
 /**
@@ -780,7 +803,6 @@ function FullThread(props: {
   readonly resolveMember: BotMemberResolver;
   readonly scroller: HTMLElement | null;
   readonly onShowPost: () => void;
-  readonly onOpenThread: () => void;
 }): ReactNode {
   const {
     hostId,
@@ -790,7 +812,6 @@ function FullThread(props: {
     resolveMember,
     scroller,
     onShowPost,
-    onOpenThread,
   } = props;
   const { bot, thread } = entry;
   const { botId } = bot;
@@ -835,11 +856,10 @@ function FullThread(props: {
             tail: FOLDED_TAIL,
             onUnfold: () => unfold(threadId),
           },
-      onOpenThread,
       onShowPost,
       readMark,
     }),
-    [onOpenThread, onShowPost, readMark, threadId, unfold, unfolded],
+    [onShowPost, readMark, threadId, unfold, unfolded],
   );
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(

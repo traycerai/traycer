@@ -90,6 +90,7 @@ function landingTab(
     confirmedHostBlobHashes: [],
     closed: true,
     returnedSandbox: null,
+    namedHostId: null,
     ...overrides,
   };
 }

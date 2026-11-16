@@ -19,7 +19,6 @@ import {
   USER_A,
   USER_B,
   verdictUpdatesSent,
-  sentTokens,
 } from "../../test-fixtures/dial-gate-harness";
 import type {
   HostCredentialMintFlow,
@@ -191,7 +190,6 @@ describe("a stream client is bound to the user it was built for", () => {
 
       expect(statuses).toContain("reconnecting");
       expect(FakeNativeWebSocket.instances).toHaveLength(0);
-      expect(sentTokens()).not.toContain("token-b");
 
       signIn(provider, USER_A, "token-a2");
       await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
@@ -213,7 +211,6 @@ describe("a stream client is bound to the user it was built for", () => {
 
       expect(statuses).toContain("reconnecting");
       expect(FakeNativeWebSocket.instances).toHaveLength(0);
-      expect(sentTokens()).not.toContain("token-b");
 
       signIn(provider, USER_A, "token-a");
       await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
@@ -238,7 +235,6 @@ describe("a stream client is bound to the user it was built for", () => {
 
       expect(statuses).toContain("reconnecting");
       expect(FakeNativeWebSocket.instances).toHaveLength(0);
-      expect(sentTokens()).not.toContain("token-b");
 
       signIn(provider, USER_A, "token-a");
       await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);

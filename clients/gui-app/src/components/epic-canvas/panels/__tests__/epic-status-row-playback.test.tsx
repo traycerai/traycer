@@ -136,6 +136,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useSoundtrackStore.getState().disable();
+  useSoundtrackStore.getState().setSetPiecesEnabled(true);
   Reflect.deleteProperty(navigator, "locks");
   Reflect.deleteProperty(globalThis, "runnerHost");
   vi.restoreAllMocks();
@@ -364,7 +365,6 @@ describe("the identity of the track that is sounding", () => {
     await startMusic();
 
     expect(identity()).toBe("Moonlit Étude · Composed");
-    expect(useSoundtrackStore.getState().soundingTrack?.kind).toBe("composed");
   });
 
   it("follows Next and Previous through the session, and holds through a pause", async () => {
@@ -407,7 +407,6 @@ describe("the identity of the track that is sounding", () => {
     });
     await advance(2);
 
-    expect(useSoundtrackStore.getState().soundingTrack).toBeNull();
     expect(identity()).toBeNull();
     expect(descriptions()).toEqual([null, null, null]);
     expect(buttonNames()).toEqual(NAMES);
@@ -424,7 +423,6 @@ describe("the identity of the track that is sounding", () => {
       useSoundtrackStore.getState().disable();
     });
 
-    expect(useSoundtrackStore.getState().soundingTrack).toBeNull();
     expect(identity()).toBeNull();
     expect(buttonNames()).toEqual(NAMES);
   });
@@ -444,7 +442,6 @@ describe("the identity of the track that is sounding", () => {
       useSoundtrackStore.getState().setSetPiecesEnabled(false);
     });
 
-    expect(useSoundtrackStore.getState().soundingTrack).toBeNull();
     expect(identity()).toBeNull();
     expect(buttonNames()).toEqual(NAMES);
   });

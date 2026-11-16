@@ -69,7 +69,7 @@ const ACTIVE_REFETCH_EXEMPT_METHODS: ReadonlySet<string> = new Set([
  * rather than a scope. The list still refreshes through its own lifecycle and
  * its own manual refresh.
  */
-function isActiveRefetchExempt(query: Query): boolean {
+export function isActiveRefetchExempt(query: Query): boolean {
   if (isCloudEpicTasksQueryKey(query.queryKey)) return true;
   const method = query.queryKey[2];
   return (
@@ -127,7 +127,7 @@ function isReplayCoveredWorktreeRead(query: Query): boolean {
  * an attempt fails, so a read parked in retry backoff - still `"fetching"` -
  * reads a count above zero and is not one of these.
  */
-function attemptInFlightHasNotFailed(query: Query): boolean {
+export function attemptInFlightHasNotFailed(query: Query): boolean {
   return (
     query.state.fetchStatus === "fetching" &&
     query.state.fetchFailureCount === 0

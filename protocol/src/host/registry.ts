@@ -50,7 +50,9 @@ import {
   organizationCommandV10,
   organizationHistoryV10,
   organizationHistoryV11,
+  organizationHistoryV12,
   organizationHistoryUpgradeV10ToV11,
+  organizationHistoryUpgradeV11ToV12,
   organizationSubscribeV10,
   organizationSubscribeV11,
 } from "./organization/contracts";
@@ -978,6 +980,7 @@ import {
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
+  epicGetChatTitleV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -988,6 +991,7 @@ import {
   epicListTasksV17,
   epicListTasksV18,
   epicListTasksV19,
+  epicListTasksV110,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
@@ -997,6 +1001,7 @@ import {
   epicListTasksUpgradeV16ToV17,
   epicListTasksUpgradeV17ToV18,
   epicListTasksUpgradeV18ToV19,
+  epicListTasksUpgradeV19ToV110,
   epicMentionArtifactsV10,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
@@ -1188,7 +1193,9 @@ import {
   simulatorScreenshotV10,
   simulatorSetKeepRunningV10,
   simulatorShutdownV10,
+  simulatorStatusUpgradeV10ToV11,
   simulatorStatusV10,
+  simulatorStatusV11,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -1429,6 +1436,7 @@ import {
   providersChangedV11,
   providersChangedV12,
 } from "@traycer/protocol/host/providers-changed-stream";
+import { cloudRecoveredV10 } from "@traycer/protocol/host/cloud-recovered-stream";
 import {
   epicCommunicationGraphSubscribeV10,
   epicCommunicationGraphSubscribeV11,
@@ -6477,7 +6485,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.history": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: organizationHistoryV10,
@@ -6486,6 +6494,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: organizationHistoryV11,
           upgradeFromPreviousVersion: organizationHistoryUpgradeV10ToV11,
+        },
+        2: {
+          contract: organizationHistoryV12,
+          upgradeFromPreviousVersion: organizationHistoryUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -7116,11 +7128,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorStatusV11,
+          upgradeFromPreviousVersion: simulatorStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8751,7 +8767,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -8796,6 +8812,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         9: {
           contract: epicListTasksV19,
           upgradeFromPreviousVersion: epicListTasksUpgradeV18ToV19,
+        },
+        10: {
+          contract: epicListTasksV110,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV19ToV110,
         },
       },
       downgradePathsFromLatest: {},
@@ -10689,6 +10709,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.getChatTitle": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatTitleV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -16475,6 +16508,16 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: providersChangedV12,
+        },
+      },
+    },
+  },
+  "cloud.recovered.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: cloudRecoveredV10,
         },
       },
     },

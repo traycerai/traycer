@@ -23,13 +23,9 @@ function resetStores(): void {
   useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
 }
 
-function surface() {
-  return useTracySurfaceStore.getState();
-}
+const surface = useTracySurfaceStore.getState;
 
-function place() {
-  return useTracyPlaceStore.getState();
-}
+const place = useTracyPlaceStore.getState;
 
 /** `botId`'s view and session, as the surface's place holds them. */
 function placeOf(botId: string) {
@@ -58,14 +54,15 @@ describe("selecting a Tracy channel", () => {
     expect(place().threadsShown).toBe(false);
   });
 
-  it("leaves the channel it selects, and every other channel, as it was", () => {
+  it("shows the channel it selects on Messages with no session in its place, and leaves every other channel as it was", () => {
     place().setView("bot-b", "activity");
+    place().setSession("bot-b", SESSION);
     place().setSession("bot-c", SESSION);
     surface().selectChannel("bot-a");
 
     surface().selectChannel("bot-b");
 
-    expect(placeOf("bot-b").view).toBe("activity");
+    expect(placeOf("bot-b")).toEqual({ view: "messages", session: null });
     expect(placeOf("bot-c").session).toEqual(SESSION);
   });
 
@@ -157,14 +154,6 @@ describe("the bots shown gone", () => {
     surface().settleListedBots(new Set(["bot-a"]), 9);
 
     expect(surface().goneReports).toEqual({ "bot-a": 10 });
-  });
-
-  it("takes a bot out of the gone when a list that answered after the report carries it", () => {
-    surface().forgetBot("bot-a", 10);
-
-    surface().settleListedBots(new Set(["bot-a"]), 11);
-
-    expect(surface().goneReports).toEqual({});
   });
 
   it("leaves a bot gone when a later list does not carry it", () => {

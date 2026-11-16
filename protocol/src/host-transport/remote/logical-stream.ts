@@ -127,6 +127,8 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
    * snapshot that frame carries, so its `open` is a real cycle.
    */
   private held = false;
+  /** {@link IStreamSession.hasSentOpenRequest}. */
+  private openRequestSent = false;
 
   constructor(init: LogicalStreamInit) {
     this.currentStreamId = init.streamId;
@@ -253,8 +255,21 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     return this.negotiated ? this.schemaVersion : null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return this.openRequestSent;
+  }
+
   isDisposed(): boolean {
     return this.disposed;
+  }
+
+  /**
+   * A frame of this stream's SUBSCRIBE was handed to the socket. Not when it
+   * was queued or while it sealed: a SUBSCRIBE that never reached the socket
+   * never reached the host, and its replay is the request the person made.
+   */
+  noteOpenRequestSent(): void {
+    this.openRequestSent = true;
   }
 
   /**

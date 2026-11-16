@@ -624,7 +624,7 @@ export function smallMascotCells(
 }
 
 /** The colours a mascot's body is drawn in. */
-export interface MascotRamp {
+interface MascotRamp {
   /** The body's hue, in degrees. */
   readonly hue: number;
   /** Darkest first: outline, shade, base, light, highlight. */

@@ -536,6 +536,14 @@ describe("callHostRpc", () => {
         "agent.getTranscript: cannot read agent 'a1' because the cloud could not be reached, so its published copy could not be read. Check this machine's network and try again.",
     },
     {
+      // The host's own egress budget refused the call: retryable, like a
+      // cloud that gave no verdict.
+      wire: "E_CLOUD_REQUEST_REFUSED" as const,
+      cli: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message:
+        "cloud request refused by the host egress budget (breaker-open, family=bots)",
+    },
+    {
       // Sent for a reply on a thread that belongs to another pair
       // (RESPONSE_ID_MISMATCH): the caller's own input.
       wire: "E_INVALID_ARGUMENT" as const,

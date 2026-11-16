@@ -6,6 +6,7 @@ const chooserHistoryItem = vi.hoisted<HistoryItem>(() => ({
   taskType: "epic",
   title: "History Epic",
   initialUserPrompt: "",
+  createdAtMs: 1,
   updatedAtMs: 1,
   updatedLabel: "now",
   updatedBucket: "today",

@@ -33,6 +33,7 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   target is. Never a sandbox and never the pool, so audio and on-device
  *   models never leave the person's machines.
  * - `pool-only` - the account-wide families: History (`epic.listTasks`),
+ *   the title a reference to a chat is drawn with (`epic.getChatTitle`),
  *   the notification cloud feed (`host.notifications.cloudFeed.*`),
  *   `environment.list` and `environment.binding.read`, `organization.*` and
  *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
@@ -562,6 +563,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.finishArtifactImage": "target-host",
   "epic.getChatRunSettings": "target-host",
   "epic.getChatRunSettingsBatch": "target-host",
+  "epic.getChatTitle": "pool-only",
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
@@ -839,6 +841,9 @@ export const HOST_STREAM_RPC_ROUTES = {
   "browser.sessions": "target-host",
   "chat.serving.subscribe": "pool-only",
   "chat.subscribe": "target-host-live-pool-at-rest",
+  // The doorbell of the host that answered a read, never another: its
+  // `recovered` re-asks only that host's own failed reads.
+  "cloud.recovered.subscribe": "target-host",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",
   "epic.state.subscribe": "target-host",

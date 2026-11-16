@@ -291,7 +291,7 @@ async function pointListedPanelAt(
   });
 }
 
-/** Points the open panel at `host`, as moving the tab to another host does. */
+/** Binds the panel to `host`; saves remain per bot across host bindings. */
 function pointPanelAt(host: FakeHost, hostId: string): void {
   mocks.client = host.client;
   mocks.hostId = hostId;

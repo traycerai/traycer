@@ -15,7 +15,7 @@ export function isTracyChannelView(value: unknown): value is TracyChannelView {
  * was accepted with (`BotOpenThread.sent`) is not part of a place: it is drawn
  * only until the lists catch up, and a place outlives that.
  */
-export interface TracyPlaceThread {
+interface TracyPlaceThread {
   readonly anchorMessageId: string;
   readonly announcement: boolean;
   readonly anchorKind: string | null;
@@ -50,7 +50,7 @@ export interface TracyPlace {
  * A place as `/bot` and `/bot/{botId}` carry it in their search. Every key is
  * optional, so an opener that names the channel alone passes no search.
  */
-export interface TracyPlaceSearch {
+interface TracyPlaceSearch {
   readonly view?: TracyChannelView;
   readonly threads?: true;
   readonly session?: string;

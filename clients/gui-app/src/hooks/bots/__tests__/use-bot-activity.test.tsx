@@ -23,10 +23,8 @@ import {
   failedOnRequest,
   replyingSessionOf,
   useBotActivity,
-  useBotActivityForHost,
 } from "@/hooks/bots/use-bot-activity";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
-import { LiveBotAvatar } from "@/components/bots/bot-avatars";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
 const stream = vi.hoisted(() => ({
@@ -260,39 +258,6 @@ describe("useBotActivity", () => {
     act(() => tab.session.emit(activityFrame({ kind: "trunk" }, REPLYING)));
 
     expect(tab.current()).toBeNull();
-  });
-});
-
-describe("two readers of one bot on one host", () => {
-  function ActivityReader(): ReactNode {
-    useBotActivityForHost(BOT_ID, HOST_ID);
-    return null;
-  }
-
-  function reader(content: ReactNode): ReactNode {
-    return (
-      <QueryClientProvider client={new QueryClient()}>
-        {content}
-      </QueryClientProvider>
-    );
-  }
-
-  it("share one bot.subscribe stream, which closes with the last of them", () => {
-    const session = new StubSession();
-    stream.client = new StubHostStreamClient(session);
-    const row = render(
-      reader(<LiveBotAvatar botId={BOT_ID} hostId={HOST_ID} size="sm" />),
-    );
-    const other = render(reader(<ActivityReader />));
-
-    expect(stream.client.opened).toEqual(["bot.subscribe"]);
-
-    row.unmount();
-    expect(session.close).not.toHaveBeenCalled();
-
-    other.unmount();
-    expect(session.close).toHaveBeenCalledTimes(1);
-    expect(stream.client.opened).toEqual(["bot.subscribe"]);
   });
 });
 

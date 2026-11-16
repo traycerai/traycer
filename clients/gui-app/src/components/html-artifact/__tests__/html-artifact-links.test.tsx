@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
 import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -79,6 +79,9 @@ const PAGE_PATH = "a/b/index.html";
 const TRAYCER_PAGE = "traycer-artifact://artifact-a1--m1/a/b/index.html";
 const ANDROID_PAGE =
   "https://artifact-a1--m1.traycer-artifact.invalid/a/b/index.html";
+// The desktop's site is shared by the artifact's mounts; the page's mount is
+// in the path, ahead of the tree path.
+const DESKTOP_PAGE = "traycer-sandbox://artifact-a1/m/m1/a/b/index.html";
 
 /** A link clicked on page a/b/index.html, served at `pageUrl`. */
 const linkAt = (href: string, pageUrl: string) => ({
@@ -126,6 +129,8 @@ const IN_EPIC_TAB = {
   tileHost: "tab-host",
   epicSession: true,
 } as const;
+
+afterEach(cleanup);
 
 beforeEach(() => {
   mocks.worktrees.mockReset();
@@ -257,6 +262,34 @@ describe("HtmlArtifactLinks", () => {
     );
   });
 
+  it.each([
+    ["a relative href", "../sibling/index.html"],
+    ["a rooted href", "/a/sibling/"],
+    [
+      "an href written out in full through the page's mount",
+      "traycer-sandbox://artifact-a1/m/m1/a/sibling/index.html",
+    ],
+    [
+      "an href written out in full from the site's root",
+      "traycer-sandbox://artifact-a1/a/sibling/",
+    ],
+  ])(
+    "opens %s on the desktop's site, where the mount comes before the tree path",
+    async (_label, href) => {
+      mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+      const open = mountFrame(IN_EPIC_TAB);
+
+      open(linkAt(href, DESKTOP_PAGE));
+      await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+      expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filePath: "epics/epic-1/artifacts/a/sibling/index.md",
+        }),
+      );
+    },
+  );
+
   it("opens a protocol-relative href on the page's own origin", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
     const open = mountFrame(IN_EPIC_TAB);
@@ -281,6 +314,11 @@ describe("HtmlArtifactLinks", () => {
       "another artifact's Android address",
       "https://artifact-zz--m1.traycer-artifact.invalid/a/sibling/",
       ANDROID_PAGE,
+    ],
+    [
+      "another artifact's desktop address",
+      "traycer-sandbox://artifact-zz/m/m1/a/sibling/",
+      DESKTOP_PAGE,
     ],
     [
       "a full URL that walks above the root",

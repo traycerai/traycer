@@ -50,6 +50,53 @@ interface AnchoredDraftState {
   ) => void;
   readonly clearDraft: (epicId: string, draftId: string) => void;
 }
+const openDraftDiscards = new Map<
+  string,
+  { readonly draftId: string; readonly discard: () => boolean }
+>();
+
+/**
+ * Lets the box showing a task's open draft answer for it when another view
+ * starts a comment, with the box's own discard. Returns the release.
+ */
+export function registerOpenDraftDiscard(
+  epicId: string,
+  draftId: string,
+  discard: () => boolean,
+): () => void {
+  const entry = { draftId, discard };
+  openDraftDiscards.set(epicId, entry);
+  return () => {
+    if (openDraftDiscards.get(epicId) === entry)
+      openDraftDiscards.delete(epicId);
+  };
+}
+
+/**
+ * Whether an opener may go ahead in the task, which holds one draft.
+ *
+ * A draft that is posting holds the task until it settles, whoever asks: its
+ * box's own discard refuses only while a request is in flight, not between the
+ * steps of a submission. An opener that keeps the open draft (the same element
+ * picked again) goes ahead. Any other goes first through the open draft's own
+ * discard, which asks before dropping typed text. Neither a pick inside a page
+ * nor a draft out of sight (a card lowered under it, a pane in the background)
+ * meets the box's question on a press outside it, so without this the draft
+ * would be replaced without a word. A draft no box shows holds no text.
+ */
+export function yieldOpenDraft(
+  epicId: string,
+  keepsOpenDraft: boolean,
+): boolean {
+  const current = useAnchoredDraftStore.getState().byEpicId[epicId];
+  if (current === undefined) return true;
+  if (current.submitting === true) return false;
+  if (keepsOpenDraft) return true;
+  const entry = openDraftDiscards.get(epicId);
+  if (entry?.draftId !== current.draftId) return true;
+  return entry.discard();
+}
+
 export const useAnchoredDraftStore = create<AnchoredDraftState>((set) => ({
   byEpicId: {},
   setDraft: (epicId, draft) =>

@@ -542,7 +542,6 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
       onOpenTurn={mocks.openTurn}
-      onOpenSession={vi.fn()}
       landOn={null}
       openMemory={null}
       onOpenMemory={vi.fn()}

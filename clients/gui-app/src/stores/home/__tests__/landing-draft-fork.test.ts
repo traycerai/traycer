@@ -157,4 +157,20 @@ describe("landing draft store: forkDraft", () => {
         .drafts.some((d) => d.id === "fresh-target"),
     ).toBe(false);
   });
+
+  it("carries the host the source was opened for onto the fork", () => {
+    const sourceId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) =>
+        draft.id === sourceId ? { ...draft, namedHostId: "host-a" } : draft,
+      ),
+    }));
+    expect(useLandingDraftStore.getState().forkDraft(sourceId, "fork")).toBe(
+      true,
+    );
+    expect(
+      useLandingDraftStore.getState().drafts.find((d) => d.id === "fork")
+        ?.namedHostId,
+    ).toBe("host-a");
+  });
 });

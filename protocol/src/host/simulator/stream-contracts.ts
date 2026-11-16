@@ -6,7 +6,7 @@ import {
   simulatorHubStateSchema,
   simulatorOpeningSchema,
   simulatorPackStateSchema,
-  simulatorPlatformAvailabilitySchema,
+  simulatorPlatformAvailabilitySchemaV10,
   simulatorPlatformSchema,
   simulatorSessionSchema,
   simulatorSessionSchemaV10,
@@ -61,7 +61,7 @@ export type SimulatorSessionsOpenRequest = z.infer<
  */
 export const simulatorStatePatchSchemaV10 = lazySchema(() =>
   z.object({
-    platforms: z.array(simulatorPlatformAvailabilitySchema).optional(),
+    platforms: z.array(simulatorPlatformAvailabilitySchemaV10).optional(),
     packState: simulatorPackStateSchema.optional(),
     hubState: simulatorHubStateSchema.optional(),
     simulators: z.array(simulatorSummarySchemaV10).optional(),

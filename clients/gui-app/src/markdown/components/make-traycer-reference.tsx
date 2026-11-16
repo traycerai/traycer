@@ -10,10 +10,10 @@ interface TraycerReferenceProps {
 }
 
 /**
- * Builds a legacy `<traycer-*>` reference component. The four reference tags
- * (`spec` / `ticket` / `chat` / `epic`) are byte-identical apart from the icon,
- * the embedded node-id attribute, and the `refKind`, so they share one
- * config-driven body.
+ * Builds a legacy `<traycer-*>` reference component. Three reference tags
+ * (`spec` / `ticket` / `epic`) are byte-identical apart from the icon, the
+ * embedded node-id attribute, and the `refKind`, so they share one
+ * config-driven body. `<traycer-chat>` has its own, which draws a title.
  *
  * - `idAttr` is the `data-*-id` attribute holding the embedded node id, or
  *   `null` for `<traycer-epic>`, which references no node.
@@ -27,7 +27,7 @@ interface TraycerReferenceProps {
 export function makeTraycerReference(config: {
   readonly icon: ReactNode;
   readonly idAttr: string | null;
-  readonly refKind: "spec" | "ticket" | "chat" | "epic";
+  readonly refKind: "spec" | "ticket" | "epic";
   readonly requiresNode: boolean;
 }) {
   return function TraycerReference(props: TraycerReferenceProps) {

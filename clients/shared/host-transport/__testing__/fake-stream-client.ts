@@ -32,6 +32,12 @@ export class FakeStreamSession implements IStreamSession {
    * capability sets the line it wants before it opens the session.
    */
   negotiatedSchemaVersion: SchemaVersion | null = null;
+  /**
+   * {@link IStreamSession.hasSentOpenRequest}. Set by `open`, which a local
+   * transport reports right after it writes the subscribe frame; a suite
+   * modelling a request sent but never answered sets it itself.
+   */
+  openRequestSent = false;
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamStatus = "connecting";
@@ -67,11 +73,16 @@ export class FakeStreamSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return this.openRequestSent;
+  }
+
   close(): void {
     this.closed = true;
   }
 
   emitStatus(status: StreamStatus): void {
+    if (status === "open") this.openRequestSent = true;
     this.status = status;
     this.held = false;
     this.statusHandler?.(status, null, null, null);
@@ -82,6 +93,7 @@ export class FakeStreamSession implements IStreamSession {
     status: StreamStatus,
     continuity: StreamContinuity,
   ): void {
+    if (status === "open") this.openRequestSent = true;
     this.status = status;
     this.held = continuity === "held";
     this.statusHandler?.(status, null, null, continuity);
@@ -292,12 +304,26 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
   getMethodSupport(): StreamMethodSupport {
-    return "unknown";
+    return this.methodSupport;
   }
 
-  subscribeMethodSupport(): () => void {
-    return () => undefined;
+  private readonly methodSupportListeners = new Set<() => void>();
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
+  /** Changes {@link methodSupport} the way a handshake does: then tells every subscriber. */
+  setMethodSupport(next: StreamMethodSupport): void {
+    this.methodSupport = next;
+    for (const listener of [...this.methodSupportListeners]) listener();
   }
 
   subscribeAvailabilityRecovered(): () => void {

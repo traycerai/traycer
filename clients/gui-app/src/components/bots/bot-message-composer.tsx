@@ -9,9 +9,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { SendHorizontal } from "lucide-react";
+import { Paperclip, SendHorizontal } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
+  BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES,
   BOT_CONVERSATION_IMAGES_ONLY_TEXT,
   type BotConversationAttachment,
   type BotConversationSendDelivery,
@@ -52,6 +53,8 @@ import {
 } from "@/components/chat/composer/composer-prompt-editor";
 import type { PastedComposerImage } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
 import { ComposerDropOverlay } from "@/components/home/composer/composer-shell";
+import { useComposerAttachPicker } from "@/hooks/composer/use-composer-attach-picker";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import {
   appendBlocks,
@@ -108,6 +111,67 @@ function noop(): void {}
 /** An image pasted by hash has no bytes the box can send: only an inline one lands. */
 function NO_PASTED_IMAGE_BYTES(): boolean {
   return false;
+}
+
+/** The platform picker offers only the images a message can carry. */
+const BOX_PICKER_ACCEPT = BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES.join(",");
+
+/**
+ * The box's Attach, where it takes images: a picked image goes where a paste
+ * goes, and a picked file that is no image is refused. Off while the box
+ * cannot send and while a send is on its way.
+ */
+function BoxAttach(props: {
+  readonly shown: boolean;
+  readonly sendable: boolean;
+  readonly sendPending: boolean;
+  readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
+  readonly testId: string;
+}): ReactNode {
+  const picker = useComposerAttachPicker({
+    accept: BOX_PICKER_ACCEPT,
+    onAttachImages: props.onAttachImages,
+    onAttachFiles: props.onAttachFiles,
+  });
+  if (!props.shown) return null;
+  return (
+    <div className="mr-auto flex">
+      {picker.input}
+      <BoxAttachButton
+        testId={props.testId}
+        disabled={!props.sendable || props.sendPending}
+        onClick={picker.open}
+      />
+    </div>
+  );
+}
+
+function BoxAttachButton(props: {
+  readonly testId: string;
+  readonly disabled: boolean;
+  readonly onClick: (() => void) | undefined;
+}): ReactNode {
+  return (
+    <TooltipWrapper
+      label="Attach"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm-touch"
+        aria-label="Attach"
+        disabled={props.disabled}
+        data-testid={`${props.testId}-attach`}
+        onClick={props.onClick}
+      >
+        <Paperclip aria-hidden="true" />
+      </Button>
+    </TooltipWrapper>
+  );
 }
 
 const BOX_FULL = {
@@ -560,6 +624,14 @@ export function BotMessageComposer(props: {
           <div
             className={cn("flex items-center justify-end gap-2 px-2", box.send)}
           >
+            <BoxAttach
+              shown={takesImages}
+              sendable={sendable}
+              sendPending={send.isPending}
+              onAttachImages={paste.attachImageFiles}
+              onAttachFiles={paste.attachFiles}
+              testId={testId}
+            />
             <ComposerCallButton
               target={call.target}
               botTitle={botTitle}
@@ -641,6 +713,9 @@ export function BotMessageComposerUnavailable(props: {
           data-testid={`${testId}-input`}
         />
         <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
+          <div className="mr-auto flex">
+            <BoxAttachButton testId={testId} disabled onClick={undefined} />
+          </div>
           <Button
             type="button"
             size="icon-sm-touch"

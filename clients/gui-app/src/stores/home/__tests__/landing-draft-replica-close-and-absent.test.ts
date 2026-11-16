@@ -50,6 +50,7 @@ function baseDraft(
     confirmedHostBlobHashes: [],
     closed: false,
     returnedSandbox: null,
+    namedHostId: null,
     ...overrides,
   };
 }
