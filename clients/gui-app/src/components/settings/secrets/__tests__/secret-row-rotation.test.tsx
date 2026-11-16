@@ -44,6 +44,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsDestroyRequest,
@@ -335,6 +339,7 @@ function buildLocalRotationHost(
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
+  recordNegotiatedHostMethods(HOST_ID, ["environment.status"]);
   return mountRotationHost(overrides, { kind: "host" });
 }
 
@@ -354,6 +359,7 @@ function renderPage(host: RotationHost): QueryClient {
 }
 
 beforeEach(() => {
+  resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
   });
@@ -368,6 +374,7 @@ afterEach(() => {
   vi.useRealTimers();
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out" });
   openLinkMock.mockReset();
 });

@@ -10,6 +10,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamProviderKeys } from "@/components/settings/environment/team-provider-keys";
@@ -70,6 +74,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
@@ -290,6 +295,11 @@ describe("SecretsPage on a team", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
     });
+    const hostId = requireTeamHostClient().getActiveHostId();
+    if (hostId === null) {
+      throw new Error("the host Secrets page has no selected host");
+    }
+    recordNegotiatedHostMethods(hostId, ["environment.status"]);
     const harness = mountTeamPage({ kind: "host" }, {
       ...teamHandlers(),
       "environment.status": () =>

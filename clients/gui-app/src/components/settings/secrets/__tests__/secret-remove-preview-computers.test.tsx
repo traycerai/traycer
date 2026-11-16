@@ -54,6 +54,10 @@ import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-sc
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
@@ -157,6 +161,9 @@ function mountRow(
   pick: EnvironmentPick | null,
 ): void {
   useSettingsEnvironmentPickStore.setState({ pick });
+  if (pick?.kind === "local") {
+    recordNegotiatedHostMethods("host-secrets", ["environment.status"]);
+  }
   const harness = mountTeamPage(
     source === "host"
       ? { kind: "host" }
@@ -234,6 +241,7 @@ async function previewText(): Promise<string> {
 }
 
 beforeEach(() => {
+  resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
   });
@@ -253,6 +261,7 @@ afterEach(() => {
   vi.useRealTimers();
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   reads.scope = null;
   useAuthStore.setState({ status: "signed-out" });
 });
