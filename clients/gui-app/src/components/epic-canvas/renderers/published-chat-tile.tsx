@@ -63,6 +63,9 @@ import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-sto
 import { usePublishedChatLiveConversion } from "@/hooks/chats/use-published-chat-live-conversion";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { cloudChatBelongsToViewer } from "@/lib/chats/cloud-chat-view-ownership";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -239,6 +242,7 @@ interface PublishedChatOwner {
 function usePublishedChatOwner(
   node: PublishedChatTileRef,
   epicId: string,
+  cloudChat: CloudChatSummary | null,
 ): PublishedChatOwner {
   const reachability = useHostReachability(node.ownerHostId);
   const hostName = useChatTileHostLabel(reachability, node.ownerHostId);
@@ -252,12 +256,23 @@ function usePublishedChatOwner(
     reachability,
     sandboxState.kind === "none" || sandboxState.kind === "unreachable",
   );
-  const ownership = useChatOwnerCopyFacts(
+  const namespaceOwnership = useChatOwnerCopyFacts(
     node.ownerUserId,
     node.ownerHostId,
     node.chatId,
   );
-  const ownerName = useCollaboratorDisplayName(epicId, node.ownerUserId);
+  const viewerUserId = useAuthStore((state) => state.profile?.userId ?? null);
+  const ownership = {
+    ...namespaceOwnership,
+    ownedByViewer:
+      cloudChat === null
+        ? namespaceOwnership.ownedByViewer
+        : cloudChatBelongsToViewer(cloudChat, viewerUserId),
+  };
+  const ownerName = useCollaboratorDisplayName(
+    epicId,
+    cloudChat?.creatorUserId ?? node.ownerUserId,
+  );
   const sandbox = resolveChatSandbox(sandboxState, {
     ...ownership,
     reachable: reachability.status === "reachable",
@@ -359,11 +374,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // the two are different hosts and this tile exists because of that.
   const servingHostId = useTabHostId();
   const servingReachability = useHostReachability(servingHostId);
-  // The SAME reachability source the live dead-tile banner reads, so the two
-  // surfaces can never describe one host two ways. This tile is opened
-  // precisely because the owner is out of reach, and when that host returns it
-  // converts itself into the live tile (`usePublishedChatLiveConversion`).
-  const owner = usePublishedChatOwner(node, props.epicId);
   const identity = useMemo(
     () => ({
       taskId: node.taskId,
@@ -387,6 +397,17 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     enabled: true,
     recordHeadSha256: recordHead?.headSha256 ?? null,
   });
+  const resolvedCloudChat =
+    state.kind === "ready" || state.kind === "refused" ? state.read.chat : null;
+  const matchingCloudChat =
+    resolvedCloudChat !== null &&
+    resolvedCloudChat.identity.taskId === node.taskId &&
+    resolvedCloudChat.identity.ownerUserId === node.ownerUserId &&
+    resolvedCloudChat.identity.chatId === node.chatId &&
+    resolvedCloudChat.ownerHostId === node.ownerHostId
+      ? resolvedCloudChat
+      : null;
+  const owner = usePublishedChatOwner(node, props.epicId, matchingCloudChat);
   const publishedSource = useMemo(
     () => ({ identity, client }),
     [identity, client],
@@ -550,6 +571,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           owner={owner}
         >
           <ChatTileSessionView
+            cloudChat={matchingCloudChat ?? undefined}
             isLiveSession={false}
             preContent={null}
             handle={replicaHandle}
@@ -619,6 +641,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           owner={owner}
         >
           <ChatTileSessionView
+            cloudChat={matchingCloudChat ?? undefined}
             isLiveSession={false}
             preContent={null}
             handle={applied.handle}

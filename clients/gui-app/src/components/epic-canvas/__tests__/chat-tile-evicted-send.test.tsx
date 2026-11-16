@@ -49,6 +49,10 @@ import type {
   ChatRecordSummaryV12,
   ChatRecordSummaryV15,
 } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  CloudChatSummary,
+  ListCloudChatsResponse,
+} from "@traycer/protocol/host/epic/cloud-chat";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -74,6 +78,9 @@ import {
 } from "@/components/share-on-x/sent-messages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
+import { PoolArmClient } from "@/hooks/environment/__tests__/arm-pool-test-support";
+import { publishEnvironmentArmScope } from "@/hooks/environment/use-environment-arms";
+import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import {
   __getChatSessionRegistryForTests,
   __setChatStreamClientFactoryForTests,
@@ -129,6 +136,13 @@ const originSignInTestState = vi.hoisted(() => ({
   listeners: new Set<RequestContextListener>(),
 }));
 
+const cloudChatListTestState = vi.hoisted(
+  (): {
+    data: ListCloudChatsResponse | undefined;
+    requestCount: number;
+  } => ({ data: undefined, requestCount: 0 }),
+);
+
 const hostDirectoryTestState = vi.hoisted(() => ({
   teamSandboxForCurrentChat: false,
 }));
@@ -159,7 +173,12 @@ const hydrateBoundary = vi.hoisted(
 );
 
 const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
+  request: (method: string) => {
+    if (method === "epic.listCloudChats") {
+      cloudChatListTestState.requestCount += 1;
+    }
+    return new Promise(() => {});
+  },
   // A pool build reads the pool tier's client through the surface's.
   createRequesterForHostId: () => MOCK_HOST_CLIENT,
   getActiveHostId: () => HOST_ID,
@@ -361,6 +380,42 @@ const CHAT_ARTIFACT = {
   name: "Chat 1",
   hostId: HOST_ID,
 };
+
+function cloudChatSummary(input: {
+  readonly taskId: string;
+  readonly chatId: string;
+  readonly ownerUserId: string;
+  readonly ownerHostId: string;
+  readonly creatorUserId: string | null | undefined;
+}): CloudChatSummary {
+  const summary = {
+    identity: {
+      taskId: input.taskId,
+      chatId: input.chatId,
+      ownerUserId: input.ownerUserId,
+    },
+    ownerHostId: input.ownerHostId,
+    createdAt: 1,
+    visibility:
+      input.ownerUserId === SAVED_CREATOR_USER_ID
+        ? ("private" as const)
+        : ("task" as const),
+    title: CHAT_ARTIFACT.name,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer: input.ownerUserId === SAVED_CREATOR_USER_ID,
+  } satisfies Omit<CloudChatSummary, "creatorUserId">;
+  return input.creatorUserId === undefined
+    ? summary
+    : { ...summary, creatorUserId: input.creatorUserId };
+}
+
 interface ChatSourceFixture {
   readonly ownerUserId: string;
   readonly starterUserId: string | null;
@@ -430,6 +485,11 @@ type ChatAccessFixture =
 const ADMITTED_SAVED_CREATOR_ACCESS = {
   role: "owner",
   ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+  canAct: true,
+} as const satisfies ChatAccessFixture;
+const ADMITTED_PERSONAL_OWNER_ACCESS = {
+  role: "owner",
+  ownerUserId: SAVED_CREATOR_USER_ID,
   canAct: true,
 } as const satisfies ChatAccessFixture;
 const POOL_VIEWER_ACCESS = {
@@ -556,6 +616,19 @@ function sendFramesOf(stream: ChatStream): SendFrame[] {
   return stream.sent.filter(
     (frame): frame is SendFrame => frame.kind === "send",
   );
+}
+
+function publishTeamChatArm(): PoolArmClient {
+  const client = new PoolArmClient();
+  publishEnvironmentArmScope({
+    poolHostId: poolEntry.hostId,
+    client,
+    viewerId: SAVED_CREATOR_USER_ID,
+    environmentIds: [TEAM_ENVIRONMENT_OWNER_ID],
+    environmentIdByTeamId: new Map([["team-1", TEAM_ENVIRONMENT_OWNER_ID]]),
+    supported: new Set(["environment.chats.subscribe"]),
+  });
+  return client;
 }
 
 /** A stream opens and its peer's snapshot arrives. */
@@ -776,12 +849,23 @@ const AT_REST: ChatServing = {
 interface Mounted {
   readonly witnessClient: FakeStreamClient;
   readonly witness: PoolChatServingWitness;
+  readonly queryClient: QueryClient;
 }
 
 function mountEvictedTile(source: ChatSourceFixture): Mounted {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  if (cloudChatListTestState.data !== undefined) {
+    queryClient.setQueryData(
+      cloudChatListQueryKey({
+        hostId: HOST_ID,
+        viewerUserId: SAVED_CREATOR_USER_ID,
+        taskId: EPIC_ID,
+      }),
+      cloudChatListTestState.data,
+    );
+  }
   hydrateBoundary.client = buildHydrateClient(queryClient);
   const witnessClient = new FakeStreamClient(true);
   const witness = new PoolChatServingWitness();
@@ -822,7 +906,7 @@ function mountEvictedTile(source: ChatSourceFixture): Mounted {
       </QueryClientProvider>
     </TestRouterProvider>,
   );
-  return { witnessClient, witness };
+  return { witnessClient, witness, queryClient };
 }
 
 /** The tile on the pool: the witness read the chat at rest and the pool's stream is up. */
@@ -861,6 +945,39 @@ function putInComposer(text: string): void {
       .getState()
       .replaceDraft(CHAT_ARTIFACT.id, draftOf(text), null);
   });
+}
+
+function expectReadOnlyWithoutParking(): void {
+  expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  putInComposer(FIRST_TEXT);
+  expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  expect(
+    useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+  ).toEqual(draftOf(FIRST_TEXT));
+  expect(pendingRows()).toEqual([]);
+  expect(streams.flatMap(sendFramesOf)).toEqual([]);
+  expect(hydrates).toEqual([]);
+}
+
+async function parkAndSendThroughOwnerHost(
+  access: Extract<ChatAccessFixture, { readonly role: "owner" }>,
+  ownerUserId: string,
+): Promise<void> {
+  putInComposer(FIRST_TEXT);
+  clickSend();
+  await waitFor(() => {
+    expect(pendingRows()).toHaveLength(1);
+    expect(hydrates).toHaveLength(1);
+  });
+  expect(sendFramesOf(streams[0])).toEqual([]);
+
+  await answerHydrate(0);
+  await waitFor(() => expect(streams).toHaveLength(2));
+  openStream(streams[1], access, undefined, ownerUserId);
+  await waitFor(() => expect(sendFramesOf(streams[1])).toHaveLength(1));
+  expect(textInContent(sendFramesOf(streams[1])[0].content)).toBe(FIRST_TEXT);
 }
 
 function stageRebind(): void {
@@ -942,6 +1059,7 @@ beforeAll(() => {
 beforeEach(() => {
   installLegendListViewportMetrics();
   installLegendListTestClock();
+  publishEnvironmentArmScope(null);
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -956,6 +1074,8 @@ beforeEach(() => {
   originSignInTestState.userId = SAVED_CREATOR_USER_ID;
   originSignInTestState.generation = 0;
   originSignInTestState.listeners.clear();
+  cloudChatListTestState.data = undefined;
+  cloudChatListTestState.requestCount = 0;
   hostDirectoryTestState.teamSandboxForCurrentChat = false;
   useComposerDraftStore.setState({ drafts: {} });
   useComposerRunSettingsStore.getState().resetForTests();
@@ -979,6 +1099,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const unsubscribe of sentMessageUnsubscribers.splice(0)) unsubscribe();
   cleanup();
+  publishEnvironmentArmScope(null);
   toast.dismiss();
   __setChatStreamClientFactoryForTests(null);
   __getChatSessionRegistryForTests().disposeAll();
@@ -990,6 +1111,191 @@ afterEach(() => {
 });
 
 describe("a message sent to a chat the pool serves because its host dropped the records", () => {
+  it("parks a fresh Team chat when its exact cloud row names the viewer as creator", async () => {
+    cloudChatListTestState.data = {
+      chats: [
+        cloudChatSummary({
+          taskId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+          ownerHostId: HOST_ID,
+          creatorUserId: SAVED_CREATOR_USER_ID,
+        }),
+      ],
+    };
+    const source: ChatSourceFixture = {
+      ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+      starterUserId: null,
+    };
+    const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
+
+    expect(
+      mounted.queryClient.getQueryData(
+        cloudChatListQueryKey({
+          hostId: HOST_ID,
+          viewerUserId: SAVED_CREATOR_USER_ID,
+          taskId: EPIC_ID,
+        }),
+      ),
+    ).toEqual(cloudChatListTestState.data);
+    await parkAndSendThroughOwnerHost(
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
+  });
+
+  it("parks from the Team environment arm while the viewer cloud-list request is pending", async () => {
+    const poolArm = publishTeamChatArm();
+    const source: ChatSourceFixture = {
+      ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+      starterUserId: null,
+    };
+    const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
+    const listKey = cloudChatListQueryKey({
+      hostId: HOST_ID,
+      viewerUserId: SAVED_CREATOR_USER_ID,
+      taskId: EPIC_ID,
+    });
+
+    await waitFor(() => {
+      expect(cloudChatListTestState.requestCount).toBeGreaterThan(0);
+      expect(poolArm.armSessions).toHaveLength(1);
+    });
+    expect(mounted.queryClient.getQueryState(listKey)?.status).toBe("pending");
+    act(() => {
+      poolArm.armSessions[0].emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          generation: 1,
+          chats: [
+            cloudChatSummary({
+              taskId: EPIC_ID,
+              chatId: CHAT_ARTIFACT.id,
+              ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+              ownerHostId: HOST_ID,
+              creatorUserId: SAVED_CREATOR_USER_ID,
+            }),
+          ],
+        },
+        null,
+      );
+    });
+
+    await parkAndSendThroughOwnerHost(
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
+  });
+
+  it.each([
+    { cause: "an explicit null creator", creatorUserId: null },
+    { cause: "an omitted creator field", creatorUserId: undefined },
+  ] as const)(
+    "does not use a held Team starter when the matching cloud row has $cause",
+    async ({ creatorUserId }) => {
+      cloudChatListTestState.data = {
+        chats: [
+          cloudChatSummary({
+            taskId: EPIC_ID,
+            chatId: CHAT_ARTIFACT.id,
+            ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+            ownerHostId: HOST_ID,
+            creatorUserId,
+          }),
+        ],
+      };
+      await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+
+      expectReadOnlyWithoutParking();
+    },
+  );
+
+  it.each([
+    {
+      cause: "task",
+      taskId: "another-task",
+      chatId: CHAT_ARTIFACT.id,
+      ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+      ownerHostId: HOST_ID,
+    },
+    {
+      cause: "chat",
+      taskId: EPIC_ID,
+      chatId: "another-chat",
+      ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+      ownerHostId: HOST_ID,
+    },
+    {
+      cause: "namespace owner",
+      taskId: EPIC_ID,
+      chatId: CHAT_ARTIFACT.id,
+      ownerUserId: "another-environment",
+      ownerHostId: HOST_ID,
+    },
+    {
+      cause: "owner host",
+      taskId: EPIC_ID,
+      chatId: CHAT_ARTIFACT.id,
+      ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+      ownerHostId: "another-host",
+    },
+  ] as const)(
+    "does not use a cloud creator row with a mismatched $cause",
+    async ({ taskId, chatId, ownerUserId, ownerHostId }) => {
+      cloudChatListTestState.data = {
+        chats: [
+          cloudChatSummary({
+            taskId,
+            chatId,
+            ownerUserId,
+            ownerHostId,
+            creatorUserId: SAVED_CREATOR_USER_ID,
+          }),
+        ],
+      };
+      const source: ChatSourceFixture = {
+        ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+        starterUserId: null,
+      };
+      await mountOnThePool(POOL_VIEWER_ACCESS, source);
+
+      expectReadOnlyWithoutParking();
+    },
+  );
+
+  it("parks a personal-owner chat with its matching private cloud row", async () => {
+    cloudChatListTestState.data = {
+      chats: [
+        cloudChatSummary({
+          taskId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          ownerUserId: SAVED_CREATOR_USER_ID,
+          ownerHostId: HOST_ID,
+          creatorUserId: null,
+        }),
+      ],
+    };
+    const source: ChatSourceFixture = {
+      ownerUserId: SAVED_CREATOR_USER_ID,
+      starterUserId: null,
+    };
+    const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
+    expect(
+      mounted.queryClient.getQueryData(
+        cloudChatListQueryKey({
+          hostId: HOST_ID,
+          viewerUserId: SAVED_CREATOR_USER_ID,
+          taskId: EPIC_ID,
+        }),
+      ),
+    ).toEqual(cloudChatListTestState.data);
+    await parkAndSendThroughOwnerHost(
+      ADMITTED_PERSONAL_OWNER_ACCESS,
+      SAVED_CREATOR_USER_ID,
+    );
+  });
+
   it("keeps a noncreator pool viewer read-only without staging a send", async () => {
     useAuthStore.setState({
       status: "signed-in",
