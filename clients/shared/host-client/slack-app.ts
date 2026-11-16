@@ -13,6 +13,7 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 
@@ -128,7 +129,7 @@ type PostResult<T> =
 /**
  * The platform `fetch` as the calls with no secret in their body send: the
  * bearer rides along, so a redirect is answered here, as a failure, and never
- * followed with it; the answer is read whole.
+ * followed with it; a non-redirect answer is read whole.
  */
 const manualRedirectFetchTransport: EnvironmentTransport = async (request) => {
   const response = await fetch(request.url, {
@@ -143,7 +144,10 @@ const manualRedirectFetchTransport: EnvironmentTransport = async (request) => {
   if (request.signal.aborted) {
     throw new Error("The request was given up before it answered.");
   }
-  return { status: response.status, text: await response.text() };
+  return {
+    status: response.status,
+    text: isRedirectAnswer(response.status) ? null : await response.text(),
+  };
 };
 
 /**
@@ -186,7 +190,7 @@ async function post<T>(
       abort.signal,
     );
     status = answer.status;
-    parsedBody = parseJsonOrNull(answer.text);
+    parsedBody = isRedirectAnswer(status) ? null : parseJsonOrNull(answer.text);
   } catch (error: unknown) {
     return {
       kind: "network-error",
