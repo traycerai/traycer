@@ -1,6 +1,7 @@
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import { z } from "zod";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { PATH_ID_PATTERN } from "./path-id";
 
 /**
@@ -147,13 +148,16 @@ async function post(
             "Content-Type": "application/json",
           },
           body,
-          redirect: "error",
+          redirect: "manual",
           signal: abort.signal,
         }),
         abort.signal,
       );
     } catch {
       return { kind: "no-answer" };
+    }
+    if (isRedirectAnswer(response.status)) {
+      return { kind: "response", status: response.status, body: null };
     }
     // The status is the answer once it has arrived: a body that cannot be
     // read or parsed (a proxy's page, a dropped stream, an empty body) reads

@@ -148,7 +148,7 @@ export async function readReviewHolds(
   );
   const holds: ReviewHeldEntry[] = [];
   for (const entry of review?.needsYou ?? []) {
-    // A sign-in that did not move is the dashboard's to show.
+    // Authn's `needs_link` entries are not shown on any surface.
     if (entry.type !== "held") continue;
     const kind = environmentItemKindSchema.safeParse(entry.kind);
     if (!kind.success) continue;

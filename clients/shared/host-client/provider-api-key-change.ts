@@ -10,6 +10,7 @@ import type {
 import type { HostRequester } from "./host-client";
 import { HostRpcError } from "../host-transport/host-messenger";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { PATH_ID_PATTERN } from "./path-id";
 type ProviderApiKeyChangeHost = Pick<
   HostRequester<HostRpcRegistry>,
@@ -233,11 +234,14 @@ export async function changeProviderKeyRecordViaHttp(
           change.action === "set"
             ? JSON.stringify({ key: change.apiKey, onlyIfAbsent: false })
             : null,
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status)) {
+      return { kind: "refused", code: "RPC_ERROR" };
+    }
     if (response.status === 401)
       return { kind: "refused", code: "UNAUTHORIZED" };
     if (response.status === 403) return { kind: "refused", code: "FORBIDDEN" };

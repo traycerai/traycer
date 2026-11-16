@@ -170,7 +170,7 @@ describe("provider sign-in request recording HTTP contract", () => {
         "Content-Type": "application/json",
       }),
     );
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     expect(JSON.parse(String(init?.body))).toEqual({
       operationId: SIGN_IN_REQUEST_FIXTURE.operationId,
       kind: "provider_sign_in",

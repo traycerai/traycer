@@ -5,6 +5,7 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { PATH_ID_PATTERN } from "./path-id";
 
 export type ProfileRecordFailure =
@@ -271,12 +272,14 @@ async function callRecord(
           "Content-Type": "application/json",
         },
         body: body === null ? null : JSON.stringify(body),
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
-    if (response.status === 401) return { status: response.status, body: null };
+    if (isRedirectAnswer(response.status) || response.status === 401) {
+      return { status: response.status, body: null };
+    }
     const text = await untilAborted(response.text(), abort.signal);
     let parsed: unknown = null;
     try {

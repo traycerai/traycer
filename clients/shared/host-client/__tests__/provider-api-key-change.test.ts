@@ -274,7 +274,7 @@ describe("changeProviderApiKey shared flow", () => {
         firstInit?.method === "PUT" && secondInit?.method === "DELETE",
       ).toBe(true);
       expect(
-        firstInit?.redirect === "error" && secondInit?.redirect === "error",
+        firstInit?.redirect === "manual" && secondInit?.redirect === "manual",
       ).toBe(true);
       expect(
         firstBody.success &&

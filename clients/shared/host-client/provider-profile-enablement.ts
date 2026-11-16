@@ -127,7 +127,7 @@ async function writeProfileRecordItem(input: {
       fetch(itemsUrl, {
         method: "GET",
         headers,
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
@@ -159,7 +159,7 @@ async function writeProfileRecordItem(input: {
           revision: item.revision,
           upload: null,
         }),
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
