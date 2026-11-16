@@ -42,12 +42,17 @@ type StatusAnswer = ResponseOfMethod<HostRpcRegistry, typeof METHOD>;
  * Whether a computer's cached status asks for the status poll: its move is
  * running, or its move is done and its Local row has not turned over (the
  * host records `done` before it flips the planes the row is decided from).
+ * The second arm applies only to a personal computer: a computer given to a
+ * team answers `done` with local planes as its ordinary state, and one that
+ * reports no principal yet cannot be told apart from it.
  */
 function movePollWanted(status: StatusAnswer | undefined): boolean {
   if (status === undefined) return false;
   return (
     environmentStatusMoveRunning(status) ||
-    (status.move?.state === "done" && localRowCohort(status).kind === "local")
+    (status.move?.state === "done" &&
+      status.principal?.kind === "personal" &&
+      localRowCohort(status).kind === "local")
   );
 }
 

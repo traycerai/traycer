@@ -291,6 +291,24 @@ describe("status polling while a computer's move runs", () => {
     expect(rig.reads()).toBe(3);
   });
 
+  it("abnormal path, a given computer with no principal yet: a done move with local planes is read once and never polled", async () => {
+    // A computer given to a team answers `done` with local planes as its
+    // ordinary state, and before its first binding read it reports no
+    // principal, so it is not told apart from a personal one by the cohort.
+    const rig = mountStatuses([MOVED_HOST], () => ({
+      ...answer("local", "done"),
+      principal: null,
+    }));
+    await advance(0);
+    expect(rig.reads()).toBe(1);
+    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+
+    await advance(5_000);
+    await deliverSettledRead();
+    expect(rig.reads()).toBe(1);
+    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+  });
+
   it("no move: reads computers at rest once each and never polls them", async () => {
     // The first host asked answers Local, the second Personal; the row
     // assertions fail loudly if the order ever differs.
