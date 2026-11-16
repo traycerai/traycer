@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMoveOutcomeAnswer } from "@traycer/protocol/host/environment/move-contracts";
@@ -8,7 +8,10 @@ import {
   TEAM_TRANSFER_DISCLOSURE_VERSION,
 } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { needsUpdateSubtitle } from "@/components/settings/environment/environment-picker-model";
-import { giveNotFinishedLine } from "@/components/settings/panels/team-give-copy";
+import {
+  giveNotFinishedLine,
+  TEAM_TRANSFER_NOT_CONFIRMED,
+} from "@/components/settings/panels/team-give-copy";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -24,6 +27,8 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { authQueryKeys } from "@/lib/query-keys";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 /**
  * Giving a computer the person owns to one of their teams, from this app
@@ -34,7 +39,9 @@ import { authQueryKeys } from "@/lib/query-keys";
  * nothing and has no per-row choice, so it stages no choices. Until the
  * computer answers `done`, the dialog reads the attempt's outcome from
  * `environment.status@1.3`'s `move`, on that read's own poll: the give adds
- * no timer of its own.
+ * no timer of its own. A done attempt is reported as given only after one
+ * fresh authn read confirms that this computer belongs to the chosen team,
+ * on the sign-in that confirmed the give.
  *
  * A computer whose disclosure is another version than this app's shows the
  * needs-an-update line and no confirm. One that answers `needs_person`, or no
@@ -78,20 +85,84 @@ export function TeamGiveDialog(props: {
   const start = useEnvironmentMoveStartMutation(props.client, null);
   const [attempt, setAttempt] = useState<GiveAttempt | null>(null);
   const [notFinished, setNotFinished] = useState(false);
-  const { given, ended, reread } = useGiveAttempt(props.client, attempt);
+  const originAttempt =
+    attempt !== null &&
+    attempt.press.hostId === props.hostId &&
+    attempt.press.team.environmentId === team.environmentId &&
+    attempt.press.operation.onOriginSignIn()
+      ? attempt
+      : null;
+  const { given, ended, reread } = useGiveAttempt(
+    originAttempt?.press.client ?? props.client,
+    originAttempt,
+  );
+  const ownership = useQuery<GiveOwnership>({
+    queryKey: authQueryKeys.hostOwnershipAfterMove(
+      attempt?.press.runtime.auth ?? null,
+      attempt?.press.userId ?? null,
+      attempt?.press.hostId ?? null,
+      attempt?.attemptId ?? null,
+    ),
+    queryFn: async () => {
+      if (attempt === null) return "sign_in_changed";
+      const { press } = attempt;
+      if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+      const era = press.runtime.auth.currentAuthEra();
+      if (era.identity !== press.userId) return "sign_in_changed";
+      try {
+        const result = await press.runtime.auth.readHostOwnership(
+          press.hostId,
+          era,
+        );
+        if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+        return result.kind === "ok" &&
+          result.host.hostId === press.hostId &&
+          result.host.owner.kind === "team" &&
+          result.host.owner.id === press.team.ownerId
+          ? "confirmed"
+          : "not_confirmed";
+      } catch {
+        return press.operation.onOriginSignIn()
+          ? "not_confirmed"
+          : "sign_in_changed";
+      }
+    },
+    // One read for this attempt, never an earlier Overview read or a poll.
+    enabled: (query) =>
+      given &&
+      attempt !== null &&
+      attempt.press.operation.onOriginSignIn() &&
+      query.state.data === undefined,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
   const givenOnce = useRef(false);
-  const { onGiven } = props;
   useEffect(() => {
-    if (!given || givenOnce.current) return;
+    if (
+      !given ||
+      ownership.data !== "confirmed" ||
+      givenOnce.current ||
+      attempt === null ||
+      originAttempt === null ||
+      !attempt.press.operation.onOriginSignIn()
+    )
+      return;
     givenOnce.current = true;
     void queryClient.invalidateQueries({
       queryKey: authQueryKeys.hostOwnershipAll(),
     });
-    void runtime?.directory.refresh();
-    onGiven(team);
-  }, [given, onGiven, queryClient, runtime, team]);
+    void attempt.press.runtime.directory.refresh();
+    attempt.press.onGiven(attempt.press.team);
+  }, [attempt, given, originAttempt, ownership.data, queryClient]);
 
-  const settle = (answer: EnvironmentMoveOutcomeAnswer): void => {
+  const settle = (
+    answer: EnvironmentMoveOutcomeAnswer,
+    press: GivePress,
+  ): void => {
     if (answer.state === "needs_person" || answer.state === "not_found") {
       setNotFinished(true);
       return;
@@ -99,10 +170,23 @@ export function TeamGiveDialog(props: {
     // `done` reads the same through the status as `running`, so one path
     // ends the give. The re-read cancels one already in flight, so every
     // answer after `startedAt` was asked after the start.
-    setAttempt({ attemptId: answer.attemptId, startedAt: Date.now() });
+    setAttempt({ attemptId: answer.attemptId, startedAt: Date.now(), press });
     reread();
   };
   const confirm = (planHash: string): void => {
+    if (runtime === null) return;
+    const userId = runtime.auth.currentAuthEra().identity;
+    const operation = runtime.auth.environmentCloud();
+    if (userId === null || !operation.onOriginSignIn()) return;
+    const press: GivePress = {
+      runtime,
+      operation,
+      userId,
+      client: props.client,
+      hostId: props.hostId,
+      team,
+      onGiven: props.onGiven,
+    };
     setAttempt(null);
     setNotFinished(false);
     start.mutate(
@@ -115,8 +199,12 @@ export function TeamGiveDialog(props: {
       },
       {
         onSuccess: (result) => {
-          if (result.kind === "sign_in_changed") return;
-          if (result.kind === "started") settle(result.outcome);
+          if (
+            result.kind === "sign_in_changed" ||
+            !press.operation.onOriginSignIn()
+          )
+            return;
+          if (result.kind === "started") settle(result.outcome, press);
           else {
             setNotFinished(true);
             void plan.refetch().catch(ignoreError);
@@ -126,7 +214,10 @@ export function TeamGiveDialog(props: {
     );
   };
 
-  const giving = start.isPending || (attempt !== null && !given && !ended);
+  const giving =
+    start.isPending ||
+    (originAttempt !== null && !given && !ended) ||
+    (originAttempt !== null && ownership.isFetching);
   const versionDiffers =
     plan.data !== undefined &&
     plan.data.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
@@ -163,7 +254,13 @@ export function TeamGiveDialog(props: {
           planError={plan.isError ? plan.error.message : null}
           onRetryPlan={() => void plan.refetch().catch(ignoreError)}
           notFinished={notFinished || ended}
-          startError={start.isError ? start.error.message : null}
+          startError={
+            originAttempt !== null && ownership.data === "not_confirmed"
+              ? TEAM_TRANSFER_NOT_CONFIRMED
+              : start.isError
+                ? start.error.message
+                : null
+          }
         />
         <div className="flex flex-wrap justify-end gap-2">
           <Button
@@ -198,10 +295,23 @@ export function TeamGiveDialog(props: {
   );
 }
 
+interface GivePress {
+  readonly runtime: HostRuntimeBinding<HostRpcRegistry>;
+  readonly operation: EnvironmentCloud;
+  readonly userId: string;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly team: EnvironmentDescriptorV11;
+  readonly onGiven: (team: EnvironmentDescriptorV11) => void;
+}
+
 interface GiveAttempt {
   readonly attemptId: string;
   readonly startedAt: number;
+  readonly press: GivePress;
 }
+
+type GiveOwnership = "confirmed" | "not_confirmed" | "sign_in_changed";
 
 /**
  * Where the started give stands, from `environment.status`'s `move` on that
