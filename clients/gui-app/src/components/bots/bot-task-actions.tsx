@@ -47,6 +47,7 @@ function TaskActionMenu(props: {
   const { botId, hostId, task, nameOf } = props;
   const ended = task.state === "ended" && task.endedReason === "by-bot";
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const client = useTabHostClient();
   const canRun = useHostMethodSupport(hostId, "bot.task.runNow") === true;
@@ -55,31 +56,26 @@ function TaskActionMenu(props: {
   const runNow = useBotTaskRunNowMutation(client);
   const setPaused = useBotTaskSetPausedMutation(client);
   const stop = useBotTaskStopMutation(client);
+  if (ended && confirmOpen && !stop.isPending) setConfirmOpen(false);
   if (!ended && !canRun && !canPause && !canStop) return null;
   const pending = runNow.isPending || setPaused.isPending;
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(open) => setMenuOpen(pending ? false : open)}
+      >
         <DropdownMenuTrigger asChild>
           <Button
             ref={triggerRef}
-            disabled={pending}
+            aria-disabled={pending}
+            aria-busy={pending}
             type="button"
             variant="ghost"
             size="icon-sm"
             aria-label="Reporting actions"
           >
-            {pending ? (
-              <span aria-hidden="true">
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              </span>
-            ) : (
-              <EllipsisVertical aria-hidden="true" />
-            )}
+            <ReportingTriggerIndicator pending={pending} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -184,5 +180,21 @@ function ReportingMetadata(props: {
         </p>
       )}
     </>
+  );
+}
+
+function ReportingTriggerIndicator(props: {
+  readonly pending: boolean;
+}): ReactNode {
+  return props.pending ? (
+    <span aria-hidden="true">
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </span>
+  ) : (
+    <EllipsisVertical aria-hidden="true" />
   );
 }

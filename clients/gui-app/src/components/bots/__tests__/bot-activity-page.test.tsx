@@ -2982,13 +2982,65 @@ describe("<BotActivityPage /> a held check-in or pause", () => {
         }),
       ).toBe(trigger);
       expect(showsSpinner(trigger)).toBe(true);
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
       expect(mocks.actions.map((action) => action.method)).toEqual([method]);
 
       act(() => mocks[key].settle?.());
 
       expect(showsSpinner(trigger)).toBe(false);
+      expect(trigger.getAttribute("aria-disabled")).not.toBe("true");
       expect(mocks.actions).toHaveLength(1);
     },
+  );
+
+  it.each([
+    ["Check in now", "bot.task.runNow", "runNow"],
+    ["Pause reports", "bot.task.setPaused", "setPaused"],
+  ] as const)(
+    "chosen with the keyboard, %s keeps focus on the same busy, aria-disabled trigger, ignores another activation, and still holds focus after the answer",
+    async (item, method, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks[key].hold = true;
+      mount([periodic("t-every", {})], { boundHere: true });
+      const trigger = within(row("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      });
+      trigger.focus();
+      await user.keyboard("{Enter}");
+      const target = screen.getByRole("menuitem", { name: item });
+      for (
+        let step = 0;
+        step < 6 && document.activeElement !== target;
+        step += 1
+      )
+        await user.keyboard("{ArrowDown}");
+      if (document.activeElement !== target)
+        throw new Error(`arrow keys never reached ${item}`);
+
+      const returned = focusReturns(trigger);
+      await user.keyboard("{Enter}");
+      await returned;
+
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.getAttribute("aria-label")).toBe("Reporting actions");
+      expect(trigger.getAttribute("aria-busy")).toBe("true");
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+      expect(trigger.hasAttribute("disabled")).toBe(false);
+      expect(mocks.actions.map((action) => action.method)).toEqual([method]);
+
+      await user.keyboard("{Enter}");
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(mocks.actions).toHaveLength(1);
+
+      act(() => mocks[key].settle?.());
+
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(mocks.actions).toHaveLength(1);
+    },
+    5_000,
   );
 });
 
@@ -3054,6 +3106,68 @@ describe("<BotActivityPage /> a task whose reporting ends while its confirmation
     },
     5_000,
   );
+});
+
+describe("<BotActivityPage /> a task the bot ends while its confirmation is open", () => {
+  const tracking = (): BotTaskEntry => periodic("t-every", {});
+  const endedByBot = (): BotTaskEntry =>
+    task("t-every", {
+      cadence: { kind: "none" },
+      state: "ended",
+      endedReason: "by-bot",
+      inputNeeded: [],
+    });
+  const harness = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode => (
+    <Harness
+      threads={[]}
+      tasks={tasks}
+      boundHere
+      notificationSubscriptions={null}
+    />
+  );
+
+  it("closes the confirmation, returns focus to the same Reporting actions trigger and sends no stop; a later tracking snapshot does not bring it back", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    const view = render(harness([tracking()]));
+    const trigger = await openEndReportingByKeyboard(user);
+
+    const returned = focusReturns(trigger);
+    view.rerender(harness([endedByBot()]));
+    await returned;
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(
+      within(endedRowFor("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      }),
+    ).toBe(trigger);
+    expect(mocks.actions).toEqual([]);
+
+    view.rerender(harness([tracking()]));
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(mocks.actions).toEqual([]);
+  }, 5_000);
+
+  it("opens a fresh confirmation after the task tracks again, and Cancel on it still sends nothing", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    const view = render(harness([tracking()]));
+    const first = await openEndReportingByKeyboard(user);
+    const returned = focusReturns(first);
+    view.rerender(harness([endedByBot()]));
+    await returned;
+    view.rerender(harness([tracking()]));
+
+    await openEndReportingByKeyboard(user);
+    expect(screen.getAllByText("End reporting?")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(mocks.actions).toEqual([]);
+  }, 5_000);
 });
 
 describe("<BotActivityPage /> ending reporting from the keyboard", () => {
