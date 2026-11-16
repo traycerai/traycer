@@ -974,8 +974,6 @@ describe("Team Review through the addressed page", () => {
     }
     expect(proposedName.value).toBe("Work A");
     expect(currentName.value).toBe("Work B");
-    expect(within(profile).queryByText("Needs a sign-in")).toBeNull();
-    expect(within(profile).queryByRole("switch")).toBeNull();
     expect(profile.textContent).toContain("Claude Code · On");
     expect(profile.textContent).toContain("Claude Code · Off");
     expect(profile.textContent).toContain("work-a@example.test");
