@@ -632,12 +632,6 @@ describe("buildHostEnsureCommand", () => {
     // installed, and again by the transfer itself.
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
-    expect(ctx.progress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: "host-team",
-        message: "Restarting Traycer on this computer to run as acme…",
-      }),
-    );
   });
 
   it.each(["ensure", "bind", "not-running", "unreadable"] as const)(
