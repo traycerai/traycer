@@ -2921,14 +2921,20 @@ describe("<ChatTile />", () => {
       expect(document.body.textContent).not.toContain(
         "No sandbox is running this agent",
       );
-      expect(document.body.textContent).not.toContain("Read-only viewer");
       expect(document.body.textContent).not.toContain("is offline");
       if (role === "owner") {
+        expect(document.body.textContent).not.toContain("Read-only viewer");
         const send = screen.getByRole("button", { name: "Send" });
         if (!(send instanceof HTMLButtonElement)) {
           throw new Error("expected send button");
         }
         expect(send.disabled).toBe(false);
+      } else {
+        expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+        expect(
+          screen.getByRole("button", { name: "Clone agent" }),
+        ).not.toBeNull();
+        expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
       }
     },
   );
@@ -6155,29 +6161,91 @@ describe("<ChatTile />", () => {
       status: "waitingChat",
       chatId: CHAT_ARTIFACT.id,
     });
-    expect(
-      await screen.findByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
-    ).not.toBeNull();
+    expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
   });
 
-  it("shows read-only viewer state without owner actions", async () => {
+  it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
     harness.teardown();
     chatHarness.teardown();
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("viewer", []);
+    taskSandboxTestState.task = {
+      kind: "sandbox",
+      name: "Shared environment",
+    };
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "Shared environment",
+        environmentId: "env-team-shared",
+      }),
+    ];
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
 
     renderChatTile();
 
     await waitForChatTileLoaded();
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clone agent" }));
+    expect(await screen.findByLabelText("Fork agent title")).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("gates pending interview controls from the host access role", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
     expect(
-      screen.getByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
+      await screen.findByText("Which path should we take?"),
     ).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "1. Option A" }));
+    const ownerSubmit = screen.getByRole("button", { name: "Submit" });
+    if (!(ownerSubmit instanceof HTMLButtonElement)) {
+      throw new Error("expected the interview submit button");
+    }
+    expect(ownerSubmit.disabled).toBe(false);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
+    expect(screen.queryByText("Which path should we take?")).toBeNull();
+    expect(screen.queryByRole("button", { name: "1. Option A" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("renders queued messages with compact row actions", async () => {
@@ -6331,7 +6399,7 @@ describe("<ChatTile />", () => {
 
   it("shows read-only queue chrome for viewers", async () => {
     chatHarness.teardown();
-    chatHarness.install("viewer", [
+    const queueItems: ChatQueuedItem[] = [
       {
         kind: "prompt" as const,
         queueItemId: "queue-1",
@@ -6343,7 +6411,7 @@ describe("<ChatTile />", () => {
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
-        accountContext: { type: "PERSONAL" as const },
+        accountContext: { type: "TEAM" as const, teamId: "team-test" },
         sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
@@ -6353,16 +6421,34 @@ describe("<ChatTile />", () => {
         createdAt: 2,
         updatedAt: 2,
       },
-    ]);
+    ];
+    chatHarness.install("viewer", queueItems);
 
     renderChatTile();
 
     await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems,
+        settings: null,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+      });
+    });
 
     expect(screen.getByText("Owner manages queue")).not.toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
     expect(
       screen.queryByRole("button", { name: "Edit queued message" }),
     ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Steer queued message now" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("updates queued item settings from composer toolbar while editing", async () => {

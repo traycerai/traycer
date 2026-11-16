@@ -233,6 +233,10 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useEpicChatStarter } from "@/hooks/chats/use-epic-chat-starter";
+import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
+import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -340,6 +344,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
@@ -348,7 +353,6 @@ import {
   resolvePersonSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
-import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
@@ -2689,9 +2693,16 @@ function useChatTileSessionViewModel(
         ? state.pendingUserMessages
         : [
             ...state.pendingUserMessages,
-            ...parkedEvictedSends.map((send) => send.row),
+            ...parkedEvictedSends
+              .filter(
+                (send) =>
+                  send.onOriginSignIn() &&
+                  send.row.sender.type === "user" &&
+                  send.row.sender.userId === profile?.userId,
+              )
+              .map((send) => send.row),
           ],
-    [parkedEvictedSends, state.pendingUserMessages],
+    [parkedEvictedSends, profile?.userId, state.pendingUserMessages],
   );
   const renderedMessages = useRenderedMessages(
     {
@@ -3310,6 +3321,10 @@ function useChatTileSessionViewModel(
       getDraftBlobBridgeSupported,
     });
 
+  const cloneChat = useCallback(() => {
+    forkAtAssistantMessage(null, "plain", null, FORK_ON_SOURCE_HOST);
+  }, [forkAtAssistantMessage]);
+
   // Switching hosts clones the chat from the latest checkpoint available to
   // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
@@ -3531,6 +3546,7 @@ function useChatTileSessionViewModel(
     (
       input: ChatComposerSubmitInput,
       onDispatch: ((accepted: boolean) => void) | null,
+      onOriginSignIn: (() => boolean) | null,
     ): boolean | Promise<boolean> => {
       if (!canAct) return false;
       // Armed behind the folder dialog, the composer gets the promise and
@@ -3538,6 +3554,7 @@ function useChatTileSessionViewModel(
       return submitThroughRebindGate({
         submit: input,
         dispatch: (message) => {
+          if (onOriginSignIn !== null && !onOriginSignIn()) return false;
           const accepted = dispatchUserSend(message);
           // Transfer custody and report at dispatch, before a consent promise
           // continuation or the next parked send can run.
@@ -3549,7 +3566,10 @@ function useChatTileSessionViewModel(
           });
           return accepted;
         },
-        refusal: NO_LIVE_SEND_REFUSAL,
+        refusal:
+          onOriginSignIn === null
+            ? NO_LIVE_SEND_REFUSAL
+            : () => (onOriginSignIn() ? null : EVICTED_SEND_FAILED_MESSAGE),
       }).accepted;
     },
     [
@@ -3561,9 +3581,34 @@ function useChatTileSessionViewModel(
     ],
   );
   const evictedSend = props.evictedSend ?? null;
+  const recordedStarter = useEpicChatStarter(
+    currentEpicId,
+    state.chat?.userId ?? null,
+    node.id,
+  );
+  const teamEnvironments = useEnvironmentListQuery(
+    props.restingSandbox !== undefined || evictedSend?.served === true,
+  );
+  // This only chooses local capture while the read-only pool serves the chat.
+  // The host's fresh access verdict still decides whether a captured send goes.
+  const canParkCreatorMessage =
+    teamEnvironments.data?.environments.some(
+      (environment) =>
+        environment.ownerKind === "organization" &&
+        environment.environmentId === state.chat?.userId,
+    ) === true &&
+    recordedStarter !== null &&
+    recordedStarter !== SYSTEM_ACTOR_ID &&
+    recordedStarter === profile?.userId &&
+    (props.restingSandbox !== undefined || evictedSend?.served === true);
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
+      if (
+        handle.store.getState().access?.role !== "owner" &&
+        !canParkCreatorMessage
+      )
+        return false;
       if (activeEditingQueueItemId !== null) {
         if (!canAct) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
@@ -3598,10 +3643,12 @@ function useChatTileSessionViewModel(
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
       if (evictedSend?.parks === true) {
-        evictedSend.park(input, { type: "user", userId: profile.userId });
-        return true;
+        return evictedSend.park(input, {
+          type: "user",
+          userId: profile.userId,
+        });
       }
-      return submitLiveMessage(input, null);
+      return submitLiveMessage(input, null, null);
     },
     [
       activeEditingQueueItemId,
@@ -3614,19 +3661,37 @@ function useChatTileSessionViewModel(
       dispatchUi,
       node.instanceId,
       profile,
+      handle.store,
+      canParkCreatorMessage,
     ],
   );
-  // The parked messages go once the host holds the chat again and this
-  // session is the host's own: the pool's session never acts, so `canAct`
-  // waits for the host's snapshot.
+  // The handle's acquisition follows its actual serving peer. A host snapshot,
+  // not the at-rest hint, decides whether these locally captured messages go.
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
-    if (evictedSend.served || !canAct) return;
+    if (
+      evictedSend.served ||
+      !state.snapshotLoaded ||
+      state.connectionStatus !== "open" ||
+      handle.userId !== profile?.userId
+    )
+      return;
+    if (!canAct) {
+      if (state.access?.role !== "viewer") return;
+      for (;;) {
+        const refused = evictedSend.take().at(0);
+        if (refused === undefined) break;
+        evictedSend.settle(refused, false);
+      }
+      return;
+    }
     for (;;) {
       const send = evictedSend.take().at(0);
       if (send === undefined) break;
-      const accepted = submitLiveMessage(send.input, (result) =>
-        evictedSend.settle(send, result),
+      const accepted = submitLiveMessage(
+        send.input,
+        (result) => evictedSend.settle(send, result),
+        send.onOriginSignIn,
       );
       if (typeof accepted === "boolean") {
         evictedSend.settle(send, accepted);
@@ -3637,7 +3702,16 @@ function useChatTileSessionViewModel(
         break;
       }
     }
-  }, [evictedSend, canAct, submitLiveMessage]);
+  }, [
+    evictedSend,
+    canAct,
+    submitLiveMessage,
+    handle.userId,
+    profile?.userId,
+    state.snapshotLoaded,
+    state.connectionStatus,
+    state.access?.role,
+  ]);
   useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);
   // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
   // only it knows about its own chat - owner, title, lineage, workspace, pane -
@@ -4141,7 +4215,7 @@ function useChatTileSessionViewModel(
   const lowerAccess = useMemo(
     () => ({
       isCopy,
-      isViewer: accessFlags.isViewer,
+      isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox,
@@ -4150,6 +4224,7 @@ function useChatTileSessionViewModel(
     [
       isCopy,
       accessFlags.isViewer,
+      canParkCreatorMessage,
       canAct,
       props.readOnlyNotice,
       props.restingSandbox,
@@ -4395,6 +4470,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSideChat: startSideChatFromComposer,
+      onClone: cloneChat,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4416,6 +4492,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       submitMessage,
       startSideChatFromComposer,
+      cloneChat,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
