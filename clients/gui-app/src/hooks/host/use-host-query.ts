@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import {
+  captureSettingsSaveOrigin,
+  type SettingsSaveOrigin,
+} from "@/lib/environment/settings-save-origin";
 import {
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
-  type MutationFunctionContext,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
@@ -35,10 +38,7 @@ import {
 } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import type {
-  EnvironmentCloud,
-  EnvironmentCloudSource,
-} from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   sendFollowedSave,
   type PendingSettingsSave,
@@ -543,8 +543,8 @@ export interface UseHostMutationOptions<
 }
 
 /**
- * {@link SettingsSaveFollow.follow}; `pressedOn` is the
- * sign-in the person acted on, as `useSettingsSave`'s preparation takes it.
+ * {@link SettingsSaveFollow.follow}; the captured origin belongs to this
+ * public press, as `useSettingsSave`'s host-only preparation takes it.
  */
 type FollowSettingsSave<
   Registry extends VersionedRpcRegistry,
@@ -552,7 +552,7 @@ type FollowSettingsSave<
 > = (
   request: RequestOfMethod<Registry, Method>,
   client: HostRequester<Registry>,
-  pressedOn: EnvironmentCloud | null,
+  origin: SettingsSaveOrigin,
 ) => Promise<PendingSettingsSave>;
 
 /**
@@ -570,13 +570,14 @@ export interface SettingsSaveFollow<
   readonly proposes: (response: ResponseOfMethod<Registry, Method>) => boolean;
 }
 
-/** A followed save as the person pressed it: the render's follow, on the sign-in then. */
+/** The followed save's preparation, sign-in and client, captured at its press. */
 interface PressedSettingsSave<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
 > {
-  readonly follow: FollowSettingsSave<Registry, Method>;
-  readonly pressedOn: EnvironmentCloud | null;
+  readonly follow: SettingsSaveFollow<Registry, Method>;
+  readonly origin: SettingsSaveOrigin;
+  readonly client: HostRequester<Registry> | null;
 }
 
 /**
@@ -596,123 +597,109 @@ export function useHostMutation<
   TVariables,
   TContext
 > {
-  // TanStack gives a pending mutation each newer render's options and runs
-  // its function with them, so a save made before an account switch, and
-  // started after it, would be followed by the next account's editor.
-  // `onMutate` runs as the person acts, with the options of the render they
-  // acted in, and keeps that render's follow and the sign-in current then for
-  // the function, which TanStack hands the same context. A followed save with
-  // no press recorded is not sent.
-  const [pressedIn] = useState(
-    () =>
-      new WeakMap<
-        MutationFunctionContext,
-        PressedSettingsSave<Registry, Method>
-      >(),
-  );
-  const follow = args.followSettingsSave;
-  const { onMutate } = args.options ?? {};
-  const baseOptions =
-    follow === undefined || onMutate === undefined
-      ? (args.options ?? {})
-      : {
-          ...args.options,
-          onMutate: (
-            variables: TVariables,
-            context: MutationFunctionContext,
-          ) => {
-            pressedIn.set(context, {
-              follow: follow.follow,
-              pressedOn: follow.source === null ? null : follow.source(),
-            });
-            return onMutate(variables, context);
-          },
-        };
-  return useMutation<
+  return usePressCapturedMutation<
     ResponseOfMethod<Registry, Method>,
     HostRpcError,
     TVariables,
+    PressedSettingsSave<Registry, Method> | null,
     TContext
-  >({
-    ...withHostMutationLifecycleBoundary(args.method, baseOptions),
-    // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
-    // (pre-flight validation) surfaces as the declared `HostRpcError`.
-    mutationFn: (variables, mutationContext) =>
-      withHostMutationErrorBoundary(args.method, async () => {
-        const client =
-          typeof args.client === "function"
-            ? args.client(variables)
-            : args.client;
-        if (client === null) {
-          return Promise.reject<ResponseOfMethod<Registry, Method>>(
-            hostClientUnavailableError(args.method),
-          );
-        }
-        const mapped = args.mapVariables(variables);
-        const params =
-          args.prepareRequest === undefined
-            ? mapped
-            : await args.prepareRequest(mapped, client);
-        const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
-        const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-        // A keyed dispatch carries both retry identity and version floor.
-        const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
-          if (idempotencyKey !== null) {
-            return client.requestWithOptions(args.method, params, {
-              idempotencyKey,
-              // The method's own scheduling budget. A keyed create is a small
-              // INTERACTIVE request once its images travel by hash, so there is
-              // nothing to extend - and the policy table REFUSES a budget it
-              // does not declare for the method.
-              responseTimeoutMs: null,
-              requiredHostMethodVersion: requirement,
-              signal: undefined,
-            });
-          }
-          if (requirement !== null)
-            return client.requestWithSignalRequiringHostMethodVersion(
-              args.method,
-              params,
-              undefined,
-              requirement,
-            );
-          return client.request(args.method, params);
+  >(
+    (variables) => {
+      const follow = args.followSettingsSave;
+      if (follow === undefined) return null;
+      try {
+        return {
+          follow,
+          origin: captureSettingsSaveOrigin(follow.source),
+          client:
+            typeof args.client === "function"
+              ? args.client(variables)
+              : args.client,
         };
-        const mapDispatchError = args.mapDispatchError;
-        // `.catch` directly on the dispatch, never chained after a `.then`: a
-        // catch downstream of a success arm also catches what that arm throws,
-        // and here that would re-map a `resolveResponse` failure into a
-        // dispatch error.
-        const mappedDispatch =
-          mapDispatchError === undefined
-            ? dispatch
-            : (): Promise<ResponseOfMethod<Registry, Method>> =>
-                dispatch().catch((cause: unknown) => {
-                  throw mapDispatchError(cause);
-                });
-        const pressed = pressedIn.get(mutationContext);
-        const dispatched =
-          follow === undefined
-            ? await mappedDispatch()
-            : await sendFollowedSave(
-                pressed === undefined
-                  ? { kind: "abandoned", method: args.method }
-                  : await pressed.follow(params, client, pressed.pressedOn),
-                mappedDispatch,
-                follow.proposes,
+      } catch (error) {
+        throw toHostRpcError(error, args.method);
+      }
+    },
+    {
+      ...withHostMutationLifecycleBoundary(args.method, args.options ?? {}),
+      // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
+      // (pre-flight validation) surfaces as the declared `HostRpcError`.
+      mutationFn: (variables, pressed) =>
+        withHostMutationErrorBoundary(args.method, async () => {
+          const client =
+            pressed !== null
+              ? pressed.client
+              : typeof args.client === "function"
+                ? args.client(variables)
+                : args.client;
+          if (client === null) {
+            return Promise.reject<ResponseOfMethod<Registry, Method>>(
+              hostClientUnavailableError(args.method),
+            );
+          }
+          const mapped = args.mapVariables(variables);
+          const params =
+            args.prepareRequest === undefined
+              ? mapped
+              : await args.prepareRequest(mapped, client);
+          const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+          const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+          // A keyed dispatch carries both retry identity and version floor.
+          const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+            if (idempotencyKey !== null) {
+              return client.requestWithOptions(args.method, params, {
+                idempotencyKey,
+                // The method's own scheduling budget. A keyed create is a small
+                // INTERACTIVE request once its images travel by hash, so there is
+                // nothing to extend - and the policy table REFUSES a budget it
+                // does not declare for the method.
+                responseTimeoutMs: null,
+                requiredHostMethodVersion: requirement,
+                signal: undefined,
+              });
+            }
+            if (requirement !== null)
+              return client.requestWithSignalRequiringHostMethodVersion(
+                args.method,
+                params,
+                undefined,
+                requirement,
               );
-        // Between the dispatch and `onResponse`, so a substituted response is
-        // what every arm below sees - including the caller's `onSuccess` and
-        // whatever `mutateAsync` resolves with.
-        const resolveResponse = args.resolveResponse;
-        const response =
-          resolveResponse === undefined
-            ? dispatched
-            : await resolveResponse(dispatched, variables, mappedDispatch);
-        args.onResponse?.(response, variables);
-        return response;
-      }),
-  });
+            return client.request(args.method, params);
+          };
+          const mapDispatchError = args.mapDispatchError;
+          // `.catch` directly on the dispatch, never chained after a `.then`: a
+          // catch downstream of a success arm also catches what that arm throws,
+          // and here that would re-map a `resolveResponse` failure into a
+          // dispatch error.
+          const mappedDispatch =
+            mapDispatchError === undefined
+              ? dispatch
+              : (): Promise<ResponseOfMethod<Registry, Method>> =>
+                  dispatch().catch((cause: unknown) => {
+                    throw mapDispatchError(cause);
+                  });
+          const dispatched =
+            pressed === null
+              ? await mappedDispatch()
+              : await sendFollowedSave(
+                  await pressed.follow.follow(params, client, pressed.origin),
+                  mappedDispatch,
+                  pressed.follow.proposes,
+                );
+          // Between the dispatch and `onResponse`, so a substituted response is
+          // what every arm below sees - including the caller's `onSuccess` and
+          // whatever `mutateAsync` resolves with.
+          const resolveResponse = args.resolveResponse;
+          const response =
+            resolveResponse === undefined
+              ? dispatched
+              : await resolveResponse(dispatched, variables, mappedDispatch);
+          args.onResponse?.(response, variables);
+          return response;
+        }),
+    },
+  );
 }
 
 /**
