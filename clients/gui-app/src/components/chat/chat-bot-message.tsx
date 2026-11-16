@@ -247,6 +247,7 @@ function MemberRow(props: {
           onOpenChange={sheet.setOpen}
           name={name}
           text={message.content}
+          copyText={message.content}
           replyInThread={replyInThread}
           failed={failed}
           receipt={null}
@@ -614,6 +615,9 @@ function BotRow(props: {
           onOpenChange={sheet.setOpen}
           name={presentation.botTitle}
           text={message.content}
+          // A bot row's `content` is the list's folded preview; its segments
+          // carry what the row shows.
+          copyText={collectAssistantReplyText(message.segments)}
           replyInThread={replyInThread}
           failed={null}
           receipt={receipt}
@@ -1356,6 +1360,8 @@ function RowSheet(props: {
   /** Who wrote the row. */
   readonly name: string;
   readonly text: string;
+  /** The row's whole text, for "Copy text"; empty offers no copy. */
+  readonly copyText: string;
   readonly replyInThread: (() => void) | null;
   readonly failed: FailedMessageActions | null;
   readonly receipt: ChatBotTurnReceipt | null;
@@ -1434,13 +1440,13 @@ function RowSheet(props: {
               <span className="min-w-0 truncate">Reply in thread</span>
             </button>
           )}
-          {props.text.trim() === "" ? null : (
+          {props.copyText.trim() === "" ? null : (
             <button
               type="button"
               data-testid="bot-reply-sheet-copy-text"
               className={itemClassName}
               onClick={() => {
-                copy(props.text);
+                copy(props.copyText);
                 onOpenChange(false);
               }}
             >

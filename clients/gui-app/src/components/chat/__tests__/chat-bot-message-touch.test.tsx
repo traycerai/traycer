@@ -129,10 +129,7 @@ function memberPost(
     : { ...base, conversationRequest };
 }
 
-function renderRow(
-  message: ChatMessageModel,
-  value: ChatBotPresentation,
-): HTMLElement {
+function mountRow(message: ChatMessageModel, value: ChatBotPresentation): void {
   function Providers(props: { readonly children: ReactNode }) {
     return (
       <StrictMode>
@@ -155,6 +152,13 @@ function renderRow(
     />,
     { wrapper: Providers },
   );
+}
+
+function renderRow(
+  message: ChatMessageModel,
+  value: ChatBotPresentation,
+): HTMLElement {
+  mountRow(message, value);
   return screen.getByTestId("bot-member-row");
 }
 
@@ -213,12 +217,51 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
     expect(row.className).toContain("pointer-coarse:touch-chrome");
 
     longPress(row, "touch");
-    await user.click(await screen.findByTestId("bot-reply-sheet-copy-text"));
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
 
     expect(await navigator.clipboard.readText()).toBe(POST_TEXT);
     await waitFor(() => {
       expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
     });
+  });
+
+  it("copies a bot's whole reply as its segments carry it, not the list's folded preview", async () => {
+    const user = userEvent.setup();
+    const first = "Both have owners:\n\n- **Emojis:** T244\n- **Unread:** T406";
+    const second = "Main has already put that choice to you.";
+    const reply: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      persistentMessageId: "reply-1",
+      content: "Both have owners: - **Emojis:** T244 - **Unr...",
+      segments: [
+        {
+          id: "message-1:a",
+          kind: "text",
+          markdown: first,
+          isStreaming: false,
+        },
+        {
+          id: "message-1:b",
+          kind: "text",
+          markdown: second,
+          isStreaming: false,
+        },
+      ],
+    };
+    mountRow(reply, {
+      ...plain(null),
+      replyReceipt: () => ({
+        summary: "Used 5 tools",
+        startedAt: 0,
+        endedAt: 35_000,
+        open: vi.fn(),
+      }),
+    });
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    expect(await navigator.clipboard.readText()).toBe(`${first}\n\n${second}`);
   });
 
   it("leaves a row with no sheet selectable by touch", () => {
