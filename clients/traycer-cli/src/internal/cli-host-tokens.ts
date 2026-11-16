@@ -99,9 +99,9 @@ export type CliHostBearer =
  */
 export interface CliHostTokens {
   /** The token on disk, else one mint; a refused sign-in is refreshed once first. */
-  bearerFor(hostId: string): Promise<CliHostBearer>;
+  bearerFor(hostId: string, signal: AbortSignal | null): Promise<CliHostBearer>;
   /** A fresh token whatever is on disk: `traycer login`'s. */
-  mintFresh(hostId: string): Promise<CliHostBearer>;
+  mintFresh(hostId: string, signal: AbortSignal | null): Promise<CliHostBearer>;
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
   /**
@@ -249,6 +249,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const recoverRefusedSignIn = async (
     hostId: string,
     first: CliHostTokenFailure,
+    signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
     const refreshed = await refreshSignIn();
     if (refreshed === "network-error")
@@ -260,7 +261,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       report(hostId, first);
       return answer(hostId, first);
     }
-    const second = await source.obtain(userId, hostId, true, signIn.signal);
+    const second = await source.obtain(userId, hostId, true, signal);
     if (second.kind === "sign-in-rejected") report(hostId, second);
     return answer(hostId, second);
   };
@@ -268,16 +269,17 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const obtain = async (
     hostId: string,
     fresh: boolean,
+    signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
-    const first = await source.obtain(userId, hostId, fresh, signIn.signal);
+    const first = await source.obtain(userId, hostId, fresh, signal);
     if (first.kind === "no-sign-in") report(hostId, first);
     if (first.kind !== "sign-in-rejected") return answer(hostId, first);
-    return recoverRefusedSignIn(hostId, first);
+    return recoverRefusedSignIn(hostId, first, signal);
   };
 
   return {
-    bearerFor: (hostId) => obtain(hostId, false),
-    mintFresh: (hostId) => obtain(hostId, true),
+    bearerFor: (hostId, signal) => obtain(hostId, false, signal),
+    mintFresh: (hostId, signal) => obtain(hostId, true, signal),
     unaryRecovery: (hostId) => {
       const recovery = streamRecovery(hostId);
       return {
@@ -307,7 +309,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
             return lease;
           if (!minting.has(hostId)) {
             minting.add(hostId);
-            void obtain(hostId, false)
+            void obtain(hostId, false, null)
               .then(
                 () => undefined,
                 () => undefined,
@@ -341,7 +343,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         report(hostId, renewed);
         return false;
       }
-      return (await recoverRefusedSignIn(hostId, renewed)).kind === "ok";
+      return (await recoverRefusedSignIn(hostId, renewed, null)).kind === "ok";
     },
   };
 }
@@ -367,28 +369,37 @@ export type CliHostSessionResult =
  * the one on disk, or with `fresh` a new one whatever is on disk. The caller
  * disposes the session when its command ends, so a refresh's continuation
  * timer never outlives it.
+ *
+ * `signal` is the caller's own cancellation, or null for a session as long as
+ * its command: it ends every mint the session makes, its recoveries
+ * included, and the sign-in refresh's wait for the lock and its request. An
+ * aborted refresh is the store's network-ambiguous case: the credentials file
+ * is not written, and the armed marker settles a refresh token it may have
+ * spent.
  */
 export async function openCliHostSession(
   auth: HostAuth,
   hostId: string,
   fresh: boolean,
+  signal: AbortSignal | null,
 ): Promise<CliHostSessionResult> {
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  // `signal: null`: the session lives as long as its command.
   const store = createCliCredentialsStore();
   // Typed to its own refresh: the shared `AuthRevalidator` it also satisfies
   // declares the same method as `Promise<unknown>`.
   const revalidator: SignInRevalidator = createStoreBackedRevalidator({
     store,
     lease,
-    signal: null,
+    signal,
   });
   const tokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.revalidateCurrentContext(),
-    signal: null,
+    signal,
   });
-  const pending = fresh ? tokens.mintFresh(hostId) : tokens.bearerFor(hostId);
+  const pending = fresh
+    ? tokens.mintFresh(hostId, signal)
+    : tokens.bearerFor(hostId, signal);
   const held = await pending.catch((error: unknown) => {
     store.dispose();
     throw error;
@@ -414,7 +425,7 @@ export async function requireCliHostSession(
   hostId: string,
   toError: (failure: CliHostTokenFailure) => CliError,
 ): Promise<CliHostSession> {
-  const result = await openCliHostSession(auth, hostId, false);
+  const result = await openCliHostSession(auth, hostId, false, null);
   if (result.kind === "failed") throw toError(result.failure);
   return result.session;
 }

@@ -13,8 +13,6 @@
  * value, and a row that looks like a key carries only its name. Optional
  * capabilities with `degrade: { kind: "unsupported" }`, off the released
  * floor, like every environment method (`environment/contracts.ts`).
- * `plan@2.0`, `stage`, `start` and `outcome` are defined and not registered:
- * each registers with the host slice that serves it and its first caller.
  */
 import { z } from "zod";
 import {
@@ -287,9 +285,12 @@ export type EnvironmentMovePlanRequestV20 = z.infer<
 
 /**
  * `@1.2`'s answer without `itemChoices`: a `@2.0` host always honours a
- * `stays` choice on a `moves` row, so there is nothing to advertise. A new
- * major has no older sender, so no row list or flag defaults. Reading a plan
- * never stages, never ends an attempt and never touches a staged file.
+ * `stays` choice on a `moves` row, so there is nothing to advertise. Nor
+ * does it carry the two retired lists the released shapes still declare,
+ * `looksLikeAKey` and `sameNameInPersonal`: a variable is a value and is
+ * never judged as a credential. A new major has no older sender, so no row
+ * list or flag defaults. Reading a plan never stages, never ends an attempt
+ * and never touches a staged file.
  */
 export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
   z.object({
@@ -304,8 +305,6 @@ export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
       staysOnThisComputer: z.array(environmentMoveRowSchema),
       alreadyInPersonal: z.array(environmentMoveRowSchema),
       differsMasked: z.array(environmentMoveRowSchema),
-      looksLikeAKey: z.array(environmentMoveRowSchema),
-      sameNameInPersonal: z.array(environmentMoveRowSchema),
     }),
     guideDiffers: z.boolean(),
     personalHoldsSecrets: z.boolean(),
@@ -320,6 +319,30 @@ export const environmentMovePlanV20 = defineRpcContract({
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: environmentMovePlanRequestSchemaV20,
   responseSchema: environmentMovePlanResponseSchemaV20,
+});
+
+/**
+ * Required by the registry for a new major, and never run: `@2.0` has no
+ * downgrade to `@1.x`, so a host refuses a `@1.x` caller before upgrading
+ * anything, and an app meets a `@1.x`-only host as unsupported. `@1.2`'s
+ * request names no target, and `@2.0` cannot be read without one.
+ */
+export const environmentMovePlanUpgradeV12ToV20 = defineUpgradePath<
+  typeof environmentMovePlanV12,
+  typeof environmentMovePlanV20
+>({
+  from: environmentMovePlanV12.schemaVersion,
+  to: environmentMovePlanV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "environment.move.plan v1.2 requests cannot be upgraded to v2.0: v1.2 names no target",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "environment.move.plan v1.2 responses cannot be upgraded to v2.0: no v1.2 request reaches a v2.0 host",
+    );
+  },
 });
 
 /** What every `environmentMoveItemChoiceKey` starts with. */

@@ -336,7 +336,12 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const opened = await openCliHostSession(auth, endpoint.hostId, false);
+  const opened = await openCliHostSession(
+    auth,
+    endpoint.hostId,
+    false,
+    dispatch.signal,
+  );
   if (opened.kind === "failed") {
     createCliLogger(config.environment).warn(
       "Host RPC blocked: no host-only token",

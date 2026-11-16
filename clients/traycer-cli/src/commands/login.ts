@@ -85,7 +85,7 @@ async function mintHostTokenForNewSignIn(
     // No host running: nothing to mint for until one starts.
     const endpoint = await resolveEndpoint().catch(() => null);
     if (endpoint === null) return;
-    const opened = await openCliHostSession(auth, endpoint.hostId, true);
+    const opened = await openCliHostSession(auth, endpoint.hostId, true, null);
     if (opened.kind === "ok") opened.session.dispose();
     ctx.runtime.logger.info("Login host-only token mint completed", {
       environment: ctx.runtime.environment,
