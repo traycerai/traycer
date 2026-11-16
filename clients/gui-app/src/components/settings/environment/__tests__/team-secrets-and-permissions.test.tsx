@@ -26,7 +26,6 @@ import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-setti
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import { teamEnvironments } from "./mcp-skills-test-support";
 import {
   answerTeamHostList,
   authnAnswer,
