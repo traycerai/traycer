@@ -14,6 +14,12 @@ import {
   type TaskEnvironmentAttachmentRequest,
 } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  fetchTeamChatAutoArchiveViaHttp,
+  parseTeamChatAutoArchiveSetRequest,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -535,6 +541,44 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getTeamChatAutoArchive,
+    async (_event, bearerToken: unknown, teamId: unknown) => {
+      assertString(bearerToken, "getTeamChatAutoArchive.bearerToken");
+      assertString(teamId, "getTeamChatAutoArchive.teamId");
+      return fetchTeamChatAutoArchiveViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        teamId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setTeamChatAutoArchive,
+    async (
+      _event,
+      bearerToken: unknown,
+      teamId: unknown,
+      request: unknown,
+    ): Promise<TeamChatAutoArchiveWriteResult> => {
+      assertString(bearerToken, "setTeamChatAutoArchive.bearerToken");
+      assertString(teamId, "setTeamChatAutoArchive.teamId");
+      const parsedRequest = parseTeamChatAutoArchiveSetRequest(request);
+      if (parsedRequest === null) return { kind: "failed" };
+      return putTeamChatAutoArchiveViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        teamId,
+        parsedRequest,
       );
     },
   );

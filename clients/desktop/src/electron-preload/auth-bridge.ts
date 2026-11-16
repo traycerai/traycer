@@ -1,3 +1,8 @@
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
@@ -313,6 +318,17 @@ export interface AuthBridgeSurface {
   ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export function buildAuthBridge(): AuthBridgeSurface {
@@ -653,6 +669,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
   };
 }
 

@@ -12,6 +12,11 @@ import type {
   TaskEnvironmentAttachmentResult,
 } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -534,6 +539,17 @@ export interface DesktopPreloadBridge {
    */
   selectionAuthority: SelectionAuthorityClient;
   refreshSelectionFleet: () => Promise<void>;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -1690,6 +1706,21 @@ export class DesktopRunnerHost implements IRunnerHost {
     }
     this.localHostHandlers.clear();
     this.systemResumedHandlers.clear();
+  }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return this.bridge.getTeamChatAutoArchive(bearerToken, teamId);
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return this.bridge.setTeamChatAutoArchive(bearerToken, teamId, request);
   }
 }
 

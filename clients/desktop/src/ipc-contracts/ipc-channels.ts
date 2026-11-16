@@ -103,6 +103,9 @@ export const RunnerHostInvoke = {
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
   getTraycerModels: "runnerHost:traycer:models",
+  // A team's chat auto-archive setting, read and saved.
+  getTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:get",
+  setTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:set",
   // The voice session routes (traycer-server `/api/voice/sessions`): the SDP
   // exchange that opens a session, and its end. Same CORS reason as above.
   getVoiceAvailability: "runnerHost:voice:availability",

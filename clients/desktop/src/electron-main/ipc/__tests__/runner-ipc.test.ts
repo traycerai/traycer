@@ -869,6 +869,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.getTraycerModels,
+          RunnerHostInvoke.getTeamChatAutoArchive,
+          RunnerHostInvoke.setTeamChatAutoArchive,
           RunnerHostInvoke.createSandbox,
           RunnerHostInvoke.destroySandbox,
           RunnerHostInvoke.patchSandbox,

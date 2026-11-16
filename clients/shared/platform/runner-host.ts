@@ -7,6 +7,11 @@ import type {
 } from "../host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import type { HostTokenSource } from "../auth/host-token-source";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "../host-client/team-chat-auto-archive";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
@@ -1156,6 +1161,23 @@ export interface IRunnerHost {
    * shell; `null` everywhere else, since no other platform has the gesture.
    */
   readonly statusBarTap: IStatusBarTapHost | null;
+
+  /**
+   * A team's chat auto-archive setting on traycer-server
+   * (`/api/traycer/chat-auto-archive/teams/:teamId`) with the user bearer,
+   * sent where the shell's other traycer-server calls are sent, through a
+   * request that follows no redirect. Never throw.
+   */
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 /**
