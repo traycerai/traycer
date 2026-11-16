@@ -86,6 +86,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "reasonix",
     "antigravity",
     "commandcode",
+    "muse",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -215,6 +216,49 @@ export type GuiHarnessIdPreCommandCode = z.infer<
   typeof guiHarnessIdSchemaPreCommandCode
 >;
 
+/**
+ * Frozen copy of the persisted harness enum as the released lines shipped it -
+ * everything through Command Code, before Muse, which first rides
+ * `chat.subscribe@1.45`, `sessionImport.scan@1.4`, `sessionImport.run@1.4`
+ * and `drafts.subscribe@1.2`.
+ *
+ * Bound by every released line that embeds the persisted enum and is not held
+ * by a host floor gate: the released `sessionImport` minors, and through
+ * `chatRunSettingsSchemaPreMuse` / `chatRunSettingsStrictSchemaPreMuse` below
+ * the released run-settings reads, fallback target listing and draft lines.
+ *
+ * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above, freeze
+ * the lines a tag has shipped, and gate stream emission on the negotiated
+ * minor (streams have no downgrade bridge).
+ */
+export const guiHarnessIdSchemaPreMuse = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type GuiHarnessIdPreMuse = z.infer<typeof guiHarnessIdSchemaPreMuse>;
+
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
 export const tuiHarnessIdSchema = lazySchema(() =>
@@ -322,7 +366,7 @@ export const ALL_PERMISSION_MODES_PRE_AUTO: readonly PermissionModePreAuto[] =
 // Settings carried by every wire line before the per-chat Ultracode request.
 export const chatRunSettingsSchemaPreUltracode = lazySchema(() =>
   z.object({
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaPreMuse,
     // Concrete model slug; there is no "use the harness default" sentinel. The
     // renderer resolves a real model (defaulting to the provider's first listed
     // model) before a turn is sent.
@@ -346,7 +390,7 @@ export type ChatRunSettingsPreUltracode = z.infer<
 /** Released settings tuples before portable account provenance. */
 export const chatRunSettingsSchemaPreProfileBinding = lazySchema(() =>
   z.object({
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaPreMuse,
     // Concrete model slug; there is no "use the harness default" sentinel. The
     // renderer resolves a real model (defaulting to the provider's first listed
     // model) before a turn is sent.
@@ -363,6 +407,13 @@ export const chatRunSettingsSchemaPreProfileBinding = lazySchema(() =>
     profileId: z.string().nullable().default(null),
     ultracode: z.boolean().default(false),
   }),
+);
+
+export const chatRunSettingsSchemaPreMuse = lazySchema(() =>
+  chatRunSettingsSchema.extend({ harnessId: guiHarnessIdSchemaPreMuse }),
+);
+export const chatRunSettingsStrictSchemaPreMuse = lazySchema(() =>
+  chatRunSettingsStrictSchema.extend({ harnessId: guiHarnessIdSchemaPreMuse }),
 );
 
 export const chatRunSettingsSchema = lazySchema(() =>
@@ -494,7 +545,7 @@ export type ChatRunSettingsPreReasonix = z.infer<
  */
 export const chatRunSettingsSchemaPreAuto = lazySchema(() =>
   z.object({
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaPreMuse,
     model: z.string().min(1),
     permissionMode: permissionModeSchemaPreAuto,
     reasoningEffort: z.string().nullable(),

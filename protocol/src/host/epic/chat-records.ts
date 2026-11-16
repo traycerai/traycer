@@ -1,5 +1,6 @@
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreMuse,
   chatRunSettingsSchemaPreProfileBinding,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
@@ -689,7 +690,7 @@ export type GetChatRunSettingsRequest = z.infer<
 
 export const getChatRunSettingsResponseSchema = lazySchema(() =>
   z.object({
-    settings: chatRunSettingsSchemaPreUltracode.nullable(),
+    settings: chatRunSettingsSchema.nullable(),
   }),
 );
 export type GetChatRunSettingsResponse = z.infer<
@@ -721,7 +722,7 @@ export type GetChatRunSettingsBatchRequest = z.infer<
 export const getChatRunSettingsBatchEntrySchema = lazySchema(() =>
   z.object({
     chatId: z.string().min(1),
-    settings: chatRunSettingsSchemaPreUltracode.nullable(),
+    settings: chatRunSettingsSchema.nullable(),
   }),
 );
 export type GetChatRunSettingsBatchEntry = z.infer<
@@ -1450,6 +1451,21 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });
 
+export const getChatRunSettingsResponseSchemaV40 = lazySchema(() =>
+  getChatRunSettingsResponseSchema.extend({
+    settings: chatRunSettingsSchemaPreUltracode.nullable(),
+  }),
+);
+export const getChatRunSettingsBatchResponseSchemaV20 = lazySchema(() =>
+  getChatRunSettingsBatchResponseSchema.extend({
+    entries: z.array(
+      getChatRunSettingsBatchEntrySchema.extend({
+        settings: chatRunSettingsSchemaPreUltracode.nullable(),
+      }),
+    ),
+  }),
+);
+
 export const getChatRunSettingsResponseSchemaV41 = lazySchema(() =>
   getChatRunSettingsResponseSchema.extend({
     settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
@@ -1474,14 +1490,14 @@ export type GetChatRunSettingsBatchResponseV21 = z.infer<
 
 export function projectChatRunSettingsResponseBeforeUltracode(
   response: GetChatRunSettingsResponseV41,
-): GetChatRunSettingsResponse {
+): z.infer<typeof getChatRunSettingsResponseSchemaV40> {
   if (response.settings === null) return response;
   const { ultracode: _ultracode, ...settings } = response.settings;
   return { settings };
 }
 export function projectChatRunSettingsBatchResponseBeforeUltracode(
   response: GetChatRunSettingsBatchResponseV21,
-): GetChatRunSettingsBatchResponse {
+): z.infer<typeof getChatRunSettingsBatchResponseSchemaV20> {
   return {
     entries: response.entries.map((entry) => ({
       chatId: entry.chatId,
@@ -1493,7 +1509,7 @@ export function projectChatRunSettingsBatchResponseBeforeUltracode(
 /** Portable provenance is absent on the released 4.1 / 2.1 read lines. */
 export const getChatRunSettingsResponseSchemaV42 = lazySchema(() =>
   getChatRunSettingsResponseSchemaV41.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreMuse.nullable(),
   }),
 );
 export type GetChatRunSettingsResponseV42 = z.infer<
@@ -1501,7 +1517,7 @@ export type GetChatRunSettingsResponseV42 = z.infer<
 >;
 export const getChatRunSettingsBatchEntrySchemaV22 = lazySchema(() =>
   getChatRunSettingsBatchEntrySchemaV21.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreMuse.nullable(),
   }),
 );
 export const getChatRunSettingsBatchResponseSchemaV22 = lazySchema(() =>
@@ -1512,3 +1528,8 @@ export const getChatRunSettingsBatchResponseSchemaV22 = lazySchema(() =>
 export type GetChatRunSettingsBatchResponseV22 = z.infer<
   typeof getChatRunSettingsBatchResponseSchemaV22
 >;
+
+export const getChatRunSettingsResponseSchemaV50 =
+  getChatRunSettingsResponseSchema;
+export const getChatRunSettingsBatchResponseSchemaV30 =
+  getChatRunSettingsBatchResponseSchema;

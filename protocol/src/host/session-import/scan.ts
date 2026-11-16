@@ -38,6 +38,7 @@ import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
   guiHarnessIdSchemaPreCommandCode,
+  guiHarnessIdSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   sessionImportCandidateSchema,
@@ -236,6 +237,49 @@ export const sessionImportScanServerFrameSchemaPreCommandCode = lazySchema(() =>
   ]),
 );
 
+const sessionImportCandidateSchemaPreMuse = lazySchema(() =>
+  sessionImportCandidateSchema.extend({
+    harness: guiHarnessIdSchemaPreMuse,
+  }),
+);
+
+const sessionImportGroupSchemaPreMuse = lazySchema(() =>
+  sessionImportGroupSchema.extend({
+    sessions: z.array(sessionImportCandidateSchemaPreMuse),
+  }),
+);
+
+export const sessionImportScanServerFrameSchemaPreMuse = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("started"),
+      providers: z.array(guiHarnessIdSchemaPreMuse),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("group"),
+      group: sessionImportGroupSchemaPreMuse,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("providerFailed"),
+      harness: guiHarnessIdSchemaPreMuse,
+      reason: sessionImportFailureReasonSchema,
+      detail: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      totals: sessionImportScanTotalsSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
 export const sessionImportScanV10 = defineStreamRpcContract({
   method: "sessionImport.scan",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -281,6 +325,14 @@ export const sessionImportScanV12 = defineStreamRpcContract({
 export const sessionImportScanV13 = defineStreamRpcContract({
   method: "sessionImport.scan",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: sessionImportScanOpenRequestSchema,
+  serverFrameSchema: sessionImportScanServerFrameSchemaPreMuse,
+  clientFrameSchema: sessionImportScanClientFrameSchema,
+});
+
+export const sessionImportScanV14 = defineStreamRpcContract({
+  method: "sessionImport.scan",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: sessionImportScanOpenRequestSchema,
   serverFrameSchema: sessionImportScanServerFrameSchema,
   clientFrameSchema: sessionImportScanClientFrameSchema,

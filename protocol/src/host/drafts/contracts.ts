@@ -10,6 +10,10 @@ import {
   draftsListRequestSchema,
   draftsListResponseSchema,
   draftsListResponseSchemaV10,
+  draftsListResponseSchemaV20,
+  draftsUpsertResponseSchemaV20,
+  draftDocumentSchemaV20,
+  draftsSubscribeServerFrameSchemaV12,
   draftDocumentSchemaV10,
   draftsPutBlobRequestSchema,
   draftsPutBlobRequestSchemaV11,
@@ -58,7 +62,7 @@ export const draftsUpsertV20 = defineRpcContract({
   method: "drafts.upsert",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: draftsUpsertRequestSchema,
-  responseSchema: draftsUpsertResponseSchema,
+  responseSchema: draftsUpsertResponseSchemaV20,
 });
 
 export const draftsUpsertUpgradeV10ToV20 = defineUpgradePath<
@@ -123,7 +127,7 @@ export const draftsListV20 = defineRpcContract({
   method: "drafts.list",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: draftsListRequestSchema,
-  responseSchema: draftsListResponseSchema,
+  responseSchema: draftsListResponseSchemaV20,
 });
 
 export const draftsListUpgradeV10ToV20 = defineUpgradePath<
@@ -334,4 +338,120 @@ export const draftsSubscribeV11 = defineStreamRpcContract({
   openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: draftsSubscribeServerFrameSchemaV11,
   clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
+});
+
+export const draftsSubscribeV12 = defineStreamRpcContract({
+  method: "drafts.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: draftsSubscribeServerFrameSchemaV12,
+  clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
+});
+
+export const draftsListV30 = defineRpcContract({
+  method: "drafts.list",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: draftsListRequestSchema,
+  responseSchema: draftsListResponseSchema,
+});
+export const draftsListUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsListV20,
+  typeof draftsListV30
+>({
+  from: draftsListV20.schemaVersion,
+  to: draftsListV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const draftsListDowngradeV30ToV10 = defineDowngradePath<
+  typeof draftsListV30,
+  typeof draftsListV10
+>({
+  from: draftsListV30.schemaVersion,
+  to: draftsListV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      ...response,
+      drafts: response.drafts.flatMap((draft) => {
+        const parsed = draftDocumentSchemaV10.safeParse(draft);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});
+export const draftsListDowngradeV30ToV20 = defineDowngradePath<
+  typeof draftsListV30,
+  typeof draftsListV20
+>({
+  from: draftsListV30.schemaVersion,
+  to: draftsListV20.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      ...response,
+      drafts: response.drafts.flatMap((draft) => {
+        const parsed = draftDocumentSchemaV20.safeParse(draft);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});
+
+export const draftsUpsertV30 = defineRpcContract({
+  method: "drafts.upsert",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: draftsUpsertRequestSchema,
+  responseSchema: draftsUpsertResponseSchema,
+});
+export const draftsUpsertUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsUpsertV20,
+  typeof draftsUpsertV30
+>({
+  from: draftsUpsertV20.schemaVersion,
+  to: draftsUpsertV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const draftsUpsertDowngradeV30ToV10 = defineDowngradePath<
+  typeof draftsUpsertV30,
+  typeof draftsUpsertV10
+>({
+  from: draftsUpsertV30.schemaVersion,
+  to: draftsUpsertV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = draftsUpsertResponseSchemaV10.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message: "This draft requires a newer Traycer client.",
+          },
+        };
+  },
+});
+export const draftsUpsertDowngradeV30ToV20 = defineDowngradePath<
+  typeof draftsUpsertV30,
+  typeof draftsUpsertV20
+>({
+  from: draftsUpsertV30.schemaVersion,
+  to: draftsUpsertV20.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = draftsUpsertResponseSchemaV20.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message: "This draft requires a newer Traycer client.",
+          },
+        };
+  },
 });

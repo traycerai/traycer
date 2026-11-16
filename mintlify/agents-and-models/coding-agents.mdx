@@ -75,6 +75,10 @@ Traycer supports 22 coding agents. The first table shows what each one can do; t
 - **CLI.** Traycer downloads and updates the CLIs it manages; see [CLI Binary And Arguments](/settings/providers#cli-binary-and-arguments). Install the Amp, Hermes Agent, and Command Code CLIs yourself. Command Code installs with `npm i -g command-code`; its command is `cmd`, or `cmdc` on Windows. On Macs, Antigravity needs macOS 14 or later.
 - **Settings tabs.** Every provider also has **CLI & Args**, **Env**, and **Permissions**. What each tab holds is in [Provider Tabs](/settings/providers#provider-tabs).
 
+### Muse Code
+
+Muse Code appears when your host supports the `muse` coding agent. Install it using the [Muse Code installation guide](https://dev.meta.ai/docs/muse-code), then run `muse` in a terminal to sign in. You can instead set `META_API_KEY` in the provider's **Env** tab to use an API key. Available models and permission modes come from your host.
+
 ## Models
 
 Traycer loads models from the selected coding agent and provider profile at runtime. The list can vary with your installed CLI version, account, provider configuration, and model access, so these docs don't keep a fixed model list.

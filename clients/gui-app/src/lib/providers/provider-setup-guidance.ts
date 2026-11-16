@@ -218,6 +218,12 @@ export const TERMINAL_SIGN_IN_COPY: {
     terminalHint:
       "Command Code opens its sign-in page in a browser on that computer and waits in the terminal. Finish there, then use Refresh above.",
   },
+  muse: {
+    summary: "Sign in to Muse Code from a terminal.",
+    firstStep: "Complete the sign-in in the browser.",
+    terminalHint:
+      "Complete the Muse Code sign-in in the browser, then use Refresh above.",
+  },
 };
 
 /**

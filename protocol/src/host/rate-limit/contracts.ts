@@ -14,6 +14,7 @@ import {
   providersRefreshProfileStatusResponseSchemaV10,
   providersRefreshProfileStatusResponseSchemaV20,
   providersRefreshProfileStatusResponseSchemaV30,
+  providersRefreshProfileStatusResponseSchemaV40,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -26,6 +27,7 @@ import {
   rateLimitUsageResponseSchemaV40,
   rateLimitUsageResponseSchemaV50,
   rateLimitUsageResponseSchemaV60,
+  rateLimitUsageResponseSchemaV70,
   degradeProviderRateLimitsToV151,
   mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
@@ -166,14 +168,106 @@ export const providersRefreshProfileStatusV30 = defineRpcContract({
   responseSchema: providersRefreshProfileStatusResponseSchemaV30,
 });
 
-// The LIVE line. The moment a tag ships `4`, freeze it against a snapshot
-// union and open `5`.
+// Frozen when Muse opened 5.0, against `providerRateLimitsSchemaV100` - the
+// snapshot freeze this line carried always said a shipped `4` gets.
 export const providersRefreshProfileStatusV40 = defineRpcContract({
   method: "providers.refreshProfileStatus",
   schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: providersRefreshProfileStatusRequestSchema,
+  responseSchema: providersRefreshProfileStatusResponseSchemaV40,
+});
+
+// The LIVE line, where Muse rides.
+export const providersRefreshProfileStatusV50 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 5, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
   responseSchema: providersRefreshProfileStatusResponseSchema,
 });
+
+export const providersRefreshProfileStatusUpgradeV40ToV50 = defineUpgradePath<
+  typeof providersRefreshProfileStatusV40,
+  typeof providersRefreshProfileStatusV50
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 5, minor: 0 },
+  // Request shape identical; only the response's provider enum grows.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRefreshProfileStatusDowngradeV50ToV40 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV40
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // Nothing to degrade - only the id enum grew, and an id major 4 cannot
+      // spell fails the frozen union's parse, which refuses.
+      const parsed =
+        providersRefreshProfileStatusResponseSchemaV40.safeParse(response);
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV30 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV30
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV30.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV20 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV20
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV20.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV10 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV10
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV10.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
 
 export const providersRefreshProfileStatusUpgradeV10ToV20 = defineUpgradePath<
   typeof providersRefreshProfileStatusV10,
@@ -849,7 +943,108 @@ export const hostGetRateLimitUsageV60 = defineRpcContract({
   method: "host.getRateLimitUsage",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: rateLimitUsageRequestSchemaV40,
+  // Frozen when Muse opened 7.0, against `providerRateLimitsSchemaV100` - a
+  // new id is not strippable by the within-major skew handler, for the reason
+  // the Kimi arm was a major.
   responseSchema: rateLimitUsageResponseSchemaV60,
+});
+
+// The LIVE line, where Muse rides.
+export const hostGetRateLimitUsageV70 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 7, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV40,
+  responseSchema: rateLimitUsageResponseSchemaV70,
+});
+
+export const hostGetRateLimitUsageUpgradeV60ToV70 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV70
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV70.schemaVersion,
+  // Request shape is identical, and a v6.0 response is a valid v7.0 response
+  // (only the id enum grows) - both are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV6 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV60
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV60.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Nothing to degrade - only the id enum grew, and an id major 6 cannot
+    // spell fails the frozen union's parse, which refuses.
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV5 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV50
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV50.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = rateLimitUsageResponseSchemaV50.safeParse(
+      degradedToV151(response),
+    );
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV4 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV40(degradedToV151(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV30(degradedToV151(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV21(degradedToV151(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV7ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV70,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV70.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV12(degradedToV151(response)),
 });
 
 // Every frozen 5.0 arm is a valid 6.0 arm (the live union is a strict superset

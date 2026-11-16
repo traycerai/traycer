@@ -1,5 +1,6 @@
 import {
   chatEventSchema,
+  chatEventSchemaPreMuse,
   chatEventSchemaPreImported,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
@@ -23,6 +24,7 @@ import {
 import {
   activeSessionChainSchema,
   activeSessionChainSchemaPreReasonix,
+  activeSessionChainSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -52,7 +54,7 @@ export const claudePendingWakeSchema = lazySchema(() =>
     // history rewrite temporarily clears the chat's active chain. Preserve the
     // validated chain with the wake so host hydration can restore it instead of
     // pruning the wake after a restart during that handoff.
-    heldChain: activeSessionChainSchema.nullable().optional(),
+    heldChain: activeSessionChainSchemaPreMuse.nullable().optional(),
   }),
 );
 export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
@@ -112,10 +114,10 @@ export const chatSchemaV18 = lazySchema(() =>
     // Pre-`auto`: `chat.subscribe@1.7`/`@1.8` embed this record and both are
     // RELEASED, so an `auto` chat served on either would fail the whole frame.
     settings: chatRunSettingsSchemaPreAuto.nullable().default(null),
-    activeSessionChain: activeSessionChainSchema.nullable().default(null),
+    activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
     claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
     messages: z.array(messageSchemaV18),
-    events: z.array(chatEventSchema).default([]),
+    events: z.array(chatEventSchemaPreMuse).default([]),
     /**
      * Wall-clock ms when this chat was archived, or `null` while active.
      * Archiving is a durable, host-backed flag (see the "Archive Mechanism"
@@ -158,6 +160,8 @@ export const chatSchemaV18 = lazySchema(() =>
 export const chatSchema = lazySchema(() =>
   chatSchemaV18.extend({
     messages: z.array(messageSchema),
+    events: z.array(chatEventSchema).default([]),
+    activeSessionChain: activeSessionChainSchema.nullable().default(null),
     // Re-widened to the live tuple. `chatSchemaV18` pins `permissionMode`
     // pre-`auto` because `chat.subscribe@1.7`/`@1.8` embed it and both shipped in
     // `cli-v1.3.0`; only the lines that bind THIS schema may carry the mode.

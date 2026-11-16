@@ -31,6 +31,7 @@ import {
   providerIdSchemaV70,
   providerIdSchemaV80,
   providerIdSchemaV91,
+  providerIdSchemaV100,
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -47,6 +48,7 @@ import {
   providerRateLimitsSchemaV80,
   providerRateLimitsSchemaV91,
   providerRateLimitsSchemaV151,
+  providerRateLimitsSchemaV100,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
@@ -58,6 +60,7 @@ import {
   guiHarnessIdSchemaV70,
   guiHarnessIdSchemaV80,
   guiHarnessIdSchemaV90,
+  guiHarnessIdSchemaV100,
 } from "@traycer/protocol/host/agent/shared";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -277,6 +280,24 @@ export type AgentListProviderProfilesResponseV6 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV6
 >;
 
+/**
+ * Frozen `agent.listProviderProfiles@7.0` response, pinned to the provider id
+ * set major 7 shipped (`providerIdSchemaV100`, through Command Code).
+ *
+ * 7.0 bound the live schema while it was the head, which is how Command Code
+ * reached it. It is registered by released hosts, so Muse opening 8.0 freezes
+ * it here - the moment the comment below asked for.
+ */
+export const agentListProviderProfilesResponseSchemaV7 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV100,
+    profiles: z.array(agentProviderProfileSummarySchema),
+  }),
+);
+export type AgentListProviderProfilesResponseV7 = z.infer<
+  typeof agentListProviderProfilesResponseSchemaV7
+>;
+
 export const agentListProviderProfilesV60 = defineRpcContract({
   method: "agent.listProviderProfiles",
   schemaVersion: { major: 6, minor: 0 } as const,
@@ -284,13 +305,13 @@ export const agentListProviderProfilesV60 = defineRpcContract({
   responseSchema: agentListProviderProfilesResponseSchemaV6,
 });
 
-// The LIVE line. The moment a tag ships `7`, freeze it against a snapshot id
-// set and open `8`: a provider id added after that must not reach it.
+// Frozen when Muse opened 8.0: a provider id added after major 7 must not
+// reach a released line.
 export const agentListProviderProfilesV70 = defineRpcContract({
   method: "agent.listProviderProfiles",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: agentListProviderProfilesRequestSchema,
-  responseSchema: agentListProviderProfilesResponseSchema,
+  responseSchema: agentListProviderProfilesResponseSchemaV7,
 });
 
 export const agentListProviderProfilesUpgradeV60ToV70 = defineUpgradePath<
@@ -434,6 +455,203 @@ export const agentListProviderProfilesDowngradeV70ToV10 = defineDowngradePath<
   typeof agentListProviderProfilesV10
 >({
   from: { major: 7, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+// The LIVE line, where Muse rides.
+export const agentListProviderProfilesV80 = defineRpcContract({
+  method: "agent.listProviderProfiles",
+  schemaVersion: { major: 8, minor: 0 } as const,
+  requestSchema: agentListProviderProfilesRequestSchema,
+  responseSchema: agentListProviderProfilesResponseSchema,
+});
+
+export const agentListProviderProfilesUpgradeV70ToV80 = defineUpgradePath<
+  typeof agentListProviderProfilesV70,
+  typeof agentListProviderProfilesV80
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 8, minor: 0 },
+  // Request shape is identical; a v7.0 response is a valid v8.0 response
+  // (only the id enum grows), so the upgrade is identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListProviderProfilesDowngradeV80ToV70 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV70
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // One provider per response, so there is nothing to filter: pass through
+    // or refuse. The message names no provider so it stays honest as the id
+    // set grows.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV7.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV60 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV60
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // One provider per response, so there is nothing to filter: pass through
+    // or refuse. The message names no provider so it stays honest as the id
+    // set grows.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV6.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV50 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV50
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Same fail-closed rule as the v7.0 bridges above: this response carries
+    // exactly one provider, so there is nothing to filter and the only honest
+    // options are pass-through or refuse.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV5.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV40 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV40
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV4.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV30 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV30
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV3.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV20 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV20
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV80ToV10 = defineDowngradePath<
+  typeof agentListProviderProfilesV80,
+  typeof agentListProviderProfilesV10
+>({
+  from: { major: 8, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -1299,9 +1517,9 @@ export const agentGetProviderProfileRateLimitsDowngradeV70ToV10 =
     },
   });
 
-// The LIVE line. Ranges over `providerRateLimitsSchema`; the moment a tag
-// ships `8`, freeze it against a snapshot union and open `9` - do not edit
-// this comment to say the line is safe because it is newest.
+// Frozen when Muse opened 9.0, against `providerRateLimitsSchemaV100` - the
+// snapshot-union freeze the comment this line carried always said a shipped
+// `8` gets. The id enum is the only thing that grew; nothing else moved.
 //
 // This method deliberately does NOT follow its siblings, where the head
 // contract names the un-suffixed base schema. Here the head gets its own
@@ -1315,7 +1533,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV70ToV10 =
 export const agentGetProviderProfileRateLimitsResponseSchemaV8 = lazySchema(
   () =>
     z.object({
-      rateLimits: providerRateLimitsSchema,
+      rateLimits: providerRateLimitsSchemaV100,
       usageUpdatedAt: z.number().nullable(),
     }),
 );
@@ -1475,6 +1693,164 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV10 =
     typeof agentGetProviderProfileRateLimitsV10
   >({
     from: { major: 8, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+// The LIVE line, where Muse rides. Only the response's provider id enum grew;
+// the head gets its own `...ResponseSchemaVN` object for the reason the 8.0
+// one records.
+export const agentGetProviderProfileRateLimitsResponseSchemaV9 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchema,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
+
+export const agentGetProviderProfileRateLimitsV90 = defineRpcContract({
+  method: "agent.getProviderProfileRateLimits",
+  schemaVersion: { major: 9, minor: 0 } as const,
+  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
+  responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV9,
+});
+
+export const agentGetProviderProfileRateLimitsUpgradeV80ToV90 =
+  defineUpgradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV90
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 9, minor: 0 },
+    // Request shape is identical - only the response's id enum grows (Muse).
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV80 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV80
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 8, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      // Nothing to degrade - only the id enum grew, and an id major 8 cannot
+      // spell fails the frozen union's parse, which refuses.
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV8.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV70 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV70
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 7, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV7.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV60 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV60
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 6, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV6.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV50 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV50
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 5, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV5.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV40 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV40
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV4.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV30 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV30
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV20 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV20
+  >({
+    from: { major: 9, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(
+          profileDegradedToV151(response),
+        ),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV90ToV10 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV90,
+    typeof agentGetProviderProfileRateLimitsV10
+  >({
+    from: { major: 9, minor: 0 },
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) =>
@@ -2090,7 +2466,10 @@ export type AgentConfigureRequestV72 = z.infer<
 
 export const agentConfigureSettingsSchemaV71 = lazySchema(() =>
   z.object({
-    harnessId: guiHarnessIdSchema,
+    // Pinned to `guiHarnessIdSchemaV100` when Muse opened 8.0: 7.0 and 7.1 are
+    // RELEASED (`host-v1.5.1`), so a harness id added after Command Code must
+    // not reach them. The head widens the id again below.
+    harnessId: guiHarnessIdSchemaV100,
     model: z.string().min(1),
     profileSelection: concreteProfileSelectionSchema,
     reasoningEffort: z.string().nullable(),
@@ -2109,6 +2488,9 @@ export const agentConfigureSettingsSchemaV71 = lazySchema(() =>
 );
 export const agentConfigureSettingsSchema = lazySchema(() =>
   agentConfigureSettingsSchemaV71.extend({
+    // The LIVE line tracks the enum again; every released major-7 line above
+    // keeps the V100 pin.
+    harnessId: guiHarnessIdSchema,
     serviceTier: z.string().nullable(),
   }),
 );
@@ -2132,6 +2514,23 @@ export const agentConfigureResponseSchema = lazySchema(() =>
 );
 export type AgentConfigureResponse = z.infer<
   typeof agentConfigureResponseSchema
+>;
+
+/**
+ * Frozen `agent.configure@7.2` response: the released 7.0/7.1 settings (V100
+ * id pin) plus the `serviceTier` key 7.2 added. Muse opening 8.0 froze it
+ * here - the moment the 7.0 comment above asked for.
+ */
+export const agentConfigureResponseSchemaV72 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV71.extend({
+      serviceTier: z.string().nullable(),
+    }),
+    warnings: z.array(z.string()),
+  }),
+);
+export type AgentConfigureResponseV72 = z.infer<
+  typeof agentConfigureResponseSchemaV72
 >;
 
 /**
@@ -2429,9 +2828,8 @@ export const agentConfigureV60 = defineRpcContract({
   responseSchema: agentConfigureResponseSchemaV6,
 });
 
-// `7.0` is RELEASED (`host-v1.5.1`); `7.2` below is the LIVE line. The moment a
-// tag ships a harness id after Command Code, freeze the response against a
-// snapshot harness id set and open `8`.
+// `7.0` is RELEASED (`host-v1.5.1`); Muse opening 8.0 froze every major-7
+// response against `guiHarnessIdSchemaV100`.
 export const agentConfigureV70 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 7, minor: 0 } as const,
@@ -2452,11 +2850,111 @@ export const agentConfigureV71 = defineRpcContract({
   responseSchema: agentConfigureResponseSchemaV71,
 });
 
+// Frozen when Muse opened 8.0: a harness id added after Command Code must not
+// reach a released line.
 export const agentConfigureV72 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 7, minor: 2 } as const,
   requestSchema: agentConfigureRequestSchemaV72,
+  responseSchema: agentConfigureResponseSchemaV72,
+});
+
+// The LIVE line, where Muse rides.
+export const agentConfigureV80 = defineRpcContract({
+  method: "agent.configure",
+  schemaVersion: { major: 8, minor: 0 } as const,
+  requestSchema: agentConfigureRequestSchemaV72,
   responseSchema: agentConfigureResponseSchema,
+});
+
+export const agentConfigureUpgradeV72ToV80 = defineUpgradePath<
+  typeof agentConfigureV72,
+  typeof agentConfigureV80
+>({
+  from: { major: 7, minor: 2 },
+  to: { major: 8, minor: 0 },
+  // Request shape is identical; a v7.2 response is a valid v8.0 response
+  // (only the harness id enum grows), so the upgrade is identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentConfigureDowngradeV80ToV72 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV72
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 7, minor: 2 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Fails closed for a harness added after Command Code: a single configured
+    // agent cannot be filtered, so it is pass-through or refuse. The message
+    // names no harness so it stays honest as the enum grows.
+    const parsed = agentConfigureResponseSchemaV72.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV80ToV60 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV60
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: downgradeConfigureRequestFromV72,
+  downgradeResponse: (response) => {
+    // Fails closed for a harness added after 1.5.0: a single configured agent
+    // cannot be filtered, so it is pass-through or refuse. The message names
+    // no harness so it stays honest as the enum grows.
+    const parsed = agentConfigureResponseSchemaV6.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV80ToV50 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV50
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: downgradeConfigureRequestFromV72,
+  downgradeResponse: (response) => {
+    // Fails closed for a post-v8.0 harness (antigravity) - see the v5->v4
+    // bridge below for the full reasoning. The message names no harness so it
+    // stays honest as the enum grows.
+    const parsed = agentConfigureResponseSchemaV5.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const agentConfigureUpgradeV71ToV72 = defineUpgradePath<
@@ -2686,6 +3184,106 @@ export const agentConfigureDowngradeV72ToV10 = defineDowngradePath<
   },
 });
 
+export const agentConfigureDowngradeV80ToV40 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV40
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: downgradeConfigureRequestFromV72,
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV4.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV80ToV30 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV30
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: downgradeConfigureRequestFromV72,
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV3.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV80ToV20 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV20
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: downgradeConfigureRequestFromV72,
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV80ToV10 = defineDowngradePath<
+  typeof agentConfigureV80,
+  typeof agentConfigureV10
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 1, minor: 0 },
+  // Same refusal as every other bridge onto v1.0 - see the v5->v1 bridge.
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before configuring this agent.",
+    },
+  }),
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
 export const agentConfigureUpgradeV50ToV60 = defineUpgradePath<
   typeof agentConfigureV50,
   typeof agentConfigureV60
@@ -2836,6 +3434,7 @@ const AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR: Readonly<
     | typeof agentConfigureSettingsSchemaV4
     | typeof agentConfigureSettingsSchemaV5
     | typeof agentConfigureSettingsSchemaV6
+    | typeof agentConfigureSettingsSchemaV71
     | typeof agentConfigureSettingsSchema
     | undefined
   >
@@ -2846,7 +3445,8 @@ const AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR: Readonly<
   4: agentConfigureSettingsSchemaV4,
   5: agentConfigureSettingsSchemaV5,
   6: agentConfigureSettingsSchemaV6,
-  7: agentConfigureSettingsSchema,
+  7: agentConfigureSettingsSchemaV71,
+  8: agentConfigureSettingsSchema,
 };
 
 export const agentConfigureUpgradeV10ToV20 = defineUpgradePath<

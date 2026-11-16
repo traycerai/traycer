@@ -25,6 +25,9 @@ import {
   agentSenderSchemaPreReasonix,
   chatSessionAnchorSchema,
   chatSessionAnchorSchemaPreReasonix,
+  chatSessionAnchorSchemaPreMuse,
+  agentSenderSchemaPreMuse,
+  userMessageSenderSchemaPreMuse,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
@@ -435,10 +438,10 @@ export const userMessageSchemaV18 = lazySchema(() =>
     .object({
       role: z.literal("user"),
       messageId: z.string(),
-      sender: userMessageSenderSchema,
+      sender: userMessageSenderSchemaPreMuse,
       message: userMessagePayloadSchemaPreCanvas,
       timestamp: z.number(),
-      sessionAnchor: chatSessionAnchorSchema.nullable(),
+      sessionAnchor: chatSessionAnchorSchemaPreMuse.nullable(),
     })
     .superRefine(userMessageSenderKindRefine),
 );
@@ -782,6 +785,8 @@ export const userMessageSchema = lazySchema(() =>
     .object({
       ...userMessageSchemaPreCanvas.shape,
       message: userMessagePayloadSchema,
+      sender: userMessageSenderSchema,
+      sessionAnchor: chatSessionAnchorSchema.nullable(),
       /**
        * `true` on a member's message whose words were spoken on a call
        * (`chat.subscribe@1.43`). Absent on every other row, and optional for
@@ -810,10 +815,10 @@ export const userMessageSchemaPreAnnotation = lazySchema(() =>
     .object({
       role: z.literal("user"),
       messageId: z.string(),
-      sender: userMessageSenderSchema,
+      sender: userMessageSenderSchemaPreMuse,
       message: userMessagePayloadSchemaPreAnnotation,
       timestamp: z.number(),
-      sessionAnchor: chatSessionAnchorSchema.nullable(),
+      sessionAnchor: chatSessionAnchorSchemaPreMuse.nullable(),
     })
     .superRefine(userMessageSenderKindRefine),
 );
@@ -952,7 +957,7 @@ export const assistantMessageSchemaV18 = lazySchema(() =>
      * message id; migrated legacy rows are assigned one.
      */
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaV18),
     /**
      * Wall-clock the turn began (ms). Set once at turn-start and never
@@ -1085,6 +1090,7 @@ export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
 );
 export const assistantMessageSchema = lazySchema(() =>
   assistantMessageSchemaPreMultiSelect.extend({
+    sender: agentSenderSchema,
     /** The row's questions, each of which may say `multiSelect` (`chat.subscribe@1.43`). */
     question: botQuestionSchema.optional(),
   }),
@@ -1361,7 +1367,7 @@ export const assistantMessageSchemaPreFallback = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaPreFallback),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
@@ -1396,7 +1402,7 @@ export const assistantMessageSchemaPreShellHost = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaPreShellHost),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
@@ -1426,7 +1432,7 @@ export const assistantMessageSchemaPreBrowser = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaPreBrowser),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
@@ -1459,7 +1465,7 @@ export const assistantMessageSchemaPreReceipt = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaPreReceipt),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
@@ -1492,7 +1498,7 @@ export const assistantMessageSchemaPreMcpApp = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
-    sender: agentSenderSchema,
+    sender: agentSenderSchemaPreMuse,
     blocks: z.array(contentBlockSchemaPreMcpApp),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),

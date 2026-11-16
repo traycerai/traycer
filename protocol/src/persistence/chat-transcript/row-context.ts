@@ -4,6 +4,7 @@ import {
   chatSessionAnchorSchema,
   chatSessionAnchorSchemaPreAntigravity,
   chatSessionAnchorSchemaPreCommandCode,
+  chatSessionAnchorSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/senders";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -171,6 +172,34 @@ export const transcriptRowContextSchemaPreCommandCode = lazySchema(() =>
   z.object({
     legacyRowAnchorAt: z.number().optional(),
     sessionAnchor: chatSessionAnchorSchemaPreCommandCode.optional(),
+    profileWalkUnprovable: z.boolean().optional(),
+    hasLaterOverlappingChanges: z.boolean().optional(),
+    setupWindowIndex: z.number().int().nonnegative().optional(),
+    setupWindowIsActive: z.boolean().optional(),
+    completedSteer: z.boolean().optional(),
+  }),
+);
+
+/**
+ * Frozen copy bound to `chat.subscribe@1.10` through `@1.44`, as the released
+ * lines shipped them: the live fields with `sessionAnchor` taking the anchor
+ * union those peers strict-decode, without the Muse arm
+ * (`chatSessionAnchorSchemaPreMuse`). `@1.45` binds the live schema.
+ *
+ * Hand-copied field-for-field, not `.extend()`ed off the live schema: a field
+ * minted for a later line must not reach these. The two older copies below
+ * derive from THIS one for the same reason. See the live schema for what each
+ * field means.
+ *
+ * The host withholds a row's anchor this union rejects from a peer below
+ * `@1.45`, the way it already withholds a Command Code one below `@1.21`: an
+ * absent `sessionAnchor` is the projection declining to speak, and the reader
+ * falls back to its own walk.
+ */
+export const transcriptRowContextSchemaPreMuse = lazySchema(() =>
+  z.object({
+    legacyRowAnchorAt: z.number().optional(),
+    sessionAnchor: chatSessionAnchorSchemaPreMuse.optional(),
     profileWalkUnprovable: z.boolean().optional(),
     hasLaterOverlappingChanges: z.boolean().optional(),
     setupWindowIndex: z.number().int().nonnegative().optional(),

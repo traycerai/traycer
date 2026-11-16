@@ -37,6 +37,10 @@ describe("providerIdFromHarnessOrProviderName", () => {
     expect(providerIdFromHarnessOrProviderName("claude")).toBe("claude-code");
   });
 
+  it("resolves Muse Code by its harness or provider name", () => {
+    expect(providerIdFromHarnessOrProviderName("muse")).toBe("muse");
+  });
+
   it("returns null for a name that is neither", () => {
     expect(providerIdFromHarnessOrProviderName("not-a-provider")).toBeNull();
   });

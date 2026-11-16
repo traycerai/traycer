@@ -109,5 +109,6 @@ export const harnessIdSchema = lazySchema(() =>
     "reasonix",
     "antigravity",
     "commandcode",
+    "muse",
   ]),
 );

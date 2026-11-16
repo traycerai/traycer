@@ -2,6 +2,7 @@ import { sessionWorkspaceSnapshotSchema } from "@traycer/protocol/common/workspa
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreReasonix,
+  guiHarnessIdSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -73,6 +74,13 @@ export const userMessageSenderSchema = lazySchema(() =>
 );
 export type UserMessageSender = z.infer<typeof userMessageSenderSchema>;
 export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
+
+export const agentSenderSchemaPreMuse = lazySchema(() =>
+  agentSenderSchema.extend({ harnessId: guiHarnessIdSchemaPreMuse }),
+);
+export const userMessageSenderSchemaPreMuse = lazySchema(() =>
+  z.discriminatedUnion("type", [userSenderSchema, agentSenderSchemaPreMuse]),
+);
 
 /**
  * Wire-freeze copy of {@link agentSenderSchema} WITHOUT `inReplyTo`, bound to
@@ -179,6 +187,10 @@ export const activeSessionChainSchema = lazySchema(() =>
   }),
 );
 export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
+
+export const activeSessionChainSchemaPreMuse = lazySchema(() =>
+  activeSessionChainSchema.extend({ harnessId: guiHarnessIdSchemaPreMuse }),
+);
 
 /**
  * Wire-freeze copy of {@link activeSessionChainSchema} with `harnessId` pinned
@@ -645,6 +657,20 @@ export type CommandCodeChatSessionAnchor = z.infer<
   typeof commandCodeChatSessionAnchorSchema
 >;
 
+// Muse session identity; runtime resume and fork behavior belongs to the host.
+export const museChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("muse"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
+export type MuseChatSessionAnchor = z.infer<typeof museChatSessionAnchorSchema>;
+
 export const chatSessionAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("harnessId", [
     claudeChatSessionAnchorSchema,
@@ -669,6 +695,7 @@ export const chatSessionAnchorSchema = lazySchema(() =>
     reasonixChatSessionAnchorSchema,
     antigravityChatSessionAnchorSchema,
     commandCodeChatSessionAnchorSchema,
+    museChatSessionAnchorSchema,
   ]),
 );
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
@@ -775,4 +802,45 @@ export const chatSessionAnchorSchemaPreCommandCode = lazySchema(() =>
 );
 export type ChatSessionAnchorPreCommandCode = z.infer<
   typeof chatSessionAnchorSchemaPreCommandCode
+>;
+
+/**
+ * Wire-freeze copy of the anchor union as the released lines through Command
+ * Code shipped it: every live arm through Command Code, without the Muse one.
+ * Bound by the `rowContext` of `chat.subscribe@1.9` through `@1.44`
+ * (`transcriptRowContextSchemaPreMuse`); `@1.45` is where a later arm rides.
+ *
+ * Hand-listed from the live arms rather than derived from a pre-Command-Code
+ * freeze, for the reason that freeze gives. A variant added to the live union
+ * is excluded here by construction - it has to be added to this list to reach
+ * a released line.
+ */
+export const chatSessionAnchorSchemaPreMuse = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
+    claudeChatSessionAnchorSchema,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+    reasonixChatSessionAnchorSchema,
+    antigravityChatSessionAnchorSchema,
+    commandCodeChatSessionAnchorSchema,
+  ]),
+);
+export type ChatSessionAnchorPreMuse = z.infer<
+  typeof chatSessionAnchorSchemaPreMuse
 >;

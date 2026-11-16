@@ -14,6 +14,7 @@ import {
   KiroIcon,
   KiloCodeIcon,
   KimiIcon,
+  MuseIcon,
   OmpIcon,
   OpenCodeIcon,
   OpenRouterIcon,
@@ -53,4 +54,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   reasonix: { Icon: ReasonixIcon, className: "text-foreground" },
   antigravity: { Icon: AntigravityIcon, className: "text-foreground" },
   commandcode: { Icon: CommandCodeIcon, className: "text-foreground" },
+  muse: { Icon: MuseIcon, className: "text-foreground" },
 };

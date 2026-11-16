@@ -10,6 +10,7 @@ import {
   guiHarnessIdSchemaV70,
   guiHarnessIdSchemaV80,
   guiHarnessIdSchemaV90,
+  guiHarnessIdSchemaV100,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
@@ -717,7 +718,7 @@ export type ListGuiHarnessesResponseV91 = z.infer<
 // no minor of a major may grow a response enum over its predecessor.
 //
 // Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
-// which only 10.1 (the head line) binds.
+// which only 11.0 (the head line) binds.
 export const guiHarnessOptionSchemaV92 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -757,16 +758,15 @@ export type ListGuiHarnessesResponseV92 = z.infer<
 //
 // A field-for-field hand copy of the live row at the cut, in the live key
 // order, for the reason 9.1's and 9.2's copies are: a derived row keeps
-// reading every live leaf. The id is the live `guiHarnessIdSchema`, shared
-// with 10.1 - no minor of a major may grow a response enum over its
-// predecessor, so the next id opens major 11 and freezes this one's id then,
-// as `guiHarnessIdSchemaV90` was frozen for major 9.
+// reading every live leaf. The id is `guiHarnessIdSchemaV100`, frozen when
+// major 11 opened - no minor of a major may grow a response enum over its
+// predecessor, as `guiHarnessIdSchemaV90` was frozen for major 9.
 //
 // Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
-// only 10.1 (the head line) binds.
+// only 11.0 (the head line) binds.
 export const guiHarnessOptionSchemaV100 = lazySchema(() =>
   z.object({
-    id: guiHarnessIdSchema,
+    id: guiHarnessIdSchemaV100,
     label: z.string(),
     enabled: z.boolean().default(true),
     available: z.boolean(),
@@ -794,6 +794,56 @@ export const listGuiHarnessesResponseSchemaV100 = lazySchema(() =>
 );
 export type ListGuiHarnessesResponseV100 = z.infer<
   typeof listGuiHarnessesResponseSchemaV100
+>;
+
+// ── Frozen protocol-v10.1 catalog row + response (pre-Muse) ────────────────
+// 10.1 is the `sandboxCredentialMode`/`sandboxCredentialNote` line and the
+// latest minor of major 10. `host-v1.5.1` shipped `10.0`, so major 10 stops
+// binding the live row here and major 11 opens above it for the harness ids
+// added since.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, for the reason 9.2's copy is one: a derived row keeps reading every
+// live leaf. The id is `guiHarnessIdSchemaV100`, shared by both minors - no
+// minor of a major may grow a response enum over its predecessor.
+//
+// Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
+// which only 11.0 (the head line) binds.
+export const guiHarnessOptionSchemaV101 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchemaV100,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    judgeDefaultModel: z.string().nullable().optional(),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+    sandboxCredentialMode: guiHarnessSandboxCredentialModeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+    sandboxCredentialNote: z.string().nullable().optional(),
+  }),
+);
+export type GuiHarnessOptionV101 = z.infer<typeof guiHarnessOptionSchemaV101>;
+export const listGuiHarnessesResponseSchemaV101 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV101),
+  }),
+);
+export type ListGuiHarnessesResponseV101 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV101
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

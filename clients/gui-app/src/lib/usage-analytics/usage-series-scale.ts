@@ -49,6 +49,7 @@ const HARNESS_PREFERRED_SLOT: Readonly<Partial<Record<string, number>>> = {
   kilocode: 14,
   kimi: 9,
   kiro: 7,
+  muse: 11,
   omp: 10,
   openrouter: 11,
   pi: 16,

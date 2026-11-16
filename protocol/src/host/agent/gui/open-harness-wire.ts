@@ -109,6 +109,7 @@ import {
   turnStoppedEventSchema,
   usageUpdatedEventSchema,
   userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreMuse,
   userMessageAnchorTailUpdatedEventSchema,
   workflowCompletedEventSchema,
   workflowProgressEventSchema,
@@ -137,6 +138,7 @@ export {
   openContentBlockSchema,
   openHarnessIdSchema,
   openMessageSchema,
+  openMessageSchemaPreMuse,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,
@@ -151,6 +153,7 @@ export {
   openSteerBlockSchema,
   openTextBlockSchema,
   openUserMessageSchema,
+  openUserMessageSchemaPreMuse,
   openUserMessageSchemaPreCanvas,
   openUserMessageSchemaPreConversation,
   openUserMessageSchemaPreSlack,
@@ -264,7 +267,7 @@ export const openRuntimeEventSchemaPreHtml = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
@@ -313,7 +316,7 @@ export const openRuntimeEventSchemaPreArtifact = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
@@ -362,7 +365,7 @@ export const openRuntimeEventSchemaPreNotApplied = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
@@ -387,7 +390,7 @@ export const openRuntimeEventSchemaPreNotApplied = lazySchema(() =>
  * joins this line by a visible edit; the member-set test says when one is
  * missing.
  */
-export const openRuntimeEventSchema = lazySchema(() =>
+export const openRuntimeEventSchemaPreMuse = lazySchema(() =>
   z.discriminatedUnion("type", [
     textDeltaEventSchema,
     textCompletedEventSchema,
@@ -420,7 +423,7 @@ export const openRuntimeEventSchema = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
@@ -433,6 +436,15 @@ export const openRuntimeEventSchema = lazySchema(() =>
     openProviderNoticeUpsertEventSchema,
     imageResolutionUpdatedEventSchema,
     userMessageAnchorTailUpdatedEventSchema,
+  ]),
+);
+export const openRuntimeEventSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    ...openRuntimeEventSchemaPreMuse.def.options.map((schema) =>
+      schema === userMessageAnchorResolvedEventSchemaPreMuse
+        ? userMessageAnchorResolvedEventSchema
+        : schema,
+    ),
   ]),
 );
 export type OpenRuntimeEvent = z.infer<typeof openRuntimeEventSchema>;
@@ -475,7 +487,7 @@ export const openRuntimeEventSchemaPreDelivery = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
@@ -525,7 +537,7 @@ export const openRuntimeEventSchemaPreMcpApp = lazySchema(() =>
     openSessionCreatedEventSchema,
     openSessionResumedEventSchema,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,

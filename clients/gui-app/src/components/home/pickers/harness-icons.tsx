@@ -174,6 +174,15 @@ export const CommandCodeIcon: HarnessIcon = (props) => (
   </svg>
 );
 
+// A text monogram, not an official Muse Code mark.
+export const MuseIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="currentColor">
+    <text x="12" y="19" textAnchor="middle" fontSize="20" fontWeight="bold">
+      M
+    </text>
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox={TRAYCER_MARK_VIEWBOX} fill="currentColor">

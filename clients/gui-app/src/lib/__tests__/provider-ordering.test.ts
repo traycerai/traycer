@@ -73,6 +73,17 @@ describe("ORDERED_PROVIDERS commandcode placement", () => {
   });
 });
 
+describe("Muse Code provider ordering", () => {
+  it("includes Muse Code and resolves it in both directions", () => {
+    expect(ORDERED_PROVIDERS.filter((p) => p.providerId === "muse")).toEqual([
+      { providerId: "muse", harnessId: "muse" },
+    ]);
+    expect(guiHarnessIdToProviderId("muse")).toBe("muse");
+    expect(providerIdToGuiHarnessId("muse")).toBe("muse");
+    expect(providerCliIdForHarness("muse")).toBe("muse");
+  });
+});
+
 describe("orderProvidersByEnablement", () => {
   const ALL_PROVIDER_IDS: ReadonlyArray<ProviderId> = ORDERED_PROVIDERS.map(
     (p) => p.providerId,

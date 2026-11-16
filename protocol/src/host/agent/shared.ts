@@ -81,6 +81,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "reasonix",
     "antigravity",
     "commandcode",
+    "muse",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -405,6 +406,48 @@ export const guiHarnessIdSchemaV90 = lazySchema(() =>
 );
 export type GuiHarnessIdV90 = z.infer<typeof guiHarnessIdSchemaV90>;
 
+/**
+ * The harness id set `agent.gui.listHarnesses@10.0`–`@10.1` and
+ * `agent.list@10.0`–`@10.3` shipped: v9.0's twenty-one plus Command Code,
+ * which opened major 10.
+ *
+ * Major 10 was opened to carry Command Code and bound the live enum on the
+ * reading that the head line is the unreleased one. `host-v1.5.1` then shipped
+ * `listHarnesses@10.0`, so the next id would have widened released catalog
+ * lines in place. Pinned here the moment the next id arrives, which opens
+ * major 11 - the same discipline the V90 note describes for major 9.
+ *
+ * Do NOT add new harnesses here - extend the latest `guiHarnessIdSchema`; the
+ * head line's bridge drops post-v10 ids for older callers.
+ */
+export const guiHarnessIdSchemaV100 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type GuiHarnessIdV100 = z.infer<typeof guiHarnessIdSchemaV100>;
+
 export const tuiHarnessIdSchema = lazySchema(() =>
   harnessIdSchema.extract(["claude", "codex", "opencode", "cursor"]),
 );
@@ -522,6 +565,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "reasonix",
   "antigravity",
   "commandcode",
+  "muse",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -1128,11 +1172,13 @@ export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
  * The `agent.list@10.0` row, frozen when `@10.1` put the run tuple on the
  * head. RELEASED (`host-v1.5.1` registers `@10.0`), so it never grows a key
  * again. Hand-frozen off the released base, not `.omit()`ted off the live
- * head, so a key added to the head cannot reach it; the harness id stays the
- * live enum both minors share, as a minor may not grow it.
+ * head, so a key added to the head cannot reach it; the harness id was pinned
+ * to `guiHarnessIdSchemaV100` when Muse opened major 11, exactly as the
+ * major-9 rows pin `guiHarnessIdSchemaV90`.
  */
 export const agentSummarySchemaV100 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV100.nullable(),
     runConfig: agentRunConfigSchemaV102.nullable().default(null),
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
@@ -1501,6 +1547,30 @@ export const listAgentsResponseSchemaV102 = lazySchema(() =>
     agents: z.array(agentSummarySchemaV102),
   }),
 );
+
+/**
+ * The `agent.list@10.3` row, frozen when Muse opened major 11: it extends
+ * `agentSummarySchemaV102`, so it inherits that chain's `guiHarnessIdSchemaV100`
+ * pin, and carries the only key `@10.3` added, the service tier.
+ */
+export const agentSummarySchemaV103 = lazySchema(() =>
+  agentSummarySchemaV102.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
+  }),
+);
+
+/**
+ * The `agent.list@10.3` response, frozen off the canonical one when Muse
+ * opened major 11. See {@link agentSummarySchemaV103}.
+ */
+export const listAgentsResponseSchemaV103 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV103),
+  }),
+);
+export type ListAgentsResponseV103 = z.infer<
+  typeof listAgentsResponseSchemaV103
+>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

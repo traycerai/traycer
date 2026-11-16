@@ -425,6 +425,7 @@ describe("OnboardingDetectedAgents", () => {
       "Hermes Agent",
       "Oh My Pi",
       "Reasonix",
+      "Muse Code",
       "Command Code",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
@@ -472,6 +473,7 @@ describe("OnboardingDetectedAgents", () => {
       "Hermes Agent",
       "Oh My Pi",
       "Reasonix",
+      "Muse Code",
     ];
     const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
     const commandCodeRows = rows.filter((text) =>

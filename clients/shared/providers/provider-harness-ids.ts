@@ -34,6 +34,7 @@ export const GUI_HARNESS_BY_PROVIDER_ID = {
   omp: "omp",
   reasonix: "reasonix",
   commandcode: "commandcode",
+  muse: "muse",
 } satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
 /**
