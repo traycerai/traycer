@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentInboxCommand } from "../agent-inbox";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { callAgentHostRpc } from "../../internal/host-rpc";
+import { makeCtx } from "./hook-test-helpers";
 
 vi.mock("../../internal/host-rpc", async (importOriginal) => {
   const actual =
@@ -38,7 +39,7 @@ describe("agent inbox", () => {
       after: null,
     });
 
-    const result = await Reflect.apply(command, null, []);
+    const result = await command(makeCtx());
 
     expect(result).toMatchObject({
       data: { messages: [], nextCursor: null },
