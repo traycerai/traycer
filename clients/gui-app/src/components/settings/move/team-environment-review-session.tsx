@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
@@ -51,6 +52,24 @@ interface RefusedRevision {
 
 const NO_ENTRIES: readonly TeamReviewEntry[] = [];
 
+/** Only a settled directory read can authorize this organization target. */
+function mayEditReview(
+  directory: UseQueryResult<EnvironmentListResponseV11, HostRpcError>,
+  environmentId: string,
+): boolean {
+  const environment = environmentReadData(directory)?.environments.find(
+    (row) =>
+      row.environmentId === environmentId && row.ownerKind === "organization",
+  );
+  return (
+    directory.isFetchedAfterMount &&
+    directory.isSuccess &&
+    !directory.isFetching &&
+    environment !== undefined &&
+    mayChangeConfiguration(configurationRoleOf(environment))
+  );
+}
+
 /** An addressed account review, independent of any connected computer. */
 export function TeamEnvironmentReviewSession(props: {
   readonly target: EnvironmentReviewTarget;
@@ -74,17 +93,7 @@ export function TeamEnvironmentReviewSession(props: {
     origin?.onOriginSignIn() === true;
   const review = useTeamEnvironmentReviewRead(target.environmentId, current);
   const directory = useEnvironmentListQuery(current);
-  const environment = environmentReadData(directory)?.environments.find(
-    (row) =>
-      row.environmentId === target.environmentId &&
-      row.ownerKind === "organization",
-  );
-  const canEdit =
-    directory.isFetchedAfterMount &&
-    directory.isSuccess &&
-    !directory.isFetching &&
-    environment !== undefined &&
-    mayChangeConfiguration(configurationRoleOf(environment));
+  const canEdit = mayEditReview(directory, target.environmentId);
   const refetchDirectory = directory.refetch;
   useEffect(() => {
     if (current) void refetchDirectory();
