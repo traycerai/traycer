@@ -47,10 +47,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import type {
-  EnvironmentStatusResponseV11,
-  EnvironmentStatusResponseV13,
-} from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentMovePlanRequestV20,
   EnvironmentMoveStageRequest,
@@ -546,10 +543,31 @@ describe("HostEnvironmentSection", () => {
       return Promise.resolve(ownershipResult(TEAM_OWNER));
     });
     const queryClient = await openGiveDialog(calls, events);
-    const acceptanceRequests = installGiveAcceptanceTransport(() => true, events);
+    const acceptanceRequests = installGiveAcceptanceTransport(
+      () => true,
+      events,
+    );
+    const dialog = screen.getByRole("dialog");
+    for (const disclosure of TEAM_TRANSFER_DISCLOSURE) {
+      expect(within(dialog).getByText(disclosure)).toBeTruthy();
+    }
+    expect(
+      within(dialog).getByText(
+        "Any member of the team can claim this computer as their own.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "The team will own this computer. Any member of the team can claim it as their own. Traycer restarts once on this computer.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText("Personal")).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
+    ).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Confirm at this computer" }),
+      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
     );
 
     await readbackStarted.promise;
@@ -569,7 +587,7 @@ describe("HostEnvironmentSection", () => {
       events.indexOf("ownership-readback"),
     );
 
-    await act(async () => {
+    act(() => {
       ownershipReadback.resolve(ownershipResult(TEAM_OWNER));
     });
 
@@ -643,7 +661,10 @@ describe("HostEnvironmentSection", () => {
         );
       });
       const queryClient = await openGiveDialog(calls, events);
-      const acceptanceRequests = installGiveAcceptanceTransport(() => true, events);
+      const acceptanceRequests = installGiveAcceptanceTransport(
+        () => true,
+        events,
+      );
 
       fireEvent.click(
         screen.getByRole("button", { name: "Confirm at this computer" }),
@@ -698,7 +719,7 @@ describe("HostEnvironmentSection", () => {
     await readbackStarted.promise;
     const readbackKey = giveReadbackKey();
     origin.current = false;
-    await act(async () => {
+    act(() => {
       ownershipReadback.resolve(ownershipResult(TEAM_OWNER));
     });
 
