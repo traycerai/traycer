@@ -7,11 +7,19 @@ import {
   botMemorySubscribeServerFrameSchema,
   type BotMemory,
 } from "@traycer/protocol/host/bot/schemas";
+import {
+  currentBotLifetime,
+  retireAtBotLifetimeEdge,
+  useBotLifetime,
+} from "@/lib/bots/bot-lifetime";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+import { useHostClient } from "@/lib/host";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import {
   resetSharedStreamSubscriptions,
   useSharedStreamSubscription,
@@ -50,13 +58,41 @@ interface MemorySlot {
 }
 
 /**
- * One session per client, host, bot and environment, however many readers
- * mount: the profile card's count and the memory pane share it. Each memory
- * it reads lands in the host's query cache, which keeps the last one after
- * the session closes, so a reader opened again shows it while a new session
- * asks the host.
+ * One session per client, host, bot, environment and bot lifetime, however
+ * many readers mount: the profile card's count and the memory pane share it.
+ * Each memory it reads lands in the host's query cache, which keeps the last
+ * one after the session closes, so a reader opened again shows it while a new
+ * session asks the host.
  */
 const sessions: SharedStreamSubscriptionRegistry<MemoryEvent> = new Map();
+
+function isMemorySlot(queryKey: readonly unknown[]): boolean {
+  return (
+    queryKey[0] === "host" && queryKey[2] === "bot" && queryKey[3] === "memory"
+  );
+}
+
+/**
+ * At an account change, before anything renders as the new account: every
+ * session closes and leaves the registry with its last frame gone, so a
+ * mounted reader opens a fresh one under the new lifetime, and every memory
+ * slot is emptied, so no render shows the previous account's entries.
+ */
+retireAtBotLifetimeEdge((clients) => {
+  for (const [key, shared] of [...sessions]) {
+    sessions.delete(key);
+    shared.isTerminal = true;
+    shared.lastEvent = null;
+    shared.unsubscribeFromStream();
+    for (const consumer of shared.consumers.values()) consumer();
+  }
+  for (const client of clients) {
+    const slots = client
+      .getQueryCache()
+      .findAll({ predicate: (query) => isMemorySlot(query.queryKey) });
+    for (const slot of slots) slot.reset();
+  }
+});
 
 /** Test helper: tear every session down and empty the registry. */
 export function __resetBotMemorySessionsForTesting(): void {
@@ -83,30 +119,47 @@ export function useBotMemory(args: {
   );
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
-  const client = useHostStreamClientFor(target, auth);
+  const binding = useHostStreamClientBindingFor(target, auth);
+  // The binding is rebuilt in an effect, so the render after an account
+  // change still holds the previous account's client. Only a binding whose
+  // transport key names the account requests go out as now is used.
+  const expectedKey = remoteAwareOwnerIdentityKey(
+    target,
+    useRequestContextUserId(useHostClient()),
+  );
+  const client =
+    binding !== null && binding.transportKey === expectedKey
+      ? binding.client
+      : null;
+  const lifetime = useBotLifetime();
   const support = useStreamMethodSupportFor(client, "bot.memory.subscribe");
+  // The lifetime is in the key so a mounted reader moves to a fresh session
+  // at an account change, A, B, A included, where the client is the same.
   const sessionKey =
     client === null
       ? null
-      : `${client.instanceId}|${hostId}|${botId}|${environmentId}`;
+      : `${client.instanceId}|${hostId}|${botId}|${environmentId}|${lifetime}`;
 
   const createSession =
     useCallback((): SharedStreamSubscription<MemoryEvent> => {
       if (client === null) {
         throw new Error("A bot's memory needs a client.");
       }
-      return openSession(client, queryClient, slot);
-    }, [client, queryClient, slot]);
+      return openSession(client, queryClient, slot, lifetime);
+    }, [client, queryClient, slot, lifetime]);
 
   const onConsumerJoined = useCallback(
     (shared: SharedStreamSubscription<MemoryEvent>): void => {
+      // The key carries the lifetime the joined session was opened under; a
+      // session of a lifetime already gone replays nothing.
+      if (lifetime !== currentBotLifetime()) return;
       const last = shared.lastEvent;
       if (last?.kind !== "snapshot" || last.memory === null) return;
       const key = botQueryKeys.memory(slot);
       if (queryClient.getQueryData(key) !== undefined) return;
       queryClient.setQueryData(key, last.memory);
     },
-    [queryClient, slot],
+    [queryClient, slot, lifetime],
   );
 
   const { lastEvent, sendRefresh } = useSharedStreamSubscription({
@@ -158,6 +211,7 @@ function openSession(
   client: StreamClient,
   queryClient: QueryClient,
   slot: MemorySlot,
+  lifetime: number,
 ): SharedStreamSubscription<MemoryEvent> {
   const session = client.subscribe("bot.memory.subscribe", {
     botId: slot.botId,
@@ -180,8 +234,12 @@ function openSession(
     shared.lastEvent = event;
     for (const consumer of shared.consumers.values()) consumer();
   };
+  // A frame or close of a lifetime already gone is dropped whole: one queued
+  // before the account changed, or one for a session opened under a lifetime
+  // that moved before its effect ran.
+  const live = (): boolean => !closed && lifetime === currentBotLifetime();
   session.onServerFrame((envelope) => {
-    if (closed) return;
+    if (!live()) return;
     const parsed = botMemorySubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success || parsed.data.kind !== "snapshot") return;
     const { memory } = parsed.data;
@@ -191,7 +249,7 @@ function openSession(
     publish({ kind: "snapshot", memory });
   });
   session.onStatusChange((status, reason) => {
-    if (closed || status !== "closed") return;
+    if (!live() || status !== "closed") return;
     // A retryable close is the transport redialing this same session.
     if (reason?.kind === "fatalError" && reason.details.retryable === true) {
       return;

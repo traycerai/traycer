@@ -446,6 +446,8 @@ test("accepting the question replaces the parked draft with the new one", async 
   await expect.poll(() => answers.asked.length).toBe(1);
   expect(answers.asked[0]).toContain(DISCARD_QUESTION);
   await expect(draftIn(page, CARD_B)).toHaveCount(1);
+  // The draft takes focus when its editor mounts; Close's Enter must not race it.
+  await expect(draftText(page)).toBeFocused();
   await closeCard(page, CARD_B);
   await expandCard(page, CARD_A);
   await expect(draftIn(page, CARD_A)).toHaveCount(0);
@@ -463,6 +465,8 @@ test("an empty parked draft is replaced without a question", async ({
   await pickElement(page, CARD_B, "#known");
 
   await expect(draftIn(page, CARD_B)).toHaveCount(1);
+  // The draft takes focus when its editor mounts; Close's Enter must not race it.
+  await expect(draftText(page)).toBeFocused();
   expect(answers.asked).toEqual([]);
   await closeCard(page, CARD_B);
   await expandCard(page, CARD_A);
