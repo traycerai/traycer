@@ -1,10 +1,17 @@
 import {
+  defaultScheduler,
+  notifyManager,
   QueryClient,
   QueryClientProvider,
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import { Profiler, useEffect, type ReactNode } from "react";
+import {
+  Profiler,
+  useEffect,
+  type ProfilerOnRenderCallback,
+  type ReactNode,
+} from "react";
 import {
   act,
   cleanup,
@@ -14,7 +21,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   OrganizationAction,
@@ -31,14 +46,18 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 
 /** The stream transport as the provider uses it: frames, and recovery evidence. */
 interface FakeStreamClient {
-  readonly subscribe: () => {
-    readonly onServerFrame: () => void;
+  readonly subscribe: (
+    method: string,
+    request: { readonly taskIds: readonly string[] },
+  ) => {
+    readonly onServerFrame: (listener: (envelope: unknown) => void) => void;
     readonly close: () => void;
   };
   readonly subscribeAvailabilityRecovered: (listener: () => void) => () => void;
@@ -78,6 +97,7 @@ const state = vi.hoisted(() => {
       };
     }) => Promise<unknown>
   >();
+  const revalidateAuth = vi.fn<() => Promise<null>>();
   // The stream transport the surface binding hands out: `null` until a test
   // dials one. The host's recovery evidence is its availability listeners.
   const stream: {
@@ -86,13 +106,23 @@ const state = vi.hoisted(() => {
   // What the pool tier resolves the surface's stream to. `null` is the
   // no-pool plan, where the answer is the surface's own stream.
   const poolStream: { current: FakeStreamClient | null } = { current: null };
-  return { client, identity, view, support, mutateAsync, stream, poolStream };
+  return {
+    viewFromCache: false,
+    client,
+    identity,
+    view,
+    support,
+    mutateAsync,
+    revalidateAuth,
+    stream,
+    poolStream,
+  };
 });
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => state.client,
   useAuthService: () => ({
-    revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+    revalidateCurrentContextAfterInvalidation: state.revalidateAuth,
   }),
 }));
 
@@ -151,7 +181,31 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: state.view }),
+  useHostQuery: (args: {
+    readonly method: string;
+    readonly cacheKeyIdentity: readonly unknown[];
+  }) => {
+    // The real hook's entry: the view the provider writes frames into, so a
+    // frame re-renders the provider through the cache as it does in the app.
+    const observed = state.viewFromCache && args.method === "organization.read";
+    const cached = useQuery(
+      queryOptions({
+        queryKey: observed
+          ? [
+              ...hostQueryKeys.method<HostRpcRegistry, "organization.read">(
+                state.identity.hostId,
+                "organization.read",
+                { taskIds: [] },
+              ),
+              ...args.cacheKeyIdentity,
+            ]
+          : ["organization-provider-test", "unobserved"],
+        queryFn: () => state.view,
+        enabled: false,
+      }),
+    );
+    return observed ? cached : { data: state.view };
+  },
   useHostMutation: () => ({ mutateAsync: state.mutateAsync }),
 }));
 
@@ -207,6 +261,7 @@ function renderProvider(queryClient: QueryClient, children: ReactNode) {
 function resetStores(): void {
   state.stream.current = null;
   state.poolStream.current = null;
+  state.viewFromCache = false;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   state.identity.hostId = "host-1";
@@ -214,6 +269,7 @@ function resetStores(): void {
   state.identity.authUserId = "user-1";
   state.support.current = true;
   state.mutateAsync.mockReset();
+  state.revalidateAuth.mockReset().mockResolvedValue(null);
   state.mutateAsync.mockImplementation(() =>
     Promise.resolve({
       commandId: "command-1",
@@ -347,6 +403,65 @@ afterEach(() => {
 });
 
 describe("OrganizationProvider lifecycle projection", () => {
+  it("commits a token-only account-wide frame once, with no render of its own for the identity re-read", async () => {
+    // Each notification reaches the provider as it is made, so a re-read
+    // that rendered would commit on its own instead of batching with the view.
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
+    const subscriptions = new Map<string, (envelope: unknown) => void>();
+    state.stream.current = {
+      wsStreamClient: {
+        subscribe: (_method, request) => ({
+          onServerFrame: (listener) => {
+            subscriptions.set(request.taskIds.join(","), listener);
+          },
+          close: () => undefined,
+        }),
+        subscribeAvailabilityRecovered: () => () => undefined,
+      },
+    };
+    state.view = { ...emptyView(), historyInvalidation: "token-1" };
+    state.viewFromCache = true;
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      organizationKeys.view("host-1", "user-1"),
+      state.view,
+    );
+    const providerCommits = vi.fn<ProfilerOnRenderCallback>();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="organization-provider" onRender={providerCommits}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </Profiler>
+      </QueryClientProvider>,
+    );
+    const pushAccountWideFrame = (token: string): void => {
+      act(() => {
+        subscriptions.get("")?.({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          view: { ...state.view, historyInvalidation: token },
+        });
+      });
+    };
+    pushAccountWideFrame("token-1");
+    providerCommits.mockClear();
+
+    pushAccountWideFrame("token-2");
+    await waitFor(() =>
+      expect(
+        queryClient
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => mutation.state.status),
+      ).toEqual(["success"]),
+    );
+
+    expect(state.revalidateAuth).toHaveBeenCalledTimes(1);
+    // The token moved the cached view: that is the one commit.
+    expect(providerCommits).toHaveBeenCalledTimes(1);
+  });
+
   it("opens saved siblings when a grouped task is opened", async () => {
     const taskOneTabId = openTask("task-1");
     state.view = viewWithGroup([
