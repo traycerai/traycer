@@ -518,10 +518,12 @@ describe("MobileNavDrawer", () => {
       const row = await screen.findByRole("button", {
         name: "Notifications, 3 notifications need attention",
       });
-      expect(
-        within(row).getByTestId("mobile-nav-notifications-attention-count")
-          .textContent,
-      ).toBe("3");
+      const count = within(row).getByTestId(
+        "mobile-nav-notifications-attention-count",
+      );
+      expect(count.textContent).toBe("3");
+      // Neutral, as the strip's row draws its count: not an error's red.
+      expect(count.getAttribute("data-variant")).toBe("muted");
       expect(
         within(row).queryByTestId("mobile-nav-notifications-quiet-dot"),
       ).toBeNull();
