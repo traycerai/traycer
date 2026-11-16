@@ -12,10 +12,9 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 // The page's reads of Personal's id, notices and review sheet are the app's own
-// calls to authn, and the grant minter a write carries is read from the host
-// binding: the real runtime's binding, with only its `auth` swapped for the
-// fake sign-in. The client is a REAL `HostClient` over an in-memory messenger
-// (`buildAccessHost`): only the host on the far side is faked.
+// calls to authn through the real runtime's binding, with only its `auth`
+// swapped for the fake sign-in. The client is a real `HostClient` over an
+// in-memory messenger (`buildAccessHost`): only the host on the far side is faked.
 const hostMock = vi.hoisted((): { auth: AuthService | null } => ({
   auth: null,
 }));
@@ -137,8 +136,6 @@ interface FrameOptions {
   /** The host id the window addresses; the notice's host id is compared to it. */
   readonly windowHostId: string;
   readonly runnerHost: IRunnerHost | null;
-  /** `true` stands up a grant minter, so a write's grant is observable. */
-  readonly mintsGrants: boolean;
   /**
    * Answers an authn request ahead of the host-backed answers below, or
    * declines it with null.
@@ -155,7 +152,6 @@ const SHELL_PAGE: FrameOptions = {
   methods: ACCESS_METHODS,
   windowHostId: ACCESS_HOST_ID,
   runnerHost: null,
-  mintsGrants: true,
   onAuthnRequest: null,
 };
 
@@ -336,14 +332,6 @@ function renderPage(host: AccessHost, options: FrameOptions): AuthnLog {
     }),
     runnerHostOverrides: { authnBaseUrl: "https://authn.example.test" },
   });
-  if (options.mintsGrants) {
-    auth.mintExecutableWriteGrant = () =>
-      Promise.resolve({
-        kind: "ok" as const,
-        grant: "grant-1",
-        expiresInSeconds: 600,
-      });
-  }
   hostMock.auth = auth;
   // The reads of Personal's id and its notices wait for a verified viewer.
   useAuthStore.setState({
@@ -405,7 +393,6 @@ function renderUndoAuthnPage(code: string): EnvironmentTransportRequest[] {
   const host = hostWith({}, { notices: [noticeFixture({})] });
   return renderPage(host, {
     ...SHELL_PAGE,
-    mintsGrants: false,
     onAuthnRequest: (request) =>
       request.method === "POST" &&
       new URL(request.url).pathname.endsWith("/undo")
@@ -672,7 +659,6 @@ describe("Keep this host's value", () => {
         params: {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "debug",
-          executableWriteGrant: "grant-1",
         },
       },
       {
@@ -843,7 +829,6 @@ describe("Keep this host's value", () => {
           key: "ANTHROPIC_BASE_URL",
         },
         value: "http://proxy",
-        executableWriteGrant: "grant-1",
       },
     ]);
   });

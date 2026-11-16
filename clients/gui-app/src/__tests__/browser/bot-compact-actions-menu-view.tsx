@@ -13,6 +13,10 @@ import type {
   BotSubscribeServerFrame,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -33,7 +37,8 @@ import type {
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { createFakeEnvironmentCloudTransport } from "../../../__tests__/create-fake-runner-host";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -42,7 +47,6 @@ import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-b
 import {
   HostRuntimeProvider,
   hostRpcRegistry,
-  useHostBinding,
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
@@ -80,6 +84,7 @@ const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
 const ENVIRONMENT_ID = "env-personal";
 const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
 const AUTHN_BASE_URL = "http://127.0.0.1:9";
+const FIXTURE_TOKEN = "fixture";
 
 useSettingsStore.getState().setTheme("light");
 setPhoneLayoutOnly(true);
@@ -97,14 +102,21 @@ recordNegotiatedHostManifest(HOST_ID, {
   "bot.readCursor.read": { major: 1, minor: 0 },
   "bot.notificationLevel.read": { major: 1, minor: 0 },
   "bot.turn.locate": { major: 1, minor: 0 },
-  "environment.list": { major: 1, minor: 1 },
-  "environment.members": { major: 1, minor: 2 },
 });
 
-const requestContext = createRendererContextFixture({
-  bearerToken: "fixture",
-});
-const USER_ID = requestContext.identity.userId;
+const SIGNED_IN_USER = createAuthenticatedUserFixture(undefined);
+const USER_ID = SIGNED_IN_USER.user.id;
+const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
+  environmentId: ENVIRONMENT_ID,
+  ownerKind: "user",
+  ownerId: USER_ID,
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
 
 const BOT: BotRecord = {
   botId: BOT_ID,
@@ -328,27 +340,6 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
           },
         ],
       }),
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: ENVIRONMENT_ID,
-            ownerKind: "user",
-            ownerId: USER_ID,
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner",
-            kind: "personal",
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
-      "environment.members": () => ({
-        members: [],
-        nextCursor: null,
-        legacyRoleNoticeSeenAt: null,
-        legacyMembers: [],
-      }),
       "bot.thread.list": () => ({
         threads: [],
         trunkCostUsd: null,
@@ -370,36 +361,10 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-/** Holds the page back until the host client has its request context. */
-function RequestContextGate(props: {
-  readonly children: ReactNode;
-}): ReactNode {
-  const binding = useHostBinding();
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (ready || binding === null) return;
-    const unsubscribe = binding.hostClient.onChange(() => setReady(true));
-    binding.hostClient.setRequestContext(requestContext);
-    return unsubscribe;
-  }, [binding, ready]);
-  return ready ? props.children : null;
-}
-
-function SignedIn(props: { readonly children: ReactNode }): ReactElement {
+/** The real AuthService validates the stored fixture session before rendering. */
+function SignedIn(props: { readonly children: ReactNode }): ReactNode {
   const authStatus = useAuthStore((state) => state.status);
-  useEffect(() => {
-    if (authStatus === "signed-in") return;
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: USER_ID,
-        userName: "Fixture User",
-        email: "compact-actions-menu@example.invalid",
-      },
-      { userId: USER_ID, username: "Fixture User" },
-      [],
-    );
-  }, [authStatus]);
-  return <>{props.children}</>;
+  return authStatus === "signed-in" ? props.children : null;
 }
 
 function Page(): ReactElement {
@@ -429,7 +394,34 @@ function Page(): ReactElement {
   );
 }
 
-const runnerHost = new MockRunnerHost({
+/** Authn and the directory name the same person the stored session validates. */
+class CompactActionsRunnerHost extends MockRunnerHost {
+  override readonly environmentTransport = createFakeEnvironmentCloudTransport({
+    environments: () => [PERSONAL_ENVIRONMENT],
+  });
+
+  override validateAuthTokenIdentity(
+    token: string,
+  ): Promise<AuthIdentityValidationResult> {
+    return Promise.resolve(
+      token === FIXTURE_TOKEN
+        ? { kind: "valid", user: SIGNED_IN_USER }
+        : { kind: "rejected" },
+    );
+  }
+
+  override listEnvironments(
+    bearerToken: string,
+  ): Promise<EnvironmentDirectoryResult> {
+    return Promise.resolve(
+      bearerToken === FIXTURE_TOKEN
+        ? { kind: "ok", list: { environments: [PERSONAL_ENVIRONMENT] } }
+        : { kind: "unauthorized" },
+    );
+  }
+}
+
+const runnerHost = new CompactActionsRunnerHost({
   signInUrl: `${AUTHN_BASE_URL}/sign-in`,
   authnBaseUrl: AUTHN_BASE_URL,
   localHost,
@@ -438,6 +430,10 @@ const runnerHost = new MockRunnerHost({
   hasLocalHost: undefined,
   traycerCli: new MockTraycerCli(),
 });
+const storedSession = runnerHost.tokenStore.signIn(
+  { token: FIXTURE_TOKEN, refreshToken: "fixture-refresh" },
+  credentialsIdentityFromAuthenticatedUser(SIGNED_IN_USER),
+);
 
 function buildRouter() {
   const rootRoute = createRootRoute({
@@ -457,9 +453,7 @@ function buildRouter() {
             <WindowsBridgeContext.Provider value={windowsBridgeValue}>
               <TooltipProvider>
                 <SignedIn>
-                  <RequestContextGate>
-                    <Page />
-                  </RequestContextGate>
+                  <Page />
                 </SignedIn>
               </TooltipProvider>
             </WindowsBridgeContext.Provider>
@@ -481,6 +475,16 @@ function buildRouter() {
 
 const router = buildRouter();
 
-export function CompactActionsFixture(): ReactElement {
-  return <RouterProvider router={router} />;
+export function CompactActionsFixture(): ReactElement | null {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    void storedSession.then(() => {
+      if (!disposed) setReady(true);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  return ready ? <RouterProvider router={router} /> : null;
 }

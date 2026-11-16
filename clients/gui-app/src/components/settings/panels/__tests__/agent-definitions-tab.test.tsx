@@ -244,19 +244,7 @@ function renderPage(
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
   hostMock.client = client;
-  hostMock.binding = {
-    ...authnBinding,
-    auth: {
-      ...authnBinding.auth,
-      mintExecutableWriteGrant: () =>
-        Promise.resolve({
-          kind: "ok" as const,
-          grant: "grant-1",
-          expiresInSeconds: 600,
-        }),
-      getCredentialGeneration: () => 0,
-    },
-  };
+  hostMock.binding = authnBinding;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -365,13 +353,11 @@ describe("<AgentDefinitionsTab />", () => {
     await waitFor(() => {
       expect(rig.puts).toHaveLength(1);
     });
-    // Compare-and-set on THIS definition's revision, carrying the grant the
-    // person's own session minted: an agent definition is content an agent runs.
+    // Compare-and-set on THIS definition's revision.
     expect(rig.puts[0]).toEqual({
       name: "reviewer.md",
       text: "Review the change, then approve.",
       expectedRevision: 3,
-      executableWriteGrant: null,
     });
 
     // The re-read remounts the editor on what the host now has: the new
@@ -433,7 +419,6 @@ describe("<AgentDefinitionsTab />", () => {
       name: "triage.md",
       text: "Triage the report.",
       expectedRevision: null,
-      executableWriteGrant: null,
     });
     // It lists once the host has it, and the form is empty again.
     await screen.findByRole("heading", { name: "triage.md" });
@@ -728,19 +713,7 @@ describe("<AgentDefinitionsTab />", () => {
     recordNegotiatedHostMethods("host-b", METHODS);
     mountTeamPage({ kind: "host" }, {});
     const authnBinding = requireTeamEnvironmentAuthnBinding();
-    hostMock.binding = {
-      ...authnBinding,
-      auth: {
-        ...authnBinding.auth,
-        mintExecutableWriteGrant: () =>
-          Promise.resolve({
-            kind: "ok" as const,
-            grant: "grant-1",
-            expiresInSeconds: 600,
-          }),
-        getCredentialGeneration: () => 0,
-      },
-    };
+    hostMock.binding = authnBinding;
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },

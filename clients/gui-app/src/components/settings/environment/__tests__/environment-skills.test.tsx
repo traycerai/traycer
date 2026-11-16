@@ -1384,6 +1384,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
           providerId: "claude-code",
           mutation: {
             kind: "promoteToPersonal",
+            intentOperationId: null,
             entryKind: "skills",
             scope: "global",
             workspaceRoot: null,
@@ -1396,6 +1397,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
           providerId: "claude-code",
           mutation: {
             kind: "promoteToPersonal",
+            intentOperationId: null,
             entryKind: "skills",
             scope: "project",
             workspaceRoot: "/Users/dev/app-wt",

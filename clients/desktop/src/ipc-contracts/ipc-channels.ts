@@ -142,7 +142,6 @@ export const RunnerHostInvoke = {
   getEnvironmentProviders: "runnerHost:environments:providers",
   decideSecretRequest: "runnerHost:sandboxSecrets:decide",
   // The executable-write grant (authn), from Electron main for the same reason.
-  mintExecutableWriteGrant: "runnerHost:environment:mintExecutableWriteGrant",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

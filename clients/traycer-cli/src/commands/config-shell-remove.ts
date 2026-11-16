@@ -25,7 +25,6 @@ export function buildConfigShellRemoveCommand(args: {
     }
     const response = await writeConfigViaRunningHost("config.shell.remove", {
       path: args.path,
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     });
     const next = response ?? (await removeShell(args.path));

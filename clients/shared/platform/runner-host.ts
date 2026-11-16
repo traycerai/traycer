@@ -92,7 +92,6 @@ import type {
   SecretRequestDecideFetchResult,
 } from "../host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
-import type { ExecutableWriteGrantFetchResult } from "../host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -705,16 +704,6 @@ export interface IRunnerHost {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  /**
-   * An executable-write grant for one host, minted by authn on the user's
-   * session (`host-client/executable-write-grant.ts`). Sent with a write that
-   * can reach an execution sink on that host.
-   */
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
-
   openExternalLink(url: string): Promise<void>;
 
   /**

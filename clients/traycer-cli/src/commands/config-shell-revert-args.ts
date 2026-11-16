@@ -27,7 +27,6 @@ export function buildConfigShellRevertArgsCommand(args: {
       "config.shell.revertArgs",
       {
         path: args.path,
-        executableWriteGrant: null,
         selection: { kind: "not_stated" },
       },
     );
