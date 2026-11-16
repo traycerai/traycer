@@ -687,6 +687,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
 import type {
   ChatRecordSummaryV12,
   ChatRecordSummaryV15,
@@ -1069,6 +1070,33 @@ function testWorktreeBinding(): WorktreeBinding {
         ownedSubmodules: [],
       },
     ],
+  };
+}
+
+function userSenderMessage(
+  messageId: string,
+  sender: UserMessageSender,
+  text: string,
+): Message {
+  return {
+    role: "user",
+    messageId,
+    sender,
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
   };
 }
 
@@ -2606,6 +2634,132 @@ describe("<ChatTile />", () => {
     }
     expect(messages.length).toBe(1);
     rootState.destroy();
+  });
+
+  it("shows team member and former-member names and pictures on chat rows", async () => {
+    teamDirectoryPeople.set("team-member", {
+      displayName: "Team Directory Member",
+      avatarUrl: "https://images.example.test/chat-team-member.png",
+    });
+    teamDirectoryPeople.set("former-member", {
+      displayName: "Former Directory Member",
+      avatarUrl: "https://images.example.test/chat-former-member.png",
+    });
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "team-member-row",
+            { type: "user", userId: "team-member" },
+            "Team member chat row",
+          ),
+          userSenderMessage(
+            "former-member-row",
+            { type: "user", userId: "former-member" },
+            "Former member chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("Team Directory Member")).not.toBeNull();
+    expect(await screen.findByText("Former Directory Member")).not.toBeNull();
+    await waitFor(() => {
+      const pictures = screen
+        .getAllByTestId("person-avatar")
+        .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
+      expect(pictures).toContain(
+        "https://images.example.test/chat-team-member.png",
+      );
+      expect(pictures).toContain(
+        "https://images.example.test/chat-former-member.png",
+      );
+    });
+    expect(screen.queryByText("team-member", { exact: true })).toBeNull();
+    expect(screen.queryByText("former-member", { exact: true })).toBeNull();
+  });
+
+  it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "agent-row",
+            {
+              type: "agent",
+              harnessId: "codex",
+              agentId: "codex",
+              displayName: "Codex",
+              reply: { expectsReply: false },
+              inReplyTo: null,
+            },
+            "Agent chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("You")).not.toBeNull();
+    expect(screen.getByText("Codex")).not.toBeNull();
+    expect(screen.queryByTestId("person-avatar")).toBeNull();
+  });
+
+  it("shows only the timestamp on a system sender row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "system-row",
+            { type: "user", userId: "system" },
+            "System status row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    const systemText = await screen.findByText("System status row");
+    const systemRow = systemText.closest('[class~="group/message"]');
+    if (!(systemRow instanceof HTMLElement)) {
+      throw new Error("expected the system sender row");
+    }
+    expect(within(systemRow).queryByText("system", { exact: true })).toBeNull();
+    expect(within(systemRow).queryByTestId("person-avatar")).toBeNull();
+    const stamp = within(systemRow).getByTestId("chat-message-timestamp");
+    expect(stamp.closest("span.text-overline")?.textContent).not.toContain(
+      " · ",
+    );
   });
 
   it("shows Started by Priya with her picture from the team's directory", async () => {
