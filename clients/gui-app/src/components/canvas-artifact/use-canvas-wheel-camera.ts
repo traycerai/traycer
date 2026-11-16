@@ -272,7 +272,12 @@ export function useCanvasWheelCamera({
     (viewport: Viewport): boolean => {
       const from = camera.current ?? shown.current;
       if (flow === null || from === null) return false;
-      if (!zooming.current && viewport.zoom === from.zoom) return false;
+      if (!zooming.current && viewport.zoom === from.zoom) {
+        // A settle still waiting reads the camera, so a pan handed back
+        // moves it too: the live boards are picked where the pan ended.
+        if (camera.current !== null) camera.current = viewport;
+        return false;
+      }
       // Each report is the whole viewport, so the latest one is the camera
       // and the next frame draws only that.
       camera.current = viewport;

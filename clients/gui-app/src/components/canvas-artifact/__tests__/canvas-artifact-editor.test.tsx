@@ -2058,6 +2058,32 @@ describe("CanvasArtifactEditor wheel settling", () => {
       expect(sourceForBoard).toHaveBeenCalledWith(FAR);
     });
 
+    it("picks the live boards where a one-finger pan ended when it follows the pinch before the settle", () => {
+      const { sourceForBoard } = mountWheelEditor();
+      const pinched = { x: 300, y: 100, zoom: 0.5 };
+
+      pinchTo(pinched);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(flow.viewport).toEqual(pinched);
+
+      // Same zoom, no pinch held: the pan goes straight to the viewport.
+      pinchTo(TOWARDS_FAR);
+      liftFingers(TOWARDS_FAR);
+      expect(flow.viewport).toEqual(TOWARDS_FAR);
+      act(() => {
+        vi.advanceTimersByTime(49);
+      });
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      // The settle runs 200ms after the pinch's last move.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
     it("hands a one-finger pan, with the zoom unchanged and no pinch held, straight to the viewport", () => {
       const { sourceForBoard } = mountWheelEditor();
       const panned = { x: -300, y: 100, zoom: 0.6 };
