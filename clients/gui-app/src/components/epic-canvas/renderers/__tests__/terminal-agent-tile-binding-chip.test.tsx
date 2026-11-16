@@ -161,6 +161,16 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
 }));
 
 vi.mock(
+  "@/hooks/agent/use-terminal-tile-bootstrap",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/agent/use-terminal-tile-bootstrap")
+    >()),
+    TerminalXtermHost: () => null,
+  }),
+);
+
+vi.mock(
   "@/lib/registries/terminal-session-registry",
   async (importOriginal) => ({
     // Keep the real registry surface (the bootstrap's warm-handle adoption
