@@ -1054,9 +1054,12 @@ describe("buildHostInstallCommand", () => {
     // staged, and again by the transfer itself.
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
+    expect(ctx.progress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "host-team" }),
+    );
   });
 
-  it.each(["stage", "bind", "post-swap"] as const)(
+  it.each(["stage", "transfer", "post-swap"] as const)(
     "warns about the retained sign-in when team install fails at %s through the real credentials file",
     async (failure) => {
       registerHostOnMachine();
@@ -1072,9 +1075,9 @@ describe("buildHostInstallCommand", () => {
           new Error("stage failed"),
         );
       else mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
-      if (failure === "bind")
+      if (failure === "transfer")
         mocks.completeTeamInstallMock.mockRejectedValue(
-          new Error("bind failed"),
+          new Error("transfer failed"),
         );
       if (failure === "post-swap") handle.state.postSwapError = "start failed";
       mocks.createServiceInstallLifecycleMock.mockReturnValue(handle);
