@@ -878,32 +878,24 @@ describe("Secrets page reads on the window host's own environment", () => {
     expect(hostSecretCalls).toEqual([]);
   });
 
-  it("shows the Personal read failure after a cold directory failure and retries only after the press", async () => {
-    directoryFails = true;
+  it("shows the Personal secrets read failure and retries only after the press", async () => {
+    secretListFails = true;
     mountSecretsPage();
 
     const error = await screen.findByTestId("secrets-page-error");
     expect(error.textContent).toContain("Couldn't read Personal's secrets.");
     expect(screen.queryByTestId("secret-row")).toBeNull();
-    expect(authnSecretPaths()).toEqual([]);
     expect(hostSecretCalls).toEqual([]);
-    const directoryReadsBeforeRetry = authnTransport.requests.filter(
-      (request) => request.url.pathname === "/api/environments",
-    ).length;
+    const secretsPath =
+      "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets";
+    expect(secretRequestCount(secretsPath, "GET")).toBe(1);
 
-    directoryFails = false;
+    secretListFails = false;
     fireEvent.click(within(error).getByRole("button", { name: "Retry" }));
     expect(await screen.findByTestId("secret-row")).toBeTruthy();
     await waitFor(() => {
-      expect(
-        authnTransport.requests.filter(
-          (request) => request.url.pathname === "/api/environments",
-        ).length,
-      ).toBeGreaterThan(directoryReadsBeforeRetry);
+      expect(secretRequestCount(secretsPath, "GET")).toBe(2);
     });
-    expect(authnSecretPaths()).toContain(
-      "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/secrets",
-    );
     expect(hostSecretCalls).toEqual([]);
   });
 });
