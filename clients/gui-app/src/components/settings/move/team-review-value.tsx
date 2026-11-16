@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type { TeamReviewValue } from "@/components/settings/move/team-review-values";
 import { heldCommandLine } from "@/components/settings/move/held-from-review";
@@ -16,6 +16,7 @@ export function TeamReviewValueReadout(props: {
   readonly value: TeamReviewValue | null;
   readonly onRetry: () => void;
 }): ReactNode {
+  const id = useId();
   const value = props.value;
   if (value === null) {
     const line = heldCommandLine({ ...props.entry, op: "delete" });
@@ -68,13 +69,19 @@ export function TeamReviewValueReadout(props: {
     case "profile":
       return (
         <div className="flex flex-col gap-2">
-          <label className="flex flex-col gap-1 text-ui-sm">
+          <label
+            htmlFor={`${id}-name`}
+            className="flex flex-col gap-1 text-ui-sm"
+          >
             Profile name
-            <Input value={value.name} readOnly />
+            <Input id={`${id}-name`} value={value.name} readOnly />
           </label>
-          <label className="flex flex-col gap-1 text-ui-sm">
+          <label
+            htmlFor={`${id}-color`}
+            className="flex flex-col gap-1 text-ui-sm"
+          >
             Accent color
-            <Input value={value.color ?? "None"} readOnly />
+            <Input id={`${id}-color`} value={value.color ?? "None"} readOnly />
           </label>
           <p>
             {harnessLabel(value.harnessId)} · {value.enabled ? "On" : "Off"}
@@ -82,9 +89,13 @@ export function TeamReviewValueReadout(props: {
           {value.accountIdentity === null ? null : (
             <p>{value.accountIdentity}</p>
           )}
-          <label className="flex items-center gap-2 text-ui-sm">
+          <label
+            htmlFor={`${id}-needs-link`}
+            className="flex items-center gap-2 text-ui-sm"
+          >
             Needs a sign-in
             <Switch
+              id={`${id}-needs-link`}
               aria-label="Needs a sign-in"
               checked={value.needsLink}
               disabled
@@ -109,10 +120,12 @@ export function TeamReviewValueReadout(props: {
               {group.tools.map((tool) => (
                 <label
                   key={tool.id}
+                  htmlFor={`${id}-${group.id}-${tool.id}`}
                   className="flex items-center justify-between gap-3 text-ui-sm"
                 >
                   {tool.name}
                   <Switch
+                    id={`${id}-${group.id}-${tool.id}`}
                     aria-label={`${group.harness} ${tool.name}`}
                     checked={tool.enabled}
                     disabled

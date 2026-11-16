@@ -85,8 +85,7 @@ export interface TeamReviewChoice {
 export type TeamReviewMutation = UseMutationResult<
   ReviewChoiceOutcome,
   HostRpcError,
-  TeamReviewChoice,
-  unknown
+  TeamReviewChoice
 >;
 
 interface TeamReviewPress {

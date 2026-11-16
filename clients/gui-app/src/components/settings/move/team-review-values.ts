@@ -165,7 +165,10 @@ function factsValue(
   key: string,
   value: unknown,
 ): TeamReviewValue {
-  if (kind === "shell" && !configurationShellValueSchema.safeParse(value).success)
+  if (
+    kind === "shell" &&
+    !configurationShellValueSchema.safeParse(value).success
+  )
     return UNREADABLE;
   if (kind === "setup_script" && !textValueSchema.safeParse(value).success)
     return UNREADABLE;

@@ -129,8 +129,7 @@ export function TeamEnvironmentReviewSession(props: {
       { heldId, choice: action },
       {
         onSuccess: (answer) => {
-          if (!origin?.onOriginSignIn() || answer.outcome !== "conflict")
-            return;
+          if (!origin.onOriginSignIn() || answer.outcome !== "conflict") return;
           setRefused((previous) =>
             new Map(previous).set(heldId, { heldRevision, liveRevision }),
           );
@@ -232,7 +231,12 @@ function TeamReviewDialog(props: {
                       onRetry={retry}
                     />
                     <div className="flex flex-col gap-1">
-                      <h4 className="font-medium">Current</h4>
+                      <h4 className="font-medium">
+                        Current
+                        {row.entry.liveRevision === null
+                          ? null
+                          : ` · ${String(row.entry.liveRevision)}`}
+                      </h4>
                       <TeamReviewValueReadout
                         entry={row.entry}
                         value={row.current}

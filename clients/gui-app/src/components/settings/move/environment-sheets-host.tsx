@@ -115,9 +115,7 @@ function HostRetrospectiveSheet(props: {
 }): ReactNode {
   const { target } = props;
   const hostId = target.hostId;
-  const named = useHostClientForHostId(hostId);
-  // `null` resolves the window's following client, which is not the target.
-  const client = hostId === null ? null : named;
+  const client = useHostClientForHostId(hostId);
   if (client === null) return null;
   return (
     <RetrospectiveSession
