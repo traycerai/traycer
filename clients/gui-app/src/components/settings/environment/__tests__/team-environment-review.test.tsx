@@ -691,10 +691,10 @@ describe("Team Review through the addressed page", () => {
     );
     renderTeamPage(harness);
     const dialog = await openReview();
-    const row = await within(dialog).findByTestId(
+    const reviewRow = await within(dialog).findByTestId(
       "retrospective-held-hold-press",
     );
-    const approve = await within(row).findByRole("button", {
+    const approve = await within(reviewRow).findByRole("button", {
       name: "Approve",
     });
 
@@ -1071,10 +1071,10 @@ describe("Team Review through the addressed page", () => {
     );
     renderTeamPage(harness);
     const dialog = await openReview();
-    const row = await within(dialog).findByTestId(
+    const reviewRow = await within(dialog).findByTestId(
       "retrospective-held-hold-account",
     );
-    const approve = await within(row).findByRole("button", {
+    const approve = await within(reviewRow).findByRole("button", {
       name: "Approve",
     });
 
