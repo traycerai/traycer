@@ -1,4 +1,3 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -25,20 +24,17 @@ import type {
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { ReplaceSecretValueDialog } from "@/components/settings/secrets/replace-secret-value-dialog";
 import { SecretVersionsList } from "@/components/settings/secrets/secret-versions-list";
 import {
-  buildEnvironmentClient,
-  type EnvironmentClientFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import {
-  SECRET_REPLACE_STALE,
-  SECRET_SAVED_OFFLINE,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRET_REPLACE_STALE } from "@/lib/sandboxes/secrets-page-copy";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -50,23 +46,18 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => hostBoundary.client,
 }));
-
-/** A host client the page under test reads through `useHostClient()`. */
-function buildBoundClient(options: {
-  readonly hostId: string;
-  readonly handlers: MockHandlerMap<HostRpcRegistry>;
-}): EnvironmentClientFixture {
-  const built = buildEnvironmentClient(options);
-  hostBoundary.client = built.client;
-  return built;
-}
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
 
 // The edges of Replace value and of the versions
 // list that `secret-row-rotation.test.tsx` reaches only through the whole
 // Secrets page. Each case here is a claim a mutation of the dialog or the
-// list survived: the disabled gate, a queued save leaving the list alone, the
-// note clearing while a retry is in flight, an unknown refusal's fallback and
-// a destroyed version winning over `current`.
+// list survived: the disabled gate, note clearing while a retry is in flight,
+// an unknown refusal's fallback and a destroyed version winning over `current`.
 
 const HOST_ID = "host-edges";
 const TYPED = "sk_live_EDGE_VALUE_77aa";
@@ -104,29 +95,17 @@ function versionFixture(overrides: Partial<SecretVersion>): SecretVersion {
 }
 
 beforeEach(() => {
-  // A Local pick names the host's own environment: these cases are about the
-  // dialog and the list, not about which environment a call names.
   useSettingsEnvironmentPickStore.setState({
-    pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+    pick: { kind: "personal" },
   });
 });
 
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   hostBoundary.client = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
-
-function testQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-}
-
-/** The dialog's writes are host mutations, so it renders under a cache. */
-function underCache(queryClient: QueryClient, node: ReactNode): ReactNode {
-  return <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>;
-}
 
 function buttonOf(element: HTMLElement): HTMLButtonElement {
   if (!(element instanceof HTMLButtonElement)) {
@@ -138,7 +117,6 @@ function buttonOf(element: HTMLElement): HTMLButtonElement {
 interface DialogMount {
   readonly requests: EnvironmentSecretsReplaceValueRequest[];
   readonly onReplaced: Mock<() => void>;
-  readonly queryClient: QueryClient;
 }
 
 function mountDialog(
@@ -146,30 +124,26 @@ function mountDialog(
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): DialogMount {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-  const { client } = buildBoundClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.secrets.replaceValue": (request) => {
-        requests.push(request);
-        return answer();
-      },
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.secrets.replaceValue": (request) => {
+      requests.push(request);
+      return answer();
     },
   });
+  const client = requireTeamHostClient();
+  hostBoundary.client = client;
   const onReplaced = vi.fn<() => void>();
-  const queryClient = testQueryClient();
   render(
-    underCache(
-      queryClient,
-      <ReplaceSecretValueDialog
-        open
-        secret={secret}
-        client={client}
-        onOpenChange={() => undefined}
-        onReplaced={onReplaced}
-      />,
-    ),
+    <ReplaceSecretValueDialog
+      open
+      secret={secret}
+      client={client}
+      onOpenChange={() => undefined}
+      onReplaced={onReplaced}
+    />,
+    { wrapper: harness.Wrapper },
   );
-  return { requests, onReplaced, queryClient };
+  return { requests, onReplaced };
 }
 
 function typeValue(value: string): void {
@@ -212,29 +186,6 @@ describe("the Replace value dialog's gate", () => {
 });
 
 describe("the Replace value dialog's answers", () => {
-  it("leaves the list alone and the dialog open when the host only queued the save", async () => {
-    const mounted = mountDialog(secretFixture({}), () =>
-      Promise.resolve({ outcome: "pending", uploadId: "u1" }),
-    );
-    const listKey = hostQueryKeys.methodScope(
-      HOST_ID,
-      "environment.secrets.list",
-    );
-    mounted.queryClient.setQueryData(listKey, { secrets: [], removed: [] });
-
-    typeValue(TYPED);
-    fireEvent.click(replaceButton());
-
-    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
-      SECRET_SAVED_OFFLINE,
-    );
-    expect(mounted.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
-      false,
-    );
-    expect(mounted.onReplaced).not.toHaveBeenCalled();
-    expect(screen.getByTestId("replace-secret-dialog")).toBeTruthy();
-  });
-
   it("clears the previous note while a retry is in flight", async () => {
     let release: (
       answer: EnvironmentSecretsReplaceValueResponse,
@@ -265,10 +216,11 @@ describe("the Replace value dialog's answers", () => {
       expect(mounted.requests).toHaveLength(2);
     });
     expect(screen.queryByTestId("replace-secret-note")).toBeNull();
-    release({ outcome: "pending", uploadId: "u2" });
-    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
-      SECRET_SAVED_OFFLINE,
-    );
+    release({ outcome: "accepted", rotationId: "rot-1", versionId: "ver-4" });
+    await waitFor(() => {
+      expect(mounted.onReplaced).toHaveBeenCalledOnce();
+    });
+    expect(screen.queryByTestId("replace-secret-note")).toBeNull();
   });
 });
 
@@ -304,24 +256,21 @@ describe("the Replace value dialog across a close and a reopen", () => {
       answer: EnvironmentSecretsReplaceValueResponse,
     ) => void = () => undefined;
     const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-    const { client } = buildBoundClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.secrets.replaceValue": (request) => {
-          requests.push(request);
-          return new Promise<EnvironmentSecretsReplaceValueResponse>(
-            (resolve) => {
-              release = resolve;
-            },
-          );
-        },
+    const harness = mountTeamPage(personalPoolSource(), {
+      "environment.secrets.replaceValue": (request) => {
+        requests.push(request);
+        return new Promise<EnvironmentSecretsReplaceValueResponse>(
+          (resolve) => {
+            release = resolve;
+          },
+        );
       },
     });
+    const client = requireTeamHostClient();
+    hostBoundary.client = client;
     render(
-      underCache(
-        testQueryClient(),
-        <ReopenableReplaceDialog secret={secretFixture({})} client={client} />,
-      ),
+      <ReopenableReplaceDialog secret={secretFixture({})} client={client} />,
+      { wrapper: harness.Wrapper },
     );
     typeValue(TYPED);
     fireEvent.click(replaceButton());
@@ -355,28 +304,23 @@ function mountRerenderableDialog(
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): RerenderableDialog {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-  const { client } = buildBoundClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.secrets.replaceValue": (request) => {
-        requests.push(request);
-        return answer();
-      },
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.secrets.replaceValue": (request) => {
+      requests.push(request);
+      return answer();
     },
   });
-  const queryClient = testQueryClient();
+  const client = requireTeamHostClient();
+  hostBoundary.client = client;
   const dialogFor = (shown: EnvironmentSecretV12): ReactNode =>
-    underCache(
-      queryClient,
-      <ReplaceSecretValueDialog
-        open
-        secret={shown}
-        client={client}
-        onOpenChange={() => undefined}
-        onReplaced={() => undefined}
-      />,
-    );
-  const mounted = render(dialogFor(secret));
+    <ReplaceSecretValueDialog
+      open
+      secret={shown}
+      client={client}
+      onOpenChange={() => undefined}
+      onReplaced={() => undefined}
+    />;
+  const mounted = render(dialogFor(secret), { wrapper: harness.Wrapper });
   return {
     requests,
     showSecret: (shown) => mounted.rerender(dialogFor(shown)),
@@ -390,7 +334,12 @@ describe("the Replace value dialog's expected version", () => {
     // ver-2 would overwrite the other admin's rotation unseen.
     const mounted = mountRerenderableDialog(
       secretFixture({ currentVersionId: "ver-1" }),
-      () => Promise.resolve({ outcome: "pending", uploadId: "u1" }),
+      () =>
+        Promise.resolve({
+          outcome: "accepted",
+          rotationId: "rot-1",
+          versionId: "ver-4",
+        }),
     );
     mounted.showSecret(secretFixture({ currentVersionId: "ver-2" }));
 
@@ -405,33 +354,30 @@ describe("the Replace value dialog's expected version", () => {
 
   it("sends the version the list shows now once the dialog is closed and opened again", async () => {
     const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-    const { client } = buildBoundClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.secrets.replaceValue": (request) => {
-          requests.push(request);
-          return Promise.resolve({ outcome: "pending", uploadId: "u1" });
-        },
+    const harness = mountTeamPage(personalPoolSource(), {
+      "environment.secrets.replaceValue": (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          outcome: "accepted",
+          rotationId: "rot-1",
+          versionId: "ver-4",
+        });
       },
     });
-    const queryClient = testQueryClient();
+    const client = requireTeamHostClient();
+    hostBoundary.client = client;
     const view = render(
-      underCache(
-        queryClient,
-        <ReopenableReplaceDialog
-          secret={secretFixture({ currentVersionId: "ver-1" })}
-          client={client}
-        />,
-      ),
+      <ReopenableReplaceDialog
+        secret={secretFixture({ currentVersionId: "ver-1" })}
+        client={client}
+      />,
+      { wrapper: harness.Wrapper },
     );
     view.rerender(
-      underCache(
-        queryClient,
-        <ReopenableReplaceDialog
-          secret={secretFixture({ currentVersionId: "ver-2" })}
-          client={client}
-        />,
-      ),
+      <ReopenableReplaceDialog
+        secret={secretFixture({ currentVersionId: "ver-2" })}
+        client={client}
+      />,
     );
     fireEvent.click(screen.getByText("Cancel"));
     await waitFor(() => {
@@ -482,23 +428,20 @@ function mountVersions(
   versions: SecretVersion[],
   undoAnswer: EnvironmentSecretsUndoResponse,
 ): void {
-  const { client } = buildBoundClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.secrets.versions": () => ({ versions, removal: null }),
-      "environment.secrets.undo": () => undoAnswer,
-    },
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.secrets.versions": () => ({ versions, removal: null }),
+    "environment.secrets.undo": () => undoAnswer,
   });
-  const queryClient = testQueryClient();
+  const client = requireTeamHostClient();
+  hostBoundary.client = client;
   render(
-    <QueryClientProvider client={queryClient}>
-      <SecretVersionsList
-        secret={secret}
-        client={client}
-        hostId={HOST_ID}
-        onChanged={() => undefined}
-      />
-    </QueryClientProvider>,
+    <SecretVersionsList
+      secret={secret}
+      client={client}
+      hostId={HOST_ID}
+      onChanged={() => undefined}
+    />,
+    { wrapper: harness.Wrapper },
   );
 }
 

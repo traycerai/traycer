@@ -16,6 +16,7 @@ import { TeamProviderKeys } from "@/components/settings/environment/team-provide
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { teamEnvironments } from "./mcp-skills-test-support";
 import {
   answerTeamHostList,
@@ -285,21 +286,26 @@ describe("SecretsPage on a team", () => {
     ).toBe(false);
   });
 
-  it("keeps a Local pick on the host's own environment: no environment id and no floor", async () => {
+  it("resolves a Local pick to the host's Personal environment through authn", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
     });
-    const harness = mountTeamPage({ kind: "host" }, teamHandlers());
+    const harness = mountTeamPage({ kind: "host" }, {
+      ...teamHandlers(),
+      "environment.status": () =>
+        environmentStatusFixture({ principal: { kind: "personal" } }),
+    });
     renderSecrets(harness);
 
     expect(await screen.findByTestId("secrets-list")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.list")).toEqual([
-      { environmentId: null },
+      { environmentId: "env-personal" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 });
 

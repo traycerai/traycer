@@ -169,6 +169,7 @@ function mountRow(
           effectiveRole: "owner",
         },
     {
+      "environment.status": () => PERSONAL,
       "environment.list": () => ({
         environments: [
           {
