@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   ChevronRight,
+  Copy,
   MessageSquareText,
   Pencil,
   RotateCcw,
@@ -44,7 +45,9 @@ import {
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { cn } from "@/lib/utils";
 import {
@@ -1008,7 +1011,13 @@ function BotMessageFrame(props: {
   return (
     <div
       data-testid={props.testId}
-      className="group/message relative flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
+      className={cn(
+        "group/message relative flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3",
+        // The hold that opens the sheet is also iOS's hold to select text,
+        // and iOS fires second: with the row selectable it selects whatever
+        // is under the finger by then, which is the sheet.
+        longPress !== null && "pointer-coarse:touch-chrome",
+      )}
       {...longPress?.handlers}
       // The click a long press ends with opened the sheet already; it does
       // not also reach what was under the finger.
@@ -1325,11 +1334,21 @@ export function RunningFor(props: {
   return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
 }
 
+function reportCopyFailure(): void {
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
+}
+
 /**
  * The sheet a long press on a row opens on a touch screen, which has no
  * hover to show the row's actions with: Retry and Edit on a message the bot
- * failed to answer, "Reply in thread" where the row takes one, and on a reply
- * "How Tracy answered", with the receipt's label.
+ * failed to answer, "Reply in thread" where the row takes one, "Copy text"
+ * (a row that takes the long press gives up touch selection for it), and on
+ * a reply "How Tracy answered", with the receipt's label.
  */
 function RowSheet(props: {
   readonly open: boolean;
@@ -1350,6 +1369,11 @@ function RowSheet(props: {
   // does.
   const { resolvedTheme, themePreset } = useResolvedTheme();
   const label = receipt === null ? null : turnReceiptLabel(receipt);
+  const { copy } = useClipboardCopy({
+    resetMs: 0,
+    onSuccess: null,
+    onError: reportCopyFailure,
+  });
   const itemClassName =
     "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-start text-ui-sm text-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:bg-foreground/8";
   return (
@@ -1408,6 +1432,20 @@ function RowSheet(props: {
                 className="size-4 shrink-0"
               />
               <span className="min-w-0 truncate">Reply in thread</span>
+            </button>
+          )}
+          {props.text.trim() === "" ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-copy-text"
+              className={itemClassName}
+              onClick={() => {
+                copy(props.text);
+                onOpenChange(false);
+              }}
+            >
+              <Copy aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">Copy text</span>
             </button>
           )}
           {receipt === null ? null : (

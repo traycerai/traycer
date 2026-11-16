@@ -207,6 +207,26 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
     });
   });
 
+  it("copies the post's text from the sheet, and gives up touch selection on the row that takes the long press", async () => {
+    const user = userEvent.setup();
+    const row = renderRow(memberPost(undefined), plain(vi.fn()));
+    expect(row.className).toContain("pointer-coarse:touch-chrome");
+
+    longPress(row, "touch");
+    await user.click(await screen.findByTestId("bot-reply-sheet-copy-text"));
+
+    expect(await navigator.clipboard.readText()).toBe(POST_TEXT);
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
+    });
+  });
+
+  it("leaves a row with no sheet selectable by touch", () => {
+    const row = renderRow(memberPost(undefined), plain(null));
+
+    expect(row.className).not.toContain("touch-chrome");
+  });
+
   it("opens the sheet on a pen's long press as on a finger's", async () => {
     const row = renderRow(memberPost(undefined), plain(vi.fn()));
 
