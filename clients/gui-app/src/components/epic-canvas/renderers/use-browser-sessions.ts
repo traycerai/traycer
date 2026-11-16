@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
 import {
   MINIMUM_HOST_VERSION,
   hostDirectoryEntryNeedsUpdate,
@@ -210,6 +211,7 @@ export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
   hostEntry: HostDirectoryEntry | null,
 ): BrowserViewBridge | null {
+  if (!allowsBrowserLoginSync(hostEntry)) return null;
   if (
     hostEntry !== null &&
     isRemoteHostDirectoryEntry(hostEntry) &&

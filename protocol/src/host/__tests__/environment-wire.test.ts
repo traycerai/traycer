@@ -95,6 +95,9 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
   "providers.link",
   "providers.linkComplete",
+  "environment.agentDefinitions.put",
+  "environment.agentDefinitions.delete",
+  "environment.setup.put",
   "environment.secrets.create",
   "environment.secrets.verify",
   "environment.secrets.replaceValue",
@@ -207,9 +210,9 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 28 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
+  it("registers exactly 29 environment methods", () => {
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(29);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(29);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {

@@ -33,6 +33,7 @@ vi.mock("@/hooks/environment/team/use-team-viewing-host", () => ({
     viewingHost: reads.bound ? { hostId: "host-b", hostLabel: "Studio" } : null,
     client: reads.bound ? {} : null,
     hosts: {
+      error: null,
       isError: false,
       isPending: false,
       data: { hosts: [] },

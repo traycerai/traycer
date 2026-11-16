@@ -1,4 +1,5 @@
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -346,6 +347,8 @@ function ProviderProfileSignInDialog({
         providerId: state.providerId,
         profileId: profile.profileId,
         accentColor,
+        enabled: profile.enabled,
+        environmentProfileId: profile.environmentProfileId ?? null,
       },
       { onSuccess: () => complete(profile) },
     );
@@ -368,6 +371,8 @@ function ProviderProfileSignInDialog({
         providerId: state.providerId,
         profileId: profile.profileId,
         label: trimmedLabel,
+        enabled: profile.enabled,
+        environmentProfileId: profile.environmentProfileId ?? null,
       },
       {
         onSuccess: (result) => {
@@ -495,7 +500,7 @@ function ProviderProfileSignInDialog({
               finalizeError={recolorProfile.error}
               duplicateProfile={duplicateProfile}
               naming={naming}
-              namingError={renameProfile.error}
+              namingError={reportedSaveFailure(renameProfile.error)}
               namingRecordFailure={namingRecordFailure}
               emailRevealed={emailRevealed}
               setEmailRevealed={setEmailRevealed}

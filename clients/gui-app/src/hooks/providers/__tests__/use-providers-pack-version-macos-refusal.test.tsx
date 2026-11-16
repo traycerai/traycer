@@ -43,6 +43,21 @@ vi.mock("@/lib/host", () => ({
     request: mocks.request,
     getActiveHostId: () => mocks.activeHostId.current,
   }),
+  useHostBinding: () => null,
+}));
+
+// The settings-save memory is not what these outcome tests check; the save
+// is still sent through the real `sendFollowedSave`.
+vi.mock("@/hooks/environment/use-settings-save", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/environment/use-settings-save")
+  >()),
+  useSettingsSave: () => () =>
+    Promise.resolve({
+      kind: "send",
+      answered: () => undefined,
+      failed: () => undefined,
+    }),
 }));
 
 import {
@@ -111,7 +126,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
 
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
     expect(mocks.toastError).toHaveBeenCalledWith(SENTENCE);
@@ -134,7 +153,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
     // Truly in flight: the transport has the request before the popover closes.
     await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(1));
     release();
@@ -153,7 +176,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mocks.toastError).not.toHaveBeenCalled();
@@ -174,7 +201,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
 
     // The refetch is still pending; the sentence is already out.
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
@@ -198,7 +229,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
     await waitFor(() => expect(result.current.isPending).toBe(true));
     mocks.activeHostId.current = "host-b";
     resolve(REFUSAL);
@@ -251,7 +286,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       ),
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
 
     await waitFor(() => expect(fetches).toBe(2));
     await waitFor(() =>
@@ -280,7 +319,11 @@ describe("usePackVersion macos-ineligible first refusal", () => {
       wrapper,
     });
 
-    result.current.mutate({ packId: "antigravity", version: "2.0.0" });
+    result.current.mutate({
+      packId: "antigravity",
+      version: "2.0.0",
+      policy: null,
+    });
     await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(1));
     releaseOld();
     resolve(REFUSAL);

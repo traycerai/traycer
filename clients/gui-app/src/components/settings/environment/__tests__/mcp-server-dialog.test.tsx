@@ -16,13 +16,13 @@ import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentMcpServerCredentialV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import {
   initialMcpServerForm,
-  mcpServerPutRequest,
+  mcpServerSave,
 } from "@/components/settings/environment/mcp-server-form";
-import { useConfigurationMcpServerMutations } from "@/hooks/environment/team/use-mcp-servers";
+import { useConfigurationMcpServerSave } from "@/hooks/environment/team/use-mcp-servers";
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { createAppQueryClient } from "@/lib/query-client";
 import { isRecord } from "@/lib/editor/prosemirror-json";
@@ -37,13 +37,19 @@ import {
   teamEnvironments,
 } from "./mcp-skills-test-support";
 import {
-  mountTeamPage,
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "./environment-authn-test-support";
+import {
+  mountTeamPage as mountTeamHarness,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
-  type TeamPageHarness,
+  setTeamEnvironmentCloudOverride,
   windowHostScopeMock,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -57,10 +63,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => ({
-    hostId: "host-local",
-    hostClient: requireTeamHostClient(),
-  }),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -129,8 +132,12 @@ function captureConsoleOutput(): unknown[][] {
   return output;
 }
 
+let fakeAuthn: FakeEnvironmentAuthn | null = null;
+
 afterEach(() => {
   cleanup();
+  fakeAuthn?.restore();
+  fakeAuthn = null;
   resetTeamPageHarness();
   resetNegotiatedManifests();
   for (const unsubscribe of mutationCacheUnsubscribers.splice(0)) unsubscribe();
@@ -138,8 +145,37 @@ afterEach(() => {
   for (const client of appQueryClients.splice(0)) client.clear();
 });
 
+const MCP_WRITE_PATHS = /\/(mcp-servers(\/|$)|items\/mcp_server$)/u;
+
+/**
+ * The team page, with an MCP server's writes (its row and its item) answered by
+ * the fake authn, which records the put the dialog built.
+ */
+function mountTeamPage(
+  source: Parameters<typeof mountTeamHarness>[0],
+  served: MockHandlerMap<HostRpcRegistry>,
+): TeamPageHarness {
+  const harness = mountTeamHarness(source, served);
+  const authn = createFakeEnvironmentAuthn(served);
+  fakeAuthn = authn;
+  const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: (request) =>
+      request.method !== "GET" && MCP_WRITE_PATHS.test(request.url)
+        ? authn.cloud.transport(request)
+        : cloud.transport(request),
+  });
+  return {
+    ...harness,
+    paramsOf: (method) => [
+      ...harness.paramsOf(method),
+      ...authn.paramsOf(method),
+    ],
+  };
+}
+
 const PUT_1_1 = { major: 1, minor: 1 };
-const PUT_1_0 = { major: 1, minor: 0 };
 
 function negotiate(put: { major: number; minor: number }): void {
   negotiateMethods({
@@ -186,8 +222,9 @@ function handlers(options: {
       ...options.answer,
       serverId: null,
     }),
+    // Authn lists live secrets only: a revoked one never reaches the dialog.
     "environment.secrets.list": () => ({
-      secrets: [...options.secrets],
+      secrets: options.secrets.filter((row) => !row.revoked),
       removed: [],
     }),
     "environment.host.list": () => ({ hosts: [reachableHost] }),
@@ -455,7 +492,9 @@ describe("The MCP server dialog", () => {
 
   it("says the secrets could not be read to pick from, and Retry brings them into the select", async () => {
     negotiate(PUT_1_1);
-    let failing = true;
+    // The page's own list joins the same secrets read, so the read fails only
+    // once the page has loaded and before the dialog opens.
+    let failing = false;
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers({ servers: [], secrets: [], answer: SAVED }),
       "environment.secrets.list": () => {
@@ -464,6 +503,8 @@ describe("The MCP server dialog", () => {
       },
     });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+    await screen.findByRole("button", { name: "Add a server" });
+    failing = true;
     const dialog = await openAdd();
 
     await userEvent.type(
@@ -491,8 +532,8 @@ describe("The MCP server dialog", () => {
     ).toEqual(["acme-key", "Add a secret"]);
   });
 
-  it("takes only a typed value on a host at put 1.0, and sends it as the PAT", async () => {
-    negotiate(PUT_1_0);
+  it("takes a typed value from the picker's Add a secret, and sends it as the PAT", async () => {
+    negotiate(PUT_1_1);
     const harness = mountTeamPage(
       personalPoolSource(),
       handlers({ servers: [], secrets: [], answer: SAVED }),
@@ -501,20 +542,13 @@ describe("The MCP server dialog", () => {
     const dialog = await openAdd();
 
     await fillPersonalPatTarget(dialog);
+    await choose(dialog, "Secret", "Add a secret");
 
-    expect(
-      within(dialog).getByText(
-        "Add a secret. It is sent only to this server's address.",
-      ),
-    ).toBeTruthy();
     expect(
       within(dialog).getByText(
         "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
       ),
     ).toBeTruthy();
-    expect(
-      within(dialog).queryByRole("combobox", { name: "Secret" }),
-    ).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Add" })).toHaveProperty(
       "disabled",
       true,
@@ -532,7 +566,7 @@ describe("The MCP server dialog", () => {
   });
 
   it("keeps the typed PAT in the form after a failed put", async () => {
-    negotiate(PUT_1_0);
+    negotiate(PUT_1_1);
     const routes = handlers({ servers: [], secrets: [], answer: SAVED });
     const harness = mountTeamPage(personalPoolSource(), {
       ...routes,
@@ -574,7 +608,7 @@ describe("The MCP server dialog", () => {
     "sends a typed PAT from the real mutation hook and retains none after it settles $settles",
     async ({ fail }) => {
       const consoleOutput = captureConsoleOutput();
-      negotiate(PUT_1_0);
+      negotiate(PUT_1_1);
       const queryClient = createAppQueryClient();
       appQueryClients.push(queryClient);
       const observers = captureMutationObservers(queryClient);
@@ -596,20 +630,17 @@ describe("The MCP server dialog", () => {
       const { result, unmount } = renderHook(
         () => {
           const submitted =
-            useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
+            useSubmittedSecretInput<EnvironmentMcpServerCredentialV11>(
               "MCP server input is unavailable.",
             );
           return {
             input: submitted,
-            mutation: useConfigurationMcpServerMutations(
-              submitted.read,
-              submitted.clear,
-            ).put,
+            mutation: useConfigurationMcpServerSave(submitted.read),
           };
         },
         { wrapper: withAppQueryClient(harness, queryClient) },
       );
-      const request = mcpServerPutRequest(
+      const request = mcpServerSave(
         {
           ...initialMcpServerForm(null),
           name: "github",
@@ -617,16 +648,12 @@ describe("The MCP server dialog", () => {
         },
         null,
         "env-personal",
-        { kind: "pat", pat: FAKE_TEAM_MCP_PAT },
       );
       const observations = { rejectionContainsPat: false };
       await act(async () => {
-        result.current.input.set(request);
+        result.current.input.set({ kind: "pat", pat: FAKE_TEAM_MCP_PAT });
         try {
-          await result.current.mutation.mutateAsync({
-            environmentId: "env-personal",
-            serverId: null,
-          });
+          await result.current.mutation.mutateAsync(request);
         } catch (error) {
           observations.rejectionContainsPat = containsTeamPat(error);
         }
@@ -646,14 +673,11 @@ describe("The MCP server dialog", () => {
       let replayRefused = false;
       let replayErrorContainsPat = false;
       try {
-        await mutationFn(
-          { environmentId: "env-personal", serverId: null },
-          {
-            client: queryClient,
-            meta: retainedMutation.options.meta,
-            mutationKey: retainedMutation.options.mutationKey ?? [],
-          },
-        );
+        await mutationFn(request, {
+          client: queryClient,
+          meta: retainedMutation.options.meta,
+          mutationKey: retainedMutation.options.mutationKey ?? [],
+        });
       } catch (error) {
         replayRefused =
           error instanceof Error &&

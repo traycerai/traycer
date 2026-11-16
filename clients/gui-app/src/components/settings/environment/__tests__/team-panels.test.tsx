@@ -8,6 +8,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -15,6 +16,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -49,7 +51,7 @@ const definition = (text: string, revision: number) =>
   });
 
 describe("AgentDefinitionsTab on a team", () => {
-  it("reads the team's definitions from the pool items, not the host's list", async () => {
+  it("reads the team's definitions from cloud items, never the host's list", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
         items: [definition("Review the diff", 7)],
@@ -241,9 +243,13 @@ describe("BrowserAgentAccessGroup on a team", () => {
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(harness.paramsOf("environment.configuration.items").length).toBe(
-        2,
-      );
+      expect(
+        harness.cloudRequests.filter(
+          (request) =>
+            new URL(request.url).searchParams.get("kind") ===
+            "browser_agent_access",
+        ),
+      ).toHaveLength(2);
     });
     expect(
       screen.getByRole("switch", { name: "Let agents use the in-app browser" }),

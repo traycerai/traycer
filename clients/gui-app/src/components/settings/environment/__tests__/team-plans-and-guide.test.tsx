@@ -12,16 +12,21 @@ import { EditorView } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
+  answerTeamHostList,
+  authnAnswer,
   mountTeamPage,
   mountTeamPageNegotiating,
+  hostIdsOf,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -29,6 +34,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -233,21 +239,15 @@ describe("TeamPlans", () => {
 
   it.each([
     {
-      name: "refuses a held binding version a 1.0 host cannot compare, sending nothing",
-      bindingVersion: 7,
-      negotiatedMinor: 0,
-      sent: null,
-    },
-    {
-      name: "still sends the 1.0 unlink when no binding version is held",
+      name: "sends an authn unlink when no binding version is held",
       bindingVersion: undefined,
       negotiatedMinor: 0,
       sent: { expectedBindingVersion: null },
     },
     {
-      name: "sends the held binding version to a 1.1 host",
+      name: "sends the held revision through authn even when the host is at 1.0",
       bindingVersion: 7,
-      negotiatedMinor: 1,
+      negotiatedMinor: 0,
       sent: { expectedBindingVersion: 7 },
     },
   ])("$name", async ({ bindingVersion, negotiatedMinor, sent }) => {
@@ -286,18 +286,12 @@ describe("TeamPlans", () => {
       within(dialog).getByRole("button", { name: "Unlink" }),
     );
 
-    if (sent === null) {
-      await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledTimes(1);
-      });
-      expect(harness.paramsOf("environment.plans.unlink")).toEqual([]);
-      return;
-    }
     await waitFor(() => {
       expect(harness.paramsOf("environment.plans.unlink")).toEqual([
         { environmentId: "env-a", profileId: "prof-1", ...sent },
       ]);
     });
+    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -530,5 +524,81 @@ describe("TeamGuide", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+});
+
+describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
+  async function openUnlinkNamingMacMini() {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => ({
+        plans: [
+          {
+            profileId: "prof-1",
+            bindingVersion: 7,
+            harness: "claude",
+            status: "linked" as const,
+            linkedBy: { name: "Ada", you: false },
+          },
+        ],
+      }),
+      "environment.list": () => environmentList,
+      "environment.host.list": () => ({ hosts: [host] }),
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 2,
+        localHostId: host.hostId,
+        keepsWorking: [],
+      }),
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy(),
+    );
+    return { harness, dialog };
+  }
+
+  it.each([
+    ["a 403 environment_action_forbidden", 403, "environment_action_forbidden"],
+    ["a 404 environment_not_found", 404, "environment_not_found"],
+  ])(
+    "calls the serving host by no name after %s",
+    async (_label, status, code) => {
+      const { harness, dialog } = await openUnlinkNamingMacMini();
+
+      answerTeamHostList(harness, "env-a", authnAnswer(status, { code }));
+      await act(() =>
+        invalidateEnvironmentReads(harness.queryClient, [
+          "environment.host.list",
+        ]),
+      );
+
+      await waitFor(() =>
+        expect(
+          within(dialog).getByText(/On the serving host only\./),
+        ).toBeTruthy(),
+      );
+      expect(within(dialog).queryByText(/Mac mini/)).toBeNull();
+    },
+  );
+
+  it("still names the serving host through a 503", async () => {
+    const { harness, dialog } = await openUnlinkNamingMacMini();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy();
   });
 });

@@ -494,18 +494,15 @@ export async function warnIfTeamInstallSignInRemains(
   );
 }
 
-/** The one team transfer used by host use, install --team and ensure --team. */
-export async function useInstalledHostTeam(
+/**
+ * The team `team` names among the sign-in's own teams: by environment id,
+ * else by slug, with or without a `team/` prefix, and exactly one. Reads the
+ * sign-in at authn only, so a team install can check it before anything is
+ * installed.
+ */
+export async function resolveSignInTeam(
   team: string,
-  progress: CommandContext["progress"],
-): Promise<EnvironmentHostBinding> {
-  const dispatch = {
-    ...PLAIN_DISPATCH,
-    requiredHostMethodVersion: {
-      method: "environment.host.bind",
-      version: { major: 1, minor: 1 },
-    },
-  };
+): Promise<SignInEnvironment> {
   const selector = team.startsWith("team/") ? team.slice(5) : team;
   // The teams the sign-in's own record lists, labelled by slug.
   const teams = (await readSignInEnvironments()).filter(
@@ -527,7 +524,22 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const target = matches[0];
+  return matches[0];
+}
+
+/** The one team transfer used by host use, install --team and ensure --team. */
+export async function useInstalledHostTeam(
+  team: string,
+  progress: CommandContext["progress"],
+): Promise<EnvironmentHostBinding> {
+  const dispatch = {
+    ...PLAIN_DISPATCH,
+    requiredHostMethodVersion: {
+      method: "environment.host.bind",
+      version: { major: 1, minor: 1 },
+    },
+  };
+  const target = await resolveSignInTeam(team);
   const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {

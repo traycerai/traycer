@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   EnvironmentOs,
   SetupAttempt,
@@ -10,10 +11,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -121,6 +124,8 @@ function SetupScripts(): ReactNode {
   );
 }
 
+const SAVED_KINDS = ["setup_script"] as const;
+
 function SetupScriptEditor(props: {
   readonly os: Exclude<EnvironmentOs, "any">;
   readonly label: string;
@@ -128,11 +133,22 @@ function SetupScriptEditor(props: {
 }): ReactNode {
   const saved = props.script?.text ?? "";
   const [text, setText] = useState(saved);
-  // The script runs on every computer of that OS, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
-  const put = useHostScopedMutationForClient(useHostClient(), {
+  const queryClient = useQueryClient();
+  const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
+  const put = useHostScopedMutationForClient(client, {
     method: "environment.setup.put",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "environment.setup.put", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: (answer) => answer.outcome !== "local_only",
+    },
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",
     invalidateMethods: [
@@ -142,6 +158,9 @@ function SetupScriptEditor(props: {
       "environment.review",
     ],
     onSuccess: noticeWriteOutcome,
+    // A script authn holds shows in the review the app reads from authn.
+    onSettled: () =>
+      void invalidateEnvironmentReads(queryClient, ["environment.review"]),
   });
   return (
     <div className="flex flex-col gap-2 pt-2">

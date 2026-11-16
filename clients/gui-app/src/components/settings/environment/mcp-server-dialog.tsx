@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import { negotiatedVersionMeetsRequirement } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,14 +23,13 @@ import {
   AgentSpinningDots,
   MutedAgentSpinner,
 } from "@/components/ui/agent-spinning-dots";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import {
-  useConfigurationMcpServerMutations,
+  useConfigurationMcpServerSave,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
-import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentMcpServerCredentialV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useHostClient } from "@/lib/host";
 import {
   useConfigurationIsPersonal,
@@ -40,7 +38,7 @@ import {
 import {
   initialMcpServerForm,
   mcpServerCredential,
-  mcpServerPutRequest,
+  mcpServerSave,
   mcpServerReady,
   pickableSecrets,
   refusedSecret,
@@ -53,16 +51,10 @@ import {
   addServerTitle,
   custodySentence,
   editServerTitle,
-  secretOptionLine,
   serverRefusal,
   stdioSecretRefusal,
+  SECRET_OPTION_LINE,
 } from "./mcp-skills-copy";
-
-/** `put@1.1` binds an existing secret; a 1.0 host takes a typed value only. */
-const PICK_SECRET_REQUIRED_HOST_VERSION = {
-  method: "environment.configuration.mcpServers.put",
-  version: { major: 1, minor: 1 },
-} as const;
 
 type FormUpdate = (patch: Partial<McpServerForm>) => void;
 
@@ -80,17 +72,6 @@ export function McpServerDialog(props: {
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
   const client = useHostClient();
-  const putVersion = useHostNegotiatedMethodVersion(
-    client,
-    "environment.configuration.mcpServers.put",
-  );
-  const canPick =
-    putVersion !== null &&
-    putVersion !== false &&
-    negotiatedVersionMeetsRequirement(
-      putVersion,
-      PICK_SECRET_REQUIRED_HOST_VERSION,
-    );
   const secrets = useEnvironmentSecretsQuery(client);
   const secretList = secrets.data?.secrets ?? [];
   // The pick is read apart from the server: while it is read, or once it
@@ -110,44 +91,37 @@ export function McpServerDialog(props: {
   const [problem, setProblem] = useState<string | null>(null);
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
-  const credential = mcpServerCredential(form, server !== null, canPick);
-  const submittedServer =
-    useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
+  const credential = mcpServerCredential(form, server !== null, true);
+  // The credential pressed is handed over once, when the save is sent, so a
+  // typed value is never the mutation's variables and the mutation holds no
+  // reference to the form.
+  const submittedCredential =
+    useSubmittedSecretInput<EnvironmentMcpServerCredentialV11>(
       "MCP server input is unavailable.",
     );
-  const { put } = useConfigurationMcpServerMutations(
-    submittedServer.read,
-    submittedServer.clear,
-  );
+  const put = useConfigurationMcpServerSave(submittedCredential.read);
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
-    submittedServer.set(
-      mcpServerPutRequest(form, server, source.environmentId, credential),
-    );
     const serverName = form.name.trim();
     const refusalSecret = refusedSecret(form, server, secretList);
-    put.mutate(
-      {
-        environmentId: source.environmentId,
-        serverId: server?.serverId ?? null,
+    submittedCredential.set(credential);
+    put.mutate(mcpServerSave(form, server, source.environmentId), {
+      onSettled: submittedCredential.clear,
+      onSuccess: (result) => {
+        if (result.outcome === "saved") props.onClose();
+        else if (result.outcome === "forbidden")
+          setProblem("You no longer have access to change these settings.");
+        else
+          setProblem(
+            serverRefusal(result.reason, {
+              configuration: name,
+              server: serverName,
+              secret: refusalSecret,
+            }),
+          );
       },
-      {
-        onSuccess: (result) => {
-          if (result.outcome === "saved") props.onClose();
-          else if (result.outcome === "forbidden")
-            setProblem("You no longer have access to change these settings.");
-          else
-            setProblem(
-              serverRefusal(result.reason, {
-                configuration: name,
-                server: serverName,
-                secret: refusalSecret,
-              }),
-            );
-        },
-      },
-    );
+    });
   };
   return (
     <Dialog
@@ -194,7 +168,6 @@ export function McpServerDialog(props: {
             <McpServerSecretFields
               form={form}
               update={update}
-              canPick={canPick}
               secrets={secretList}
               secretsRead={secretsRead}
               custody={custodySentence(personal, "This environment")}
@@ -285,14 +258,12 @@ function McpServerTransportFields(props: {
 }
 
 /**
- * A remote server's Secret: the line, the pick (or Add only on a 1.0 host),
- * the value when added here, then the custody sentence. A command server's
+ * A remote server's Secret: the line, the pick, the value when added here, then the custody sentence. A command server's
  * Secret is refused by the field it names.
  */
 function McpServerSecretFields(props: {
   readonly form: McpServerForm;
   readonly update: FormUpdate;
-  readonly canPick: boolean;
   readonly secrets: readonly EnvironmentSecret[];
   /** Where the secrets read is, while it is read or once it fails. */
   readonly secretsRead: ReactNode;
@@ -315,33 +286,29 @@ function McpServerSecretFields(props: {
       </>
     );
   }
-  const adding = !props.canPick || form.secretChoice === "new";
+  const adding = form.secretChoice === "new";
   return (
     <>
-      <p className="text-ui-xs text-muted-foreground">
-        {secretOptionLine(props.canPick)}
-      </p>
-      {props.canPick ? (
-        <Select
-          value={form.secretChoice}
-          onValueChange={(value) =>
-            update({ secretChoice: value, authTouched: true })
-          }
-        >
-          <SelectTrigger aria-label="Secret">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {pickableSecrets(props.secrets, form.url).map((secret) => (
-              <SelectItem key={secret.secretId} value={secret.secretId}>
-                {secret.name}
-              </SelectItem>
-            ))}
-            <SelectItem value="new">Add a secret</SelectItem>
-          </SelectContent>
-        </Select>
-      ) : null}
-      {props.canPick ? props.secretsRead : null}
+      <p className="text-ui-xs text-muted-foreground">{SECRET_OPTION_LINE}</p>
+      <Select
+        value={form.secretChoice}
+        onValueChange={(value) =>
+          update({ secretChoice: value, authTouched: true })
+        }
+      >
+        <SelectTrigger aria-label="Secret">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {pickableSecrets(props.secrets, form.url).map((secret) => (
+            <SelectItem key={secret.secretId} value={secret.secretId}>
+              {secret.name}
+            </SelectItem>
+          ))}
+          <SelectItem value="new">Add a secret</SelectItem>
+        </SelectContent>
+      </Select>
+      {props.secretsRead}
       {adding ? (
         <Input
           aria-label="Secret value"

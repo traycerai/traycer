@@ -10,7 +10,7 @@ import type { ClaimedComputersResult } from "@traycer-clients/shared/auth/claime
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import type { AuthService } from "@/lib/auth/auth-service";
-import { useHostBinding, useOptionalHostClient } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import type { HostClaimFacts } from "@/lib/host/window-narration";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -301,10 +301,7 @@ export function useHostClaim(
   useSyncExternalStore(subscribe, () => reads?.version ?? 0);
   // The null-tolerant read: the window's narration mounts at the app root,
   // where a tree with no host runtime is a legitimate answer.
-  const environments = useEnvironmentListQuery(
-    useOptionalHostClient(),
-    claimed,
-  );
+  const environments = useEnvironmentListQuery(claimed);
   const teams = useMemo(
     () =>
       (environments.data?.environments ?? []).filter(
