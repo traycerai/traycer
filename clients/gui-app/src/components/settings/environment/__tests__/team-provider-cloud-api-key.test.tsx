@@ -541,21 +541,21 @@ describe("TeamProviders cloud API keys", () => {
       await harness.runtime.auth.signOut();
       useAuthStore.setState({ status: "signed-out" });
     });
-    const previousEnvironmentReads = profileReadsFor(
-      harness,
-      PERSONAL_ENVIRONMENT,
-    ).length;
     harness.source.current = noHostSource(SECOND_PERSONAL_ENVIRONMENT);
+    view.rerender(<TeamProviders />);
     await signInOwnEnvironmentAs(harness.runtime, "user-2", "user-2-token");
     await waitFor(() => {
       expect(harness.runtime.auth.chosenSignIn().userId).toBe("user-2");
     });
-    view.rerender(<TeamProviders />);
 
     await selectProvider("Cursor");
     const nextInput = await screen.findByLabelText("API key");
     await userEvent.type(nextInput, "user-two-unsent-draft");
     expect(nextInput).toHaveProperty("value", "user-two-unsent-draft");
+    const previousEnvironmentReads = profileReadsFor(
+      harness,
+      PERSONAL_ENVIRONMENT,
+    ).length;
 
     const release = harness.state.releasePendingSet;
     if (release === null) throw new Error("the Personal save was not held");
@@ -632,21 +632,16 @@ describe("TeamProviders cloud API keys", () => {
         .getByRole("button", { name: /OpenRouter/ })
         .getAttribute("aria-current"),
     ).toBe("true");
-    const previousEnvironmentReads = profileReadsFor(
-      harness,
-      PERSONAL_ENVIRONMENT,
-    ).length;
-
     await act(async () => {
       await harness.runtime.auth.signOut();
       useAuthStore.setState({ status: "signed-out" });
     });
     harness.source.current = noHostSource(SECOND_PERSONAL_ENVIRONMENT);
+    view.rerender(<TeamProviders />);
     await signInOwnEnvironmentAs(harness.runtime, "user-2", "user-2-token");
     await waitFor(() => {
       expect(harness.runtime.auth.chosenSignIn().userId).toBe("user-2");
     });
-    view.rerender(<TeamProviders />);
 
     await selectProvider("Cursor");
     const nextInput = await screen.findByLabelText("API key");
@@ -662,6 +657,16 @@ describe("TeamProviders cloud API keys", () => {
         "authorization",
       ),
     ).toBe("Bearer user-2-token");
+    const previousEnvironmentReads = profileReadsFor(
+      harness,
+      PERSONAL_ENVIRONMENT,
+    ).length;
+    expect(
+      profileReadsFor(harness, PERSONAL_ENVIRONMENT).every(
+        (request) =>
+          request.headers.get("authorization") === "Bearer user-1-token",
+      ),
+    ).toBe(true);
 
     act(() => {
       releaseOnMutate.resolve();
