@@ -992,7 +992,7 @@ describe("<SideTabStrip />", () => {
 
     fireEvent.contextMenu(beta);
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: /^Close Tab/ }),
+      await screen.findByRole("menuitem", { name: /^Close Tab(?!s)/ }),
     );
     await flushNav();
 
