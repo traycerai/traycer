@@ -1,4 +1,8 @@
 import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
+import {
   killConflictingPortOwner,
   type KillConflictingPortOwnerResult,
 } from "../host/free-port-kill";
@@ -300,8 +304,13 @@ export function buildHostFreePortAndRestartCommand(
         : kill.killed
           ? `sent SIGTERM to pid ${args.pid ?? "?"} (${kill.releaseDetail}); ${action}`
           : `pid ${args.pid ?? "?"} could not be signalled (${kill.killError}); port verified free anyway (${kill.releaseDetail}); ${action}`;
+    const credentialProvision = restarted
+      ? await maybeProvisionCredential(ctx, "start", null)
+      : null;
+    const note = formatCredentialProvisionNote(credentialProvision);
     return {
       data: {
+        credentialProvision,
         port: args.port,
         pid: args.pid,
         processName: null,
@@ -320,7 +329,7 @@ export function buildHostFreePortAndRestartCommand(
         runtimeVersion: attestation.runtimeVersion,
         runtimeWasNull: attestation.runtimeWasNull,
       },
-      human,
+      human: note === null ? human : `${human}; ${note}`,
       exitCode: 0,
     };
   };

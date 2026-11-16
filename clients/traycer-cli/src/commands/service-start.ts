@@ -1,3 +1,7 @@
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   CommandContext,
@@ -144,7 +148,8 @@ async function runServiceStart(
   // admission every such record refused, so after a Linked teardown or a
   // reboot over a park the explicit start could not bring the host back for
   // as long as the record stood.
-  return withCliSupervisorRelaunchSegment(
+  let started = false;
+  const result = await withCliSupervisorRelaunchSegment(
     contenderOptions,
     (capability, context) =>
       withCliAttemptMutation(capability, contenderOptions, async () => {
@@ -292,6 +297,7 @@ async function runServiceStart(
             exitCode: 0,
           };
         }
+        started = true;
         // Also best-effort: the start was ACCEPTED, and a descriptive readback
         // that fails afterwards must not turn that into a nonzero result. This
         // command promises an accepted request, not readiness.
@@ -317,6 +323,15 @@ async function runServiceStart(
         };
       }),
   );
+  const credentialProvision = started
+    ? await maybeProvisionCredential(ctx, "start", null)
+    : null;
+  const note = formatCredentialProvisionNote(credentialProvision);
+  return {
+    ...result,
+    data: { ...result.data, credentialProvision },
+    human: note === null ? result.human : `${result.human}; ${note}`,
+  };
 }
 
 function startData(

@@ -1,3 +1,7 @@
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
 import { platform as osPlatform } from "node:os";
 import {
   finalizePendingCliUpgrade,
@@ -320,8 +324,19 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             locked.record,
             locked.parkMatchesInstall,
           );
+    const credentialProvision =
+      restarted && !locked.result.helperOwnsServiceStart
+        ? await maybeProvisionCredential(ctx, "start", null)
+        : null;
+    const note = formatCredentialProvisionNote(credentialProvision);
+    const human = restarted
+      ? humanForRestart(locked.jobId, locked.result)
+      : deferredForParkedActivation
+        ? `left service '${locked.jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+        : `stopped service '${locked.jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`;
     return {
       data: {
+        credentialProvision,
         restarted,
         deferredForParkedActivation,
         label: label.id,
@@ -332,11 +347,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         runtimeVersion: locked.attestation.runtimeVersion,
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
-      human: restarted
-        ? humanForRestart(locked.jobId, locked.result)
-        : deferredForParkedActivation
-          ? `left service '${locked.jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
-          : `stopped service '${locked.jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
+      human: note === null ? human : `${human}; ${note}`,
       exitCode: 0,
     };
   };
