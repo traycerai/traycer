@@ -235,6 +235,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEpicChatStarter } from "@/hooks/chats/use-epic-chat-starter";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { cloudChatBelongsToViewer } from "@/lib/chats/cloud-chat-view-ownership";
 import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -252,7 +255,7 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -477,6 +480,7 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
+  readonly cloudChat?: CloudChatSummary;
   readonly restingSandbox?: RestingChatSandbox;
   /**
    * The road for a message to a chat its host may have dropped the records
@@ -3581,17 +3585,47 @@ function useChatTileSessionViewModel(
     ],
   );
   const evictedSend = props.evictedSend ?? null;
+  const isAtRest =
+    props.restingSandbox !== undefined || evictedSend?.served === true;
+  const cloudChatClient = useOptionalHostClient();
+  const atRestCloudChats = useCloudChatList({
+    client: cloudChatClient,
+    taskId: currentEpicId,
+    enabled: isAtRest,
+  });
+  const environmentChatRows = useEnvironmentArmChats(
+    isAtRest ? currentEpicId : "",
+  );
+  const cloudChat = useMemo(() => {
+    const namesThisChat = (chat: CloudChatSummary): boolean =>
+      chat.identity.taskId === currentEpicId &&
+      chat.identity.chatId === node.id &&
+      chat.identity.ownerUserId === state.chat?.userId &&
+      chat.ownerHostId === activeHostId;
+    if (props.cloudChat !== undefined && namesThisChat(props.cloudChat)) {
+      return props.cloudChat;
+    }
+    const viewerRow = atRestCloudChats.data?.chats.find(namesThisChat);
+    if (viewerRow?.creatorUserId !== undefined) return viewerRow;
+    return environmentChatRows.find(namesThisChat) ?? viewerRow;
+  }, [
+    activeHostId,
+    atRestCloudChats.data,
+    currentEpicId,
+    environmentChatRows,
+    node.id,
+    props.cloudChat,
+    state.chat?.userId,
+  ]);
   const recordedStarter = useEpicChatStarter(
     currentEpicId,
     state.chat?.userId ?? null,
     node.id,
   );
-  const teamEnvironments = useEnvironmentListQuery(
-    props.restingSandbox !== undefined || evictedSend?.served === true,
-  );
+  const teamEnvironments = useEnvironmentListQuery(isAtRest);
   // This only chooses local capture while the read-only pool serves the chat.
   // The host's fresh access verdict still decides whether a captured send goes.
-  const canParkCreatorMessage =
+  const heldCreatorMatchesViewer =
     teamEnvironments.data?.environments.some(
       (environment) =>
         environment.ownerKind === "organization" &&
@@ -3599,8 +3633,13 @@ function useChatTileSessionViewModel(
     ) === true &&
     recordedStarter !== null &&
     recordedStarter !== SYSTEM_ACTOR_ID &&
-    recordedStarter === profile?.userId &&
-    (props.restingSandbox !== undefined || evictedSend?.served === true);
+    recordedStarter === profile?.userId;
+  const canParkCreatorMessage =
+    isAtRest &&
+    profile !== null &&
+    (cloudChat === undefined
+      ? heldCreatorMatchesViewer
+      : cloudChatBelongsToViewer(cloudChat, profile.userId));
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;

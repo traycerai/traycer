@@ -54,6 +54,7 @@ import {
 } from "@/components/share-on-x/sent-messages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
+import { publishEnvironmentArmScope } from "@/hooks/environment/use-environment-arms";
 import {
   __getChatSessionRegistryForTests,
   __setChatStreamClientFactoryForTests,
@@ -76,6 +77,7 @@ import {
   HOST_ID,
   SAVED_CREATOR_USER_ID,
   TEAM_ENVIRONMENT_OWNER_ID,
+  cloudChatListTestState,
   environmentListTestState,
   originSignInTestState,
   hostDirectoryTestState,
@@ -90,7 +92,7 @@ export const CHAT_ARTIFACT = {
   name: "Chat 1",
   hostId: HOST_ID,
 };
-interface ChatSourceFixture {
+export interface ChatSourceFixture {
   readonly ownerUserId: string;
   readonly starterUserId: string | null;
 }
@@ -142,7 +144,7 @@ export const PERSONAL_AND_TEAM_VIEWER_ENVIRONMENT_LIST_RESPONSE = {
   ],
 } satisfies EnvironmentListResponseV11;
 
-type ChatAccessFixture =
+export type ChatAccessFixture =
   | {
       readonly role: "owner";
       readonly ownerUserId: string;
@@ -482,9 +484,10 @@ const AT_REST: ChatServing = {
   catchingUp: null,
 };
 
-interface Mounted {
+export interface Mounted {
   readonly witnessClient: FakeStreamClient;
   readonly witness: PoolChatServingWitness;
+  readonly queryClient: QueryClient;
 }
 
 function mountEvictedTile(source: ChatSourceFixture): Mounted {
@@ -537,7 +540,7 @@ function mountEvictedTile(source: ChatSourceFixture): Mounted {
       </QueryClientProvider>
     </TestRouterProvider>,
   );
-  return { witnessClient, witness };
+  return { witnessClient, witness, queryClient };
 }
 
 /** The tile on the pool: the witness read the chat at rest and the pool's stream is up. */
@@ -657,6 +660,7 @@ export function settleEvictedSendHostTier(): void {
 export function resetEvictedSendFixture(): void {
   installLegendListViewportMetrics();
   installLegendListTestClock();
+  publishEnvironmentArmScope(null);
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -671,6 +675,8 @@ export function resetEvictedSendFixture(): void {
   originSignInTestState.userId = SAVED_CREATOR_USER_ID;
   originSignInTestState.generation = 0;
   originSignInTestState.listeners.clear();
+  cloudChatListTestState.data = undefined;
+  cloudChatListTestState.requestCount = 0;
   hostDirectoryTestState.teamSandboxForCurrentChat = false;
   useComposerDraftStore.setState({ drafts: {} });
   useComposerRunSettingsStore.getState().resetForTests();
@@ -694,6 +700,7 @@ export function resetEvictedSendFixture(): void {
 export function teardownEvictedSendFixture(): void {
   for (const unsubscribe of sentMessageUnsubscribers.splice(0)) unsubscribe();
   cleanup();
+  publishEnvironmentArmScope(null);
   toast.dismiss();
   __setChatStreamClientFactoryForTests(null);
   __getChatSessionRegistryForTests().disposeAll();

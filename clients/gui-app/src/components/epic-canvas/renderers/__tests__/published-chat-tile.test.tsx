@@ -26,6 +26,7 @@ import {
   servingBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EnvironmentHostRecordV12,
@@ -151,6 +152,7 @@ const deadTileBannerContainerProps: DeadTileBannerContainerProps[] = [];
  * ready state hands the same `handle` object back rather than a fresh one.
  */
 interface ChatTileSessionViewProps {
+  readonly cloudChat: CloudChatSummary | undefined;
   readonly readOnlyNotice: string | null;
   readonly restingSandbox?: ChatSandboxState;
   readonly handle: PublishedChatSessionHandle;
@@ -539,6 +541,21 @@ const SAME_HOST_NODE: PublishedChatTileRef = {
 function refusedUnpublished(): CloudChatTranscriptState {
   const read: CloudChatRead = { chat: null, outcome: { kind: "unpublished" } };
   return { kind: "refused", read };
+}
+
+async function readyStateWithCreator(
+  creatorUserId: string | null,
+): Promise<CloudChatTranscriptState> {
+  const state = await readyState([FIRST_COHORT]);
+  if (state.kind !== "ready" || state.read.chat === null) {
+    throw new Error("expected the published chat fixture to include its row");
+  }
+  const chat: CloudChatSummary = {
+    ...state.read.chat,
+    creatorUserId,
+    isOwnedByViewer: false,
+  };
+  return { ...state, read: { ...state.read, chat } };
 }
 
 function refusedCorrupt(): CloudChatTranscriptState {
@@ -1208,6 +1225,73 @@ async function readyState(
     payloadsSettled: true,
   });
 }
+
+describe("PublishedChatTile - Team cloud creator projection", () => {
+  const TEAM_NODE: PublishedChatTileRef = {
+    ...NODE,
+    id: "published:task-1:u-1:chat-1",
+    ownerUserId: IDENTITY.ownerUserId,
+    ownerHostId: "host-origin",
+  };
+  const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: IDENTITY.ownerUserId,
+        ownerKind: "organization",
+        ownerId: "team-1",
+        roomId: "room-team",
+        label: "acme",
+      },
+    ],
+  };
+
+  it("passes the matching Team creator summary into the read-only copy surface", async () => {
+    environments.pool = true;
+    environments.list = TEAM_ENVIRONMENTS;
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-user",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-user", username: "Viewer" },
+    });
+
+    const state = await readyStateWithCreator("viewer-user");
+    if (state.kind !== "ready" || state.read.chat === null) {
+      throw new Error("expected a published Team row");
+    }
+    const expectedCloudChat = state.read.chat;
+    mockUseCloudChatTranscript.mockReturnValue(state);
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={TEAM_NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId={TEAM_NODE.taskId}
+      />,
+    );
+
+    await waitFor(() => {
+      const surface = chatTileSessionViewCalls.at(-1);
+      expect(surface?.cloudChat).toEqual(expectedCloudChat);
+      expect(surface?.readOnlyNotice).toContain(
+        "This chat's host isn't available — showing the last published copy.",
+      );
+    });
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(
+      screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+    ).toContain("This chat's host isn't available.");
+    expect(
+      screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+    ).not.toContain("another collaborator");
+  });
+});
 
 /**
  * The head-keyed refresh: once a copy has been shown, a LATER read for a

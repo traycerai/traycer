@@ -9,6 +9,7 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ListCloudChatsResponse } from "@traycer/protocol/host/epic/cloud-chat";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -30,6 +31,11 @@ export const originSignInTestState = {
   generation: 0,
   listeners: new Set<RequestContextListener>(),
 };
+
+export const cloudChatListTestState: {
+  data: ListCloudChatsResponse | undefined;
+  requestCount: number;
+} = { data: undefined, requestCount: 0 };
 
 export const hostDirectoryTestState = {
   teamSandboxForCurrentChat: false,
@@ -62,6 +68,14 @@ export const hydrateBoundary: { client: HostClient<HostRpcRegistry> | null } = {
 
 export const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
+  requestWithSignal: (method: string) => {
+    if (method === "epic.listCloudChats") {
+      cloudChatListTestState.requestCount += 1;
+      const data = cloudChatListTestState.data;
+      return data === undefined ? new Promise(() => {}) : Promise.resolve(data);
+    }
+    return new Promise(() => {});
+  },
   // A pool build reads the pool tier's client through the surface's.
   createRequesterForHostId: () => MOCK_HOST_CLIENT,
   getActiveHostId: () => HOST_ID,
