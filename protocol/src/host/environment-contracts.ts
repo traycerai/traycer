@@ -238,11 +238,7 @@ export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
 });
 
-/**
- * Defined and not registered: registering a new latest minor changes the
- * answer every caller reads, so `@1.3` registers with the host slice that
- * fills `move` and the app change that reads it.
- */
+/** `@1.2`'s answer with the move attempt's outcome, `move`. */
 export const environmentStatusV13 = defineRpcContract({
   method: "environment.status",
   schemaVersion: { major: 1, minor: 3 } as const,
@@ -972,7 +968,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -985,6 +981,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         2: {
           contract: environmentStatusV12,
           upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: environmentStatusV13,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
