@@ -203,19 +203,7 @@ function renderPage(options: RigOptions): Rig {
   mountTeamPage({ kind: "host" }, handlers);
   const authnBinding = requireTeamEnvironmentAuthnBinding();
   hostMock.client = client;
-  hostMock.binding = {
-    ...authnBinding,
-    auth: {
-      ...authnBinding.auth,
-      mintExecutableWriteGrant: () =>
-        Promise.resolve({
-          kind: "ok" as const,
-          grant: "grant-1",
-          expiresInSeconds: 600,
-        }),
-      getCredentialGeneration: () => 0,
-    },
-  };
+  hostMock.binding = authnBinding;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -305,13 +293,10 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
     await waitFor(() => {
       expect(rig.puts).toHaveLength(1);
     });
-    // The script runs on every computer of that OS, so it carries the grant
-    // the person's own session minted.
     expect(rig.puts[0]).toEqual({
       os: "macos",
       text: "brew bundle --no-lock",
       expectedRevision: 4,
-      executableWriteGrant: null,
     });
     // The re-read remounts the editor on the revision it now has.
     await waitFor(() => {
@@ -356,7 +341,6 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "windows",
       text: "winget install jq",
       expectedRevision: null,
-      executableWriteGrant: null,
     });
   });
 

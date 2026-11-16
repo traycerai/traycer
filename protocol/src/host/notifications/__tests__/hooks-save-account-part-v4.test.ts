@@ -55,10 +55,7 @@ const saveRequestV4 = {
   configurationRevision: "rev-7",
 };
 
-const saveRequestV3 = {
-  ...saveRequestV4,
-  executableWriteGrant: "grant-token",
-};
+const saveRequestV3 = { ...saveRequestV4 };
 const saveRequestV2 = {
   hooks: [HTTP_HOOK],
   executableWriteGrant: "grant-token",
@@ -96,6 +93,7 @@ describe("notification hook save account part @4.0", () => {
       hostNotificationHooksSaveV30.requestSchema.safeParse({
         hooks: [HTTP_HOOK],
         configurationRevision: "rev-7",
+        executableWriteGrant: "grant-token",
       }).success,
     ).toBe(false);
     expect(
@@ -195,10 +193,7 @@ describe("notification hook save account part @4.0", () => {
     const downgradedRequestV2 = requireDowngradeValue(
       downgradeRequestAcrossMajors(saveRegistry, 4, 2, saveRequestV4),
     );
-    expect(downgradedRequestV3).toEqual({
-      ...saveRequestV4,
-      executableWriteGrant: null,
-    });
+    expect(downgradedRequestV3).toEqual(saveRequestV4);
     expect(
       hostNotificationHooksSaveV30.requestSchema.safeParse(downgradedRequestV3)
         .success,
@@ -218,7 +213,7 @@ describe("notification hook save account part @4.0", () => {
       downgradeRequestAcrossMajors(saveRegistry, 3, 2, saveRequestV3),
     ).toEqual({
       ok: true,
-      value: { hooks: [HTTP_HOOK], executableWriteGrant: "grant-token" },
+      value: { hooks: [HTTP_HOOK], executableWriteGrant: null },
     });
   });
 

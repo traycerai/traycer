@@ -1355,7 +1355,6 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     expect(set).toHaveBeenCalledWith({
       key: "NODE_ENV",
       value: "production",
-      executableWriteGrant: null,
     });
   });
 
@@ -1412,7 +1411,6 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: SIGN_IN_URL,
-      executableWriteGrant: null,
     });
   });
 });
@@ -1518,7 +1516,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "EDITOR",
       value: "vim",
-      executableWriteGrant: null,
     });
     expect(screen.queryByText(NAME_LINE)).toBeNull();
   });
@@ -1538,7 +1535,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "OPENAI_API_KEY",
       value: "sk-x",
-      executableWriteGrant: null,
     });
   });
 
@@ -1615,7 +1611,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
-      executableWriteGrant: null,
     });
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
