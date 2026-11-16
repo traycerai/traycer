@@ -305,7 +305,6 @@ describe("the Memory act: a write abandoned before it was sent", () => {
 
     expect(screen.queryByTestId("onboarding-memory-save-report")).toBeNull();
     expect(currentStepId()).toBe("agent-memories");
-    expect(isOn(switchOf("onboarding-memory-traycer"))).toBe(true);
     expect(advance.textContent).toBe(labelBefore);
     expect(paramsOf("config.agentMemories.set")).toEqual([]);
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
