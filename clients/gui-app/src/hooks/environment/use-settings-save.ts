@@ -33,14 +33,14 @@ import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import type { PendingSettingsSave } from "@/lib/environment/settings-save-follow";
+import type { SettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
 import { environmentQueryKeys } from "@/lib/query-keys";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Called just before a save is sent, with the host it is sent on and the
- * sign-in the person acted on (`pressedOn`, taken in the mutation's
- * `onMutate`; null with no session service): remembers what the save will
+ * origin captured at the public press: remembers what the host save will
  * propose, so the app applies its own hold. A save sent on any host but the
  * requester's own is not followed. Once the sign-in it was pressed on has
  * ended, by a switch or by signing in again as the same person, the save is
@@ -49,7 +49,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 export type PrepareSettingsSave = (
   save: SettingsSave,
   sentOn: string | null,
-  pressedOn: EnvironmentCloud | null,
+  origin: SettingsSaveOrigin,
 ) => Promise<PendingSettingsSave>;
 
 /** Who is signed in now, as {@link useCloudChatViewerId} names them. */
@@ -428,14 +428,16 @@ export function useSettingsSave(
     async (
       save: SettingsSave,
       sentOn: string | null,
-      pressedOn: EnvironmentCloud | null,
+      origin: SettingsSaveOrigin,
     ): Promise<PendingSettingsSave> => {
-      // The save was pressed on `pressedOn`: once that sign-in has ended it
-      // is not sent, wherever it was going, followed or not.
-      if (pressedOn !== null && !pressedOn.onOriginSignIn()) {
+      // SettingsSave enumerates host writes, never named authn row writes.
+      // A press with no sign-in stays host-only even if an account appears.
+      if (origin.kind === "no_sign_in_at_press") return NOTHING_TO_FOLLOW;
+      const pressedOn = origin.operation;
+      if (!pressedOn.onOriginSignIn()) {
         return { kind: "abandoned", method: save.method };
       }
-      if (scope === null || pressedOn === null) return NOTHING_TO_FOLLOW;
+      if (scope === null) return NOTHING_TO_FOLLOW;
       // The editor, and whatever the caller read from authn for this save,
       // belong to `scope.viewerId`: a save prepared once anyone else is
       // signed in is not sent, wherever it was going.
