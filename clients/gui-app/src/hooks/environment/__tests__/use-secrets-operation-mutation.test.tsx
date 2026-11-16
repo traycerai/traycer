@@ -221,7 +221,7 @@ describe("the Secrets operation mutation wrapper", () => {
       () =>
         useSecretsOperationMutation({
           mutationKey: ["secrets-operation-concurrency"],
-          onMutate: async (input) => {
+          onMutate: async (input: MutationInput) => {
             observedVariables.push(input);
             const index = pressIndex++;
             entered[index]?.resolve();
