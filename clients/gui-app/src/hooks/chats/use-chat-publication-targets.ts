@@ -209,7 +209,10 @@ function useChatPublicationTargetsQuery(
         (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
         args.epicId.length > 0 &&
         args.chatIds.length > 0,
-      staleTime: 5 * 60_000,
+      staleTime:
+        args.publicationRedirectRevisionSupported === true
+          ? Infinity
+          : 5 * 60_000,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },

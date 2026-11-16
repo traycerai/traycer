@@ -30,7 +30,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClientProvider,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 import type {
@@ -61,6 +65,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { queryKeys } from "@/lib/query-keys";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
@@ -353,11 +358,12 @@ function createFixture(queuedBridge: boolean): Fixture {
   const targetFailure = { value: false };
   const targetUnsupported = { value: false };
   let sessionHandle: OpenedStoreForTest | null = null;
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, retryDelay: 0 },
-      mutations: { retry: false },
-    },
+  // Keep production freshness and focus behavior in this integration harness.
+  const queryClient = createAppQueryClient();
+  const appQueryDefaults = queryClient.getDefaultOptions();
+  queryClient.setDefaultOptions({
+    ...appQueryDefaults,
+    queries: { ...appQueryDefaults.queries, retryDelay: 0 },
   });
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -461,6 +467,7 @@ function useFixturePublicationTargets() {
 }
 
 beforeEach(() => {
+  focusManager.setFocused(undefined);
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
@@ -475,6 +482,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  focusManager.setFocused(undefined);
   cleanup();
   fixture.handle.store.getState().dispose();
   runtime.client = null;
@@ -1524,6 +1532,303 @@ describe("R10 - the push stream's stamp", () => {
 });
 
 describe("publication targets follow the real chat-record revision", () => {
+  it("reuses the supported target answer after same-revision chat adoption and a late palette mount", async () => {
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: "redirect-r1",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-r1" },
+    ];
+    const recordView = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    const sidebarTargets = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toEqual(["chat-a"]);
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r1");
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
+      expect(fixture.targetRequests).toEqual([["chat-a"]]);
+      expect(sidebarTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r1" },
+      ]);
+      expect(sidebarTargets.result.current.isFetching).toBe(false);
+    });
+
+    const stableTargetKey = [
+      ...queryKeys.hostMethod<
+        HostRpcRegistry,
+        "epic.listChatPublicationTargets"
+      >(HOST_ID, "epic.listChatPublicationTargets", {
+        epicId: EPIC_ID,
+        chatIds: [],
+      }),
+      VIEWER_ID,
+    ] as const;
+    expect(
+      fixture.queryClient.getQueryState(stableTargetKey)?.dataUpdateCount,
+    ).toBe(1);
+    expect(
+      fixture.queryClient.getDefaultOptions().queries?.refetchOnWindowFocus,
+    ).toBe(false);
+    expect(
+      fixture.queryClient.getDefaultOptions().queries?.refetchOnReconnect,
+    ).toBe(false);
+
+    vi.useFakeTimers();
+    const firstAnswerAt = Date.now();
+    act(() => focusManager.setFocused(false));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    const callsBeforeAdoption = chatCalls(fixture.messenger).length;
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: "redirect-r1",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" }), chatRow({ chatId: "chat-b" })],
+    });
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await vi.waitFor(() => {
+      expect(chatCalls(fixture.messenger).length).toBeGreaterThan(
+        callsBeforeAdoption,
+      );
+      expect(fixture.handle.store.getState().chats.allIds).toEqual([
+        "chat-a",
+        "chat-b",
+      ]);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r1");
+    });
+    expect(fixture.targetRequests).toEqual([["chat-a"]]);
+
+    const remainingTimeToPaletteMount = 458_540 - (Date.now() - firstAnswerAt);
+    expect(remainingTimeToPaletteMount).toBeGreaterThan(300_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(remainingTimeToPaletteMount);
+    });
+    const paletteMountAt = Date.now();
+    expect(paletteMountAt - firstAnswerAt).toBe(458_540);
+    expect(fixture.handle.store.getState().chats.allIds).toEqual([
+      "chat-a",
+      "chat-b",
+    ]);
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevision,
+    ).toBe("redirect-r1");
+
+    const paletteTargets = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(paletteTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r1" },
+      ]);
+      expect(paletteTargets.result.current.isFetching).toBe(false);
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.fetchStatus,
+      ).toBe("idle");
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.dataUpdateCount,
+      ).toBe(1);
+    });
+    expect(fixture.targetRequests).toEqual([["chat-a"]]);
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      focusManager.setFocused(true);
+    });
+    await vi.waitFor(() => {
+      expect(focusManager.isFocused()).toBe(true);
+      expect(fixture.targetRequests).toEqual([["chat-a"]]);
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.fetchStatus,
+      ).toBe("idle");
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.dataUpdateCount,
+      ).toBe(1);
+    });
+
+    paletteTargets.unmount();
+    sidebarTargets.unmount();
+    recordView.unmount();
+  });
+
+  it("refetches a stale legacy target slot when a second observer mounts", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "epic.listChatRecords": { major: 1, minor: 4 },
+    });
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: null,
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-legacy" },
+    ];
+    const recordView = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    const sidebarTargets = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+
+    await vi.waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toEqual(["chat-a"]);
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(false);
+      expect(fixture.targetRequests).toEqual([["chat-a"]]);
+      expect(sidebarTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-legacy" },
+      ]);
+      expect(sidebarTargets.result.current.isFetching).toBe(false);
+    });
+    const legacyTargetKey = [
+      ...queryKeys.hostMethod<
+        HostRpcRegistry,
+        "epic.listChatPublicationTargets"
+      >(HOST_ID, "epic.listChatPublicationTargets", {
+        epicId: EPIC_ID,
+        chatIds: ["chat-a"],
+      }),
+      VIEWER_ID,
+    ] as const;
+    expect(
+      fixture.queryClient.getQueryState(legacyTargetKey)?.dataUpdateCount,
+    ).toBe(1);
+
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
+    const paletteTargets = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-a"], ["chat-a"]]);
+      expect(paletteTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-legacy" },
+      ]);
+      expect(paletteTargets.result.current.isFetching).toBe(false);
+      expect(
+        fixture.queryClient.getQueryState(legacyTargetKey)?.fetchStatus,
+      ).toBe("idle");
+      expect(
+        fixture.queryClient.getQueryState(legacyTargetKey)?.dataUpdateCount,
+      ).toBe(2);
+    });
+
+    paletteTargets.unmount();
+    sidebarTargets.unmount();
+    recordView.unmount();
+  });
+
+  it("refetches exactly once when the supported record revision changes after five minutes", async () => {
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: "redirect-r1",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-r1" },
+    ];
+    const recordView = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    const sidebarTargets = renderHook(useFixturePublicationTargets, {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r1");
+      expect(fixture.targetRequests).toEqual([["chat-a"]]);
+      expect(sidebarTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r1" },
+      ]);
+      expect(sidebarTargets.result.current.isFetching).toBe(false);
+    });
+    const stableTargetKey = [
+      ...queryKeys.hostMethod<
+        HostRpcRegistry,
+        "epic.listChatPublicationTargets"
+      >(HOST_ID, "epic.listChatPublicationTargets", {
+        epicId: EPIC_ID,
+        chatIds: [],
+      }),
+      VIEWER_ID,
+    ] as const;
+    expect(
+      fixture.queryClient.getQueryState(stableTargetKey)?.dataUpdateCount,
+    ).toBe(1);
+
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
+    fixture.targetRedirects.value = [
+      { chatId: "chat-a", publicationChatId: "published-r2" },
+    ];
+    fixture.chatHandler.impl = () => ({
+      kind: "unchanged",
+      publicationRedirectRevision: "redirect-r2",
+      listStamp: {
+        epoch: "publication-records",
+        revision: 3,
+        touchRevision: 0,
+      },
+      touched: [],
+    });
+    const previousAnswerSequence =
+      fixture.handle.store.getState().chatRecordListAnswerSequence;
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+
+    await vi.waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chatRecordListAnswerSequence,
+      ).toBeGreaterThan(previousAnswerSequence);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r2");
+      expect(fixture.targetRequests).toEqual([["chat-a"], ["chat-a"]]);
+      expect(sidebarTargets.result.current.data?.redirected).toEqual([
+        { chatId: "chat-a", publicationChatId: "published-r2" },
+      ]);
+      expect(sidebarTargets.result.current.isFetching).toBe(false);
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.fetchStatus,
+      ).toBe("idle");
+      expect(
+        fixture.queryClient.getQueryState(stableTargetKey)?.dataUpdateCount,
+      ).toBe(2);
+    });
+
+    recordView.unmount();
+    sidebarTargets.unmount();
+  });
+
   it("reads doc-only chats from the legacy target slot after an unsupported list answer", async () => {
     const docChats = fixture.handle.doc.getMap("epic").get("chats");
     if (!(docChats instanceof Y.Map)) throw new Error("expected chat map");
