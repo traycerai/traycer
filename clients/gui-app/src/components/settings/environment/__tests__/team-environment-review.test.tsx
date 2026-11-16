@@ -17,6 +17,7 @@ import {
   PersonalPageFrame,
   PersonalPageHeaderStatus,
 } from "@/components/settings/personal/personal-page-frame";
+import { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { environmentMutationKeys } from "@/lib/query-keys/environment-mutation-keys";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -177,8 +178,17 @@ function renderTeamPage(harness: TeamPageHarness): void {
   );
 }
 
+async function reviewButton(): Promise<HTMLElement> {
+  const rows = await screen.findAllByTestId("personal-review-row");
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("Team Review needs a public review notice row");
+  }
+  return within(row).findByRole("button", { name: "Review" });
+}
+
 async function openReview(): Promise<HTMLElement> {
-  fireEvent.click(await screen.findByTestId("personal-review-link"));
+  fireEvent.click(await reviewButton());
   return screen.findByRole("dialog");
 }
 
@@ -271,9 +281,13 @@ describe("Team Review through the addressed page", () => {
     const { harness } = createReviewHarness("editor", rows);
     renderTeamPage(harness);
 
-    const reviewLink = await screen.findByTestId("personal-review-link");
+    const reviewRows = await screen.findAllByTestId("personal-review-row");
+    const reviewRow = reviewRows[0];
+    if (reviewRow === undefined) {
+      throw new Error("Team Review needs a public review notice row");
+    }
     expect(screen.getAllByTestId("personal-review-link")).toHaveLength(1);
-    expect(screen.getByText("NODE_ENV")).toBeTruthy();
+    expect(reviewRow.textContent).toContain("NODE_ENV");
     expect(screen.queryByText("skill-a")).toBeNull();
     expect(screen.queryByText("guide-a")).toBeNull();
     expect(operationReads(harness).length).toBeGreaterThan(0);
@@ -283,7 +297,7 @@ describe("Team Review through the addressed page", () => {
       ).searchParams.get("include"),
     ).toBe("operation");
 
-    fireEvent.click(reviewLink);
+    fireEvent.click(within(reviewRow).getByRole("button", { name: "Review" }));
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByRole("heading", { name: "Review" }),
@@ -677,10 +691,14 @@ describe("Team Review through the addressed page", () => {
     );
     renderTeamPage(harness);
     const dialog = await openReview();
-
-    fireEvent.click(
-      within(dialog).getByTestId("retrospective-held-hold-press-approve"),
+    const row = await within(dialog).findByTestId(
+      "retrospective-held-hold-press",
     );
+    const approve = await within(row).findByRole("button", {
+      name: "Approve",
+    });
+
+    fireEvent.click(approve);
     await gate.started;
     expect(choiceRequests(harness)).toEqual([]);
     await act(async () => {
@@ -740,9 +758,10 @@ describe("Team Review through the addressed page", () => {
       "retrospective-held-hold-agent",
     );
 
-    fireEvent.click(
-      within(row).getByTestId("retrospective-held-hold-agent-approve"),
-    );
+    const initialApprove = await within(row).findByRole("button", {
+      name: "Approve",
+    });
+    fireEvent.click(initialApprove);
     await waitFor(() =>
       expect(choiceRequests(scenario.harness)).toHaveLength(1),
     );
@@ -782,9 +801,11 @@ describe("Team Review through the addressed page", () => {
       },
     ]);
 
-    fireEvent.click(
-      within(row).getByTestId("retrospective-held-hold-agent-approve"),
-    );
+    const refreshedApprove = await within(row).findByRole("button", {
+      name: "Approve",
+    });
+    expect(refreshedApprove).toBeEnabled();
+    fireEvent.click(refreshedApprove);
     await waitFor(() =>
       expect(choiceRequests(scenario.harness)).toHaveLength(2),
     );
@@ -1050,10 +1071,14 @@ describe("Team Review through the addressed page", () => {
     );
     renderTeamPage(harness);
     const dialog = await openReview();
-
-    fireEvent.click(
-      within(dialog).getByTestId("retrospective-held-hold-account-approve"),
+    const row = await within(dialog).findByTestId(
+      "retrospective-held-hold-account",
     );
+    const approve = await within(row).findByRole("button", {
+      name: "Approve",
+    });
+
+    fireEvent.click(approve);
     await gate.started;
     act(() => {
       harness.auth.applyExternalSession(
@@ -1132,15 +1157,19 @@ describe("Team Review through the addressed page", () => {
     });
     const { harness } = createReviewHarness("admin", [row]);
     const gate = holdNextReviewMutation(harness, () => undefined);
+    harness.auth.environmentCloud = AuthService.prototype.environmentCloud.bind(
+      harness.auth,
+    );
     renderTeamPage(harness);
     const dialog = await openReview();
-    await within(dialog).findByTestId(
-      "retrospective-held-hold-reentry-approve",
+    const reviewRow = await within(dialog).findByTestId(
+      "retrospective-held-hold-reentry",
     );
+    const approve = await within(reviewRow).findByRole("button", {
+      name: "Approve",
+    });
 
-    fireEvent.click(
-      within(dialog).getByTestId("retrospective-held-hold-reentry-approve"),
-    );
+    fireEvent.click(approve);
     await gate.started;
     act(() => {
       harness.auth.applyExternalSession({ status: "signed-out" });
