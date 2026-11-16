@@ -105,7 +105,7 @@ export function usePressCapturedMutation<
   const committedExecute = useRef(execute);
   useLayoutEffect(() => {
     committedExecute.current = execute;
-  }, [execute]);
+  });
   const mutateAsync = useCallback<
     UseMutateAsyncFunction<TData, TError, TVariables, TContext>
   >((variables, perCall) => committedExecute.current(variables, perCall), []);
