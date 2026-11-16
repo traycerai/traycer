@@ -14,6 +14,8 @@ import {
 import { validateAuthTokenIdentityAccessOnly } from "../../../../shared/auth/auth-validation";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 import { buildLoginCommand, loginCommand } from "../login";
+import { runHostStart } from "../host-start";
+import { runHostStartCommand } from "../host-start-command";
 import { config } from "../../config";
 import type { HostCredentialProvisionOutcome } from "../../host/credential-provisioning";
 import { noopLogger } from "../../logger";
@@ -42,6 +44,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => mocks.home.path ?? actual.homedir() };
+});
+
+vi.mock("../host-start", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../host-start")>();
+  return { ...actual, runHostStart: vi.fn() };
 });
 
 vi.mock("../../host/credential-provisioning", () => ({
@@ -99,6 +106,7 @@ const pollMock = vi.mocked(pollDeviceToken);
 const identityMock = vi.mocked(validateAuthTokenIdentityAccessOnly);
 const provisionMock = mocks.provisionInstalledHostCredential;
 const spawnMock = vi.mocked(spawn);
+const runHostStartMock = vi.mocked(runHostStart);
 
 const signedInIdentity = {
   id: "u1",
@@ -132,8 +140,12 @@ function userWith(id: string, email: string, name: string): AuthenticatedUser {
 }
 
 function makeCtx(): CommandContext {
+  return makeCtxWithJson(false);
+}
+
+function makeCtxWithJson(json: boolean): CommandContext {
   const runtime: RuntimeContext = {
-    json: false,
+    json,
     quiet: false,
     noProgress: false,
     noBootstrap: false,
@@ -279,6 +291,7 @@ beforeEach(async () => {
   );
   vi.stubGlobal("fetch", mocks.fetch);
   provisionMock.mockReset();
+  runHostStartMock.mockReset();
   provisionMock.mockResolvedValue({ kind: "active", minted: true });
   startAuthMock.mockReset();
   startAuthMock.mockResolvedValue(authorizedDevice);
@@ -449,5 +462,212 @@ describe("traycer login credentials a host already running", () => {
 
     expectUndialed(result);
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("manual host start uses a stored sign-in without prompting", () => {
+  async function runManualStart(ctx: CommandContext): Promise<void> {
+    runHostStartMock.mockImplementation(async (_options, injected) => {
+      const onHostStarted = injected.onHostStarted;
+      if (onHostStarted !== null && onHostStarted !== undefined) {
+        await onHostStarted();
+      }
+    });
+    await runHostStartCommand(
+      ctx,
+      { environment: config.environment, cwd: null },
+      {},
+    );
+  }
+
+  it("uses the sign-in just stored by login and reports the real probe outcome", async () => {
+    await runTokenLogin();
+    const baseCtx = makeCtx();
+    const debug = vi.fn();
+    const ctx: CommandContext = {
+      ...baseCtx,
+      runtime: { ...baseCtx.runtime, logger: { ...noopLogger, debug } },
+    };
+
+    await runManualStart(ctx);
+
+    expect(runHostStartMock).toHaveBeenCalledTimes(1);
+    expect(runHostStartMock.mock.calls[0]?.[0]).toEqual({
+      environment: config.environment,
+      cwd: null,
+    });
+    expect(runHostStartMock.mock.calls[0]?.[1].onHostStarted).toEqual(
+      expect.any(Function),
+    );
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+    expect(provisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: config.environment,
+        auth: expect.objectContaining({ token: TOKEN_LOGIN_BEARER }),
+      }),
+    );
+    expect(ctx.output.humanRequired).toHaveBeenCalledWith("host authorized");
+    expect(ctx.output.emitResult).not.toHaveBeenCalled();
+    expect(ctx.progress).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledWith(
+      "Host credential provisioning settled",
+      expect.objectContaining({
+        environment: config.environment,
+        credentialProvision: { kind: "active", minted: true },
+      }),
+    );
+  });
+
+  it("keeps a caught probe diagnostic out of warning and info logs", async () => {
+    const diagnostic =
+      "credential-probe-marker path=/private/test/credentials body=distinctive";
+    await runTokenLogin();
+    provisionMock.mockRejectedValueOnce(new Error(diagnostic));
+    const baseCtx = makeCtx();
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const ctx: CommandContext = {
+      ...baseCtx,
+      runtime: {
+        ...baseCtx.runtime,
+        logger: { ...noopLogger, warn, info, debug },
+      },
+    };
+
+    await runManualStart(ctx);
+
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential provisioning threw; the command itself was unaffected",
+      { kind: "error" },
+    );
+    expect(info).toHaveBeenCalledWith("Host credential provisioning settled", {
+      environment: config.environment,
+      outcome: "error",
+    });
+    expect(
+      JSON.stringify({ warning: warn.mock.calls, info: info.mock.calls }),
+    ).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
+    expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+      "host authorization not confirmed - run " +
+        String.fromCharCode(96) +
+        "traycer host doctor" +
+        String.fromCharCode(96) +
+        " to see how to fix it",
+    );
+    expect(ctx.output.emitResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps manual-start JSON stdout free of probe diagnostics and result envelopes", async () => {
+    const diagnostic =
+      "manual-json-probe-marker path=/private/test/credentials body=distinctive";
+    await runTokenLogin();
+    provisionMock.mockImplementationOnce(async () => {
+      console.debug(diagnostic);
+      return { kind: "active", minted: true };
+    });
+    const ctx = makeCtxWithJson(true);
+    const originalConsole = {
+      log: console.log,
+      info: console.info,
+      debug: console.debug,
+    };
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+      callback: (() => void) | undefined,
+    ) => {
+      stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      if (typeof callback === "function") callback();
+      return true;
+    }) as never);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+      callback: (() => void) | undefined,
+    ) => {
+      stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      if (typeof callback === "function") callback();
+      return true;
+    }) as never);
+    try {
+      await runManualStart(ctx);
+    } finally {
+      console.log = originalConsole.log;
+      console.info = originalConsole.info;
+      console.debug = originalConsole.debug;
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    const stdout = stdoutChunks.join("");
+    expect(stdout).not.toContain(diagnostic);
+    expect(stdout.trim()).toBe("");
+    expect(stderrChunks.join("")).toContain(diagnostic);
+    expect(ctx.progress).not.toHaveBeenCalled();
+    expect(ctx.output.emitResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps an already credentialed host quiet instead of minting another credential", async () => {
+    await runTokenLogin();
+    provisionMock.mockResolvedValue({ kind: "active", minted: false });
+    const ctx = makeCtx();
+
+    await runManualStart(ctx);
+
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+    expect(ctx.output.humanRequired).not.toHaveBeenCalled();
+    expect(ctx.output.emitResult).not.toHaveBeenCalled();
+  });
+
+  it("leaves a signed-out manual start alone without opening a sign-in flow", async () => {
+    const ctx = makeCtx();
+
+    await runManualStart(ctx);
+
+    expect(startAuthMock).not.toHaveBeenCalled();
+    expect(pollMock).not.toHaveBeenCalled();
+    expect(provisionMock).not.toHaveBeenCalled();
+    expect(ctx.output.humanRequired).not.toHaveBeenCalled();
+    expect(ctx.output.emitResult).not.toHaveBeenCalled();
+  });
+
+  it("does not provision from a service-manager start identity", async () => {
+    const ctx = makeCtx();
+    await runHostStartCommand(
+      ctx,
+      {
+        environment: config.environment,
+        cwd: null,
+        serviceLabel: "ai.traycer.host",
+        adoptionNonce: null,
+      },
+      {},
+    );
+
+    expect(runHostStartMock.mock.calls[0]?.[1].onHostStarted).toBeNull();
+    expect(provisionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not provision from an authorized reclaim probe identity", async () => {
+    const ctx = makeCtx();
+    await runHostStartCommand(
+      ctx,
+      {
+        environment: config.environment,
+        cwd: null,
+        probe: {
+          transitionId: "transition-1",
+          probeNonce: "probe-1",
+          serviceLabel: "ai.traycer.host",
+        },
+      },
+      {},
+    );
+
+    expect(runHostStartMock.mock.calls[0]?.[1].onHostStarted).toBeNull();
+    expect(provisionMock).not.toHaveBeenCalled();
   });
 });
