@@ -52,7 +52,8 @@ interface HeldInput {
 function held(input: HeldInput): Record<string, unknown> {
   const op = input.op ?? "put";
   const proposed = input.proposed ?? { value: "proposed" };
-  const liveRevision = input.liveRevision === undefined ? 3 : input.liveRevision;
+  const liveRevision =
+    input.liveRevision === undefined ? 3 : input.liveRevision;
   return {
     type: "held",
     heldId: input.id,
@@ -114,7 +115,9 @@ function createReviewHarness(
     "environment.configuration.items": () => ({ items: [] }),
   };
   const harness = mountTeamPage(poolSource(initialRole), handlers);
-  harness.auth.applyExternalSession(authSessionForUser(VIEWER_ID, "user-1-token"));
+  harness.auth.applyExternalSession(
+    authSessionForUser(VIEWER_ID, "user-1-token"),
+  );
   useAuthStore.setState({
     status: "signed-in",
     profile: {
@@ -169,8 +172,7 @@ async function openReview(): Promise<HTMLElement> {
 function operationReads(harness: TeamPageHarness) {
   return harness.cloudRequests.filter(
     (request) =>
-      request.method === "GET" &&
-      new URL(request.url).pathname === REVIEW_PATH,
+      request.method === "GET" && new URL(request.url).pathname === REVIEW_PATH,
   );
 }
 
@@ -263,20 +265,30 @@ describe("Team Review through the addressed page", () => {
     expect(screen.queryByText("guide-a")).toBeNull();
     expect(operationReads(harness).length).toBeGreaterThan(0);
     expect(
-      new URL(operationReads(harness)[0]?.url ?? "https://invalid").searchParams.get(
-        "include",
-      ),
+      new URL(
+        operationReads(harness)[0]?.url ?? "https://invalid",
+      ).searchParams.get("include"),
     ).toBe("operation");
 
     fireEvent.click(reviewLink);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("heading", { name: "Review" })).toBeTruthy();
+    expect(
+      within(dialog).getByRole("heading", { name: "Review" }),
+    ).toBeTruthy();
     expect(within(dialog).getByText("Acme")).toBeTruthy();
     expect(within(dialog).getByText("Commands on hold")).toBeTruthy();
-    expect(within(dialog).getByTestId("retrospective-held-variable-1")).toBeTruthy();
-    expect(within(dialog).queryByTestId("retrospective-held-skill-1")).toBeNull();
-    expect(within(dialog).queryByTestId("retrospective-held-guide-1")).toBeNull();
-    expect(within(dialog).queryByText(/What an earlier version shared/)).toBeNull();
+    expect(
+      within(dialog).getByTestId("retrospective-held-variable-1"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByTestId("retrospective-held-skill-1"),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByTestId("retrospective-held-guide-1"),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByText(/What an earlier version shared/),
+    ).toBeNull();
     expect(within(dialog).queryByText(/Move to Personal/)).toBeNull();
     expect(useRetrospectiveSheetStore.getState().target).toMatchObject({
       environmentId: ENVIRONMENT_ID,
@@ -284,7 +296,9 @@ describe("Team Review through the addressed page", () => {
       viewerId: VIEWER_ID,
     });
     expect(
-      harness.messenger.calls.some((call) => call.method === "environment.review"),
+      harness.messenger.calls.some(
+        (call) => call.method === "environment.review",
+      ),
     ).toBe(false);
     expect(harness.messenger.calls.length).toBe(0);
   });
@@ -293,14 +307,18 @@ describe("Team Review through the addressed page", () => {
     "gives a settled %s the two review verbs",
     async (role) => {
       const { harness } = createReviewHarness(role, [
-          held({ id: "hold-1", kind: "variable", key: "NODE_ENV" }),
+        held({ id: "hold-1", kind: "variable", key: "NODE_ENV" }),
       ]);
       renderTeamPage(harness);
       await openReview();
 
       await waitFor(() => {
-        expect(screen.getByTestId("retrospective-held-hold-1-approve")).toBeTruthy();
-        expect(screen.getByTestId("retrospective-held-hold-1-discard")).toBeTruthy();
+        expect(
+          screen.getByTestId("retrospective-held-hold-1-approve"),
+        ).toBeTruthy();
+        expect(
+          screen.getByTestId("retrospective-held-hold-1-discard"),
+        ).toBeTruthy();
       });
     },
   );
@@ -314,9 +332,7 @@ describe("Team Review through the addressed page", () => {
     async (_label, answerKind) => {
       const { harness } = createReviewHarness(
         answerKind === "valid" ? "viewer" : "admin",
-        [
-          held({ id: "hold-1", kind: "variable", key: "NODE_ENV" }),
-        ],
+        [held({ id: "hold-1", kind: "variable", key: "NODE_ENV" })],
       );
       if (answerKind === "unknown") {
         harness.cloudResponses.set(`GET ${MEMBERS_PATH}`, () =>
@@ -332,8 +348,12 @@ describe("Team Review through the addressed page", () => {
       const dialog = await openReview();
       await within(dialog).findByTestId("retrospective-held-hold-1");
 
-      expect(within(dialog).queryByTestId("retrospective-held-hold-1-approve")).toBeNull();
-      expect(within(dialog).queryByTestId("retrospective-held-hold-1-discard")).toBeNull();
+      expect(
+        within(dialog).queryByTestId("retrospective-held-hold-1-approve"),
+      ).toBeNull();
+      expect(
+        within(dialog).queryByTestId("retrospective-held-hold-1-discard"),
+      ).toBeNull();
       expect(choiceRequests(harness)).toEqual([]);
     },
   );
@@ -395,7 +415,9 @@ describe("Team Review through the addressed page", () => {
       "environment.configuration.items": () => ({ items: [] }),
     };
     const harness = mountTeamPage(poolSource("admin"), handlers);
-    harness.auth.applyExternalSession(authSessionForUser(VIEWER_ID, "user-1-token"));
+    harness.auth.applyExternalSession(
+      authSessionForUser(VIEWER_ID, "user-1-token"),
+    );
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -423,7 +445,9 @@ describe("Team Review through the addressed page", () => {
     renderTeamPage(harness);
     const dialog = await openReview();
     await waitFor(() => {
-      expect(within(dialog).getByTestId("retrospective-held-hold-1-approve")).toBeTruthy();
+      expect(
+        within(dialog).getByTestId("retrospective-held-hold-1-approve"),
+      ).toBeTruthy();
     });
 
     const initialReviewReadCount = operationReads(harness).length;
@@ -431,7 +455,9 @@ describe("Team Review through the addressed page", () => {
       held({ id: "focus-refresh", kind: "variable", key: "FOCUSED_SETTING" }),
     ];
     holdDirectory = true;
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
     await directoryReadStarted;
     await waitFor(() => {
       expect(operationReads(harness).length).toBeGreaterThan(
@@ -440,7 +466,9 @@ describe("Team Review through the addressed page", () => {
     });
     await within(dialog).findByTestId("retrospective-held-focus-refresh");
     await waitFor(() => {
-      expect(within(dialog).queryByTestId("retrospective-held-hold-1")).toBeNull();
+      expect(
+        within(dialog).queryByTestId("retrospective-held-hold-1"),
+      ).toBeNull();
     });
     expect(
       within(dialog).queryByTestId("retrospective-held-focus-refresh-approve"),
@@ -450,7 +478,7 @@ describe("Team Review through the addressed page", () => {
     ).toBeNull();
     expect(choiceRequests(harness)).toEqual([]);
 
-    await act(async () => {
+    act(() => {
       resolveDirectory?.("viewer");
     });
     await waitFor(() => {
@@ -483,10 +511,13 @@ describe("Team Review through the addressed page", () => {
     });
     const scenario = createReviewHarness("admin", [applyRow, discardRow]);
     const { harness } = scenario;
-    harness.cloudResponses.set(`POST ${choicePath("hold-apply", "apply")}`, () => {
-      scenario.setRows([discardRow]);
-      return authnAnswer(200, {});
-    });
+    harness.cloudResponses.set(
+      `POST ${choicePath("hold-apply", "apply")}`,
+      () => {
+        scenario.setRows([discardRow]);
+        return authnAnswer(200, {});
+      },
+    );
     harness.cloudResponses.set(
       `POST ${choicePath("hold-discard", "discard")}`,
       () => {
@@ -497,19 +528,31 @@ describe("Team Review through the addressed page", () => {
     renderTeamPage(harness);
     const dialog = await openReview();
     await within(dialog).findByTestId("retrospective-held-hold-apply-approve");
-    await within(dialog).findByTestId("retrospective-held-hold-discard-discard");
-    expect(within(dialog).getByRole("heading", { name: "Current" })).toBeTruthy();
+    await within(dialog).findByTestId(
+      "retrospective-held-hold-discard-discard",
+    );
+    expect(
+      within(dialog).getByRole("heading", { name: "Current" }),
+    ).toBeTruthy();
 
-    fireEvent.click(within(dialog).getByTestId("retrospective-held-hold-apply-approve"));
+    fireEvent.click(
+      within(dialog).getByTestId("retrospective-held-hold-apply-approve"),
+    );
     await waitFor(() => expect(choiceRequests(harness)).toHaveLength(1));
     await waitFor(() => {
-      expect(within(dialog).queryByTestId("retrospective-held-hold-apply")).toBeNull();
+      expect(
+        within(dialog).queryByTestId("retrospective-held-hold-apply"),
+      ).toBeNull();
     });
 
-    fireEvent.click(within(dialog).getByTestId("retrospective-held-hold-discard-discard"));
+    fireEvent.click(
+      within(dialog).getByTestId("retrospective-held-hold-discard-discard"),
+    );
     await waitFor(() => expect(choiceRequests(harness)).toHaveLength(2));
     await waitFor(() => {
-      expect(within(dialog).queryByTestId("retrospective-held-hold-discard")).toBeNull();
+      expect(
+        within(dialog).queryByTestId("retrospective-held-hold-discard"),
+      ).toBeNull();
     });
     expect(
       choiceRequests(harness).map((request) => ({
@@ -565,7 +608,7 @@ describe("Team Review through the addressed page", () => {
       );
       expect(within(dialog).getByTestId(rowTestId)).toBeTruthy();
 
-      await act(async () => {
+      act(() => {
         if (resolveChoiceAnswer === null) {
           throw new Error("the review answer was not held");
         }
@@ -612,18 +655,25 @@ describe("Team Review through the addressed page", () => {
       expect(Reflect.get(variables, "choice")).toBe("approve");
       Reflect.set(variables, "choice", "discard");
     });
-    harness.cloudResponses.set(`POST ${choicePath("hold-press", "apply")}`, () => {
-      setRows([]);
-      return authnAnswer(200, {});
-    });
+    harness.cloudResponses.set(
+      `POST ${choicePath("hold-press", "apply")}`,
+      () => {
+        setRows([]);
+        return authnAnswer(200, {});
+      },
+    );
     renderTeamPage(harness);
     const dialog = await openReview();
 
-    fireEvent.click(within(dialog).getByTestId("retrospective-held-hold-press-approve"));
+    fireEvent.click(
+      within(dialog).getByTestId("retrospective-held-hold-press-approve"),
+    );
     await gate.started;
     expect(choiceRequests(harness)).toEqual([]);
-    await act(async () => gate.release());
-    await gate.settled;
+    await act(async () => {
+      gate.release();
+      await gate.settled;
+    });
 
     expect(
       choiceRequests(harness).map((request) => ({
@@ -673,17 +723,27 @@ describe("Team Review through the addressed page", () => {
     );
     renderTeamPage(scenario.harness);
     const dialog = await openReview();
-    const row = await within(dialog).findByTestId("retrospective-held-hold-agent");
+    const row = await within(dialog).findByTestId(
+      "retrospective-held-hold-agent",
+    );
 
-    fireEvent.click(within(row).getByTestId("retrospective-held-hold-agent-approve"));
-    await waitFor(() => expect(choiceRequests(scenario.harness)).toHaveLength(1));
+    fireEvent.click(
+      within(row).getByTestId("retrospective-held-hold-agent-approve"),
+    );
+    await waitFor(() =>
+      expect(choiceRequests(scenario.harness)).toHaveLength(1),
+    );
     await waitFor(() => {
-      expect(within(row).getByRole("heading", { name: "Current · 4" })).toBeTruthy();
+      expect(
+        within(row).getByRole("heading", { name: "Current · 4" }),
+      ).toBeTruthy();
       expect(
         within(row).getByTestId("retrospective-held-hold-agent-discard"),
       ).toBeTruthy();
     });
-    const textareas = within(row).getAllByRole("textbox", { name: "bootstrap text" });
+    const textareas = within(row).getAllByRole("textbox", {
+      name: "bootstrap text",
+    });
     const proposedText = textareas[0];
     const currentText = textareas[1];
     if (
@@ -709,8 +769,12 @@ describe("Team Review through the addressed page", () => {
       },
     ]);
 
-    fireEvent.click(within(row).getByTestId("retrospective-held-hold-agent-approve"));
-    await waitFor(() => expect(choiceRequests(scenario.harness)).toHaveLength(2));
+    fireEvent.click(
+      within(row).getByTestId("retrospective-held-hold-agent-approve"),
+    );
+    await waitFor(() =>
+      expect(choiceRequests(scenario.harness)).toHaveLength(2),
+    );
     expect(
       choiceRequests(scenario.harness).map((request) => request.body),
     ).toEqual([
@@ -838,7 +902,9 @@ describe("Team Review through the addressed page", () => {
     const { harness } = createReviewHarness("admin", rows);
     renderTeamPage(harness);
     const dialog = await openReview();
-    const mcp = await within(dialog).findByTestId("retrospective-held-mcp-modern");
+    const mcp = await within(dialog).findByTestId(
+      "retrospective-held-mcp-modern",
+    );
     expect(mcp.textContent).toContain("server-new");
     expect(mcp.textContent).toContain("server-old");
     expect(mcp.textContent).toContain("Off: Cursor");
@@ -857,17 +923,25 @@ describe("Team Review through the addressed page", () => {
     ]);
 
     const pack = within(dialog).getByTestId("retrospective-held-pack-policy");
-    expect(pack.textContent).toContain("claude-pack: 1.3.0 · Downloads automatically");
+    expect(pack.textContent).toContain(
+      "claude-pack: 1.3.0 · Downloads automatically",
+    );
     expect(pack.textContent).toContain("claude-pack: 1.2.0 · Manual download");
-    const profile = within(dialog).getByTestId("retrospective-held-managed-profile");
-    const profileNames = within(profile).getAllByRole("textbox", { name: "Profile name" });
+    const profile = within(dialog).getByTestId(
+      "retrospective-held-managed-profile",
+    );
+    const profileNames = within(profile).getAllByRole("textbox", {
+      name: "Profile name",
+    });
     const proposedName = profileNames[0];
     const currentName = profileNames[1];
     if (
       !(proposedName instanceof HTMLInputElement) ||
       !(currentName instanceof HTMLInputElement)
     ) {
-      throw new Error("managed profile names were not rendered as read-only inputs");
+      throw new Error(
+        "managed profile names were not rendered as read-only inputs",
+      );
     }
     expect(proposedName.value).toBe("Work A");
     expect(currentName.value).toBe("Work B");
@@ -877,10 +951,14 @@ describe("Team Review through the addressed page", () => {
     expect(profile.textContent).toContain("Claude Code · Off");
     expect(profile.textContent).toContain("work-a@example.test");
     expect(profile.textContent).toContain("work-b@example.test");
-    const legacyMcp = within(dialog).getByTestId("retrospective-held-mcp-stdio");
+    const legacyMcp = within(dialog).getByTestId(
+      "retrospective-held-mcp-stdio",
+    );
     expect(legacyMcp.textContent).toContain("npx --api-key •••");
     expect(legacyMcp.textContent).not.toContain("STDIO_SECRET");
-    const fallback = within(dialog).getByTestId("retrospective-held-fallback-policy");
+    const fallback = within(dialog).getByTestId(
+      "retrospective-held-fallback-policy",
+    );
     expect(fallback.textContent).toContain("Route automatically: On");
     expect(fallback.textContent).toContain("Route automatically: Off");
     expect(
@@ -918,13 +996,29 @@ describe("Team Review through the addressed page", () => {
     const { harness } = createReviewHarness("admin", rows);
     renderTeamPage(harness);
     const dialog = await openReview();
-    const deletion = await within(dialog).findByTestId("retrospective-held-delete-old");
+    const deletion = await within(dialog).findByTestId(
+      "retrospective-held-delete-old",
+    );
     expect(deletion.textContent).toContain("Remove OLD_SETTING");
-    expect(within(deletion).getByRole("heading", { name: "Current · 7" })).toBeTruthy();
-    const unreadable = within(dialog).getByTestId("retrospective-held-unreadable-profile");
-    expect(within(unreadable).getByText("Couldn't read these settings.")).toBeTruthy();
-    expect(within(unreadable).queryByTestId("retrospective-held-unreadable-profile-approve")).toBeNull();
-    expect(within(unreadable).queryByTestId("retrospective-held-unreadable-profile-discard")).toBeNull();
+    expect(
+      within(deletion).getByRole("heading", { name: "Current · 7" }),
+    ).toBeTruthy();
+    const unreadable = within(dialog).getByTestId(
+      "retrospective-held-unreadable-profile",
+    );
+    expect(
+      within(unreadable).getByText("Couldn't read these settings."),
+    ).toBeTruthy();
+    expect(
+      within(unreadable).queryByTestId(
+        "retrospective-held-unreadable-profile-approve",
+      ),
+    ).toBeNull();
+    expect(
+      within(unreadable).queryByTestId(
+        "retrospective-held-unreadable-profile-discard",
+      ),
+    ).toBeNull();
   });
 
   it("does not send a captured Team choice after the person's sign-in changes", async () => {
@@ -937,13 +1031,16 @@ describe("Team Review through the addressed page", () => {
     });
     const { harness } = createReviewHarness("admin", [row]);
     const gate = holdNextReviewMutation(harness, () => undefined);
-    harness.cloudResponses.set(`POST ${choicePath("hold-account", "apply")}`, () =>
-      authnAnswer(200, {}),
+    harness.cloudResponses.set(
+      `POST ${choicePath("hold-account", "apply")}`,
+      () => authnAnswer(200, {}),
     );
     renderTeamPage(harness);
     const dialog = await openReview();
 
-    fireEvent.click(within(dialog).getByTestId("retrospective-held-hold-account-approve"));
+    fireEvent.click(
+      within(dialog).getByTestId("retrospective-held-hold-account-approve"),
+    );
     await gate.started;
     act(() => {
       harness.auth.applyExternalSession(
@@ -961,8 +1058,10 @@ describe("Team Review through the addressed page", () => {
       });
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await act(async () => gate.release());
-    await gate.settled;
+    await act(async () => {
+      gate.release();
+      await gate.settled;
+    });
 
     expect(choiceRequests(harness)).toEqual([]);
   });
@@ -977,10 +1076,13 @@ describe("Team Review through the addressed page", () => {
     });
     const { harness, setRows } = createReviewHarness("admin", [row]);
     const gate = holdNextReviewMutation(harness, () => undefined);
-    harness.cloudResponses.set(`POST ${choicePath("hold-target", "apply")}`, () => {
-      setRows([]);
-      return authnAnswer(200, {});
-    });
+    harness.cloudResponses.set(
+      `POST ${choicePath("hold-target", "apply")}`,
+      () => {
+        setRows([]);
+        return authnAnswer(200, {});
+      },
+    );
     renderTeamPage(harness);
     const dialog = await openReview();
     await within(dialog).findByTestId("retrospective-held-hold-target-approve");
@@ -989,15 +1091,19 @@ describe("Team Review through the addressed page", () => {
       within(dialog).getByTestId("retrospective-held-hold-target-approve"),
     );
     await gate.started;
-    act(() => useSettingsEnvironmentPickStore.getState().setPick({ kind: "personal" }));
+    act(() =>
+      useSettingsEnvironmentPickStore.getState().setPick({ kind: "personal" }),
+    );
     expect(useRetrospectiveSheetStore.getState().target).toMatchObject({
       environmentId: ENVIRONMENT_ID,
       viewerId: VIEWER_ID,
     });
     expect(within(dialog).getByText("Acme")).toBeTruthy();
 
-    await act(async () => gate.release());
-    await gate.settled;
+    await act(async () => {
+      gate.release();
+      await gate.settled;
+    });
     expect(
       choiceRequests(harness).map((request) => new URL(request.url).pathname),
     ).toEqual([choicePath("hold-target", "apply")]);
@@ -1015,7 +1121,9 @@ describe("Team Review through the addressed page", () => {
     const gate = holdNextReviewMutation(harness, () => undefined);
     renderTeamPage(harness);
     const dialog = await openReview();
-    await within(dialog).findByTestId("retrospective-held-hold-reentry-approve");
+    await within(dialog).findByTestId(
+      "retrospective-held-hold-reentry-approve",
+    );
 
     fireEvent.click(
       within(dialog).getByTestId("retrospective-held-hold-reentry-approve"),
@@ -1047,8 +1155,10 @@ describe("Team Review through the addressed page", () => {
       });
     });
 
-    await act(async () => gate.release());
-    await gate.settled;
+    await act(async () => {
+      gate.release();
+      await gate.settled;
+    });
     expect(choiceRequests(harness)).toEqual([]);
   });
 
@@ -1062,13 +1172,18 @@ describe("Team Review through the addressed page", () => {
     });
     const { harness, setRows } = createReviewHarness("admin", [row]);
     const gate = holdNextReviewMutation(harness, () => undefined);
-    harness.cloudResponses.set(`POST ${choicePath("hold-rotation", "apply")}`, () => {
-      setRows([]);
-      return authnAnswer(200, {});
-    });
+    harness.cloudResponses.set(
+      `POST ${choicePath("hold-rotation", "apply")}`,
+      () => {
+        setRows([]);
+        return authnAnswer(200, {});
+      },
+    );
     renderTeamPage(harness);
     const dialog = await openReview();
-    await within(dialog).findByTestId("retrospective-held-hold-rotation-approve");
+    await within(dialog).findByTestId(
+      "retrospective-held-hold-rotation-approve",
+    );
 
     fireEvent.click(
       within(dialog).getByTestId("retrospective-held-hold-rotation-approve"),
@@ -1080,8 +1195,10 @@ describe("Team Review through the addressed page", () => {
       );
     });
 
-    await act(async () => gate.release());
-    await gate.settled;
+    await act(async () => {
+      gate.release();
+      await gate.settled;
+    });
     expect(
       choiceRequests(harness).map((request) => new URL(request.url).pathname),
     ).toEqual([choicePath("hold-rotation", "apply")]);
