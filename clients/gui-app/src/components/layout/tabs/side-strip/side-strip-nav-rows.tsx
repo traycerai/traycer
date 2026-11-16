@@ -325,7 +325,7 @@ function usePhoneShellTouchScope(): {
     : { "data-mobile-shell-touch-scope": "" };
 }
 
-/** What the Notifications pill's one count says, which its colour names. */
+/** What the Notifications pill counts, independent of its neutral styling. */
 type InboxPillTone = "needs-you" | "attention";
 
 interface InboxPill {
@@ -333,14 +333,10 @@ interface InboxPill {
   readonly count: number;
 }
 
-const INBOX_PILL_VARIANT: Readonly<
-  Record<InboxPillTone, "warning" | "destructive">
-> = { "needs-you": "warning", attention: "destructive" };
-
 /**
  * The Notifications row's one count, as the header's bell picks its mark:
- * amber, tasks and actionable notices that need the person; else red,
- * what needs attention, failures among it. `null` with nothing to count.
+ * tasks and actionable notices that need the person, else what needs
+ * attention, failures among it. `null` with nothing to count.
  */
 function inboxPillOf(input: {
   readonly needsYou: number;
@@ -364,7 +360,7 @@ function InboxRowMark(props: {
   if (props.pill !== null) {
     return (
       <Badge
-        variant={INBOX_PILL_VARIANT[props.pill.tone]}
+        variant="muted"
         size="sm"
         aria-hidden
         data-testid="side-strip-inbox-count"
