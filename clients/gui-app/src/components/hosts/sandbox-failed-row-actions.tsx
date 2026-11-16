@@ -6,12 +6,12 @@ import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-fa
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
@@ -26,16 +26,15 @@ import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 export function SandboxFailedChatActions(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const environments = useEnvironmentListQuery(
-    useTabHostClient(),
     props.summary.environmentId !== null,
   );
   const configuration = sandboxConfigurationOf(props.summary, configurations);
   // The resolver's Personal fallback is not proof: both personal sandboxes
-  // and team pods can carry an environment id without a recorded creator.
+  // and team pods can carry an environment id without a recorded creator,
+  // and a missing environment id says nothing about whose it is.
   const personal =
-    props.summary.environmentId === null ||
     environments.data?.environments.some(
       (environment) =>
         environment.environmentId === props.summary.environmentId &&
@@ -44,17 +43,26 @@ export function SandboxFailedChatActions(props: {
   const resolved =
     configuration?.kind === "personal" && !personal ? null : configuration;
   return (
-    <SandboxFailedRowActions summary={props.summary} configuration={resolved} />
+    <SandboxFailedRowActions
+      summary={props.summary}
+      configuration={resolved}
+      credits={resolved}
+    />
   );
 }
 
 /** The failed-create row's safe actions, shared by Settings and the chat slot. */
 export function SandboxFailedRowActions(props: {
   readonly summary: SandboxSummary;
+  /** Where Retry creates and what it names; `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
+  /** Whose credits the row is on, for its money remedies; `null` where not known. */
+  readonly credits: SandboxPageConfiguration | null;
 }): ReactNode {
-  const { summary, configuration } = props;
-  const create = useSandboxCreate("toast");
+  const { summary, configuration, credits } = props;
+  // Not known whose sandbox it is: worded as for someone who cannot buy.
+  const buysTeamCredits = useOffersAddCredits(credits);
+  const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
@@ -64,7 +72,7 @@ export function SandboxFailedRowActions(props: {
   const actions = sandboxRowActions({
     summary,
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
@@ -155,7 +163,7 @@ export function SandboxFailedRowActions(props: {
         sandboxId={summary.id}
         name={summary.displayName}
         hostId={summary.hostId}
-        configuration={configuration ?? undefined}
+        configuration={credits ?? undefined}
         operation={operation}
         busy={busy}
         onRetry={

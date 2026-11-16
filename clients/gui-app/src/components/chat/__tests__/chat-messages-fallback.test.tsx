@@ -1075,6 +1075,7 @@ function chatScene(
           taskId={CHAT_ID}
           epicId={EPIC_ID}
           hostId={state.hostId}
+          payerHostId={state.hostId}
           messages={state.messages}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}

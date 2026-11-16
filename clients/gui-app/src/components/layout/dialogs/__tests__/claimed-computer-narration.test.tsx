@@ -42,6 +42,7 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { authQueryKeys } from "@/lib/query-keys";
 import { setMobileApp } from "@/lib/mobile-app";
 import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
+import { createFakeEnvironmentCloudTransport } from "../../../../../__tests__/create-fake-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   clearHostDoorState,
@@ -314,15 +315,28 @@ function createClaimHarness(
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `claimed-computers-${++nextRequestId}`,
-      handlers: {
-        "environment.list": () => {
-          environmentRequests += 1;
-          if (environmentFails) throw new Error("environment.list failed");
-          return currentEnvironmentList;
-        },
-      },
+      handlers: {},
     }),
   });
+  // The app reads the environment list itself: the directory through its
+  // session service, then authn's facts for each row (unread here, so the rows
+  // list degraded, which keeps their owner, label and id).
+  vi.spyOn(AuthService.prototype, "listEnvironments").mockImplementation(() => {
+    environmentRequests += 1;
+    if (environmentFails) return Promise.resolve({ kind: "unavailable" });
+    return Promise.resolve({ kind: "ok", list: currentEnvironmentList });
+  });
+  const transport = createFakeEnvironmentCloudTransport({
+    environments: () => [],
+  });
+  vi.spyOn(AuthService.prototype, "environmentCloud").mockImplementation(
+    () => ({
+      authnBaseUrl: "http://authn.claimed-computers.test",
+      bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+      transport,
+      onOriginSignIn: () => true,
+    }),
+  );
   spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",

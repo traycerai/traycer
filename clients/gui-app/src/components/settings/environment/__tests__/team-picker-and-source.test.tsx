@@ -1,19 +1,20 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   environmentListUpgradeV10ToV11,
   type EnvironmentDescriptorV11,
   type EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { requireTeamHostClient } from "./team-configuration-test-support";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "./team-configuration-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,19 +26,10 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 
-// The shared host client and the signed-in identity are the external
-// boundaries; the environment.list query, its cache and the rows are real.
-const boundary = vi.hoisted(() => ({
-  client: null as HostClient<HostRpcRegistry> | null,
-}));
 vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
-    ...actual,
-    useHostClient: () => {
-      if (boundary.client === null) throw new Error("no host client mounted");
-      return boundary.client;
-    },
+    ...(await importOriginal<typeof import("@/lib/host")>()),
+    useHostClient: () => requireTeamHostClient(),
   };
 });
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -93,38 +85,32 @@ type ListHandler = () => Promise<EnvironmentListResponseV11>;
 
 function mountClient(list: ListHandler): {
   readonly Wrapper: (p: { children: ReactNode }) => ReactNode;
+  readonly queryClient: TeamPageHarness["queryClient"];
 } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => list(),
   });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: { "environment.list": list },
-    }),
+  // The person's teams are on the account before the list is read; the
+  // harness would only learn them from the list's own answer, too late for
+  // the read that joins each row to its team.
+  useAuthStore.setState({
+    shareableTeams: ["a", "admin", "editor", "viewer"].map((id) => ({
+      teamId: `team-${id}`,
+      slug: `handle-${id}`,
+      avatarUrl: null,
+    })),
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  boundary.client = spine.createRequester(mockLocalHostEntry);
   return {
-    Wrapper: (props) => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
-    ),
+    Wrapper: harness.Wrapper,
+    queryClient: harness.queryClient,
   };
 }
 
-beforeEach(() => {
-  boundary.client = null;
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
 });
-afterEach(cleanup);
 
 describe("TeamRows", () => {
   function PickerHarness(props: {
@@ -158,6 +144,13 @@ describe("TeamRows", () => {
         ],
       }),
     );
+    useAuthStore.setState({
+      shareableTeams: [
+        { teamId: "team-admin", slug: "handle-admin", avatarUrl: null },
+        { teamId: "team-editor", slug: "handle-editor", avatarUrl: null },
+        { teamId: "team-viewer", slug: "handle-viewer", avatarUrl: null },
+      ],
+    });
     const onPick = vi.fn();
     render(<PickerHarness onPick={onPick} />, { wrapper: Wrapper });
 
@@ -187,6 +180,44 @@ describe("TeamRows", () => {
 
     const row = await screen.findByTestId("environment-team-env-old");
     expect(row.textContent).toContain("Read-only settings");
+  });
+
+  it("removes You edit from cached team rows after the environment list fails", async () => {
+    const failed = { current: false };
+    const { Wrapper, queryClient } = mountClient(() =>
+      failed.current
+        ? Promise.reject(new Error("Environment list unavailable"))
+        : Promise.resolve({
+            environments: [
+              personal,
+              team("admin", "Acme", "admin"),
+              team("editor", "Globex", "editor"),
+            ],
+          }),
+    );
+    render(<PickerHarness onPick={vi.fn()} />, { wrapper: Wrapper });
+
+    const adminRow = await screen.findByTestId("environment-team-env-admin");
+    const editorRow = screen.getByTestId("environment-team-env-editor");
+    expect(adminRow.textContent).toContain("You edit");
+    expect(editorRow.textContent).toContain("You edit");
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failed.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(adminRow.textContent).toContain("Read-only settings");
+    expect(editorRow.textContent).toContain("Read-only settings");
+    expect(adminRow.textContent).not.toContain("You edit");
+    expect(editorRow.textContent).not.toContain("You edit");
   });
 
   it("renders no team rows when the user is in no team", async () => {
@@ -312,7 +343,7 @@ describe("ConfigurationSourceBoundary", () => {
     },
   );
 
-  it("gives a team naming the retired viewer role no role", async () => {
+  it("gives a Viewer's team the viewer role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve({
         environments: [personal, team("a", "Acme", "viewer")],
@@ -328,11 +359,11 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|handle-a|null|team",
+      "env-a|room-a|handle-a|viewer|team",
     );
   });
 
-  it("gives an @1.0 host's team no role", async () => {
+  it("gives an @1.0 host's team the viewer role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
@@ -346,7 +377,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|null|team",
+      "env-a|room-a|null|viewer|team",
     );
   });
 

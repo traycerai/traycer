@@ -27,6 +27,7 @@ import type {
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
@@ -44,6 +45,11 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const PERSONAL: EnvironmentDescriptor = {
   environmentId: "env-personal",
@@ -77,6 +83,10 @@ const mocks = vi.hoisted(() => ({
   state: {
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
+    teamRole: "editor",
+    environmentListFails: false,
+    /** The rendered host's client, which a request named for its id reaches. */
+    client: null as HostClient<HostRpcRegistry> | null,
   },
   auth: {
     currentAuthEra: vi.fn<() => AuthEra>(),
@@ -89,6 +99,8 @@ const mocks = vi.hoisted(() => ({
           environmentId: string,
         ) => Promise<TeamComputerReleaseResult>
       >(),
+    listEnvironments: vi.fn<AuthService["listEnvironments"]>(),
+    environmentCloud: vi.fn<AuthService["environmentCloud"]>(),
   },
   refreshDirectory: vi.fn<() => Promise<unknown>>(),
 }));
@@ -111,12 +123,42 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// A request named for the rendered host goes out on that host's own client.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === "host-a" ? mocks.state.client : null,
+}));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
     kind: "binding",
     query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
+// The list is the account's, read through authn rather than this host's
+// `environment.list`; the person's role on the team is all the card reads.
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { useQuery } = await import("@tanstack/react-query");
+  return {
+    useEnvironmentListQuery: (enabled: boolean) =>
+      useQuery({
+        queryKey: ["environment-list-fixture", mocks.state.teamRole],
+        queryFn: () => {
+          if (mocks.state.environmentListFails)
+            throw new Error("The account environment list could not be read.");
+          return {
+            environments: [
+              listedEnvironment(PERSONAL),
+              {
+                ...listedEnvironment(TEAM),
+                effectiveRole: mocks.state.teamRole,
+              },
+            ],
+          };
+        },
+        enabled,
+      }),
+  };
+});
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
 }));
@@ -196,9 +238,18 @@ function renderSection(
     }),
     ...options.handlers,
   };
+  const teamPage = mountTeamPage(poolSource("editor"), handlers);
+  mocks.auth.listEnvironments.mockImplementation(() =>
+    teamPage.auth.listEnvironments(),
+  );
+  mocks.auth.environmentCloud.mockImplementation(() =>
+    teamPage.auth.environmentCloud(),
+  );
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const client = makeClient(handlers);
+  mocks.state.client = client;
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostContext.Provider
@@ -227,7 +278,7 @@ function renderSection(
                     }
                   : null,
             }),
-            client: makeClient(handlers),
+            client,
           })}
         />
       </RunnerHostContext.Provider>
@@ -263,6 +314,9 @@ function ownershipResult(
 }
 
 beforeEach(() => {
+  mocks.state.teamRole = "editor";
+  mocks.state.environmentListFails = false;
+  mocks.state.client = null;
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
     identity: "user-me",
@@ -272,6 +326,8 @@ beforeEach(() => {
   mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(PERSON_OWNER));
   mocks.auth.releaseTeamComputer.mockReset();
   mocks.auth.releaseTeamComputer.mockResolvedValue({ kind: "ok" });
+  mocks.auth.listEnvironments.mockReset();
+  mocks.auth.environmentCloud.mockReset();
   noteHostMembershipChanged.mockReset();
   mocks.refreshDirectory.mockReset();
   mocks.refreshDirectory.mockResolvedValue(undefined);
@@ -304,6 +360,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   resetNegotiatedManifests();
   useAuthStore.setState({
     status: "signed-out",
@@ -572,6 +629,7 @@ describe("HostEnvironmentSection", () => {
     mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
     const stopRequests: unknown[] = [];
     let stopPreviewCalls = 0;
+    const countRequests: unknown[] = [];
     const queryClient = renderSection("personal", {
       owner: TEAM_OWNER,
       isLocalMachine: true,
@@ -585,6 +643,10 @@ describe("HostEnvironmentSection", () => {
           stopPreviewCalls += 1;
           throw new Error("returning a team computer does not need a preview");
         },
+        "environment.previewLocalFacts": (request) => {
+          countRequests.push(request);
+          return { activeTurns: 2, terminals: 0 };
+        },
       },
     });
 
@@ -597,6 +659,12 @@ describe("HostEnvironmentSection", () => {
         "This computer will become yours. The team will lose access to it.",
       ),
     ).toBeTruthy();
+    expect(
+      await within(dialog).findByText("2 chats are running and will stop."),
+    ).toBeTruthy();
+    expect(countRequests).toEqual([
+      { environmentId: TEAM.environmentId, subject: { kind: "computer" } },
+    ]);
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Claim this computer" }),
     );
@@ -640,6 +708,61 @@ describe("HostEnvironmentSection", () => {
     );
     expect(stopRequests).toEqual([]);
     expect(stopPreviewCalls).toBe(0);
+  });
+
+  it("does not offer a Viewer Claim this computer on the local team computer", async () => {
+    mocks.state.teamRole = "viewer";
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+    });
+
+    expect(
+      await screen.findByText("This computer belongs to Acme."),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(["environment-list-fixture", "viewer"])
+          ?.status,
+      ).toBe("success"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+  });
+
+  it("hides Claim after the cached Admin role read fails", async () => {
+    mocks.state.teamRole = "admin";
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+    });
+    const queryKey = ["environment-list-fixture", "admin"];
+
+    expect(
+      await screen.findByRole("button", { name: "Claim this computer" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("success"),
+    );
+
+    mocks.state.environmentListFails = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey });
+    });
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("error"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
   });
 
   it("does not offer Claim this computer on a remote team-owned host", () => {

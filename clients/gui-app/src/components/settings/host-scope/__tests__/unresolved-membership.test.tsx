@@ -11,8 +11,7 @@ import {
   renderHook,
   screen,
 } from "@testing-library/react";
-import { queryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -176,15 +175,14 @@ it("holds cached ready Personal membership until the unresolved pick resolves", 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  // The host list is the app's own read of authn, keyed under its scope.
   const membershipQuery = queryOptions({
-    queryKey: [
-      ...queryKeys.hostMethod<HostRpcRegistry, "environment.host.list">(
-        null,
-        "environment.host.list",
-        { environmentId: "personal-env" },
-      ),
+    queryKey: environmentCloudQueryKey(
+      "environment.host.list",
+      { environmentId: "personal-env" },
       "",
-    ],
+      [],
+    ),
   });
   queryClient.setQueryData(membershipQuery.queryKey, {
     hosts: [

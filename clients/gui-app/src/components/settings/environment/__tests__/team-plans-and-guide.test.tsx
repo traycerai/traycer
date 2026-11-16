@@ -12,6 +12,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
@@ -19,10 +20,14 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
+  answerTeamHostList,
+  authnAnswer,
   mountTeamPage,
   mountTeamPageNegotiating,
+  hostIdsOf,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -30,6 +35,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 // The link dialog imports the hook from the runtime module itself.
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
@@ -142,7 +148,7 @@ describe("TeamPlans", () => {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -162,71 +168,115 @@ describe("TeamPlans", () => {
     expect(screen.getAllByText(/ plan$/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("gives a viewer no Link, Unlink or Add a profile verbs, and names the admins", async () => {
+  it.each([
+    ["Viewer", poolSource("viewer")],
+    ["unrecognized role", { ...poolSource("viewer"), effectiveRole: null }],
+  ] as const)(
+    "gives a %s no Link, Unlink or Add a profile verbs",
+    async (_role, source) => {
+      const harness = mountTeamPage(source, {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      await screen.findByText(/Ada.s .* plan/);
+      expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
+      expect(screen.queryByText(/add a profile/i)).toBeNull();
+      expect(screen.queryByText(/Only an admin/)).toBeNull();
+    },
+  );
+
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s unlink after its preview resolves",
+    async (role) => {
+      let resolvePreview: (value: {
+        activeTurns: number | null;
+        localHostId: string | null;
+        keepsWorking: string[];
+      }) => void = () => undefined;
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+        "environment.plans.unlinkPreview": () =>
+          new Promise((resolve) => {
+            resolvePreview = resolve;
+          }),
+        "environment.plans.unlink": () => ({ outcome: "unlinked" }),
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const card = await screen.findByRole("region", { name: "Plans" });
+      await userEvent.click(
+        within(card).getAllByRole("button", { name: "Unlink" })[0],
+      );
+
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([
+          { environmentId: "env-a", profileId: "prof-1" },
+        ]);
+      });
+      // The consequences are not known yet: no confirm, no unlink.
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
+
+      act(() => {
+        resolvePreview({
+          activeTurns: 2,
+          localHostId: null,
+          keepsWorking: ["Team key"],
+        });
+      });
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
+      expect(dialog.textContent).toContain(
+        "Acme's Claude Code plan was unlinked. A host that has not confirmed keeps the unlink pending.",
+      );
+      expect(dialog.textContent).not.toContain("An admin can link one.");
+      expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
+
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Unlink" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.plans.unlink")).toEqual([
+          {
+            environmentId: "env-a",
+            profileId: "prof-1",
+            expectedBindingVersion: 7,
+          },
+        ]);
+      });
+    },
+  );
+
+  it("does not show an admin-only refusal when an Editor's unlink is forbidden", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 0,
+        localHostId: null,
+        keepsWorking: [],
+      }),
+      "environment.plans.unlink": () => ({ outcome: "forbidden" }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
-      wrapper: harness.Wrapper,
-    });
-
-    await screen.findByText(/Ada.s .* plan/);
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
-    expect(screen.queryByText(/add a profile/i)).toBeNull();
-    expect(
-      screen.getByText("Only an admin can link a plan: ask Ada."),
-    ).toBeTruthy();
-  });
-
-  it("holds Unlink until its preview resolves, then unlinks the picked profile in this team", async () => {
-    let resolvePreview: (value: {
-      activeTurns: number | null;
-      localHostId: string | null;
-      keepsWorking: string[];
-    }) => void = () => undefined;
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.plans.list": () => plans,
-      "environment.list": () => environmentList,
-      "environment.plans.unlinkPreview": () =>
-        new Promise((resolve) => {
-          resolvePreview = resolve;
-        }),
-      "environment.plans.unlink": () => ({ outcome: "unlinked" }),
-    });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
     const card = await screen.findByRole("region", { name: "Plans" });
-    await userEvent.click(
-      within(card).getAllByRole("button", { name: "Unlink" })[0],
-    );
-
-    await waitFor(() => {
-      expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([
-        { environmentId: "env-a", profileId: "prof-1" },
-      ]);
-    });
-    // The consequences are not known yet: no confirm, no unlink.
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
-
-    act(() => {
-      resolvePreview({
-        activeTurns: 2,
-        localHostId: null,
-        keepsWorking: ["Team key"],
-      });
-    });
+    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
-    expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
-
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Unlink" }),
     );
+
     await waitFor(() => {
       expect(harness.paramsOf("environment.plans.unlink")).toEqual([
         {
@@ -236,25 +286,21 @@ describe("TeamPlans", () => {
         },
       ]);
     });
+    expect(screen.queryByText("Admins unlink plans.")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   it.each([
     {
-      name: "refuses a held binding version a 1.0 host cannot compare, sending nothing",
-      bindingVersion: 7,
-      negotiatedMinor: 0,
-      sent: null,
-    },
-    {
-      name: "still sends the 1.0 unlink when no binding version is held",
+      name: "sends an authn unlink when no binding version is held",
       bindingVersion: undefined,
       negotiatedMinor: 0,
       sent: { expectedBindingVersion: null },
     },
     {
-      name: "sends the held binding version to a 1.1 host",
+      name: "sends the held revision through authn even when the host is at 1.0",
       bindingVersion: 7,
-      negotiatedMinor: 1,
+      negotiatedMinor: 0,
       sent: { expectedBindingVersion: 7 },
     },
   ])("$name", async ({ bindingVersion, negotiatedMinor, sent }) => {
@@ -282,7 +328,7 @@ describe("TeamPlans", () => {
       },
       { "environment.plans.unlink": { major: 1, minor: negotiatedMinor } },
     );
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -293,18 +339,12 @@ describe("TeamPlans", () => {
       within(dialog).getByRole("button", { name: "Unlink" }),
     );
 
-    if (sent === null) {
-      await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledTimes(1);
-      });
-      expect(harness.paramsOf("environment.plans.unlink")).toEqual([]);
-      return;
-    }
     await waitFor(() => {
       expect(harness.paramsOf("environment.plans.unlink")).toEqual([
         { environmentId: "env-a", profileId: "prof-1", ...sent },
       ]);
     });
+    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -320,7 +360,7 @@ describe("TeamPlans", () => {
         },
         "environment.list": () => environmentList,
       });
-      render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+      render(<TeamPlans providerId="claude-code" />, {
         wrapper: harness.Wrapper,
       });
 
@@ -340,24 +380,27 @@ describe("TeamPlans", () => {
     },
   );
 
-  it("opens the link dialog on this team's environment", async () => {
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.plans.list": () => plans,
-      "environment.list": () => environmentList,
-    });
-    render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
-      wrapper: harness.Wrapper,
-    });
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s open the link dialog for this team's environment",
+    async (role) => {
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.plans.list": () => plans,
+        "environment.list": () => environmentList,
+      });
+      render(<TeamPlans providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: /link a plan/i }),
-    );
-    expect(useProviderLinkDialogStore.getState().target).toMatchObject({
-      providerId: "claude-code",
-      profileId: null,
-      environmentId: "env-a",
-    });
-  });
+      await userEvent.click(
+        await screen.findByRole("button", { name: /link a plan/i }),
+      );
+      expect(useProviderLinkDialogStore.getState().target).toMatchObject({
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+      });
+    },
+  );
 });
 
 describe("TeamGuide", () => {
@@ -556,5 +599,81 @@ describe("TeamGuide", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+});
+
+describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
+  async function openUnlinkNamingMacMini() {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => ({
+        plans: [
+          {
+            profileId: "prof-1",
+            bindingVersion: 7,
+            harness: "claude",
+            status: "linked" as const,
+            linkedBy: { name: "Ada", you: false },
+          },
+        ],
+      }),
+      "environment.list": () => environmentList,
+      "environment.host.list": () => ({ hosts: [host] }),
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 2,
+        localHostId: host.hostId,
+        keepsWorking: [],
+      }),
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy(),
+    );
+    return { harness, dialog };
+  }
+
+  it.each([
+    ["a 403 environment_action_forbidden", 403, "environment_action_forbidden"],
+    ["a 404 environment_not_found", 404, "environment_not_found"],
+  ])(
+    "calls the serving host by no name after %s",
+    async (_label, status, code) => {
+      const { harness, dialog } = await openUnlinkNamingMacMini();
+
+      answerTeamHostList(harness, "env-a", authnAnswer(status, { code }));
+      await act(() =>
+        invalidateEnvironmentReads(harness.queryClient, [
+          "environment.host.list",
+        ]),
+      );
+
+      await waitFor(() =>
+        expect(
+          within(dialog).getByText(/On the serving host only\./),
+        ).toBeTruthy(),
+      );
+      expect(within(dialog).queryByText(/Mac mini/)).toBeNull();
+    },
+  );
+
+  it("still names the serving host through a 503", async () => {
+    const { harness, dialog } = await openUnlinkNamingMacMini();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy();
   });
 });

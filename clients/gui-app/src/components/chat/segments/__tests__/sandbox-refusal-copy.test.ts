@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import {
+  sandboxRefusalCopyFor,
+  unknownPayerFrozenRefusalCopy,
+} from "@/components/chat/segments/sandbox-refusal-copy";
 
 const FROZEN_HEADLINE = "Paused: account out of credits";
 
@@ -222,5 +225,19 @@ describe("sandboxRefusalCopyFor brokered-egress codes", () => {
 
   it("returns null for an unknown code", () => {
     expect(sandboxRefusalCopyFor("ssh_flow_unknown", "boom")).toBeNull();
+  });
+});
+
+describe("unknownPayerFrozenRefusalCopy", () => {
+  it("names no account in the headline and tells no remedy in the description", () => {
+    const base = sandboxRefusalCopyFor("SANDBOX_FROZEN", "anything at all");
+    if (base === null) throw new Error("SANDBOX_FROZEN has copy");
+
+    const copy = unknownPayerFrozenRefusalCopy(base);
+
+    expect(copy.headline).toBe("This sandbox is out of credits.");
+    expect(copy.description).toBe(
+      "This sandbox ran out of credits, which ended the turn.",
+    );
   });
 });

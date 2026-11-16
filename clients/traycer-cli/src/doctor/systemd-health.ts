@@ -110,7 +110,9 @@ export async function probeLinuxSystemdHealth(
   // (install errors even steer users here).
   const reachability = await input.runner("systemctl", [
     "--user",
-    "show-environment",
+    "show",
+    "--property=Version",
+    "--value",
   ]);
   if (
     reachability.spawnFailed ||

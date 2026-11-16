@@ -13,6 +13,8 @@ import {
 } from "./sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
 
+const PERSONAL_ENVIRONMENT_ID = vi.hoisted(() => "env-personal");
+
 const sources = vi.hoisted(
   (): {
     binding: FakeSandboxBinding | null;
@@ -54,8 +56,13 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-configurations")
     >()),
+    // Every listed team has answered (there are none), and the person's own
+    // environment is named, so a row in it is theirs.
     useSandboxConfigurations: () => ({
       configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+      personalEnvironmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   }),
 );
@@ -83,7 +90,12 @@ function listed(
 ): SandboxListResponse {
   return {
     sandboxes: [
-      sandboxSummaryFixture({ hostId: HOST, displayName: "test-box", state }),
+      sandboxSummaryFixture({
+        hostId: HOST,
+        displayName: "test-box",
+        environmentId: PERSONAL_ENVIRONMENT_ID,
+        state,
+      }),
     ],
   };
 }

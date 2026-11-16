@@ -276,6 +276,17 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
+  it("finds the Members page when searching for the viewer role", () => {
+    const members = searchSettings("viewer", DESKTOP).find(
+      (result) =>
+        result.entry.kind === "section" &&
+        result.entry.section === "members" &&
+        result.entry.anchor === null,
+    );
+
+    expect(members?.entry.label).toBe("Members");
+  });
+
   it("opens Browser agent access on the Permissions Browser tab, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
       "permissions#permissions-tab-browser",

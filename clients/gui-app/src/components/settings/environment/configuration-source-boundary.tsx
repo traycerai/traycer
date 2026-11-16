@@ -1,22 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
-import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  grantedTeamMemberRole,
-  type EnvironmentInvitation,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
+  mayChangeConfiguration,
+  personalReadOnlyOnTeamComputer,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
@@ -29,7 +19,6 @@ import {
   useEnvironmentInvitationsEntryHash,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 import {
   moveEnvironmentPick,
   moveEnvironmentSurface,
@@ -40,7 +29,7 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 
 /** The team is gone from the person's memberships: they were removed from it. */
 function noLongerInLine(teamName: string): string {
@@ -63,9 +52,9 @@ function leftToastId(environmentId: string): string {
  * asked for, and which cache ENTRY answered it. Both have to still hold for the
  * answer to be evidence about what the page is rendering now.
  *
- * The entry and not the route's slot, because a slot holds one entry per host
- * scope: a question certified while one entry served would otherwise survive a
- * move to another entry of the same slot, and that entry's stale list would be
+ * The entry and not the read as a whole, because the read holds one entry per
+ * sign-in and viewer: a question certified while one entry served would
+ * otherwise survive a move to another, and that entry's stale list would be
  * read as the answer to a question it predates.
  */
 interface AnsweredQuestion {
@@ -74,20 +63,14 @@ interface AnsweredQuestion {
 }
 
 /**
- * The team invited them instead, so its settings are an Accept away — as much
- * of them as the invited role is given.
- *
- * The role is RESOLVED rather than read literally. An invitation on the retired
- * view-only role is no longer offered, but a client can be newer than the
- * service that stops offering it, and the promise is the part that must not be
- * wrong: a seat that grants nothing must not be sold as one that can change
- * anything.
+ * The team invited them instead, so its settings are an Accept away. A
+ * viewer's invitation promises reading them and nothing more.
  */
 function invitedInsteadLine(invitation: EnvironmentInvitation): string {
   const lead = `You're invited to ${invitation.teamName}. Accept to see`;
-  return grantedTeamMemberRole(invitation.role) === null
-    ? `${lead} its settings.`
-    : `${lead} and change its settings.`;
+  return invitation.role === "admin" || invitation.role === "editor"
+    ? `${lead} and change its settings.`
+    : `${lead} its settings.`;
 }
 
 /**
@@ -125,52 +108,39 @@ export function ConfigurationSourceBoundary(props: {
 }): ReactNode {
   const { target } = props;
   const viewerId = useCloudChatViewerId();
-  const client = useHostClient();
-  const registered = useRegisteredHosts();
-  // This computer is a team's when the registry says so; the person reaches it
-  // as a member, never as its owner.
-  const teamComputerIds = useMemo(
-    () =>
-      new Set(
-        (registered.data?.hosts ?? [])
-          .filter((host) => host.owner?.kind === "team")
-          .map((host) => host.hostId),
-      ),
-    [registered.data],
-  );
-  const readTransportReadOnly = useCallback(() => {
-    const entry = client.getActiveHost();
-    if (entry === null) return false;
-    if (isRemoteHostDirectoryEntry(entry)) {
-      return entry.sandbox === null && entry.owner?.kind === "team";
-    }
-    return entry.kind === "local" && teamComputerIds.has(entry.hostId);
-  }, [client, teamComputerIds]);
-  const transportReadOnly = useSyncExternalStore(
-    subscribeAnyHostRowChanged,
-    readTransportReadOnly,
-    readTransportReadOnly,
-  );
-  const list = useEnvironmentListQuery(client, true);
+  // Until the registry answers, Personal stays read-only as on a team's
+  // computer.
+  const onTeamComputer = useWindowHostOwnership() !== "not-team";
+  const list = useEnvironmentListQuery(true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"
       ? entry.environmentId === target.environmentId &&
         entry.ownerKind === "organization"
       : entry.ownerKind === "user",
   );
+  const listFailed = list.isError;
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
+    const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
     return {
       kind: "pool",
-      configuration: descriptor.ownerKind === "user" ? "personal" : "team",
+      configuration,
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
-      effectiveRole: configurationRoleOf(descriptor),
-      transportReadOnly,
+      // A team role is the list's answer, so a failed re-read makes it not
+      // known, whatever an earlier answer said. Personal's is not read.
+      effectiveRole:
+        listFailed && configuration === "team"
+          ? null
+          : configurationRoleOf(descriptor),
+      transportReadOnly: personalReadOnlyOnTeamComputer(
+        configuration,
+        onTeamComputer,
+      ),
     };
-  }, [descriptor, transportReadOnly]);
-  useConfigurationRevision(client, descriptor?.environmentId ?? null);
+  }, [descriptor, listFailed, onTeamComputer]);
+  useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
     listed:
@@ -229,7 +199,8 @@ export function ConfigurationSourceBoundary(props: {
       value={source}
     >
       {source.kind === "pool" &&
-      (source.effectiveRole === null || source.transportReadOnly) ? (
+      (!mayChangeConfiguration(source.effectiveRole) ||
+        source.transportReadOnly) ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
           {seeButNotChangeLine(descriptor.label)}
         </p>
@@ -305,9 +276,8 @@ function useGoneConfiguration(input: {
   readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
   const { target, listed, settled, listedAt, section } = input;
-  const client = useHostClient();
-  const invitations = useEnvironmentInvitationsQuery(client);
-  const entryHash = useEnvironmentInvitationsEntryHash(client);
+  const invitations = useEnvironmentInvitationsQuery();
+  const entryHash = useEnvironmentInvitationsEntryHash();
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
@@ -350,12 +320,10 @@ function useGoneConfiguration(input: {
   // produces, and nothing recovers from, because a page that cannot be read
   // writes nothing and so has no next membership answer to ask again on.
   //
-  // NOT a count over a ROUTE, by either name. A count across both slots credits
-  // an answer the page is not reading at all; a count scoped to the serving
-  // slot still credits the wrong entry, because a slot holds one entry per host
-  // scope and the serving host can move inside it. Both leave the same hole:
-  // the question stays certified while the data under it changes, and the entry
-  // moved TO has a cached list predating the question entirely.
+  // NOT a count across every invitations entry. That credits an answer the
+  // page is not reading at all, because the read holds one entry per sign-in
+  // and viewer: the question stays certified while the data under it changes,
+  // and the entry moved TO has a cached list predating the question entirely.
   //
   // It is the answer count of the one entry the page is reading, held against
   // that ENTRY's identity — which comes from the same options the read is made
@@ -413,8 +381,7 @@ function useGoneConfiguration(input: {
   // The question is named by the membership answer it was asked for, so one
   // answered for an EARLIER membership answer says nothing about this one —
   // and by the ENTRY that answered it, so an answer stops being evidence the
-  // moment the page starts rendering a different entry's data — whichever slot
-  // that entry belongs to.
+  // moment the page starts rendering a different entry's data.
   const answered =
     answeredQuestion !== null &&
     answeredQuestion.listedAt === listedAt &&
@@ -433,8 +400,7 @@ function useGoneConfiguration(input: {
   // plain removal: the toast names the team, the selection moves to Personal,
   // and the Accept this page would have offered is not offered. The offer
   // returns without a reload, from the environment picker, bounded by that
-  // read's own staleness: neither route of the invitations read sets a
-  // `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
+  // read's own staleness: the invitations read sets no `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
   // the picker's dropdown content, which mounts afresh on each open. An open
   // within 60s of the racing reply is served that reply from cache and shows
   // the same list; the first open after that reads invitations again, and the

@@ -22,7 +22,9 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
+  (): {
+    current: { readonly hostClient: unknown; readonly auth: unknown } | null;
+  } => ({
     current: null,
   }),
 );
@@ -34,7 +36,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
       const real = actual.useHostBinding();
       return real === null || hostBindingMock.current === null
         ? hostBindingMock.current
-        : { ...real, hostClient: hostBindingMock.current.hostClient };
+        : { ...real, ...hostBindingMock.current };
     },
     // The secrets that set a variable are read through the page's client.
     useHostClient: () => hostBindingMock.current?.hostClient,
@@ -86,6 +88,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
@@ -109,6 +112,13 @@ import {
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
+import { authnSecretsList } from "@/components/settings/environment/__tests__/team-environment-cloud-handlers";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
@@ -133,6 +143,7 @@ const MANIFEST_MINORS: ReadonlyMap<string, number> = new Map([
 const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
 
 beforeEach(() => {
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
   useAuthStore.setState({ status: "signed-in" });
 });
 
@@ -272,7 +283,58 @@ function renderShellPage(options: {
     status: "ready",
     client: fixture.client,
   };
-  hostBindingMock.current = { hostClient: fixture.client };
+  const personalEnvironment: EnvironmentDescriptorV11 = {
+    environmentId: "env-personal",
+    ownerKind: "user",
+    ownerId: "user-me",
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner",
+    kind: "personal",
+    hostCount: 1,
+    providerHandle: null,
+  };
+  const auth = createFakeEnvironmentCloudAuth({
+    listEnvironments: () =>
+      Promise.resolve({
+        kind: "ok",
+        list: { environments: [personalEnvironment] },
+      }),
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => [personalEnvironment],
+      onRequest: (request) => {
+        const pathname = new URL(request.url).pathname;
+        if (request.method === "GET" && pathname.endsWith("/secrets")) {
+          return jsonEnvironmentAnswer(
+            authnSecretsList({ secrets: [...options.secrets], removed: [] }),
+          );
+        }
+        if (!pathname.endsWith("/review")) return null;
+        const needsYou = options.review.map((entry) => ({
+          type: "held",
+          heldId: entry.entryId,
+          op: "put",
+          value:
+            options.existingVariables.find(
+              (variable) => variable.key === entry.key,
+            )?.value ?? "",
+          revision: 1,
+          kind: entry.kind,
+          key: entry.key,
+          os: entry.os,
+          hostId: entry.hostId ?? HOST_ID,
+          sharingGeneration: null,
+          hostName: "dev-box",
+          heldAt: entry.heldAt,
+          live: null,
+        }));
+        return jsonEnvironmentAnswer({
+          review: { hosts: [], needsYou },
+        });
+      },
+    }),
+  });
+  hostBindingMock.current = { hostClient: fixture.client, auth };
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
@@ -643,36 +705,37 @@ describe("the Variables empty state", () => {
 });
 
 describe("a variable held for the person on a Personal page", () => {
-  const heldEntry = (
-    reason: string,
-    key: string,
-    entryId: string,
-  ): EnvironmentReviewEntry => ({
-    entryId,
-    reason,
-    kind: "variable",
-    key,
-    os: "any",
-    hostId: null,
-    heldAt: 1,
-  });
-
-  it("keeps an editable row for a variable the review names, and its Review opens Secrets", async () => {
+  it("keeps a held variable editable and opens its computer's retrospective sheet from Review", async () => {
     renderShellPage({
       ...READY_HOST,
       existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
-      review: [heldEntry("needs_grant", "SHELL_INIT", "entry-2")],
+      review: [
+        {
+          entryId: "entry-2",
+          reason: "executable_entry",
+          kind: "variable",
+          key: "SHELL_INIT",
+          os: "any",
+          hostId: null,
+          heldAt: 1,
+        },
+      ],
     });
 
     const banner = await screen.findByTestId("personal-review-row");
-    expect(banner.textContent).toContain(
-      "SHELL_INIT is waiting for you: was changed without your confirmation.",
-    );
+    expect(
+      within(banner).getByText(
+        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+      ),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Value for SHELL_INIT")).toBeTruthy();
     expect(screen.queryByTestId("env-held-row")).toBeNull();
 
     fireEvent.click(within(banner).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      open: true,
+      target: { hostId: HOST_ID, hostName: "host-a" },
+    });
   });
 });
 

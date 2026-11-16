@@ -2575,6 +2575,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // The environment methods: reads take the latest answer; writes, Verify and
   // the link steps are ordered and never joined.
   "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
+  "environment.proposals": { ...LATEST_SCHEDULING, poll: null },
   "environment.secrets.list": {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
@@ -3083,6 +3084,28 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
+  },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  "providers.commitProfileMove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
   },
 } satisfies HostMethodPolicyTable;
 

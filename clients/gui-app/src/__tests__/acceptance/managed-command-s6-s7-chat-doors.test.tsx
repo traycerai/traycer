@@ -214,7 +214,9 @@ function renderInChatContext(children: React.ReactNode): void {
  */
 function renderInOwnedChatContext(children: React.ReactNode): void {
   renderInChatContext(
-    <ChatTranscriptProvider value={{ chatId: CHAT_A, hostId: HOST_ID }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_A, hostId: HOST_ID, payerHostId: HOST_ID }}
+    >
       {children}
     </ChatTranscriptProvider>,
   );

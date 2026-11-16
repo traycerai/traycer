@@ -52,6 +52,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "secret",
   "sandbox_defaults",
   "storage_policy",
+  "snapshot_policy",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
@@ -116,6 +117,17 @@ export const environmentWriteOutcomeSchema = lazySchema(() =>
 );
 export type EnvironmentWriteOutcome = z.infer<
   typeof environmentWriteOutcomeSchema
+>;
+
+/** Only the local-form saves can complete without an environment or upload. */
+export const environmentLocalWriteOutcomeSchema = lazySchema(() =>
+  z.union([
+    environmentWriteOutcomeSchema,
+    z.object({ outcome: z.literal("local_only") }),
+  ]),
+);
+export type EnvironmentLocalWriteOutcome = z.infer<
+  typeof environmentLocalWriteOutcomeSchema
 >;
 
 const emptyRequestSchema = lazySchema(() => z.object({}));

@@ -1,5 +1,7 @@
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
+import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
@@ -266,6 +268,7 @@ function ClaimLocalTeamComputer(props: {
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
+  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -273,6 +276,7 @@ function ClaimLocalTeamComputer(props: {
     );
     setOpen(false);
   });
+  if (!mayClaim) return null;
   return (
     <>
       <Button
@@ -299,6 +303,10 @@ function ClaimLocalTeamComputer(props: {
               This computer will become yours. The team will lose access to it.
             </DialogDescription>
           </DialogHeader>
+          <ClaimRunningWork
+            hostId={props.hostId}
+            environmentId={props.environmentId}
+          />
           {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
               {mutation.error.message}
@@ -407,7 +415,7 @@ function TeamEnvironmentSourceControl(
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
-  const environments = useEnvironmentListQuery(props.client, true);
+  const environments = useEnvironmentListQuery(true);
   const teams = (environments.data?.environments ?? []).filter(
     (environment) => environment.ownerKind === "organization",
   );

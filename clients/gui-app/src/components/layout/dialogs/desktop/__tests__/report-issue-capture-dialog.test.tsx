@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   act,
   cleanup,
@@ -218,6 +219,7 @@ function createBaseRunnerHost(): IRunnerHost {
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    environmentTransport: fetchEnvironmentTransport,
     relayBaseUrl: "wss://relay.example.invalid/attach",
     poolBaseUrl: "",
     hasLocalHost: true,
@@ -238,6 +240,7 @@ function createBaseRunnerHost(): IRunnerHost {
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

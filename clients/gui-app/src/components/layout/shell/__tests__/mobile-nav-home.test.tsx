@@ -151,6 +151,7 @@ vi.mock("@/lib/analytics", () => ({
 
 vi.mock("@/lib/host", () => ({
   useAuthService: () => ({ signOut: () => Promise.resolve() }),
+  useHostBinding: () => null,
 }));
 
 // The drawer's Notifications row opens the phone's notification centre, whose

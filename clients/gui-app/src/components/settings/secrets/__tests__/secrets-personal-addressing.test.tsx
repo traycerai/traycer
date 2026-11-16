@@ -13,6 +13,7 @@ vi.mock(
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -23,15 +24,13 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  EnvironmentSecretV12,
-  SecretVersion,
-} from "@traycer/protocol/host/environment-schemas";
+import type { SecretVersion } from "@traycer/protocol/host/environment-schemas";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   mountTeamPage,
   mountTeamPageNegotiating,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -39,10 +38,7 @@ import {
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
-import {
-  RETIRED_PROVIDER_VARIABLES,
-  RETIRED_SECRET_ROW_FIELDS,
-} from "@traycer/protocol/host/released-wire-rows";
+import { secretRowFixture } from "./secret-row-test-support";
 
 // A Personal pick on a computer whose own settings have not moved: the host
 // keeps no environment of its own to answer for, so a secrets call that does
@@ -63,22 +59,6 @@ afterEach(() => {
   resetTeamPageHarness();
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
-
-function secret(): EnvironmentSecretV12 {
-  return {
-    ...RETIRED_SECRET_ROW_FIELDS,
-    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-    secretId: "sec-1",
-    name: "STRIPE_KEY",
-    kind: "api_key",
-    protocol: "https",
-    destinations: ["api.stripe.com"],
-    currentVersionId: "ver-1",
-    revoked: false,
-    updatedAt: 1,
-    variables: [],
-  };
-}
 
 const versions: SecretVersion[] = [
   {
@@ -117,7 +97,7 @@ function unsetHostHandlers(): MockHandlerMap<HostRpcRegistry> {
     }),
     "environment.secrets.list": (request) => {
       if (!namesPersonal(request)) throw new Error(NOT_SET_UP);
-      return { secrets: [secret()], removed: [] };
+      return { secrets: [secretRowFixture({})], removed: [] };
     },
     "environment.secrets.versions": (request) => {
       if (!namesPersonal(request)) throw new Error(NOT_SET_UP);
@@ -199,7 +179,7 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     expect(screen.queryByTestId("secret-row")).toBeNull();
   });
 
-  it("says the host needs an update when it cannot take a call that names Personal", async () => {
+  it("reads Personal's secrets without a computer's version in the way", async () => {
     const harness = mountTeamPageNegotiating(
       { kind: "host" },
       unsetHostHandlers(),
@@ -207,11 +187,17 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     );
     renderSecrets(harness);
 
-    const error = await screen.findByTestId("secrets-page-error");
-    expect(error.textContent).toContain("These secrets need an updated host.");
-    expect(error.textContent).not.toContain(
-      "Couldn't read Personal's secrets.",
-    );
-    expect(sentTo(harness, "environment.secrets.list")).toEqual([]);
+    expect(await screen.findByTestId("secret-row")).toBeTruthy();
+    expect(sentTo(harness, "environment.secrets.list")).toEqual([
+      { environmentId: PERSONAL_ENV },
+    ]);
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 });

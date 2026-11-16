@@ -8,6 +8,7 @@
  * `providers` answers, `epic.createChat` and the terminal create.
  */
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -31,13 +32,19 @@ import {
 } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import type {
+  GuiHarnessOption,
+  HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -55,6 +62,10 @@ import type {
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import {
+  SandboxBillingRuntime,
+  type SandboxBillingEnvironmentAnswer,
+} from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   MESSAGE_CONTENT,
@@ -70,6 +81,7 @@ import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 import {
   readStagedSandbox,
@@ -290,6 +302,8 @@ export const TASK_PIN_HOST = "task-pin-host";
 const START_PAGE_PIN_HOST = "start-page-pin-host";
 
 export const SANDBOX_ID = "sbx-1";
+/** The environment id of the person's own environment: a row that carries it is theirs. */
+export const PERSONAL_ENVIRONMENT_ID = "env-personal";
 
 export const SEND_ID = "send-1";
 
@@ -327,6 +341,7 @@ export interface HostAnswers {
 }
 
 const mocks = vi.hoisted(() => ({
+  useRuntimeBinding: false,
   /** The hosts the task lists; none unless a case names a sandbox. */
   taskHosts: [] as TaskHostRow[],
   /** What each host's `harnesses` and `providers` queries answer. */
@@ -372,6 +387,7 @@ const mocks = vi.hoisted(() => ({
   directoryRows: [] as HostDirectoryEntry[],
   /** The account's sandbox rows the ready line is read from. */
   sandboxes: [] as SandboxSummary[],
+  authUser: null as AuthenticatedUser | null,
   /** When the list was last read (epoch ms); `0` is a read before any mount. */
   listReadAt: 0,
   /** When the answered list request was SENT; `null` is its arrival. */
@@ -649,14 +665,16 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 
 // The failed line's actions read it through their tab host's client: it
 // records the host of each client it is handed.
-const environmentListClientHosts = vi.hoisted(() => [] as Array<string | null>);
-
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: (client: { readonly hostId: string } | null) => {
-    environmentListClientHosts.push(client === null ? null : client.hostId);
-    return { data: { environments: [] } };
-  },
-}));
+export const environmentListAnswer = {
+  role: null as "admin" | "editor" | "viewer" | null,
+  loading: false,
+  failed: false,
+  personalEnvironmentId: null as string | null,
+};
+export const sandboxListState = {
+  pending: false,
+  failed: false,
+};
 
 vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
   mintNewEpicTerminalTile: (target: {
@@ -686,6 +704,11 @@ const hostBinding = vi.hoisted(() => ({
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
+    getTeamEnvironment: () =>
+      Promise.resolve<TeamEnvironmentFetchResult>({
+        kind: "ok",
+        environmentId: "env-acme",
+      }),
   },
   directory: {
     refresh: () => Promise.resolve(),
@@ -721,12 +744,19 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   };
 });
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => null,
-  useHostBinding: () => hostBinding,
-  // The failed line's real actions read the control plane through it.
-  useAuthService: () => hostBinding.auth,
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () =>
+      mocks.useRuntimeBinding ? actual.useHostClient() : null,
+    useHostBinding: () =>
+      mocks.useRuntimeBinding ? actual.useHostBinding() : hostBinding,
+    // The failed line's real actions read the control plane through it.
+    useAuthService: () =>
+      mocks.useRuntimeBinding ? actual.useAuthService() : hostBinding.auth,
+  };
+});
 
 // The real TabHostProvider mounts a draft mirror that needs a live stream client.
 // Only the mount is replaced: it records the host each mirror would bind.
@@ -769,7 +799,7 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 }));
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: null }),
+  useAuthUser: () => ({ data: mocks.authUser }),
 }));
 
 vi.mock(
@@ -791,9 +821,13 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   useSandboxList: () => {
     useAnswerVersion();
     return {
-      data: { sandboxes: mocks.sandboxes },
+      data:
+        sandboxListState.pending || sandboxListState.failed
+          ? undefined
+          : { sandboxes: mocks.sandboxes },
       dataUpdatedAt: mocks.listReadAt,
       refetch: mocks.refetchSandboxes,
+      isError: sandboxListState.failed,
     };
   },
   // The answered request's send time; an old fixture's read is sent when it arrives.
@@ -844,6 +878,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
 
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
+  useBillingUrlOf: () => () => "https://example.test/billing",
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -1105,6 +1140,66 @@ export function mount() {
   );
 }
 
+function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {
+  if (environmentListAnswer.loading) return { kind: "loading" };
+  if (environmentListAnswer.failed) return { kind: "failed" };
+  if (environmentListAnswer.role === null) return { kind: "loading" };
+  return { kind: "ready", role: environmentListAnswer.role };
+}
+
+function seedCachedPersonalEnvironment(client: QueryClient): void {
+  const environmentId = environmentListAnswer.personalEnvironmentId;
+  if (environmentId === null) return;
+  const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  if (userId === null) throw new Error("The signed-in viewer id is missing");
+  const response: EnvironmentListResponseV11 = {
+    environments: [
+      {
+        environmentId,
+        ownerKind: "user",
+        ownerId: userId,
+        roomId: `room-${environmentId}`,
+        label: "Personal",
+        effectiveRole: "owner",
+        kind: "personal",
+        hostCount: 0,
+        providerHandle: "personal",
+      },
+    ],
+  };
+  const key = hostQueryKeys.method<HostRpcRegistry, "environment.list">(
+    SANDBOX_HOST,
+    "environment.list",
+    {},
+  );
+  client.setQueryData([...key, userId], response);
+}
+
+export function mountWithBillingRuntime() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  seedCachedPersonalEnvironment(client);
+  mocks.useRuntimeBinding = true;
+  return render(
+    <SandboxBillingRuntime
+      answer={billingEnvironmentAnswer()}
+      environmentId="env-acme"
+      hostId={SANDBOX_HOST}
+      queryClient={client}
+      onBinding={(binding) => {
+        vi.spyOn(binding.auth, "getTeamEnvironment").mockImplementation(() =>
+          hostBinding.auth.getTeamEnvironment(),
+        );
+      }}
+      onEnvironmentListRead={null}
+    >
+      <PendingSandboxSendsDriver />
+      <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+    </SandboxBillingRuntime>,
+  );
+}
+
 /** `mount`, inside a tile bound to another host than the strip's receipt. */
 export function mountInTileBoundTo(tileHostId: string) {
   const client = new QueryClient({
@@ -1122,6 +1217,33 @@ export function mountInTileBoundTo(tileHostId: string) {
   );
 }
 
+export function mountInTileBoundToWithBillingRuntime(tileHostId: string) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  seedCachedPersonalEnvironment(client);
+  mocks.useRuntimeBinding = true;
+  return render(
+    <SandboxBillingRuntime
+      answer={billingEnvironmentAnswer()}
+      environmentId="env-acme"
+      hostId={SANDBOX_HOST}
+      queryClient={client}
+      onBinding={(binding) => {
+        vi.spyOn(binding.auth, "getTeamEnvironment").mockImplementation(() => {
+          return hostBinding.auth.getTeamEnvironment();
+        });
+      }}
+      onEnvironmentListRead={null}
+    >
+      <TabHostContext.Provider value={tileHostId}>
+        <PendingSandboxSendsDriver />
+        <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+      </TabHostContext.Provider>
+    </SandboxBillingRuntime>,
+  );
+}
+
 /** The driver beside the setup line of the existing chat the message was sent in. */
 export function mountInChat() {
   const client = new QueryClient({
@@ -1136,6 +1258,34 @@ export function mountInChat() {
         tabId="tab-1"
       />
     </QueryClientProvider>,
+  );
+}
+
+export function mountInChatWithBillingRuntime(chatId: string) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  seedCachedPersonalEnvironment(client);
+  mocks.useRuntimeBinding = true;
+  return render(
+    <SandboxBillingRuntime
+      answer={billingEnvironmentAnswer()}
+      environmentId="env-acme"
+      hostId={SANDBOX_HOST}
+      queryClient={client}
+      onBinding={(binding) => {
+        vi.spyOn(binding.auth, "getTeamEnvironment").mockImplementation(() =>
+          hostBinding.auth.getTeamEnvironment(),
+        );
+      }}
+      onEnvironmentListRead={null}
+    >
+      <PendingSandboxSendForChat
+        epicId="epic-1"
+        chatId={chatId}
+        tabId="tab-1"
+      />
+    </SandboxBillingRuntime>,
   );
 }
 
@@ -1311,8 +1461,19 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  mocks.useRuntimeBinding = false;
+  // Signed in with no teams: every team has answered, so a row in an
+  // environment no team holds is the person's own. A case sets `null` to mean
+  // the teams are not known.
+  mocks.authUser = createAuthenticatedUserFixture(undefined);
+  sandboxListState.pending = false;
+  sandboxListState.failed = false;
   installLegendListTestClock();
   localStorage.clear();
+  environmentListAnswer.role = null;
+  environmentListAnswer.loading = false;
+  environmentListAnswer.failed = false;
+  environmentListAnswer.personalEnvironmentId = null;
   userSignedIn();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   mocks.hostAnswers.clear();
@@ -1352,6 +1513,7 @@ beforeEach(() => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state: "awake",
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   ];
   mocks.listReadAt = Date.now() + 60_000;
@@ -1396,6 +1558,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  mocks.useRuntimeBinding = false;
   useAuthStore.getState().setSignedOut();
 });
 
@@ -1573,11 +1736,4 @@ export function openTask(
   return handle;
 }
 
-export {
-  mirrorMountHosts,
-  environmentListClientHosts,
-  mocks,
-  handoffHold,
-  sessionBridge,
-  toastSpies,
-};
+export { mirrorMountHosts, mocks, handoffHold, sessionBridge, toastSpies };

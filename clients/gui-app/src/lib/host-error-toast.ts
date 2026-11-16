@@ -5,6 +5,7 @@ import {
   isTransientHostRpcFailure,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { NEEDS_PERMISSION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { toast } from "sonner";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
@@ -870,6 +871,14 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     error.code === "binding-changed"
   ) {
     return "This connection changed. Refresh and try again.";
+  }
+  // authn refuses an Undo 403 for the person's role; the grant refusal is
+  // drawn on the row, not here.
+  if (
+    error.method === "environment.undo" &&
+    error.code === "E_ROLE_FORBIDDEN"
+  ) {
+    return NEEDS_PERMISSION_MESSAGE;
   }
   if (error.code === "FORBIDDEN") {
     return forbiddenToastMessage(error.message);

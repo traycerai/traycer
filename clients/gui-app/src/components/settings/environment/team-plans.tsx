@@ -14,25 +14,30 @@ import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-d
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
-  readonly adminNames: readonly string[];
 }): ReactNode {
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
-  const canAdminister = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
+  // Linking goes through this window's host, and a team's computer cannot
+  // check the caller's seat for it, so it is not offered through one, nor
+  // until the registry has said whose computer this is.
+  const linkReachable = useWindowHostOwnership() === "not-team";
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
@@ -74,8 +79,8 @@ export function TeamPlans(props: {
       <PlansCard
         teamName={name}
         plans={plans}
-        canAdminister={canAdminister}
-        adminNames={props.adminNames}
+        canEdit={canEdit}
+        linkReachable={linkReachable}
         isPending={target !== null}
         onLink={() => {
           if (source.kind === "pool")
@@ -89,7 +94,7 @@ export function TeamPlans(props: {
           setTarget({ plan, previewId: crypto.randomUUID() })
         }
       />
-      {target !== null && canAdminister ? (
+      {target !== null && canEdit ? (
         <TeamPlanUnlink
           key={target.previewId}
           plan={target.plan}
@@ -152,42 +157,35 @@ function TeamPlanUnlink(props: {
       </div>
     );
   return (
-    <>
-      <PlanUnlinkPreview
-        teamName={props.teamName}
-        plan={props.plan}
-        activeTurns={preview.data.activeTurns}
-        activeHostName={
-          preview.data.localHostId === null
-            ? null
-            : (scope.hosts.data?.hosts.find(
-                (host) => host.hostId === preview.data.localHostId,
-              )?.hostLabel ?? "the serving host")
-        }
-        remainingAccess={preview.data.keepsWorking}
-        isPending={unlink.isPending}
-        onClose={props.onClose}
-        onConfirm={() => {
-          if (source.kind !== "pool") return;
-          unlink.mutate(
-            {
-              environmentId: source.environmentId,
-              profileId: props.plan.id,
-              expectedBindingVersion: props.plan.bindingVersion ?? null,
+    <PlanUnlinkPreview
+      teamName={props.teamName}
+      plan={props.plan}
+      activeTurns={preview.data.activeTurns}
+      activeHostName={
+        preview.data.localHostId === null
+          ? null
+          : (environmentReadData(scope.hosts)?.hosts.find(
+              (host) => host.hostId === preview.data.localHostId,
+            )?.hostLabel ?? "the serving host")
+      }
+      remainingAccess={preview.data.keepsWorking}
+      isPending={unlink.isPending}
+      onClose={props.onClose}
+      onConfirm={() => {
+        if (source.kind !== "pool") return;
+        unlink.mutate(
+          {
+            environmentId: source.environmentId,
+            profileId: props.plan.id,
+            expectedBindingVersion: props.plan.bindingVersion ?? null,
+          },
+          {
+            onSuccess: (result) => {
+              if (result.outcome !== "forbidden") props.onClose();
             },
-            {
-              onSuccess: (result) => {
-                if (result.outcome !== "forbidden") props.onClose();
-              },
-            },
-          );
-        }}
-      />
-      {unlink.data?.outcome === "forbidden" ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Admins unlink plans.
-        </p>
-      ) : null}
-    </>
+          },
+        );
+      }}
+    />
   );
 }

@@ -185,7 +185,7 @@ function AccessSections(props: {
         client={props.client}
         sentence={
           props.status.principal?.kind === "team"
-            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            ? teamTerminalAccountSentence()
             : terminalAccountSentence(
                 props.hostId !== null && props.hostId === localHostId
                   ? null
@@ -210,8 +210,6 @@ function MovedNotice(props: {
     (props.status.setup.state === "done" ||
       props.status.setup.stage === "done");
   const notices = useEnvironmentNoticesRead(
-    props.client,
-    props.hostId,
     setupDone && props.status.principal?.kind === "personal",
   );
   const dismissed = useHostAccessPromptsStore((state) =>

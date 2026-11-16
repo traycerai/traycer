@@ -1,7 +1,7 @@
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import type {
+  MemberWorkNow,
   MembersListMember,
-  RemovePreviewModel,
   SeatDelta,
   TeamRole,
 } from "@/components/settings/members/types";
@@ -32,15 +32,8 @@ export const LINKED_CLAUDE_PLAN = "linked a Claude plan";
 export const ROLE_LABELS: Readonly<Record<TeamRole, string>> = {
   admin: "Admin",
   editor: "Editor",
+  viewer: "Viewer",
 };
-
-/** The label for a seat with no authority: the role is retired or unknown. */
-const NO_ROLE_LABEL = "No access";
-
-/** One row's role label, `null` included. */
-export function roleLabelOf(role: TeamRole | null): string {
-  return role === null ? NO_ROLE_LABEL : ROLE_LABELS[role];
-}
 
 export const HOW_TRAYCER_HANDLES_THIS = "How Traycer handles this";
 
@@ -54,18 +47,10 @@ export function inviteAcceptTitle(teamName: string): string {
 /** An invitation withdrawn or already answered by the time Accept was pressed. */
 export const INVITATION_GONE = "This invitation is no longer open.";
 
-/**
- * A removal that has not committed yet. A committed removal leaves the list,
- * so it has no label.
- */
-export const PENDING_REMOVAL_LABEL = "removing";
-
 export const RETRY_LABEL = "Retry";
 
 /** A preview row with nothing to show. */
 const NONE = "None.";
-
-export const MEMBERS_NEED_UPDATED_HOST = "These members need an updated host.";
 
 export function membersReadFailed(teamName: string): string {
   return `Couldn't load ${teamName}'s members.`;
@@ -77,15 +62,6 @@ export const LEGACY_NOTICE_READ_FAILED =
 
 export function removePreviewFailed(memberName: string): string {
   return `Couldn't load what removing ${memberName} interrupts, so Remove stays off until it loads.`;
-}
-
-/**
- * The plan check says what a demotion interrupts. It does not decide whether
- * the demotion can be made, so this line says what failed and claims nothing
- * about the button beside it.
- */
-export function demotionPreviewFailed(memberName: string): string {
-  return `Couldn't load what changing ${memberName}'s role interrupts.`;
 }
 
 export function membersHeaderLine(teamName: string): string {
@@ -136,12 +112,7 @@ export function legacyRoleNotice(
   return `${lead}. ${joinNames(names)} can now edit. ${tail}`;
 }
 
-/**
- * The standing line on a team's settings this reader may read and not change:
- * a configuration read through the pool whose role authorizes nothing. There
- * is no read-only ROLE any more - this is what an older inventory's unknown
- * role reads as.
- */
+/** The standing line on a configuration a viewer may read and not change. */
 export function seeButNotChangeLine(teamName: string): string {
   return `You can see ${teamName}'s settings but not change them.`;
 }
@@ -150,6 +121,8 @@ export function roleGrantPrefix(role: TeamRole): string {
   const editor =
     "You can change the team's settings; every change reaches every team sandbox.";
   switch (role) {
+    case "viewer":
+      return "You can see the team's settings but not change them.";
     case "editor":
       return editor;
     case "admin":
@@ -158,7 +131,7 @@ export function roleGrantPrefix(role: TeamRole): string {
 }
 
 export function roleGrantCommon(): string {
-  return "Full use and management of the team's sandboxes and connected services. Uses your team credits. Every member can interrupt or permanently delete any team sandbox, including ones you created. Your name and email are visible to the team's members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.";
+  return "Full use and management of the team's sandboxes and connected services. Uses the team's credits. Every member can interrupt or permanently delete any team sandbox, including ones you created. Your name and email are visible to the team's members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.";
 }
 
 export function invitePendingSeatsSentence(): string {
@@ -168,6 +141,8 @@ export function invitePendingSeatsSentence(): string {
 /** The line under the invite's Role picker, for the role picked. */
 export function inviteRoleLine(role: TeamRole): string {
   switch (role) {
+    case "viewer":
+      return "Can see the team's settings but not change them.";
     case "editor":
       return "Can change the team's settings; every change reaches every team sandbox.";
     case "admin":
@@ -292,9 +267,9 @@ export function memberGainedEditing(
   );
 }
 
-/** A member still in the team: accepted, and not being removed. */
+/** A member in the team, not an invitation. */
 function isAcceptedMember(member: MembersListMember): boolean {
-  return member.inviteState !== "pending" && member.removalState === "none";
+  return member.inviteState !== "pending";
 }
 
 export function isLastAdminMember(
@@ -313,10 +288,6 @@ export function acceptedPeopleCount(
   return members.filter(isAcceptedMember).length;
 }
 
-export function demotionWhatKeepsWorking(): string {
-  return "Sandboxes keep running.";
-}
-
 export function removePreviewTitle(
   memberName: string,
   memberEmail: string | null,
@@ -333,49 +304,36 @@ export function removePreviewLead(
   memberName: string,
   teamName: string,
 ): string {
-  return `${memberName} loses ${teamName}'s settings, hosts and connected services. Here is what the removal stops, for ${memberName} and for everyone else.`;
+  return `${memberName} loses ${teamName}'s settings, hosts and connected services.`;
+}
+
+/** What a removal does to the member's work, with or without its count. */
+function removeWorkContinues(teamName: string): string {
+  return `Their connections close. Work they started keeps running for ${teamName} under their name.`;
 }
 
 /**
- * The member's running turns and terminals with the timing rule. Null counts
- * (the serving host holds no facts for the team) are never shown as a count;
- * both zero is "None.". The host is named only when this window knows it.
+ * The member's running turns and terminals where a team computer counted
+ * them, then what the removal does to that work; without a count, the second
+ * part alone. Both counts zero is "None.". The host is named only when this
+ * window knows it.
  */
 export function removeWorkNow(
-  memberName: string,
-  preview: RemovePreviewModel,
+  teamName: string,
+  workNow: MemberWorkNow | null,
 ): string {
-  if (preview.activeTurns === null || preview.terminals === null) {
-    return `${memberName}'s access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.`;
-  }
-  if (preview.activeTurns === 0 && preview.terminals === 0) return NONE;
-  const where = preview.hostName === null ? "" : ` on ${preview.hostName}`;
-  return `${countNoun(preview.activeTurns, "turn")} and ${countNoun(preview.terminals, "terminal")}${where}. ${memberName}'s access is revoked now; each finishes its current step and starts no new one. If a host does not answer in time, stopping shows as pending until it does.`;
+  if (workNow === null) return removeWorkContinues(teamName);
+  if (workNow.activeTurns === 0 && workNow.terminals === 0) return NONE;
+  const where = workNow.hostName === null ? "" : ` on ${workNow.hostName}`;
+  return `${countNoun(workNow.activeTurns, "turn")} and ${countNoun(workNow.terminals, "terminal")}${where}. ${removeWorkContinues(teamName)}`;
 }
 
 export function removeSharedSignInConsequence(
   teamName: string,
-  sharedSignIns: readonly string[],
+  sandboxesToRekey: number,
 ): string {
-  if (sharedSignIns.length === 0) return NONE;
-  return `${teamName}'s sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm. Other members' agents there pause while it lands.`;
-}
-
-export function removePaidSandboxesConsequence(
-  memberName: string,
-  teamName: string,
-  sandboxes: RemovePreviewModel["paidSandboxes"],
-): string {
-  if (sandboxes.length === 0) {
-    return `${memberName} pays for no ${teamName} sandboxes.`;
-  }
-  const names = sandboxes.map((sandbox) => sandbox.name).join(", ");
-  return `${names} pauses for everyone when ${memberName} leaves. Another member resumes it with their own ${teamName} credits; nothing transfers silently.`;
-}
-
-export function removeLinkedPlanConsequence(linkedPlan: string | null): string {
-  if (linkedPlan === null) return NONE;
-  return linkedPlan;
+  if (sandboxesToRekey === 0) return NONE;
+  return `${teamName}'s sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm.`;
 }
 
 export function removeCannotRecall(
@@ -384,9 +342,6 @@ export function removeCannotRecall(
 ): string {
   return `Files ${memberName} already copied off a host and work already done upstream with ${teamName}'s services. What ${memberName} started stays, labelled "started by a former member".`;
 }
-
-export const REMOVE_PENDING_UNTIL_COMMITTED =
-  "Removal shows as pending until it commits.";
 
 export function removeConfirmLabel(firstName: string): string {
   return `Remove ${firstName}`;
@@ -404,14 +359,16 @@ export function memberRemovedToastBody(
 
 /** How much a role may change: a lower one is a demotion, and confirms. */
 const ROLE_RANK: Readonly<Record<TeamRole, number>> = {
-  editor: 0,
-  admin: 1,
+  viewer: 0,
+  editor: 1,
+  admin: 2,
 };
 
 /** The role's own word, as the confirm's question and button say it. */
 const ROLE_WORDS: Readonly<Record<TeamRole, string>> = {
   admin: "admin",
   editor: "editor",
+  viewer: "viewer",
 };
 
 /**
@@ -423,7 +380,14 @@ export function isRoleDemotion(from: TeamRole, to: TeamRole): boolean {
 }
 
 export function demotionLossLine(memberName: string): string {
-  return `${memberName} can no longer invite people, change roles or edit the approval policy.`;
+  return `${memberName} can no longer invite people or change roles.`;
+}
+
+export function demotionViewerLossLine(
+  memberName: string,
+  teamName: string,
+): string {
+  return `${memberName} can no longer change ${teamName}'s settings. They can still see them.`;
 }
 
 export function demotionConfirmTitle(
@@ -435,66 +399,27 @@ export function demotionConfirmTitle(
 }
 
 /**
- * What the demotion takes away. Admin to editor is the only demotion a team
- * has left - every other role change gives - so this names the admin powers.
+ * What the demotion takes away: the admin powers, the editing, or both when
+ * an admin goes straight to viewer.
  */
 export function demotionConfirmBody(
   memberName: string,
+  teamName: string,
   currentRole: TeamRole,
   nextRole: TeamRole,
 ): string {
+  const lines: string[] = [];
   if (currentRole === "admin" && nextRole !== "admin") {
-    return demotionLossLine(memberName);
+    lines.push(demotionLossLine(memberName));
   }
-  return "";
+  if (ROLE_RANK[nextRole] < ROLE_RANK.editor) {
+    lines.push(demotionViewerLossLine(memberName, teamName));
+  }
+  return lines.join(" ");
 }
 
 export function demotionConfirmLabel(nextRole: TeamRole): string {
   return `Change to ${ROLE_WORDS[nextRole]}`;
-}
-
-/**
- * The row's tell while a picked demotion's check is still out. It names the
- * role, because the select still shows the role the person HAS: without it the
- * row says only that something is being checked.
- */
-export function roleCheckRunning(nextRole: TeamRole): string {
-  return `Checking ${ROLE_WORDS[nextRole]}…`;
-}
-
-/** The row's way out of that wait, named for what it drops. */
-export function cancelRoleChangeAriaLabel(
-  memberName: string,
-  nextRole: TeamRole,
-): string {
-  return `Cancel the change to ${ROLE_WORDS[nextRole]} for ${memberName}`;
-}
-
-export function planUnlinkTitle(planLabel: string, teamName: string): string {
-  return `Unlink ${planLabel} from ${teamName}`;
-}
-
-export function planUnlinkLead(teamName: string): string {
-  return `${teamName}'s agents stop using this plan. Nothing about a sandbox changes: sandbox charges use ${teamName} credits, not the plan.`;
-}
-
-export function planUnlinkTurnsLineFor(
-  teamName: string,
-  turnsOnPlan: number | null,
-): string {
-  const stops = `then stops with "${teamName}'s Claude plan was unlinked. An admin can link one."`;
-  if (turnsOnPlan === null) {
-    return `Unavailable. Each turn on Claude Code finishes its current step, ${stops}`;
-  }
-  return `${countNoun(turnsOnPlan, "turn")} on Claude Code. Each finishes its current step, ${stops}`;
-}
-
-export function planUnlinkAfterwards(teamName: string): string {
-  return `A member who sends to Claude Code on a ${teamName} host gets the unlink sentence, with a link to Providers. A host that does not answer in time shows the unlink as pending until it confirms.`;
-}
-
-export function planUnlinkWhoPays(): string {
-  return "Nobody changes: no sandbox's payer transfers on an unlink or a demotion.";
 }
 
 export function removeWorkNowLabel(memberName: string): string {
@@ -503,21 +428,7 @@ export function removeWorkNowLabel(memberName: string): string {
 
 export const SHARED_SIGN_INS_LABEL = "Shared sign-ins";
 
-export function paidSandboxesLabel(memberName: string): string {
-  return `Sandboxes ${memberName} pays for`;
-}
-
-export const LINKED_PLAN_LABEL = "Linked plan";
-
 export const CANNOT_RECALL_LABEL = "Can't be recalled";
-
-export const AGENTS_ON_PLAN_LABEL = "Agents on it now";
-
-export const WHAT_KEEPS_WORKING_LABEL = "What keeps working";
-
-export const AFTERWARDS_LABEL = "Afterwards";
-
-export const WHO_PAYS_LABEL = "Who pays";
 
 export function revokeInviteTitle(): string {
   return "Revoke this invitation";
