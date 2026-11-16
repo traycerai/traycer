@@ -10,7 +10,7 @@ import {
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { useNotificationIndicatorsSnapshot } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -64,7 +64,7 @@ export function ChatIndicatorHostScopes(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const isCloud = useNotificationFeedMode() === "cloud";
-  const inherited = useContext(NotificationIndicatorsContext);
+  const inherited = useNotificationIndicatorsSnapshot();
   const allChatIds = useMemo(
     () => props.scopes.flatMap((scope) => [...scope.chatIds]),
     [props.scopes],
@@ -213,7 +213,7 @@ function ChatIndicatorHostLayer(props: {
       !hostDead &&
       !(props.isCloud && feedModeSettling),
   });
-  const inherited = useContext(NotificationIndicatorsContext);
+  const inherited = useNotificationIndicatorsSnapshot();
   const inheritedFresh = useContext(ChatIndicatorFreshHostsContext);
   const inheritedAttested = useContext(ChatIndicatorAttestedContext);
   const hostFresh =

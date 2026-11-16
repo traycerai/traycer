@@ -1,9 +1,12 @@
-import { useContext, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import {
   ownChatStatusKind,
   type ChatDescendantStatusKind,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import {
+  sameIndicatorState,
+  useNotificationIndicatorsSelector,
+} from "@/components/notifications/notification-indicator-context";
 import { agentActivityTiers } from "@/lib/agent-activity";
 import {
   useRegisteredEpicAgentUpdatedAts,
@@ -17,7 +20,11 @@ import {
   type NeedsYouItem,
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
-import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import {
+  selectNotificationIndicatorState,
+  type NotificationIndicatorState,
+  type SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
 import { useStripTaskNeedsYou } from "./strip-needs-you-context";
 
 /** What a nested agent row says, in the order the strip lists them. */
@@ -113,8 +120,31 @@ export function needsYouAgentKind(
 export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
   const tiers = agentActivityTiers(useEpicAgentActivity(epicId));
-  const indicators = useContext(NotificationIndicatorsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
+  const liveAgentIdList = useMemo(
+    () => (liveAgentIds === null ? null : [...liveAgentIds]),
+    [liveAgentIds],
+  );
+  const selectAgentStates = useCallback(
+    (
+      indicators: SurfaceNotificationIndicators,
+    ): ReadonlyArray<NotificationIndicatorState> =>
+      epicId === null || liveAgentIdList === null
+        ? NO_AGENT_STATES
+        : liveAgentIdList.map((id) =>
+            selectNotificationIndicatorState(
+              { byId: localRows },
+              { epicId, chatId: id },
+              null,
+              indicators,
+            ),
+          ),
+    [epicId, liveAgentIdList, localRows],
+  );
+  const agentStates = useNotificationIndicatorsSelector(
+    selectAgentStates,
+    sameIndicatorStates,
+  );
   const needsYou = useStripTaskNeedsYou(epicId);
   const statuses = useMemo(() => {
     const found: Array<{
@@ -124,23 +154,18 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
       /** When the prompt that names the agent was filed. */
       readonly askedAt: number | null;
     }> = [];
-    if (epicId === null || liveAgentIds === null) return found;
+    if (epicId === null || liveAgentIdList === null) return found;
     const asked = new Map<string, NeedsYouItem>();
     for (const item of needsYou) {
       const chatId = needsYouItemChatId(item);
       if (chatId !== null && !asked.has(chatId)) asked.set(chatId, item);
     }
-    for (const id of liveAgentIds) {
+    for (const [index, id] of liveAgentIdList.entries()) {
       const prompt = asked.get(id);
       const kind =
         prompt === undefined
           ? ownChatStatusKind(
-              selectNotificationIndicatorState(
-                { byId: localRows },
-                { epicId, chatId: id },
-                null,
-                indicators,
-              ),
+              agentStates[index],
               tiers.get(id),
               "indeterminate",
             )
@@ -153,7 +178,7 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
       }
     }
     return found;
-  }, [epicId, liveAgentIds, tiers, indicators, localRows, needsYou]);
+  }, [epicId, liveAgentIdList, tiers, agentStates, needsYou]);
   const listedIds = useMemo(() => statuses.map(({ id }) => id), [statuses]);
   const refs = useMemo(
     () =>
@@ -179,4 +204,16 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   );
   const warm = liveAgentIds !== null;
   return useMemo(() => ({ warm, agents }), [warm, agents]);
+}
+
+const NO_AGENT_STATES: ReadonlyArray<NotificationIndicatorState> = [];
+
+function sameIndicatorStates(
+  left: ReadonlyArray<NotificationIndicatorState>,
+  right: ReadonlyArray<NotificationIndicatorState>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((state, index) => sameIndicatorState(state, right[index]))
+  );
 }

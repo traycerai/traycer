@@ -12,10 +12,7 @@ import {
   notificationPayloadBelongsToEpic,
 } from "@/lib/notifications";
 import { countsTowardEntityUnread } from "@/lib/notifications/unread-count";
-import {
-  useAppLocalNotificationsStore,
-  type AppLocalNotificationsState,
-} from "@/stores/notifications/app-local-notifications-store";
+import type { AppLocalNotificationsState } from "@/stores/notifications/app-local-notifications-store";
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
@@ -153,20 +150,6 @@ function selectUnreadLocalFailures(
     terminal: unreadLocalTerminalFailure,
     nonTerminal: unreadLocalNonTerminalFailure,
   };
-}
-
-export function useNotificationIndicatorState(
-  entity: HostNotificationsEntityRef,
-  originHostId: string | null,
-  indicators: SurfaceNotificationIndicators,
-): NotificationIndicatorState {
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
-  return selectNotificationIndicatorState(
-    { byId },
-    entity,
-    originHostId,
-    indicators,
-  );
 }
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: NotificationIndicatorRecords = {

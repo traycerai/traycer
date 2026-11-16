@@ -4026,8 +4026,11 @@ describe("chat descendant status rollup", () => {
     ).toBeNull();
 
     // Same descendant, now genuinely mid-turn: the busier tier takes the slot.
+    // The tier hook here is a plain function, not the activity store's
+    // subscription, so the surface is drawn again rather than re-rendered.
     testState.activityTierById = new Map([["chat-grandchild", "turn"]]);
-    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    view.unmount();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     expect(
       screen.getByTestId("chat-descendant-status-running-chat-root"),
     ).toBeTruthy();

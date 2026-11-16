@@ -24,7 +24,6 @@
 import {
   useCallback,
   useEffectEvent,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -35,7 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import { Maximize, Minus, Plus } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
+import { shallow } from "zustand/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
@@ -46,10 +45,13 @@ import {
   useEpicAgentRoleClaimsByAgentId,
 } from "@/lib/epic-selectors";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { useNotificationIndicatorsSelector } from "@/components/notifications/notification-indicator-context";
 import { attentionTone } from "@/components/notifications/notification-indicator-tones";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import {
+  selectNotificationIndicatorState,
+  type SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
 import {
   useCommGraphCursor,
   useCommGraphSpeed,
@@ -2998,15 +3000,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // (the same shape the sidebar's descendant rollup uses) rather than one hook
   // per character: a floor can hold dozens, and each would otherwise be its own
   // subscription re-running on every unrelated notification.
-  const indicators = useContext(NotificationIndicatorsContext);
   // ONE subscription for both signals. They are read from the same indicator
   // state and split by the SAME rule `attentionTone` applies internally, so a
   // crashed screen and a "!" bubble can never disagree about one agent.
-  const flaggedIdList = useAppLocalNotificationsStore(
-    useShallow((state): ReadonlyArray<string> =>
+  const byId = useAppLocalNotificationsStore((state) => state.byId);
+  const selectFlaggedIds = useCallback(
+    (indicators: SurfaceNotificationIndicators): ReadonlyArray<string> =>
       agents.flatMap((agent) => {
         const indicatorState = selectNotificationIndicatorState(
-          state,
+          { byId },
           { epicId, chatId: agent.id },
           agent.hostId,
           indicators,
@@ -3014,7 +3016,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         if (attentionTone(indicatorState) === null) return [];
         return [`${officeFlagKind(indicatorState)}:${agent.id}`];
       }),
-    ),
+    [agents, byId, epicId],
+  );
+  const flaggedIdList = useNotificationIndicatorsSelector(
+    selectFlaggedIds,
+    shallow,
   );
   const { attentionAgentIds, failureAgentIds } = useMemo(() => {
     const attention = new Set<string>();
