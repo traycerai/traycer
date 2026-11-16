@@ -1,4 +1,5 @@
 import type { CommandContext } from "../runner/runner";
+import { keepConsoleOffStdout } from "../runner/output";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -15,6 +16,7 @@ export async function runHostStartCommand(
   options: RunHostStartOptions,
   injected: Partial<RunHostStartDeps>,
 ): Promise<void> {
+  if (ctx.runtime.json) keepConsoleOffStdout();
   await runHostStart(options, {
     ...injected,
     onHostStarted:
