@@ -34,6 +34,7 @@ const sources = vi.hoisted(
       configurations: [{ kind: "personal" }],
       teamEnvironmentIds: new Set(),
       complete: true,
+      personalEnvironmentId: null,
     },
     entry: null,
   }),
@@ -67,6 +68,7 @@ const HOST = "host-sbx";
 const VIEWER = "viewer-1";
 const OTHER = "member-other";
 const TEAM_ENV = "env-acme";
+const PERSONAL_ENV = "env-personal";
 
 function row(overrides: Partial<SandboxSummary>): SandboxSummary {
   return sandboxSummaryFixture({
@@ -97,6 +99,7 @@ beforeEach(() => {
     ],
     teamEnvironmentIds: new Set([TEAM_ENV]),
     complete: true,
+    personalEnvironmentId: null,
   };
   sources.entry = null;
   useAuthStore.setState({
@@ -144,8 +147,14 @@ describe("useChatSandboxState", () => {
     },
   );
 
-  it("reads a frozen sandbox as resting, and a personal one under Personal", () => {
-    sources.sandboxes = [row({ state: "awake", frozen: true })];
+  it("reads a frozen sandbox as resting, and its known personal environment as Personal", () => {
+    sources.configurations = {
+      ...sources.configurations,
+      personalEnvironmentId: PERSONAL_ENV,
+    };
+    sources.sandboxes = [
+      row({ state: "awake", frozen: true, environmentId: PERSONAL_ENV }),
+    ];
 
     expect(stateOf(true)).toMatchObject({
       kind: "resting",
@@ -166,7 +175,52 @@ describe("useChatSandboxState", () => {
       kind: "resting",
       sandbox,
       configuration: null,
-      wakeChangesPayer: false,
+    });
+  });
+
+  // The hook maps the configurations it is given: a team read that has not
+  // answered and one that failed hand it the same input (no team has an
+  // environment id, `complete: false`), so one case stands for both.
+  it.each([
+    ["not answered", new Set<string>()],
+    ["a failed refetch with retained team data", new Set([TEAM_ENV])],
+  ] as const)(
+    "keeps a creator-less row unknown while the team read is %s",
+    (_state, teamEnvironmentIds) => {
+      sources.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-a",
+            teamName: "Acme",
+            environmentId: null,
+          },
+        ],
+        teamEnvironmentIds,
+        complete: false,
+        personalEnvironmentId: null,
+      };
+      const sandbox = row({
+        state: "suspended",
+        environmentId: "env-unresolved",
+      });
+      sources.sandboxes = [sandbox];
+
+      expect(stateOf(false)).toEqual({
+        kind: "resting",
+        sandbox,
+        configuration: null,
+      });
+    },
+  );
+
+  it("never treats a creator-less row without an environment id as Personal", () => {
+    sources.sandboxes = [row({ state: "suspended", environmentId: null })];
+
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: null,
     });
   });
 
@@ -256,24 +310,38 @@ describe("useChatSandboxState", () => {
     expect(stateOf(true)).toEqual({ kind: "none" });
   });
 
-  it("says a team wake changes the payer only when another member paid for the last wake", () => {
+  it("keeps the team configuration when a team sandbox names any wake payer", () => {
     const resting = (wakePayer: SandboxSummary["wakePayer"]) =>
       row({ state: "suspended", environmentId: TEAM_ENV, wakePayer });
 
     sources.sandboxes = [resting({ userId: OTHER, displayName: "Other" })];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: true });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
 
     sources.sandboxes = [resting({ userId: VIEWER, displayName: "V" })];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: false });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
 
     sources.sandboxes = [resting(null)];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: false });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
   });
 
-  it("never says a personal sandbox changes the payer, whoever the row names", () => {
+  it("keeps a personal sandbox personal when the row names a previous payer", () => {
+    sources.configurations = {
+      ...sources.configurations,
+      personalEnvironmentId: PERSONAL_ENV,
+    };
     sources.sandboxes = [
       row({
         state: "suspended",
+        environmentId: PERSONAL_ENV,
         wakePayer: { userId: OTHER, displayName: "Other" },
       }),
     ];
@@ -281,7 +349,6 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toMatchObject({
       kind: "resting",
       configuration: { kind: "personal" },
-      wakeChangesPayer: false,
     });
   });
 });

@@ -39,6 +39,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
 import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { EnvironmentEffectiveRole } from "@traycer/protocol/host/environment/contracts";
 import { ManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
 import {
   FAILED_CLAUDE_TUPLE,
@@ -397,7 +398,7 @@ afterEach(() => {
 /** The bot's environment as the environment list answers it for this reader. */
 function listAnswers(
   ownerKind: "organization" | "user",
-  effectiveRole: "owner" | "admin" | "editor" | "viewer",
+  effectiveRole: EnvironmentEffectiveRole,
   environmentId: string,
 ): void {
   const rows = [

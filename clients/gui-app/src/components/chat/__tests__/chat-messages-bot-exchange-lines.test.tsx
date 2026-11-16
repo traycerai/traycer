@@ -184,6 +184,7 @@ function Channel(props: {
               taskId="channel-1"
               epicId={BOT_ID}
               hostId={null}
+              payerHostId={null}
               messages={props.messages}
               transcriptWindow={null}
               onVisibleOrdinalRangeChange={() => undefined}
