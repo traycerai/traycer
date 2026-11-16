@@ -11,6 +11,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import type { EnvironmentTransportAnswer } from "@traycer-clients/shared/environment/environment-cloud";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import {
   PersonalPageFrame,
@@ -19,6 +20,7 @@ import {
 import { authQueryKeys } from "@/lib/query-keys";
 import { environmentMutationKeys } from "@/lib/query-keys/environment-mutation-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -151,15 +153,26 @@ function createReviewHarness(
 }
 
 function renderTeamPage(harness: TeamPageHarness): void {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
   render(
     <harness.Wrapper>
-      <>
-        <PersonalPageFrame section="secrets">
-          <PersonalPageHeaderStatus />
-          <p>Team settings page</p>
-        </PersonalPageFrame>
-        <EnvironmentSheetsHost />
-      </>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <>
+          <PersonalPageFrame section="secrets">
+            <PersonalPageHeaderStatus />
+            <p>Team settings page</p>
+          </PersonalPageFrame>
+          <EnvironmentSheetsHost />
+        </>
+      </RunnerHostProvider>
     </harness.Wrapper>,
   );
 }
