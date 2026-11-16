@@ -486,6 +486,17 @@ describe("SweepWorktreesFlow", () => {
     expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
   });
 
+  it("falls back to the surface, silently, when the preferred client cannot be built", () => {
+    state.connectableHostIds = ["host-a", "host-b"];
+    state.unresolvableHostIds = ["host-b"];
+    render(flowPreferring("host-b"));
+
+    expect(lastHostChoice().hostId).toBe("host-a");
+    expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
+    // Nobody asked for host-b, so there is no failed pick to report.
+    expect(lastHostChoice().unavailableHostId).toBeNull();
+  });
+
   it("ignores a preferred host on a single-host fleet", () => {
     render(flowPreferring("host-b"));
 

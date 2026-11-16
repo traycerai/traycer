@@ -67,6 +67,11 @@ interface SweepHostChoicePhase {
    * confirmation another machine's worktrees.
    */
   readonly settled: boolean;
+  /**
+   * The current switch came from the caller's preferred host, not a person.
+   * Undoing it says nothing: nobody asked for that machine.
+   */
+  readonly hinted: boolean;
 }
 
 type SweepFlowPhase =
@@ -229,6 +234,7 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
                         switchedHostId: hostId,
                         previousSwitchedHostId: current.switchedHostId,
                         settled: false,
+                        hinted: false,
                       }
                     : current,
                 );
@@ -377,6 +383,10 @@ function applySelectionChange(input: {
   }
   input.setDecidedKey(input.selectionKey);
   input.setUnavailableHostId(null);
+  const hinted =
+    input.preferredHostId !== null &&
+    input.preferredHostId !== input.surfaceHostId &&
+    input.fleet.hostIds.includes(input.preferredHostId);
   if (!sweepNeedsHostPicker(input.fleet.hostIds)) {
     input.setPhase(SURFACE);
     return;
@@ -384,18 +394,14 @@ function applySelectionChange(input: {
   input.setPhase({
     kind: "choice",
     // `null` when the surface cannot name its host — the unchosen state.
-    // The caller's preferred host wins only while it is dialable, so opening
-    // there can never land on a machine that cannot answer.
-    openedOnHostId:
-      input.preferredHostId !== null &&
-      input.fleet.hostIds.includes(input.preferredHostId)
-        ? input.preferredHostId
-        : input.surfaceHostId,
-    switchedHostId: null,
+    openedOnHostId: input.surfaceHostId,
+    // The caller's preferred host is applied as an UNSETTLED switch from the
+    // surface's, so a client that cannot be built is undone back to the
+    // surface the same render - never latched as an unreachable target.
+    switchedHostId: hinted ? input.preferredHostId : null,
     previousSwitchedHostId: null,
-    // The opened host is settled by definition: nobody just reached for it,
-    // so there is no gesture to undo if it stops answering.
-    settled: true,
+    settled: !hinted,
+    hinted,
   });
 }
 
@@ -426,7 +432,7 @@ function resolveSwitchTarget(input: {
   const { choice } = input;
   if (input.resolved) {
     if (choice.settled) return;
-    input.setPhase({ ...choice, settled: true });
+    input.setPhase({ ...choice, settled: true, hinted: false });
     return;
   }
   // A target that has ALREADY resolved once and has since stopped is not a
@@ -440,6 +446,7 @@ function resolveSwitchTarget(input: {
     // What we fall back to was settled before the gesture, so the undo lands
     // on a settled phase and this never walks a chain.
     settled: true,
+    hinted: false,
   });
-  input.setUnavailableHostId(choice.switchedHostId);
+  if (!choice.hinted) input.setUnavailableHostId(choice.switchedHostId);
 }

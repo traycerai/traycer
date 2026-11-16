@@ -659,15 +659,17 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
   // The history query's own index read, observed for its settledness: an
-  // empty map while the listing is in flight, or after it failed, is not
-  // "owns nothing". Through the optional client: History can mount with no
+  // empty list is "owns nothing" only from a completed listing - not one in
+  // flight, failed, or never started (a disabled read). Through the optional client: History can mount with no
   // host runtime above it, and the history query's own read tolerates that.
   const surfaceWorktreeIndex = useWorktreeHostIndexForClient(
     useOptionalHostClient(),
     true,
   );
   const surfaceWorktreesUnsettled =
-    surfaceWorktreeIndex.isFetching || surfaceWorktreeIndex.error !== null;
+    !surfaceWorktreeIndex.isSuccess ||
+    surfaceWorktreeIndex.isFetching ||
+    surfaceWorktreeIndex.error !== null;
   // Asked of the whole sweep target: one other machine has to account for
   // every selected Task's agents, and a Task whose hosts are unknown makes the
   // answer unknown.

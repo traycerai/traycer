@@ -15,12 +15,16 @@ export interface TaskWorktreeMetadata {
     readonly WorktreeHostEntryV12[]
   >;
   readonly isFetching: boolean;
+  /** The host listing has completed at least once; `[]` is then a real answer. */
+  readonly isSuccess: boolean;
   readonly error: Error | null;
 }
 
 export interface WorktreeHostIndex {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isFetching: boolean;
+  /** The host listing has completed at least once; `[]` is then a real answer. */
+  readonly isSuccess: boolean;
   readonly error: Error | null;
 }
 
@@ -47,6 +51,7 @@ export function useWorktreeHostIndexForClient(
   return {
     worktrees: listing.worktrees,
     isFetching: listing.isFetching,
+    isSuccess: listing.isSuccess,
     error: listing.error,
   };
 }
@@ -86,6 +91,7 @@ export function useWorktreeHostActivityIndex(
   return {
     worktrees: enrichment.worktrees,
     isFetching: baseQuery.isFetching || enrichment.isFetching,
+    isSuccess: baseQuery.isSuccess,
     error: baseQuery.error ?? enrichment.error,
   };
 }
@@ -148,6 +154,7 @@ export function useTaskWorktreeMetadataForClient(
   return {
     worktreesByEpicId,
     isFetching: baseQuery.isFetching || enrichment.isFetching,
+    isSuccess: baseQuery.isSuccess,
     error: baseQuery.error ?? enrichment.error,
   };
 }

@@ -134,11 +134,14 @@ function EpicSweepActionBody(props: {
         preferredHostId={sweepOpeningHostId({
           hostIds: nodeHostIds,
           surfaceHostId: sessionHostId,
-          // A failed listing proved nothing, any more than one in flight.
+          // Only a completed listing proves "owns nothing": one in flight,
+          // failed, or never started (a disabled read) proves nothing.
           surfaceWorktreeCount:
-            metadata.isFetching || metadata.error !== null
-              ? null
-              : entries.length,
+            metadata.isSuccess &&
+            !metadata.isFetching &&
+            metadata.error === null
+              ? entries.length
+              : null,
         })}
         taskTitle={tabName}
         onOpenChange={(open) => {
