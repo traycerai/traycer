@@ -10,9 +10,10 @@ export function seatsManagementPath(handle: string): string | null {
   return `/team/${encodeURIComponent(handle)}/seat-management`;
 }
 
-export function teamPlanPath(handle: string): string | null {
+/** Where a team gets the Traycer subscription a seats write needs. */
+export function teamBillingPath(handle: string): string | null {
   if (handle.length === 0) return null;
-  return `/team/${encodeURIComponent(handle)}/environment/plan`;
+  return `/team/${encodeURIComponent(handle)}/billing`;
 }
 
 export function seatsManagementUrl(
@@ -24,8 +25,11 @@ export function seatsManagementUrl(
   return `${resolvePlatformBaseUrl(signInUrl)}${path}`;
 }
 
-export function teamPlanUrl(signInUrl: string, handle: string): string | null {
-  const path = teamPlanPath(handle);
+export function teamBillingUrl(
+  signInUrl: string,
+  handle: string,
+): string | null {
+  const path = teamBillingPath(handle);
   if (path === null) return null;
   return `${resolvePlatformBaseUrl(signInUrl)}${path}`;
 }

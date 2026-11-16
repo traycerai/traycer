@@ -33,7 +33,7 @@ import {
 } from "@/components/settings/members/copy";
 import {
   seatsManagementUrl,
-  teamPlanUrl,
+  teamBillingUrl,
 } from "@/components/settings/members/dashboard-urls";
 import type {
   MembersDetailsSubject,
@@ -241,8 +241,8 @@ function MembersBanner(props: {
   readonly teamHandle: string;
 }): ReactNode {
   if (props.banner === null) return null;
-  const planPage = (signInUrl: string): string => {
-    return teamPlanUrl(signInUrl, props.teamHandle) ?? signInUrl;
+  const billingPage = (signInUrl: string): string => {
+    return teamBillingUrl(signInUrl, props.teamHandle) ?? signInUrl;
   };
   return (
     <div
@@ -254,7 +254,7 @@ function MembersBanner(props: {
       {props.banner === planRequiredRefusal(props.teamName) &&
       props.teamHandle.length > 0 ? (
         <DashboardLinkButton
-          page={planPage}
+          page={billingPage}
           label={addPlanOnDashboardLabel()}
           testId="members-plan-required-link"
         />

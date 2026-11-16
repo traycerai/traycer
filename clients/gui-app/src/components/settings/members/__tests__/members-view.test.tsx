@@ -27,6 +27,13 @@ vitest.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "u-admin",
 }));
 
+// The opener needs the app shell; the link it is handed is what these cases
+// read.
+const openLinkMock = vitest.hoisted(() => vitest.fn());
+vitest.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
+}));
+
 import {
   act,
   cleanup,
@@ -53,7 +60,10 @@ import {
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { reachableHost } from "@/components/settings/environment/__tests__/mcp-skills-test-support";
-import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import {
+  DASHBOARD_ORIGIN,
+  dashboardRunnerHost,
+} from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { MembersView } from "@/components/settings/members/members-view";
 import type {
   MembersDetailsSubject,
@@ -73,6 +83,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 
 afterEach(() => {
   cleanup();
+  openLinkMock.mockReset();
   resetTeamPageHarness();
   useSelectionAuthorityStore.getState().reset();
   toasts.success.mockReset();
@@ -428,7 +439,12 @@ describe("MembersView", () => {
     expect(banner.textContent).toContain(
       "Acme has no plan. Add one on the dashboard.",
     );
-    expect(screen.getByTestId("members-plan-required-link")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByTestId("members-plan-required-link"));
+    expect(openLinkMock).toHaveBeenCalledTimes(1);
+    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
+      `${DASHBOARD_ORIGIN}/team/acme/billing`,
+    );
   });
 
   it("shows the remove preview without a clock and closes on a pending removal", async () => {
