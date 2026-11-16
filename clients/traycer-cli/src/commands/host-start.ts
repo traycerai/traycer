@@ -678,6 +678,8 @@ function describeHostStartAdmission(
 }
 
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
+  /** Advisory work beside supervision, after the first admitted spawn. */
+  readonly onHostStarted: (() => Promise<void>) | null;
   readonly admitHostStartSpawn: AdmitHostStartSpawn;
   readonly spawn: SpawnImpl;
   // Injected so tests can drive the "another host already owns this data
@@ -831,6 +833,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 }
 
 const defaultRunDeps: RunHostStartDeps = {
+  onHostStarted: null,
   ...defaultDeps,
   admitHostStartSpawn: async (options, run, onAdmittedBeside, handoff) => {
     // A service controller that already owns the outer attempt capability
@@ -1087,6 +1090,7 @@ export async function runHostStart(
   // `supervisor.json`'s `startedAt`: when this supervisor began, not when its
   // records were published or its current child spawned.
   const supervisorStartedAt = deps.now();
+  let startObserved = false;
   // Read before any other await, because it defines what "already served" means
   // for this whole invocation: whatever record is on disk NOW is one our own
   // existence answers - something asked for a start after asking for a stop, and
@@ -2950,6 +2954,28 @@ export async function runHostStart(
         }
       });
       void childEnding.finally(escalation);
+    }
+
+    // Client-side authorization must not delay readiness or supervision.
+    if (
+      !shuttingDown &&
+      child.pid !== undefined &&
+      recordedEnding === null &&
+      !startObserved &&
+      deps.onHostStarted !== null
+    ) {
+      startObserved = true;
+      void Promise.resolve()
+        .then(deps.onHostStarted)
+        .catch((cause: unknown) => {
+          logger.warn(
+            "Host credential provisioning threw; the command itself was unaffected",
+            {
+              environment: opts.environment,
+              errorMessage: errorFromUnknown(cause).message,
+            },
+          );
+        });
     }
 
     const ending = await childEnding;
