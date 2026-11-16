@@ -58,6 +58,16 @@ export const STORAGE = defineSettingsSection("storage", {
     availableWhen: alwaysAvailable,
     keywords: ["archived", "archive"],
   },
+  // A team's own setting (board C24); Personal's is under General ▸ Agents.
+  chatAutoArchive: {
+    kind: "row",
+    group: "archivedChats",
+    search: { contributesTo: "page" },
+    label: "Archive idle agents automatically",
+    description: "Tidy up chats agents started once they go quiet.",
+    availableWhen: alwaysAvailable,
+    keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
+  },
   archivedChatWindow: {
     kind: "row",
     group: "archivedChats",
