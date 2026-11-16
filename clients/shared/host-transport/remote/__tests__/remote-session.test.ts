@@ -70,6 +70,7 @@ import {
   type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
+import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   clockCanMakeValidBearersLookExpired,
@@ -2291,6 +2292,85 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     },
     TEST_BUDGET_MS,
   );
+
+  it.each(["FORBIDDEN", "E_HOST_UNSUPPORTED"])(
+    "marks the host's own %s answer as the target's",
+    async (code) => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = { code, message: "answered by the host" };
+      const session = await readySession(relay);
+      try {
+        const error = await sendBindingUnary(session);
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code });
+        expect(isTargetAnswer(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal it remembers for the connection after the host answered E_HOST_UNSUPPORTED",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = {
+        code: "E_HOST_UNSUPPORTED",
+        message: "not served here",
+      };
+      const session = await readySession(relay);
+      try {
+        const answered = await sendBindingUnary(session);
+        const remembered = await sendBindingUnary(session);
+
+        expect(isTargetAnswer(answered)).toBe(true);
+        expect(remembered).toBeInstanceOf(HostRpcError);
+        expect(remembered).toMatchObject({ code: "E_HOST_UNSUPPORTED" });
+        expect(isTargetAnswer(remembered)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal of a method version below the caller's floor",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "epic.listTasks": { major: 1, minor: 5 },
+      };
+      const session = await readySession(relay);
+      try {
+        const error = await session
+          .sendUnary(
+            "worktree.getBinding",
+            BINDING_PARAMS,
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 });
 
 describe("RemoteSession reconnect ladder accounting", () => {
@@ -3824,6 +3904,10 @@ describe("RemoteSession absent optional method", () => {
           (error as HostRpcError).fatalDetails?.upgradeGuidance
             ?.hostShouldUpgrade,
         ).toBe(true);
+        // Raised here for a method the host never advertised, not the host's
+        // answer: nothing was sent.
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
