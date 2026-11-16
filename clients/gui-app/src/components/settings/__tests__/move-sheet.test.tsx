@@ -36,6 +36,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import { MOVE_DISCLOSURE_VERSION } from "@/components/settings/move-sheet-model";
 import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
@@ -120,7 +121,7 @@ function planWith(
     planHash,
     planRevision: 1,
     hostVersion: "1.5.0",
-    disclosureVersion: 1,
+    disclosureVersion: MOVE_DISCLOSURE_VERSION,
     rows: {
       moves: [],
       staysOnThisComputer: [],
@@ -325,7 +326,7 @@ afterEach(() => {
 });
 
 describe("<MoveSheet />", () => {
-  it("shows the disclosure and Move to Personal for disclosure version 1", async () => {
+  it("shows the disclosure and Move to Personal for the current disclosure version", async () => {
     const harness = mount({ plans: [FIRST_PLAN] });
     await settle();
 
@@ -345,7 +346,9 @@ describe("<MoveSheet />", () => {
 
   it("asks for an update and stages nothing for an unsupported disclosure version", async () => {
     const harness = mount({
-      plans: [{ ...FIRST_PLAN, disclosureVersion: 2 }],
+      plans: [
+        { ...FIRST_PLAN, disclosureVersion: MOVE_DISCLOSURE_VERSION + 1 },
+      ],
     });
     await settle();
 
@@ -778,7 +781,7 @@ describe("<MoveSheet />", () => {
           sharingGeneration: 1,
           targetKind: "personal",
           environmentId: ENVIRONMENT_ID,
-          disclosureVersion: 1,
+          disclosureVersion: MOVE_DISCLOSURE_VERSION,
           manifestHash: MANIFEST_HASH,
         },
       ],

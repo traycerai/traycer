@@ -19,7 +19,7 @@ export const MOVE_DISCLOSURE =
  * The plan's `disclosureVersion` that {@link MOVE_DISCLOSURE} is. A plan of
  * any other version shows the needs-an-update line and no accept.
  */
-export const MOVE_DISCLOSURE_VERSION = 1;
+export const MOVE_DISCLOSURE_VERSION = 2;
 
 export const MOVE_ACCEPTS_AS_SHOWN =
   "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";

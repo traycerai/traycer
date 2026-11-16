@@ -18,6 +18,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import { MOVE_DISCLOSURE_VERSION } from "@/components/settings/move-sheet-model";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -83,7 +84,7 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
   planHash: "plan-a",
   planRevision: 1,
   hostVersion: "1.5.0",
-  disclosureVersion: 1,
+  disclosureVersion: MOVE_DISCLOSURE_VERSION,
   rows: {
     looksLikeAKey: [],
     sameNameInPersonal: [],
