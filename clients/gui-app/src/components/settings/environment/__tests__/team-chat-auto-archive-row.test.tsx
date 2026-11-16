@@ -116,9 +116,7 @@ describe("TeamChatAutoArchiveRow", () => {
     expect(mainSwitch().getAttribute("aria-checked")).toBe("false");
     expect(mocks.read).toHaveBeenCalledWith("team-a", ERA);
     expect(
-      screen.getByText(
-        "Tidy up chats agents started once they go quiet. Applies on every host in this environment.",
-      ),
+      screen.getByText("Tidy up chats agents started once they go quiet."),
     ).toBeTruthy();
 
     await userEvent.click(mainSwitch());
