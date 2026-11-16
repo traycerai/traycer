@@ -28,7 +28,7 @@ export async function runHostStartCommand(
               "start",
               null,
             );
-            ctx.runtime.logger.info("Host credential provisioning settled", {
+            ctx.runtime.logger.debug("Host credential provisioning settled", {
               environment: ctx.runtime.environment,
               credentialProvision,
             });

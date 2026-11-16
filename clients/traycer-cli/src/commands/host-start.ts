@@ -2971,9 +2971,12 @@ export async function runHostStart(
           logger.warn(
             "Host credential provisioning threw; the command itself was unaffected",
             {
-              environment: opts.environment,
-              errorMessage: errorFromUnknown(cause).message,
+              kind: "error",
             },
+          );
+          logger.debug(
+            "Host credential provisioning threw; the command itself was unaffected",
+            { errorMessage: errorFromUnknown(cause).message },
           );
         });
     }

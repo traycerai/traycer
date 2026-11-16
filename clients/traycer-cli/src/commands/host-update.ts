@@ -1,4 +1,5 @@
 import {
+  credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
@@ -141,7 +142,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     const note = formatCredentialProvisionNote(credentialProvision);
     const human = humanSummary(outcome);
     return {
-      data: { ...outcome.legacy, credentialProvision },
+      data: {
+        ...outcome.legacy,
+        credentialProvision: credentialProvisionForResult(credentialProvision),
+      },
       human: note === null ? human : `${human}; ${note}`,
       exitCode: 0,
     };
