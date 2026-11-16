@@ -56,13 +56,13 @@ import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-mem
 import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
+import { OnboardingMemoryActAuthServiceProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-auth-service-probe";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   HostRuntimeProvider,
   hostRpcRegistry,
-  useAuthService,
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
@@ -646,11 +646,6 @@ function signInWindow(runnerHost: MockRunnerHost): void {
   });
 }
 
-function AuthServiceProbe(): null {
-  authService = useAuthService();
-  return null;
-}
-
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
@@ -704,7 +699,11 @@ export function renderInHost(ui: ReactNode): void {
             }
             fallback={<div data-testid="memory-act-fallback" />}
           >
-            <AuthServiceProbe />
+            <OnboardingMemoryActAuthServiceProbe
+              onAuthService={(service) => {
+                authService = service;
+              }}
+            />
             <WindowsBridgeContext.Provider
               value={{ bridge: null, hasHydrated: true }}
             >
