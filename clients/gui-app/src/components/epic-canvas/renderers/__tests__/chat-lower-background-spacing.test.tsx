@@ -246,6 +246,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },
