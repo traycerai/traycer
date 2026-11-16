@@ -412,6 +412,7 @@ describe("a bot's session offers no quote", () => {
             <BotSessionView
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={null}
               botTitle="Release Bot"
               session={{ chatId: CHANNEL_ID, threadId: null, landOn: null }}
               threads={[]}

@@ -4741,6 +4741,7 @@ export function ChatSessionMessagesSurface(
                 taskId={props.node.id}
                 epicId={props.epicId}
                 hostId={props.tabHostId}
+                payerHostId={props.tabHostId}
                 messages={props.messages}
                 transcriptWindow={props.transcriptWindow}
                 onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}

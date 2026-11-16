@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { addShell, probeShellPath } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config shell add`. Unlike the permissive
 // `config shell set` (absolute-path-only), `add` is the picker's gated
@@ -34,7 +35,12 @@ export function buildConfigShellAddCommand(args: {
         exitCode: 1,
       });
     }
-    const next = await addShell(args.path);
+    const response = await writeConfigViaRunningHost("config.shell.add", {
+      path: args.path,
+      executableWriteGrant: null,
+      selection: { kind: "not_stated" },
+    });
+    const next = response ?? (await addShell(args.path));
     return {
       data: { path: next.path, entries: next.entries },
       human: ctx.runtime.json

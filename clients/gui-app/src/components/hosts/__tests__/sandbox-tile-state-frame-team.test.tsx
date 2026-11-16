@@ -23,12 +23,18 @@ import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const HOST_ID = "host-sbx-1";
 const VIEWER = "user-viewer";
 const TEAM: HostOwnerPrincipal = { kind: "team", id: "team-a", name: "Alpha" };
+/** The row names the signed-in person as the sandbox's owner. */
+const PERSONAL_OWNER: HostOwnerPrincipal = { kind: "user", id: VIEWER };
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
@@ -65,13 +71,14 @@ import {
   sandboxFrozenLine,
   sandboxTeamFrozenLine,
 } from "@/components/hosts/sandbox-card-model";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 
 /**
  * The tile overlay's Resume or Start on a TEAM sandbox asks before it bills
  * the opener; a team pod and a personal sandbox do not ask. A frozen team
- * sandbox's overlay names whose bundle is out.
+ * sandbox's overlay names the team's bundle when credits run out.
  */
 
 /** The registry row as the host list reports it, `owner` included. */
@@ -130,12 +137,6 @@ function renderFrame(): void {
   );
 }
 
-function listedSummary(): SandboxSummary {
-  const listed = mocks.list?.sandboxes[0];
-  if (listed === undefined) throw new Error("expected the listed sandbox");
-  return listed;
-}
-
 function overlayParagraph(
   overlay: HTMLElement,
   index: number,
@@ -151,6 +152,16 @@ beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   mocks.list = null;
+  // The cover reads whose credits a frozen sandbox is on from the person's
+  // host directory, through the real hook: the registry answers the same row
+  // the entry mock gives the rest of the frame.
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => (hostId === HOST_ID ? mocks.entry : null),
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER, username: "viewer" },
@@ -158,6 +169,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetHostConnectionRegistryForTest();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -217,7 +229,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
 describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
   const ADA = { userId: "user-ada", displayName: "Ada Lovelace" };
 
-  it("names whose bundle is out instead of the personal credits line, and offers no wake", () => {
+  it("names the team's bundle instead of personal credits, and offers no wake", () => {
     setEntry({
       state: "suspended",
       frozen: true,
@@ -229,7 +241,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
-    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`;
+    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine("Alpha")}`;
     expect(overlayParagraph(overlay, 0).textContent).toBe(cause);
     expect(overlay.textContent).toBe(cause);
     expect(overlay.querySelectorAll("p")).toHaveLength(1);
@@ -248,14 +260,14 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     renderFrame();
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlayParagraph(overlay, 0).textContent).toBe(
-      `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`,
+      `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine("Alpha")}`,
     );
     const clock = sandboxFrozenClock(frozenAt);
     if (clock === null) throw new Error("expected a removal clock");
     expect(overlayParagraph(overlay, 1).textContent).toBe(clock);
   });
 
-  it("names the missing payer when the sandbox list has no row for the host", () => {
+  it("names the team when the sandbox list has no row for the host", () => {
     const state: HostSandboxState = "suspended";
     setEntry({
       state,
@@ -268,16 +280,16 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     renderFrame();
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlayParagraph(overlay, 0).textContent).toBe(
-      `${hostSandboxStateWord(state)} · ${sandboxTeamFrozenLine(null, VIEWER)}`,
+      `${hostSandboxStateWord(state)} · ${sandboxTeamFrozenLine("Alpha")}`,
     );
     expect(overlay.querySelectorAll("p")).toHaveLength(1);
   });
 
-  it("keeps the personal credits line on a personal frozen sandbox", () => {
+  it("keeps the personal credits line on a frozen sandbox whose row names the person as its owner", () => {
     setEntry({
       state: "suspended",
       frozen: true,
-      owner: undefined,
+      owner: PERSONAL_OWNER,
       profile: "agent",
       summary: { wakePayer: ADA },
     });
@@ -287,5 +299,46 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     expect(overlayParagraph(overlay, 0).textContent).toBe(cause);
     expect(overlay.textContent).toBe(cause);
     expect(overlay.querySelectorAll("p")).toHaveLength(1);
+  });
+
+  it("tells no remedy, and names no account, on a frozen sandbox whose row has no owner", () => {
+    setEntry({
+      state: "suspended",
+      frozen: true,
+      owner: undefined,
+      profile: "agent",
+      summary: { wakePayer: ADA },
+    });
+    renderFrame();
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlay.textContent).toBe(
+      `${hostSandboxStateWord("suspended")} · ${SANDBOX_OUT_OF_CREDITS}`,
+    );
+    expect(overlay.textContent).not.toContain("Top up to resume");
+    expect(overlay.querySelectorAll("p")).toHaveLength(1);
+  });
+
+  it("tells no remedy, and no empty team name, on a frozen team sandbox whose name is not on its row yet", () => {
+    setEntry({
+      state: "suspended",
+      frozen: true,
+      owner: TEAM,
+      profile: "agent",
+      summary: { wakePayer: ADA },
+    });
+    if (mocks.entry === null) throw new Error("expected a row");
+    const { sandbox } = mocks.entry;
+    if (sandbox === null) throw new Error("expected sandbox facts");
+    mocks.entry = {
+      ...mocks.entry,
+      sandbox: { ...sandbox, ownerTeamName: null },
+    };
+    renderFrame();
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlay.textContent).toBe(
+      `${hostSandboxStateWord("suspended")} · ${SANDBOX_OUT_OF_CREDITS}`,
+    );
+    expect(overlay.textContent).not.toContain("Top up to resume");
+    expect(overlay.textContent).not.toContain("'s bundle is out");
   });
 });

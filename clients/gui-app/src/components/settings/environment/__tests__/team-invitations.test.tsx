@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type {
+  AuthService,
+  LiveRevalidationOutcome,
+} from "@/lib/auth/auth-service";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
@@ -289,16 +293,16 @@ async function assertExplicitHttpInvitationFlow(
 
 describe("the invited rows of the Environment dropdown", () => {
   it("shows invitation details and hands the grant to Review", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
+    stubInvitationHttp(undefined);
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
     });
     const onReview = vi.fn();
-    renderRows(onReview, () => undefined, "controlled")(harness.Wrapper);
+    renderRows(
+      onReview,
+      () => undefined,
+      "controlled",
+    )(wrapperWithInvitationAuth(harness, invitationAuth()));
 
     const row = await screen.findByTestId("environment-invitation-env-beta");
     expect(row.textContent).toContain("Beta");
@@ -316,14 +320,10 @@ describe("the invited rows of the Environment dropdown", () => {
   it("keeps the Teams group loading while membership is pending", async () => {
     negotiateMethods({
       "environment.list": V11,
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
     });
     const teamsPending = Promise.withResolvers<typeof NO_ENVIRONMENTS>();
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => teamsPending.promise,
-      "environment.invitations.list": () => ({ invitations: [] }),
-      "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
     renderRows(vi.fn(), () => undefined, "controlled")(harness.Wrapper);
 
@@ -351,7 +351,6 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.list": () => {
         throw new Error("membership unavailable");
       },
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     renderRows(
       vi.fn(),
@@ -386,7 +385,6 @@ describe("the invited rows of the Environment dropdown", () => {
     stubInvitationHttp(() => []);
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     renderRows(
       vi.fn(),
@@ -425,7 +423,6 @@ describe("the invited rows of the Environment dropdown", () => {
           },
         ],
       }),
-      "environment.invitations.list": () => ({ invitations: [] }),
     });
     const onPick = vi.fn();
     render(
@@ -458,20 +455,21 @@ describe("the invited rows of the Environment dropdown", () => {
   it("keeps an invitation reviewable through membership and acceptance failures", async () => {
     negotiateMethods({
       "environment.list": V11,
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
     });
     const acceptancePending = Promise.withResolvers<never>();
+    const accept = vi.fn(() => acceptancePending.promise);
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => {
         throw new Error("membership unavailable");
       },
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-      "environment.invitations.accept": () => acceptancePending.promise,
     });
+    stubInvitationHttp(undefined);
     const onAccepted = vi.fn();
     render(<InvitationFlow onAccepted={onAccepted} />, {
-      wrapper: wrapperWithRunnerHost(harness.Wrapper),
+      wrapper: wrapperWithInvitationAuth(harness, {
+        ...invitationAuth(),
+        acceptEnvironmentInvitation: accept,
+      }),
     });
 
     const row = await screen.findByTestId("environment-invitation-env-beta");
@@ -501,7 +499,7 @@ describe("the invited rows of the Environment dropdown", () => {
       );
     });
     expect(onAccepted).not.toHaveBeenCalled();
-    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(1);
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => {
@@ -515,8 +513,11 @@ describe("the invited rows of the Environment dropdown", () => {
     ).toBeTruthy();
   });
 
-  it("lists and accepts an older-host invitation over authenticated HTTP only after explicit review", async () => {
-    negotiateMethods({});
+  it("lists and accepts over authenticated HTTP only after explicit review, even where the host offers both methods", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
@@ -529,8 +530,6 @@ describe("the invited rows of the Environment dropdown", () => {
     resetNegotiatedManifests();
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-      "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
     useSelectionAuthorityStore.getState().reset();
     const requester = requireTeamHostClient();
@@ -540,37 +539,10 @@ describe("the invited rows of the Environment dropdown", () => {
     await assertExplicitHttpInvitationFlow(harness);
   });
 
-  it("waits for an addressable host's invitation capabilities before routing", async () => {
-    resetNegotiatedManifests();
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-      "environment.invitations.accept": () => ({ outcome: "accepted" }),
-    });
-    expect(requireTeamHostClient().getActiveHostId()).not.toBeNull();
-    const calls = stubInvitationHttp(undefined);
-    renderRows(
-      vi.fn(),
-      () => undefined,
-      "controlled",
-    )(wrapperWithInvitationAuth(harness, invitationAuth()));
-
-    await waitFor(() => {
-      expect(harness.paramsOf("environment.list")).toHaveLength(1);
-    });
-    expect(screen.queryByTestId("environment-invitation-env-beta")).toBeNull();
-    expect(calls).toHaveLength(0);
-    expect(harness.paramsOf("environment.invitations.list")).toHaveLength(0);
-    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
-  });
-
   it("does not query or show invitations without an authenticated binding", async () => {
-    negotiateMethods({});
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-      "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
     renderRows(vi.fn(), () => undefined, "controlled")(harness.Wrapper);
 
@@ -579,36 +551,12 @@ describe("the invited rows of the Environment dropdown", () => {
     });
     expect(screen.queryByTestId("environment-invitation-env-beta")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(harness.paramsOf("environment.invitations.list")).toHaveLength(0);
-    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
-  });
-
-  it("uses HTTP when list is supported but Accept is not", async () => {
-    negotiateMethods({ "environment.invitations.list": V10 });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
-    });
-    const calls = stubInvitationHttp(undefined);
-    renderRows(
-      vi.fn(),
-      () => undefined,
-      "controlled",
-    )(wrapperWithInvitationAuth(harness, invitationAuth()));
-
-    expect(
-      await screen.findByTestId("environment-invitation-env-beta"),
-    ).toBeTruthy();
-    expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(harness.paramsOf("environment.invitations.list")).toHaveLength(0);
   });
 
   it("does not show cached invitations after the viewer changes", async () => {
     viewerUserId.current = "user-me";
-    negotiateMethods({});
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => NO_ENVIRONMENTS,
-      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
     });
     const calls = stubInvitationHttp(() =>
       viewerUserId.current === "user-me" ? [INVITATION] : [],
@@ -637,43 +585,99 @@ describe("InviteAcceptDialog", () => {
     outcome: "accepted" | "not_found",
     onAccepted: (environmentId: string) => void,
   ) {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.invitations.accept": () => ({ outcome }),
-    });
+    const accept = vi.fn(() => Promise.resolve({ outcome }));
+    const harness = mountTeamPage(poolSource("editor"), {});
     render(
       <InviteAcceptDialog
         invitation={INVITATION}
         onClose={() => undefined}
         onAccepted={onAccepted}
       />,
-      { wrapper: wrapperWithRunnerHost(harness.Wrapper) },
+      {
+        wrapper: wrapperWithInvitationAuth(harness, {
+          ...invitationAuth(),
+          acceptEnvironmentInvitation: accept,
+        }),
+      },
     );
-    return harness;
+    return accept;
   }
 
   it("shows the grant and accepts only when Accept is pressed, then reports the team to pick", async () => {
     const onAccepted = vi.fn();
-    const harness = renderDialog("accepted", onAccepted);
+    const accept = renderDialog("accepted", onAccepted);
 
     expect(
       screen.getByRole("heading", { name: "You're invited to Beta" }),
     ).toBeTruthy();
     expect(screen.getByTestId("invite-accept-grant")).toBeTruthy();
-    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
+    expect(accept).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByTestId("invite-accept"));
 
     await waitFor(() => {
       expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
     });
-    expect(harness.paramsOf("environment.invitations.accept")).toEqual([
-      { environmentId: "env-beta" },
-    ]);
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
   });
+
+  it.each([
+    [
+      "a returned network-error",
+      () => Promise.resolve({ kind: "network-error" }),
+    ],
+    ["a throw", () => Promise.reject(new Error("authn is down"))],
+  ] satisfies [string, () => Promise<LiveRevalidationOutcome>][])(
+    "still reports the team to pick, once, when the account read ends in %s",
+    async (_name, answer) => {
+      const order: string[] = [];
+      const onAccepted = vi.fn(() => {
+        order.push("onAccepted");
+      });
+      // Signed in through the provider, so the accept counts as made on this
+      // sign-in and the account is read after it.
+      const provider = new DefaultRequestContextProvider({
+        origin: "renderer",
+      });
+      provider.setSignedIn({
+        user: createAuthenticatedUserFixture({}),
+        bearerToken: "t1",
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {});
+      const reread = vi
+        .spyOn(harness.auth, "revalidateCurrentContextAfterInvalidation")
+        .mockImplementation(() => {
+          order.push("reread");
+          return answer();
+        });
+      render(
+        <InviteAcceptDialog
+          invitation={INVITATION}
+          onClose={() => undefined}
+          onAccepted={onAccepted}
+        />,
+        {
+          wrapper: wrapperWithInvitationAuth(harness, {
+            ...invitationAuth(),
+            acceptEnvironmentInvitation: () =>
+              Promise.resolve({ outcome: "accepted" }),
+            getRequestContextProvider: () => provider,
+          }),
+        },
+      );
+
+      await userEvent.click(screen.getByTestId("invite-accept"));
+
+      await waitFor(() => {
+        expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+      });
+      expect(reread).toHaveBeenCalledOnce();
+      expect(order).toEqual(["reread", "onAccepted"]);
+      expect(screen.queryByTestId("invite-accept-gone")).toBeNull();
+    },
+  );
 
   it("says the invitation is no longer open, and picks nothing, when it was withdrawn", async () => {
     const onAccepted = vi.fn();
@@ -689,21 +693,23 @@ describe("InviteAcceptDialog", () => {
   });
 
   it("offers an invitation to a Viewer and explains what accepting allows", async () => {
-    negotiateMethods({
-      "environment.invitations.list": V10,
-      "environment.invitations.accept": V10,
-    });
     const onAccepted = vi.fn();
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.invitations.accept": () => ({ outcome: "accepted" }),
-    });
+    const accept = vi.fn(() =>
+      Promise.resolve({ outcome: "accepted" as const }),
+    );
+    const harness = mountTeamPage(poolSource("editor"), {});
     render(
       <InviteAcceptDialog
         invitation={{ ...INVITATION, role: "viewer" }}
         onClose={() => undefined}
         onAccepted={onAccepted}
       />,
-      { wrapper: wrapperWithRunnerHost(harness.Wrapper) },
+      {
+        wrapper: wrapperWithInvitationAuth(harness, {
+          ...invitationAuth(),
+          acceptEnvironmentInvitation: accept,
+        }),
+      },
     );
 
     expect((await screen.findByTestId("role-grant-prefix")).textContent).toBe(
@@ -716,8 +722,6 @@ describe("InviteAcceptDialog", () => {
     await waitFor(() => {
       expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
     });
-    expect(harness.paramsOf("environment.invitations.accept")).toEqual([
-      { environmentId: "env-beta" },
-    ]);
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
   });
 });

@@ -514,6 +514,14 @@ export const PERSIST_STORES = [
     leaf: "team-continue-caution-seen",
     kind: "static",
   },
+  // The teammates' claims of a team computer each person has been told about
+  // on this device (`claimed-computer-notice-store.ts`): the notice is shown
+  // once per device.
+  {
+    camelName: "claimNoticesTold",
+    leaf: "claim-notices-told",
+    kind: "static",
+  },
   // The Tracy surface: whether it is open, the host it is bound to and its
   // selected channel (`tracy-surface-store.ts`; version 1 held one record per
   // bot tab). A bot id is a cloud entity, so no host scoping on the key; the

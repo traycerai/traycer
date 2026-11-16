@@ -61,6 +61,7 @@ const h = vi.hoisted(() => {
     configurations: [{ kind: "personal" }],
     teamEnvironmentIds: new Set(),
     complete: false,
+    personalEnvironmentId: null,
   };
   const state: {
     sandboxes: object[];
@@ -350,6 +351,7 @@ afterEach(() => {
     configurations: [{ kind: "personal" }],
     teamEnvironmentIds: new Set(),
     complete: false,
+    personalEnvironmentId: null,
   };
   h.setPanel.mockClear();
   h.openDetails.mockClear();
@@ -695,7 +697,7 @@ function showFileTree(): void {
 describe("AgentHoverTooltip host section", () => {
   beforeEach(showFileTree);
 
-  it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
+  it("does not infer a payer while teams load and keeps the viewer as creator", () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
     h.busySessionCount = 3;
@@ -724,7 +726,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
     expect(text).toContain("started by you");
-    expect(text).toContain("paid by you");
+    expect(text).not.toContain("paid by you");
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
@@ -746,6 +748,38 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  it("does not call a team sandbox paid by you when its team is named Personal", () => {
+    h.configurations = {
+      configurations: [
+        { kind: "personal" },
+        {
+          kind: "team",
+          teamId: "team-personal",
+          teamName: "Personal",
+          environmentId: "env-team-personal",
+        },
+      ],
+      teamEnvironmentIds: new Set(["env-team-personal"]),
+      complete: true,
+      personalEnvironmentId: null,
+    };
+    h.sandboxes = [
+      sandboxRow({
+        environmentId: "env-team-personal",
+        wakePayer: { userId: "user-1", displayName: "Sam" },
+      }),
+    ];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    const text = screen.getByTestId("worktree-host-section").textContent;
+    expect(text).not.toContain("paid by");
+    expect(text).toContain("started by you");
   });
 
   describe("with File Tree off", () => {
@@ -808,6 +842,36 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
+      };
+      // A row nobody started: with every team answered and none holding its
+      // environment, it is the person's own.
+      h.sandboxes = [
+        sandboxRow({ environmentId: "env-elsewhere", createdBy: null }),
+      ];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBe("Personal");
+    });
+
+    it("shows exactly unknown for a row a member started in an environment outside every team's", () => {
+      h.registryOwner = null;
+      h.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-1",
+            teamName: "Acme",
+            environmentId: "env-acme",
+          },
+        ],
+        teamEnvironmentIds: new Set(["env-acme"]),
+        complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
       renderAgent({
@@ -815,7 +879,7 @@ describe("AgentHoverTooltip host section", () => {
         ownerKind: "chat",
         ownerHostUnreachable: false,
       });
-      expect(configuration()).toBe("Personal");
+      expect(configuration()).toBe("unknown");
     });
 
     it("uses the bound team environment even when the host registry names another owner", () => {
@@ -832,6 +896,7 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderAgent({
@@ -848,8 +913,11 @@ describe("AgentHoverTooltip host section", () => {
         configurations: [{ kind: "personal" }],
         teamEnvironmentIds: new Set(),
         complete: true,
+        personalEnvironmentId: null,
       };
-      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      h.sandboxes = [
+        sandboxRow({ environmentId: "env-elsewhere", createdBy: null }),
+      ];
       renderAgent({
         hostId: "host-sbx",
         ownerKind: "chat",
@@ -886,10 +954,12 @@ describe("AgentHoverTooltip host section", () => {
           configurations: [{ kind: "personal" }],
           teamEnvironmentIds: new Set(),
           complete: true,
+          personalEnvironmentId: null,
         };
         h.sandboxes = [
           sandboxRow({
             environmentId: "env-personal",
+            createdBy: null,
             state,
           }),
         ];
@@ -927,6 +997,7 @@ describe("AgentHoverTooltip host section", () => {
         ],
         teamEnvironmentIds: new Set(["env-acme"]),
         complete: true,
+        personalEnvironmentId: null,
       };
       h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderHostSandbox();

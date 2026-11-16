@@ -19,6 +19,15 @@ import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+
+/** The operation a save was pressed on; these saves go to the host, which reads none of it. */
+const PRESSED_ON: EnvironmentCloud = {
+  authnBaseUrl: "",
+  bearer: { kind: "cloud", getBearerToken: () => null },
+  transport: () => Promise.reject(new Error("not sent")),
+  onOriginSignIn: () => true,
+};
 
 // JOB 1: the account-policy cache is partitioned by signed-in
 // user. `useAutoPolicyQuery` now folds `viewerUserId` into its cache key
@@ -342,7 +351,10 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
       ),
     );
 
-    bMutation.result.current.mutate.mutate({ body: "B's edited policy" });
+    bMutation.result.current.mutate.mutate({
+      request: { body: "B's edited policy" },
+      operation: PRESSED_ON,
+    });
     await waitFor(() => {
       expect(bMutation.result.current.mutate.isSuccess).toBe(true);
     });
@@ -408,7 +420,10 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
       }),
     );
 
-    mounted.result.current.mutate.mutate({ body: "A's edited policy" });
+    mounted.result.current.mutate.mutate({
+      request: { body: "A's edited policy" },
+      operation: PRESSED_ON,
+    });
     await waitFor(() => {
       expect(mounted.result.current.mutate.isSuccess).toBe(true);
     });
@@ -560,7 +575,10 @@ describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") 
       { wrapper: fixture.Wrapper },
     );
 
-    result.current.mutation.mutate({ body: "written while unattributed" });
+    result.current.mutation.mutate({
+      request: { body: "written while unattributed" },
+      operation: PRESSED_ON,
+    });
     await waitFor(() => expect(result.current.mutation.isSuccess).toBe(true));
 
     // The write-through addresses `hostQueryKeys.autoPolicyForViewer(hostId,

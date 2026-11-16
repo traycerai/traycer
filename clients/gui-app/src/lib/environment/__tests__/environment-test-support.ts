@@ -1,5 +1,6 @@
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   MockHostMessenger,
   type MockHandlerMap,
@@ -8,7 +9,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   EnvironmentItemStatus,
   EnvironmentPendingUpload,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -40,28 +41,45 @@ export interface EnvironmentClientFixture {
   readonly hosts: Map<string, HostDirectoryEntry>;
 }
 
+export interface EnvironmentMessengerLayers {
+  readonly messenger: IHostMessenger<HostRpcRegistry>;
+  readonly singleAttemptMessenger: IHostMessenger<HostRpcRegistry> | null;
+}
+
+export type EnvironmentMessengerWrapper = (
+  messenger: IHostMessenger<HostRpcRegistry>,
+) => EnvironmentMessengerLayers;
+
 export function buildEnvironmentClient(options: {
   readonly hostId: string;
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
+  readonly wrapMessenger?: EnvironmentMessengerWrapper;
 }): EnvironmentClientFixture {
   const entry = hostEntryFixture(options.hostId);
   const hosts = new Map([[entry.hostId, entry]]);
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
+  const rawMessenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${options.hostId}`,
     handlers: options.handlers,
   });
+  const layers = options.wrapMessenger?.(rawMessenger);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     schedulingPolicy: hostRpcSchedulingPolicy,
     findHostById: (hostId) => hosts.get(hostId) ?? null,
-    messenger,
+    messenger: layers?.messenger ?? rawMessenger,
+    singleAttemptMessenger: layers?.singleAttemptMessenger ?? undefined,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return { spine, client: spine.createRequester(entry), messenger, hosts };
+  return {
+    spine,
+    client: spine.createRequester(entry),
+    messenger: rawMessenger,
+    hosts,
+  };
 }
 
 export function itemStatusFixture(
@@ -100,8 +118,8 @@ export function pendingUploadFixture(
 }
 
 export function environmentStatusFixture(
-  overrides: Partial<EnvironmentStatusResponseV12>,
-): EnvironmentStatusResponseV12 {
+  overrides: Partial<EnvironmentStatusResponseV13>,
+): EnvironmentStatusResponseV13 {
   return {
     consent: null,
     planes: { records: "moved", broker: "moved", room: "moved" },
@@ -117,6 +135,7 @@ export function environmentStatusFixture(
     items: [],
     pendingUploads: [],
     acceptedUploads: [],
+    move: null,
     setup: null,
     remoteAccess: "off",
     ...overrides,

@@ -1,28 +1,21 @@
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
-import {
-  useMutation,
-  useQueryClient,
-  type QueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import {
-  invalidateEnvironmentReads,
-  useEnvironmentCloudOperation,
-} from "@/hooks/environment/use-environment-cloud";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+  useSecretsEnvironment,
+  useSecretsOperationMutation,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 
@@ -32,30 +25,14 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
  * dispatch, so the value never becomes the mutation's variables and reaches
  * no query or mutation cache.
  *
- * A write that names its environment (a team's, or Personal's) is the app's
- * own call to authn on the person's sign-in. One that names none is the
- * host's own secrets, and stays the host's write.
+ * Each is the app's own call to authn on the person's sign-in, naming the
+ * environment the page's secrets calls name (`useSecretsEnvironment`). Its
+ * sign-in is captured at the press, before the mutation can yield; the typed
+ * value is still read only when its request is dispatched.
  */
 
 interface CapturedHost {
   readonly hostId: string | null;
-}
-
-/** A saved or rotated value moves the list, its versions and its rotation. */
-function rereadSecrets(queryClient: QueryClient, hostId: string | null): void {
-  for (const method of SECRET_READS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(
-        hostRpcServingTierHostId(
-          method,
-          hostId,
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        method,
-      ),
-    });
-  }
 }
 
 export function useEnvironmentSecretsCreateMutation(
@@ -65,23 +42,21 @@ export function useEnvironmentSecretsCreateMutation(
     "environment.secrets.create"
   >,
 ): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
+  AuthnSecretsCreateResponse,
   HostRpcError,
   void,
   CapturedHost
 > {
-  const { environmentId } = useAddressedEnvironment();
+  const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  const begin = useEnvironmentCloudOperation();
-  const named = useMutation<
-    ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
-    HostRpcError,
+  return useSecretsOperationMutation<
+    AuthnSecretsCreateResponse,
     void,
     CapturedHost
   >({
     mutationKey: settingsDetailsMutationKeys.secretCreate(),
-    mutationFn: () =>
-      begin()("environment.secrets.create", {
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.create", {
         ...readRequest(),
         environmentId,
       }),
@@ -92,26 +67,6 @@ export function useEnvironmentSecretsCreateMutation(
       }
     },
   });
-  const hostOwn = useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.create",
-    CapturedHost,
-    void
-  >({
-    client,
-    method: "environment.secrets.create",
-    mapVariables: () => ({ ...readRequest(), environmentId: null }),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretCreate(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (outcome, _variables, captured) => {
-        if (outcome.outcome !== "refused") {
-          rereadSecrets(queryClient, captured.hostId);
-        }
-      },
-    },
-  });
-  return environmentId === null ? hostOwn : named;
 }
 
 export function useEnvironmentSecretsVerifyCandidateMutation(
@@ -125,33 +80,18 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
   HostRpcError,
   void
 > {
-  const { environmentId } = useAddressedEnvironment();
-  const begin = useEnvironmentCloudOperation();
-  const named = useMutation<
+  const { environmentId } = useSecretsEnvironment(client);
+  return useSecretsOperationMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
-    HostRpcError
+    void
   >({
     mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
-    mutationFn: () =>
-      begin()("environment.secrets.verify", {
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.verify", {
         ...readRequest(),
         environmentId,
       }),
   });
-  const hostOwn = useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.verify",
-    unknown,
-    void
-  >({
-    client,
-    method: "environment.secrets.verify",
-    mapVariables: () => ({ ...readRequest(), environmentId: null }),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
-    },
-  });
-  return environmentId === null ? hostOwn : named;
 }
 
 /** The compare-and-set a replacement names; the value is read at dispatch. */
@@ -164,23 +104,21 @@ export function useEnvironmentSecretsReplaceValueMutation(
   client: HostClient<HostRpcRegistry>,
   readValue: () => string,
 ): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.secrets.replaceValue">,
+  AuthnSecretsReplaceValueResponse,
   HostRpcError,
   SecretReplaceTarget,
   CapturedHost
 > {
-  const { environmentId } = useAddressedEnvironment();
+  const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  const begin = useEnvironmentCloudOperation();
-  const named = useMutation<
-    ResponseOfMethod<HostRpcRegistry, "environment.secrets.replaceValue">,
-    HostRpcError,
+  return useSecretsOperationMutation<
+    AuthnSecretsReplaceValueResponse,
     SecretReplaceTarget,
     CapturedHost
   >({
     mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
-    mutationFn: (target) =>
-      begin()("environment.secrets.replaceValue", {
+    mutationFn: (target, send) =>
+      send("environment.secrets.replaceValue", {
         ...target,
         value: readValue(),
         environmentId,
@@ -194,30 +132,4 @@ export function useEnvironmentSecretsReplaceValueMutation(
       }
     },
   });
-  const hostOwn = useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.replaceValue",
-    CapturedHost,
-    SecretReplaceTarget
-  >({
-    client,
-    method: "environment.secrets.replaceValue",
-    mapVariables: (target) => ({
-      ...target,
-      value: readValue(),
-      environmentId: null,
-    }),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (answer, _variables, captured) => {
-        // Accepted, or changed elsewhere: either way the list moved.
-        const outcome = replaceOutcome(answer);
-        if (outcome.kind === "accepted" || outcome.reread) {
-          rereadSecrets(queryClient, captured.hostId);
-        }
-      },
-    },
-  });
-  return environmentId === null ? hostOwn : named;
 }

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import {
   mountTeamPage,
   poolSource,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -84,12 +85,24 @@ type ListHandler = () => Promise<EnvironmentListResponseV11>;
 
 function mountClient(list: ListHandler): {
   readonly Wrapper: (p: { children: ReactNode }) => ReactNode;
+  readonly queryClient: TeamPageHarness["queryClient"];
 } {
   const harness = mountTeamPage(poolSource("admin"), {
     "environment.list": () => list(),
   });
+  // The person's teams are on the account before the list is read; the
+  // harness would only learn them from the list's own answer, too late for
+  // the read that joins each row to its team.
+  useAuthStore.setState({
+    shareableTeams: ["a", "admin", "editor", "viewer"].map((id) => ({
+      teamId: `team-${id}`,
+      slug: `handle-${id}`,
+      avatarUrl: null,
+    })),
+  });
   return {
     Wrapper: harness.Wrapper,
+    queryClient: harness.queryClient,
   };
 }
 
@@ -167,6 +180,44 @@ describe("TeamRows", () => {
 
     const row = await screen.findByTestId("environment-team-env-old");
     expect(row.textContent).toContain("Read-only settings");
+  });
+
+  it("removes You edit from cached team rows after the environment list fails", async () => {
+    const failed = { current: false };
+    const { Wrapper, queryClient } = mountClient(() =>
+      failed.current
+        ? Promise.reject(new Error("Environment list unavailable"))
+        : Promise.resolve({
+            environments: [
+              personal,
+              team("admin", "Acme", "admin"),
+              team("editor", "Globex", "editor"),
+            ],
+          }),
+    );
+    render(<PickerHarness onPick={vi.fn()} />, { wrapper: Wrapper });
+
+    const adminRow = await screen.findByTestId("environment-team-env-admin");
+    const editorRow = screen.getByTestId("environment-team-env-editor");
+    expect(adminRow.textContent).toContain("You edit");
+    expect(editorRow.textContent).toContain("You edit");
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failed.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(adminRow.textContent).toContain("Read-only settings");
+    expect(editorRow.textContent).toContain("Read-only settings");
+    expect(adminRow.textContent).not.toContain("You edit");
+    expect(editorRow.textContent).not.toContain("You edit");
   });
 
   it("renders no team rows when the user is in no team", async () => {

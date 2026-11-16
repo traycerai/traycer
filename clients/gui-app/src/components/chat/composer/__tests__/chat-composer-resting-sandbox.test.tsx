@@ -358,7 +358,6 @@ const RESTING: RestingChatSandbox = {
     displayName: "e2e-sbx-p3",
   }),
   configuration: { kind: "personal" },
-  wakeChangesPayer: false,
 };
 
 const SEEDED_MODEL: Readonly<Record<string, string>> = {

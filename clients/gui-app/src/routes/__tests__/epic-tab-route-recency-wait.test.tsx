@@ -151,6 +151,10 @@ vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
 vi.mock("@/providers/team-removal-tile-closer", () => ({
   TeamRemovalTileCloser: () => null,
 }));
+// The claimed-computer notifier reads the query client the same way.
+vi.mock("@/providers/claimed-computer-notifier", () => ({
+  ClaimedComputerNotifier: () => null,
+}));
 // The window's claimed-computer cover reads the claims query; this harness
 // has no QueryClientProvider, so stub it like the shell pieces above.
 vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({

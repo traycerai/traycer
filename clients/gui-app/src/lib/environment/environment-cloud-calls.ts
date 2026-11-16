@@ -1,3 +1,7 @@
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
 import {
   EnvironmentCloudError,
   SETTINGS_REFUSED_MESSAGE,
@@ -77,15 +81,25 @@ export type EnvironmentCloudMethod =
   | "environment.secrets.rotation"
   | "environment.secrets.consent";
 
+/** Authn's value writes answer no host-side pending-upload arm. */
+export type EnvironmentCloudResponse<Method extends EnvironmentCloudMethod> =
+  ResponseOfMethod<HostRpcRegistry, Method> &
+    (Method extends "environment.secrets.create"
+      ? AuthnSecretsCreateResponse
+      : unknown) &
+    (Method extends "environment.secrets.replaceValue"
+      ? AuthnSecretsReplaceValueResponse
+      : unknown);
+
 type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
   cloud: EnvironmentCloud,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+) => Promise<EnvironmentCloudResponse<Method>>;
 
 /**
  * A secrets request names its environment for the app to send it to authn. A
- * null one means "the environment this computer runs", which only a host
- * knows, so such a request stays a host call and never reaches here.
+ * null one names none (a computer that runs none, or one not yet told apart),
+ * and is refused here, unsent, as a host with no environment refused it.
  */
 function namedEnvironment(environmentId: string | null): string {
   if (environmentId === null) {
@@ -194,7 +208,7 @@ export function environmentCloudHostError(
 export type EnvironmentCloudSend = <Method extends EnvironmentCloudMethod>(
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+) => Promise<EnvironmentCloudResponse<Method>>;
 
 /** One moved method, sent on the person's sign-in. */
 export async function callEnvironmentCloud<
@@ -203,7 +217,7 @@ export async function callEnvironmentCloud<
   cloud: EnvironmentCloud,
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+): Promise<EnvironmentCloudResponse<Method>> {
   const call: EnvironmentCloudCall<Method> = CALLS[method];
   try {
     return await call(cloud, request);

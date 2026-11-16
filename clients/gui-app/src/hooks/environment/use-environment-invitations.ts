@@ -1,31 +1,22 @@
-import { useMemo } from "react";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
+import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
   type QueryClient,
-  type QueryFilters,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentInvitationsAcceptRequest,
   EnvironmentInvitationsListResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import {
-  useHostQuery,
-  useHostQueryEntryHash,
-} from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { useHostBinding } from "@/lib/host";
 import {
   authQueryKeys,
   environmentMutationKeys,
@@ -33,51 +24,15 @@ import {
 } from "@/lib/query-keys";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 
-const EMPTY_PARAMS = {};
-
-/** Reads and Accept use authn without a serving host or either host method. */
-function useInvitationRoute(client: HostClient<HostRpcRegistry> | null) {
-  const servingClient = useMemo(
-    () => (client === null ? null : resolvePoolTierHostClient(client)),
-    [client],
-  );
-  const hostId = useReactiveHostReadiness(servingClient).hostId;
-  const lists = useHostMethodSupport(hostId, "environment.invitations.list");
-  const accepts = useHostMethodSupport(
-    hostId,
-    "environment.invitations.accept",
-  );
-  const direct = hostId === null || lists === false || accepts === false;
-  return {
-    servingClient,
-    direct,
-    served: !direct && lists === true && accepts === true,
-  };
-}
-
 /**
- * The signed-in person's pending invitations. Older serving tiers use the
- * same authn routes directly, so identity reads never need to accept a team
- * before its grant is shown. Both caches are partitioned by the viewer.
+ * The signed-in person's pending invitations, read from authn: an identity
+ * read never needs a serving host, so a team's grant shows before the person
+ * accepts it. The cache is partitioned by the viewer.
  */
-export function useEnvironmentInvitationsQuery(
-  client: HostClient<HostRpcRegistry> | null,
-): UseQueryResult<EnvironmentInvitationsListResponse> {
-  const route = useInvitationRoute(client);
+export function useEnvironmentInvitationsQuery(): UseQueryResult<EnvironmentInvitationsListResponse> {
   const viewerUserId = useCloudChatViewerId();
-  const binding = useHostBinding();
-  const auth = binding?.auth ?? null;
-  const rpc = useHostQuery<HostRpcRegistry, "environment.invitations.list">({
-    cacheKeyIdentity: [viewerUserId],
-    client: route.servingClient,
-    method: "environment.invitations.list",
-    params: EMPTY_PARAMS,
-    options: {
-      enabled: route.served && viewerUserId.length > 0,
-      refetchOnWindowFocus: false,
-    },
-  });
-  const direct = useQuery(
+  const auth = useHostBinding()?.auth ?? null;
+  return useQuery(
     queryOptions({
       queryKey: authQueryKeys.environmentInvitations(auth, viewerUserId),
       queryFn: ({ signal }) => {
@@ -85,50 +40,25 @@ export function useEnvironmentInvitationsQuery(
           throw new Error("Sign in to review team invitations.");
         return auth.listEnvironmentInvitations(signal);
       },
-      enabled: route.direct && auth !== null && viewerUserId.length > 0,
+      enabled: auth !== null && viewerUserId.length > 0,
       refetchOnWindowFocus: false,
     }),
   );
-  return route.direct ? direct : rpc;
 }
 
 /**
- * Every cache entry an invitations read can land in, on either route.
- *
- * Deliberately all of them and not the one being served: a caller that matched
- * only the route it happens to be served from would leave a read in flight on
- * the other the moment host readiness moved, and that read can still answer
- * into the cache afterwards.
- */
-function invitationReadFilters(): readonly QueryFilters[] {
-  return [
-    {
-      predicate: (query) =>
-        hostQueryKeys.matchesMethodOnAnyHost(
-          query.queryKey,
-          "environment.invitations.list",
-        ),
-    },
-    { queryKey: authQueryKeys.environmentInvitationsAll() },
-  ];
-}
-
-/**
- * The identity of the cache entry the serving route's read lands in — its
- * `queryHash`.
+ * The identity of the cache entry {@link useEnvironmentInvitationsQuery}
+ * renders from — its `queryHash`.
  *
  * This is what a caller needs to say "the read I am RENDERING has answered
- * since I asked", and it holds the evidence to ONE entry. The route is too
- * coarse for that: one route holds one entry per host scope and per identity it
- * has been read under, so a question certified while one entry served would
- * survive a move to another of that route's entries, and the stale list that
- * entry has cached would be read as an answer to a question it predates.
+ * since I asked", and it holds the evidence to ONE entry: there is one entry
+ * per sign-in and viewer, so a question certified while one entry served would
+ * otherwise survive a move to another, and the stale list that entry has
+ * cached would be read as an answer to a question it predates.
  *
- * Every branch below mirrors {@link useEnvironmentInvitationsQuery}: the same
- * route, the same viewer, the same auth, the same params, and the same
- * `route.direct` choice between the two. That is what makes this the identity
- * of the entry whose data that hook returns in the same render, rather than an
- * identity that merely tends to agree with it.
+ * It is built from the same auth and viewer as that hook, in the same render,
+ * which is what makes it the identity of the entry whose data the hook returns
+ * rather than one that merely tends to agree with it.
  *
  * Neither does the cache answer this, which is the subtler half. TanStack hands
  * a render the data of the key it was given and moves the observer to that key
@@ -136,34 +66,20 @@ function invitationReadFilters(): readonly QueryFilters[] {
  * still names the entry the app has just stopped reading — and that is the
  * render in which a caller judging the new data decides.
  */
-export function useEnvironmentInvitationsEntryHash(
-  client: HostClient<HostRpcRegistry> | null,
-): string {
-  const route = useInvitationRoute(client);
+export function useEnvironmentInvitationsEntryHash(): string {
   const viewerUserId = useCloudChatViewerId();
-  const binding = useHostBinding();
-  const auth = binding?.auth ?? null;
+  const auth = useHostBinding()?.auth ?? null;
   const queryClient = useQueryClient();
-  const rpc = useHostQueryEntryHash<
-    HostRpcRegistry,
-    "environment.invitations.list"
-  >({
-    client: route.servingClient,
-    method: "environment.invitations.list",
-    params: EMPTY_PARAMS,
-    cacheKeyIdentity: [viewerUserId],
-  });
-  // Hashed by the client, like the RPC route's above, so it is spelled the way
-  // the cache files it — the app replaces TanStack's `queryKeyHashFn`.
-  const direct = queryClient.defaultQueryOptions({
+  // Hashed by the client so it is spelled the way the cache files it — the app
+  // replaces TanStack's `queryKeyHashFn`.
+  return queryClient.defaultQueryOptions({
     queryKey: authQueryKeys.environmentInvitations(auth, viewerUserId),
   }).queryHash;
-  return route.direct ? direct : rpc;
 }
 
 /**
- * Stops every invitations read in flight, on both routes, so the
- * caller's own request is the next one made.
+ * Stops every invitations read in flight, under every sign-in, so the caller's
+ * own request is the next one made.
  *
  * A caller that has to know whether an invitation exists *now* needs that: a
  * read already in flight is joined rather than replaced — TanStack cancels for
@@ -191,62 +107,70 @@ export function useEnvironmentInvitationsEntryHash(
 export function cancelEnvironmentInvitationReads(
   queryClient: QueryClient,
 ): void {
-  for (const filters of invitationReadFilters())
-    void queryClient.cancelQueries(filters);
+  void queryClient.cancelQueries({
+    queryKey: authQueryKeys.environmentInvitationsAll(),
+  });
 }
 
 /** Accepts one invitation; the team then lists among the person's environments. */
-export function useEnvironmentInvitationAcceptMutation(
-  client: HostClient<HostRpcRegistry> | null,
-) {
-  const route = useInvitationRoute(client);
+export function useEnvironmentInvitationAcceptMutation() {
   const binding = useHostBinding();
   const auth = binding?.auth ?? null;
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
-  const captureAdmission = () => ({
-    context: auth?.getRequestContextProvider().current() ?? null,
-    localHostId: readLocalHostIdSnapshot(),
-  });
-  const noteMembershipChange = (captured: {
-    readonly context: RequestContext | null;
+  const runnerHost = useRunnerHost();
+  // Only the sign-in that accepted: an account switched while the call was
+  // out tells the new account nothing.
+  const acceptedHere = (context: RequestContext | null): boolean =>
+    context !== null &&
+    !context.abortSignal.aborted &&
+    auth?.getRequestContextProvider().current() === context;
+  // The team's computers join the person's host list now, not at the next
+  // picker open or poll.
+  const afterAccepted = (captured: {
     readonly localHostId: string | null;
   }): void => {
-    if (
-      captured.localHostId === null ||
-      captured.context === null ||
-      captured.context.abortSignal.aborted ||
-      auth?.getRequestContextProvider().current() !== captured.context
-    )
-      return;
-    noteHostMembershipChanged(captured.localHostId);
+    if (captured.localHostId !== null)
+      noteHostMembershipChanged(captured.localHostId);
+    void queryClient.invalidateQueries({
+      queryKey: authQueryKeys.registeredHostsAll(),
+    });
+    void binding?.directory.refresh();
+    requestFleetRefresh(runnerHost);
   };
-  const rpc = useHostScopedMutationForClient(route.servingClient, {
-    method: "environment.invitations.accept",
-    mutationKey: environmentMutationKeys.invitationsAccept(),
-    errorMessage: "Couldn't accept this invitation. Try again.",
-    invalidateMethods: ["environment.invitations.list", "environment.list"],
-    captureContext: captureAdmission,
-    onSuccess: (answer, _request, _hostId, captured) => {
-      if (answer.outcome === "accepted") noteMembershipChange(captured);
-    },
-  });
-  const direct = useMutation({
+  return useMutation({
     mutationKey: environmentMutationKeys.invitationsAccept(),
     mutationFn: (request: EnvironmentInvitationsAcceptRequest) => {
       if (auth === null) throw new Error("Sign in to accept this invitation.");
       return auth.acceptEnvironmentInvitation(request.environmentId);
     },
-    onMutate: () => ({ auth, viewerUserId, ...captureAdmission() }),
+    onMutate: () => ({
+      auth,
+      viewerUserId,
+      context: auth?.getRequestContextProvider().current() ?? null,
+      localHostId: readLocalHostIdSnapshot(),
+    }),
     onSuccess: async (answer, _request, captured) => {
-      if (answer.outcome === "accepted") noteMembershipChange(captured);
+      const accepted =
+        answer.outcome === "accepted" && acceptedHere(captured.context);
+      if (accepted) afterAccepted(captured);
+      const invitations = queryClient.invalidateQueries({
+        queryKey: authQueryKeys.environmentInvitations(
+          captured.auth,
+          captured.viewerUserId,
+        ),
+      });
+      // The list joins each team's row to the account's teams, and a new set
+      // of teams reads it again by itself. The account is read again first,
+      // so the team just joined is among them. The list is still invalidated
+      // after: an accept that changes no team, or a read that fails, still
+      // brings the new row.
+      if (accepted && captured.auth !== null)
+        await captured.auth
+          .revalidateCurrentContextAfterInvalidation()
+          .catch(() => null);
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: authQueryKeys.environmentInvitations(
-            captured.auth,
-            captured.viewerUserId,
-          ),
-        }),
+        invitations,
         queryClient.invalidateQueries({
           predicate: (query) =>
             hostQueryKeys.matchesMethodOnAnyHost(
@@ -259,5 +183,4 @@ export function useEnvironmentInvitationAcceptMutation(
     onError: (error) =>
       toastFromAuthError(error, "Couldn't accept this invitation. Try again."),
   });
-  return route.direct ? direct : rpc;
 }

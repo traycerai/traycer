@@ -1,4 +1,5 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -51,6 +52,7 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachEnvironment,
@@ -735,6 +737,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
+  const takeOperation = useEnvironmentCloud();
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -914,6 +917,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      // The sign-in the attachment goes out on, taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
 
@@ -944,9 +949,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 current: true,
                 owns: true,
                 epicConfirmed: true,
-                accountActive:
-                  (useAuthStore.getState().profile?.userId ?? null) ===
-                  ownerUserId,
+                accountActive: pressedSignInCurrent(operation, ownerUserId),
                 stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
               },
             );
@@ -984,7 +987,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             return;
           }
           attachEnvironment.mutate(
-            { epicId, teamId: stagedTeamId },
+            { epicId, teamId: stagedTeamId, operation },
             {
               onSuccess: hand,
               onError: (error) => {
@@ -1008,6 +1011,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagedSignInCheck,
       tabHostTeamId,
       tabId,
+      takeOperation,
       toolbarStore,
       trimmedTitle,
     ],
@@ -1015,6 +1019,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
+    // The sign-in an attachment goes out on, taken at the press.
+    const operation = takeOperation === null ? null : takeOperation();
     // A staged sandbox: the fork is handed to the task, which creates the
     // sandbox, waits for the agent there and forks onto it, through a reload.
     const staged = readStagedSandbox(forkSurfaceKey);
@@ -1079,8 +1085,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           current: true,
           owns: true,
           epicConfirmed: true,
-          accountActive:
-            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          accountActive: pressedSignInCurrent(operation, submittedBy),
           stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
         },
       );
@@ -1102,10 +1107,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         },
         {
           onSuccess: (result) => {
-            if (
-              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
-            )
-              return;
+            if (!pressedSignInCurrent(operation, submittedBy)) return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,
@@ -1150,7 +1152,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       return;
     }
     attachEnvironment.mutate(
-      { epicId, teamId: attachTeamId },
+      { epicId, teamId: attachTeamId, operation },
       {
         onSuccess: createForkChat,
         // A host that predates the attachment creates as it always has.
@@ -1170,6 +1172,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     forkSurfaceKey,
     navigateNestedFocus,
     submitStagedFork,
+    takeOperation,
     sandboxAgentGate.notice,
     onOpenChange,
     seedIntent,

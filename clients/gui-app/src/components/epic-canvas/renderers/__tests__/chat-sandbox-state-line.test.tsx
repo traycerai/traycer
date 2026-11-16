@@ -58,6 +58,11 @@ vi.mock(
       configurations: mocks.configurations,
       teamEnvironmentIds: new Set<string>(),
       complete: false,
+      // What the real hook reads from the cached environment list.
+      personalEnvironmentId:
+        mocks.environments?.environments.find(
+          (environment) => environment.ownerKind === "user",
+        )?.environmentId ?? null,
     }),
   }),
 );

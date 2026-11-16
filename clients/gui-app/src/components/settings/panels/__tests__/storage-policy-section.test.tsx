@@ -121,6 +121,7 @@ const OTHER_TEAM_DESCRIPTOR: EnvironmentDescriptorV11 = {
 
 const host = {
   teamRole: "admin" as EnvironmentDescriptorV11["effectiveRole"],
+  environmentListFails: false,
   items: [] as EnvironmentConfigurationItem[],
   teamItems: [] as EnvironmentConfigurationItem[],
   readFails: false,
@@ -170,13 +171,17 @@ function renderSection(ui: ReactNode): void {
     }
   >();
   harness = mountTeamPage(poolSource("owner"), {
-    "environment.list": () => ({
-      environments: [
-        descriptor("owner"),
-        { ...TEAM_DESCRIPTOR, effectiveRole: host.teamRole },
-        OTHER_TEAM_DESCRIPTOR,
-      ],
-    }),
+    "environment.list": () => {
+      if (host.environmentListFails)
+        throw new Error("Could not read environment list");
+      return {
+        environments: [
+          descriptor("owner"),
+          { ...TEAM_DESCRIPTOR, effectiveRole: host.teamRole },
+          OTHER_TEAM_DESCRIPTOR,
+        ],
+      };
+    },
     "environment.configuration.items": (params) => {
       const environmentId = params.environmentId;
       let batch = itemReads.get(environmentId);
@@ -336,6 +341,7 @@ describe("<StoragePolicySection />", () => {
     resetNegotiatedManifests();
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [PUT]);
     host.teamRole = "admin";
+    host.environmentListFails = false;
     host.items = [];
     host.teamItems = [];
     host.readFails = false;
@@ -1486,6 +1492,37 @@ describe("<StoragePolicySection />", () => {
     expect(snapshotsSelect().textContent).toContain("After 30 days");
     await userEvent.click(control);
     expect(harness?.paramsOf(PUT)).toEqual([]);
+  });
+
+  it("disables storage policy controls after the cached Admin role read fails", async () => {
+    host.teamRole = "admin";
+    host.teamItems = [
+      storageItem({ chats: true, idleTaskDays: 14, archivedChatHours: 24 }, 3),
+    ];
+    renderSection(
+      <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
+    );
+
+    await settled();
+    const control = await chatsSwitch();
+    const listQuery = harness?.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (harness === null || listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    host.environmentListFails = true;
+    await act(async () => {
+      await harness?.queryClient.invalidateQueries({
+        queryKey: listQuery.queryKey,
+      });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(control.hasAttribute("disabled")).toBe(true);
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
 
   it.each(["admin", "editor"] as const)(

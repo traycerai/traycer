@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { revertShellArgs } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config shell revert-args`. Restores a remembered shell's
 // flags to its family default by clearing the entry's deviation (`args: null`)
@@ -22,7 +23,15 @@ export function buildConfigShellRevertArgsCommand(args: {
         exitCode: 1,
       });
     }
-    const next = await revertShellArgs(args.path);
+    const response = await writeConfigViaRunningHost(
+      "config.shell.revertArgs",
+      {
+        path: args.path,
+        executableWriteGrant: null,
+        selection: { kind: "not_stated" },
+      },
+    );
+    const next = response ?? (await revertShellArgs(args.path));
     return {
       data: { path: next.path, reverted: next.reverted },
       human: ctx.runtime.json

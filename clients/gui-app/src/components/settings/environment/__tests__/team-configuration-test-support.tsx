@@ -26,9 +26,9 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import {
   ConfigurationSourceContext,
+  configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
@@ -411,13 +411,24 @@ export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpc
 export function poolSource(
   effectiveRole: "owner" | "admin" | "editor" | "viewer",
 ): ConfigurationSource {
+  const descriptor: EnvironmentDescriptorV11 = {
+    environmentId: "env-a",
+    ownerKind: effectiveRole === "owner" ? "user" : "organization",
+    ownerId: effectiveRole === "owner" ? "user-me" : "team-a",
+    roomId: "room-a",
+    label: effectiveRole === "owner" ? "Personal" : "Acme",
+    effectiveRole,
+    kind: effectiveRole === "owner" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: effectiveRole === "owner" ? null : "handle-a",
+  };
   return {
     kind: "pool",
     configuration: "team",
     environmentId: "env-a",
     roomId: "room-a",
     providerHandle: "handle-a",
-    effectiveRole: grantedEnvironmentRole(effectiveRole),
+    effectiveRole: configurationRoleOf(descriptor),
   };
 }
 
@@ -1092,6 +1103,7 @@ function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
       requestId: () => `team-auth-${++requestId}`,
       handlers: {},
     }),
+    singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -1495,6 +1507,7 @@ function buildLegacyTeamPage(
     runnerHost,
     registry: hostRpcRegistry,
     messenger,
+    singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -1649,6 +1662,7 @@ function assembleTeamPage(
     runnerHost: authHarness.runnerHost,
     registry: hostRpcRegistry,
     messenger,
+    singleAttemptMessenger: null,
     requestContextProvider: authHarness.auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(queryClient),

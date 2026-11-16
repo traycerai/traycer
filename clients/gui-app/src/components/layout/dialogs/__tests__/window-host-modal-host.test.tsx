@@ -524,6 +524,7 @@ async function createModalHostRuntimeFixture(
       requestId: () => `modal-host-${++requestSeq}`,
       handlers: {},
     }),
+    singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(

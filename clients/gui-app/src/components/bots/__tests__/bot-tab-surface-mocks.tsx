@@ -25,6 +25,7 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { EnvironmentEffectiveRole } from "@traycer/protocol/host/environment/contracts";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 export type OpenResult =
@@ -177,6 +178,7 @@ export const mocks = {
       label: string;
       ownerKind: "organization" | "user";
       providerHandle: string | null;
+      effectiveRole?: EnvironmentEffectiveRole;
     }>,
   },
 };

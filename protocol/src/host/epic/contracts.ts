@@ -262,7 +262,9 @@ import {
 } from "@traycer/protocol/host/epic/artifact-attachment";
 import {
   attachEnvironmentRequestSchema,
+  attachEnvironmentRequestSchemaV20,
   attachEnvironmentResponseSchema,
+  attachEnvironmentResponseSchemaV20,
 } from "@traycer/protocol/host/epic/environment-attachment";
 import {
   localHistoryReadRequestSchema,
@@ -1322,6 +1324,42 @@ export const epicAttachEnvironmentV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: attachEnvironmentRequestSchema,
   responseSchema: attachEnvironmentResponseSchema,
+});
+
+/**
+ * `epic.attachEnvironment@2.0`, the prepare without the cloud attachment;
+ * `@1.0` stays registered beside it. Not an agent capability.
+ */
+export const epicAttachEnvironmentV20 = defineRpcContract({
+  method: "epic.attachEnvironment",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: attachEnvironmentRequestSchemaV20,
+  responseSchema: attachEnvironmentResponseSchemaV20,
+});
+
+/**
+ * Required by the registry for a new major, and never run: `@2.0` has no
+ * downgrade to `@1.0`, so a host refuses a `@1.0` caller before upgrading
+ * anything, and an app meets a `@1.0`-only host as unable to send it.
+ * Neither side can be carried honestly: `@1.0` asks for the attachment and
+ * `@2.0` never makes it, and `@2.0`'s prepare is not `@1.0`'s attached.
+ */
+export const epicAttachEnvironmentUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicAttachEnvironmentV10,
+  typeof epicAttachEnvironmentV20
+>({
+  from: epicAttachEnvironmentV10.schemaVersion,
+  to: epicAttachEnvironmentV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 requests cannot be upgraded to v2.0: v2.0 attaches nothing",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 responses cannot be upgraded to v2.0: v1.0's attached is not v2.0's prepared",
+    );
+  },
 });
 
 /**

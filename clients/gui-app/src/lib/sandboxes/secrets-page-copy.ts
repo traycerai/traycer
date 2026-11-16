@@ -19,8 +19,6 @@ export function teamSecretsDescription(name: string): string {
 
 export const SECRETS_ADD_LABEL = "Add a secret";
 
-export const SECRETS_NEED_UPDATED_HOST = "These secrets need an updated host.";
-
 /** In place of the list when Personal's secrets could not be read. */
 export const PERSONAL_SECRETS_READ_FAILED = "Couldn't read Personal's secrets.";
 
@@ -93,9 +91,6 @@ export function secretCustodySentence(personal: boolean, name: string): string {
 
 export const SECRET_REPLACE_STALE =
   "Changed somewhere else just now. Look again before you replace it.";
-
-export const SECRET_SAVED_OFFLINE =
-  "Saved. It reaches your account when this computer is connected.";
 
 /** If a secret leaked: the order that closes it fastest. */
 export const SECRET_RECOVERY_TITLE = "If this secret leaked";

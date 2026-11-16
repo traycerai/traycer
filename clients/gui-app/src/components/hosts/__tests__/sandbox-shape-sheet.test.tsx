@@ -10,13 +10,8 @@ import type {
   StageSize,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
@@ -123,6 +118,19 @@ vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
 }));
+// Each team's own balance in millicredits, as the sheet's check reads it: a
+// team not named here is unknown, which is never short.
+const teamBalancesMc = vi.hoisted(() => new Map<string, number>());
+vi.mock(
+  "@/hooks/sandboxes/use-team-bundle-balances",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-team-bundle-balances")
+    >()),
+    useTeamBundleBalances: () => (teamId: string) =>
+      teamBalancesMc.get(teamId) ?? null,
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
 }));
@@ -136,10 +144,11 @@ afterEach(() => {
   readinessState = SETTLED;
   readinessAsked = [];
   authUser = null;
+  teamBalancesMc.clear();
 });
 
 function renderSheet(onUseShape: Mock) {
-  return render(
+  return renderWithQueryClient(
     <SandboxShapeSheet
       open
       onOpenChange={() => undefined}
@@ -273,7 +282,7 @@ describe("<SandboxShapeSheet />", () => {
   });
 
   it("says a cleared resting period keeps the sandbox, not the period it opened with", () => {
-    render(
+    renderWithQueryClient(
       <SandboxShapeSheet
         open
         onOpenChange={() => undefined}
@@ -315,7 +324,7 @@ describe("<SandboxShapeSheet />", () => {
       { kind: "personal" },
       { kind: "team", teamId: "team-1", teamName: "Acme" },
     ] as const) {
-      render(
+      renderWithQueryClient(
         <SandboxShapeSheet
           open
           onOpenChange={() => undefined}
@@ -406,7 +415,7 @@ describe("<SandboxShapeSheet />", () => {
 
   it("opens on the configuration's defaults, shape and periods, when the person has no pick", () => {
     catalogueInUse = catalogueWithShapes();
-    render(
+    renderWithQueryClient(
       <SandboxShapeSheet
         open
         onOpenChange={() => undefined}
@@ -473,7 +482,7 @@ describe("<SandboxShapeSheet />", () => {
       ],
     };
     const onUseShape = vi.fn();
-    render(
+    renderWithQueryClient(
       <SandboxShapeSheet
         open
         onOpenChange={() => undefined}
@@ -659,7 +668,7 @@ describe("<SandboxShapeSheet />", () => {
           },
         ],
       };
-      render(
+      renderWithQueryClient(
         <SandboxShapeSheet
           open
           onOpenChange={() => undefined}
@@ -809,6 +818,7 @@ describe("<SandboxShapeSheet />", () => {
 
     it("asks for the team's credits at a short team balance", () => {
       withPersonalCredits(0);
+      teamBalancesMc.set("team-1", 0);
       authUser = {
         ...userWith(
           userSubscription({
@@ -821,7 +831,7 @@ describe("<SandboxShapeSheet />", () => {
           [teamSubscription(0)],
         ),
       };
-      render(
+      renderWithQueryClient(
         <SandboxShapeSheet
           open
           onOpenChange={() => undefined}
@@ -841,7 +851,7 @@ describe("<SandboxShapeSheet />", () => {
       expect(
         screen.getByTestId("sandbox-shape-sheet-price").textContent,
       ).toContain(
-        "Your acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+        "acme's credits are short $0.21. $0.21 more starts this sandbox for an hour.",
       );
     });
 

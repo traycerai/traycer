@@ -1,6 +1,7 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setEnvOverride } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config env set --key KEY --value VAL`. Sets a
 // host-process env override (harness-scoped env now lives per-provider in
@@ -26,7 +27,12 @@ export function buildConfigEnvSetCommand(args: ConfigEnvSetArgs): CommandFn {
         exitCode: 1,
       });
     }
-    await setEnvOverride(args.key, args.value);
+    const response = await writeConfigViaRunningHost("config.env.set", {
+      key: args.key,
+      value: args.value,
+      executableWriteGrant: null,
+    });
+    if (response === null) await setEnvOverride(args.key, args.value);
     return {
       data: { key: args.key, value: args.value },
       human: ctx.runtime.json ? null : `${args.key}=${args.value}`,

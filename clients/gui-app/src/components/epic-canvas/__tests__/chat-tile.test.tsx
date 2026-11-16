@@ -208,9 +208,15 @@ const MOCK_HOST_DIRECTORY = {
 // What the task says of the chat's host, and the viewer's sandbox list, when
 // a case sets them; otherwise the real reads answer.
 const taskSandboxTestState = vi.hoisted(
-  (): { task: TaskSandboxHost | null; sandboxes: SandboxSummary[] | null } => ({
+  (): {
+    task: TaskSandboxHost | null;
+    sandboxes: SandboxSummary[] | null;
+    /** The id of the person's own environment, once their list names it. */
+    personalEnvironmentId: string | null;
+  } => ({
     task: null,
     sandboxes: null,
+    personalEnvironmentId: null,
   }),
 );
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
@@ -241,6 +247,9 @@ vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
   };
 });
 
+/** The environment id a resting sandbox row carries when the cases mean it is the person's own. */
+const PERSONAL_SANDBOX_ENVIRONMENT = "env-personal";
+
 const directoryListTestState = vi.hoisted(() => ({
   entries: null as readonly HostDirectoryEntry[] | null,
 }));
@@ -265,7 +274,17 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
-    data: undefined,
+    data:
+      taskSandboxTestState.personalEnvironmentId === null
+        ? undefined
+        : {
+            environments: [
+              {
+                environmentId: taskSandboxTestState.personalEnvironmentId,
+                ownerKind: "user",
+              },
+            ],
+          },
     error: null,
     isError: false,
     refetch: () => Promise.resolve(),
@@ -717,7 +736,6 @@ const RESTING_COPY_SANDBOX = {
     displayName: "resting-copy",
   }),
   configuration: { kind: "personal" as const },
-  wakeChangesPayer: false,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -2102,6 +2120,7 @@ describe("<ChatTile />", () => {
     directoryListTestState.entries = null;
     taskSandboxTestState.task = null;
     taskSandboxTestState.sandboxes = null;
+    taskSandboxTestState.personalEnvironmentId = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -2862,8 +2881,13 @@ describe("<ChatTile />", () => {
     async (role) => {
       chatHarness.teardown();
       chatHarness.install(role, []);
+      taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
       taskSandboxTestState.sandboxes = [
-        sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "resting-box",
+          environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+        }),
       ];
       sandboxCatalogueTestState.catalogue = {
         providers: [],
@@ -2876,6 +2900,7 @@ describe("<ChatTile />", () => {
         sandboxSummaryFixture({
           hostId: HOST_ID,
           displayName: "resting-box",
+          environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
           state: "suspended",
         }),
       ];
@@ -2909,8 +2934,13 @@ describe("<ChatTile />", () => {
   );
 
   it("keeps an unconfirmed send and its delivery check beside a resting sandbox footer", async () => {
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+      }),
     ];
     sandboxCatalogueTestState.catalogue = {
       providers: [],
@@ -2938,6 +2968,7 @@ describe("<ChatTile />", () => {
       sandboxSummaryFixture({
         hostId: HOST_ID,
         displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
         state: "suspended",
       }),
     ];
@@ -2962,6 +2993,7 @@ describe("<ChatTile />", () => {
   });
 
   it("lets a sandbox state explain a dead lease before the first snapshot, even while the directory says reachable", async () => {
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
     directoryListTestState.entries = [
       {
         hostId: HOST_ID,
@@ -2973,7 +3005,11 @@ describe("<ChatTile />", () => {
       },
     ];
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "stopping-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "stopping-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+      }),
     ];
     useSelectionAuthorityStore.setState({
       attached: true,
@@ -2996,6 +3032,7 @@ describe("<ChatTile />", () => {
       sandboxSummaryFixture({
         hostId: HOST_ID,
         displayName: "stopping-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
         state: "stopped",
       }),
     ];
@@ -3013,6 +3050,34 @@ describe("<ChatTile />", () => {
     });
     expect(document.body.textContent).not.toContain("is offline");
     expect(screen.queryByText(/isn't available/)).toBeNull();
+  });
+
+  it("keeps a resting footer to the state alone while the person's own environment is not known", async () => {
+    // The same suspended row as the owner's case above, but nothing says whose
+    // environment it is (the environment list names none), so the footer
+    // does not tell the next message's remedy as the viewer's.
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+        state: "suspended",
+      }),
+    ];
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("resting-box is suspended");
+    });
+    expect(document.body.textContent).not.toContain(
+      "your next message resumes it",
+    );
   });
 
   it("keeps an ordinary host's reconnect status when the sandbox carrier is absent", async () => {

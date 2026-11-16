@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
+import {
+  useSecretsEnvironment,
+  useSecretsRead,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   secretRotationSettled,
@@ -26,10 +28,9 @@ export function SecretRotationStatus(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly secretId: string;
 }): ReactNode {
-  const { environmentId, resolved } = useAddressedEnvironment();
+  const { environmentId, resolved } = useSecretsEnvironment(props.client);
   const [moving, setMoving] = useState(true);
   const rotation = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.rotation",
     params: { secretId: props.secretId, environmentId },
     enabled: resolved,

@@ -215,20 +215,65 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     expect(hostIdsOf(harness, "environment.members")).toHaveLength(0);
   });
 
+  it("hides the sandbox defaults form when the cached Editor role read fails", async () => {
+    let roleReadFails = false;
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.list": () => {
+        if (roleReadFails) throw new Error("Could not read environment list");
+        return {
+          environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "editor" }],
+        };
+      },
+      "environment.configuration.items": () => ({
+        items: [SANDBOX_DEFAULTS_ITEM],
+      }),
+      "environment.members": () => MEMBERS_RESPONSE,
+    });
+    render(
+      <SandboxDefaultsSection
+        configuration={{
+          kind: "team",
+          teamId: "team-1",
+          teamName: "Acme",
+          environmentId: "env-acme",
+        }}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect(await screen.findByTestId("sandboxes-defaults-form")).toBeTruthy();
+    const listQuery = harness.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+    roleReadFails = true;
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        queryKey: listQuery.queryKey,
+      });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
+  });
+
   it("shows roster loading until the members read answers", async () => {
     let finish: (value: EnvironmentMembersResponseV12) => void = () =>
       undefined;
     const response = new Promise<EnvironmentMembersResponseV12>((resolve) => {
       finish = resolve;
     });
+    // The environment list reads the roster's first page for the viewer's
+    // role, and the page reads the roster only once that row is there: the
+    // first read answers the list, and the one held is the page's own.
     let reads = 0;
     mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => {
         reads += 1;
-        // The first read is the environment list's join of the viewer's role,
-        // which the section waits for; the roster's own read is the next, and
-        // is the one held.
         return reads === 1 ? MEMBERS_RESPONSE : response;
       },
     );

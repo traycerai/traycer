@@ -54,6 +54,15 @@ import {
   SETUP_BOT_ID,
   TAB_HOST,
 } from "./bot-tab-surface-harness";
+import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import {
+  ACME_TEAM,
+  serveEnvironmentList,
+} from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
+import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+
+const billingRoleRead = vi.hoisted(() => ({ viaTransport: false }));
+const environmentListRequests: number[] = [];
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -130,7 +139,21 @@ vi.mock(
   "@/hooks/bots/use-bot-list-changed-subscription",
   () => botListChangedMock,
 );
-vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
+vi.mock("@/hooks/bots/use-environment-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/bots/use-environment-list-query")
+    >();
+  return {
+    ...environmentListMock,
+    useEnvironmentListQuery: (
+      enabled: Parameters<typeof actual.useEnvironmentListQuery>[0],
+    ) =>
+      billingRoleRead.viaTransport
+        ? actual.useEnvironmentListQuery(enabled)
+        : environmentListMock.useEnvironmentListQuery(),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-mutations", () => botMutationsMock);
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
 // The setup channel draws none of these, so they are drawn as nothing.
@@ -169,6 +192,55 @@ function surfaceFor(botId: string | null): ReactNode {
   );
 }
 
+function teamSetupForBillingRole(
+  role: "admin" | "editor" | "viewer",
+): ReactNode {
+  billingRoleRead.viaTransport = true;
+  // The surface reads the scripted binding as the host binding, so the list
+  // is served on its auth.
+  if (mocks.binding !== null) {
+    serveEnvironmentList(mocks.binding.auth, {
+      answer: { kind: "ready", role },
+      environmentId: "env-new",
+      team: ACME_TEAM,
+      onRead: () => {
+        environmentListRequests.push(1);
+      },
+    });
+  }
+  return (
+    <SandboxBillingRuntime
+      answer={{ kind: "ready", role }}
+      environmentId="env-new"
+      hostId="billing-host"
+      queryClient={queryClient}
+      onBinding={null}
+      onEnvironmentListRead={() => {
+        environmentListRequests.push(1);
+      }}
+    >
+      <StrictMode>
+        <TeamSetupChannel
+          setup={{
+            environmentId: "env-new",
+            teamName: "Newco",
+            botId: SETUP_BOT_ID,
+            title: "Newco",
+          }}
+          client={null}
+          hostId="billing-host"
+          level2={null}
+          threadsView={{
+            shown: false,
+            onShow: () => undefined,
+            onLeave: () => undefined,
+          }}
+        />
+      </StrictMode>
+    </SandboxBillingRuntime>
+  );
+}
+
 beforeEach(() => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -178,6 +250,8 @@ beforeEach(() => {
 
 afterEach(() => {
   endBotTabSurfaceCase(queryClient);
+  billingRoleRead.viaTransport = false;
+  environmentListRequests.length = 0;
 });
 
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
@@ -215,7 +289,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).toBeTruthy();
       expect(
         screen.getByText(
-          "Run this on the computer, then sign in as a team member.",
+          "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.",
         ),
       ).toBeTruthy();
       expect(
@@ -704,9 +778,13 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       const user = userEvent.setup();
       auth().createSandbox.mockResolvedValue({
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        reason: "denied",
+        shortfallMc: 120,
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
         creditSource: "team",
       });
-      render(surfaceFor(SETUP_BOT_ID));
+      render(teamSetupForBillingRole("editor"));
 
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", false),
@@ -714,10 +792,35 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await user.click(enableButton());
 
       const alert = await within(cloudOption()).findByRole("alert");
+      expect(environmentListRequests.length).toBeGreaterThan(0);
       expect(alert.textContent).toBe(
         "The team's credits don't cover an hour of this sandbox.",
       );
       expect(enableButton()).toHaveProperty("disabled", false);
+    });
+
+    it("keeps the add-credit amount on a team Admin's refusal", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        reason: "denied",
+        shortfallMc: 120,
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
+        creditSource: "team",
+      });
+      render(teamSetupForBillingRole("admin"));
+
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+
+      const alert = await within(cloudOption()).findByRole("alert");
+      expect(environmentListRequests.length).toBeGreaterThan(0);
+      expect(alert.textContent).toBe(
+        "The team's credits don't cover an hour of this sandbox. Add $0.12 and try again.",
+      );
     });
   });
 });

@@ -7,18 +7,16 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
+import {
+  useSecretsEnvironment,
+  useSecretsRead,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import { useSecretVersionActions } from "@/components/settings/secrets/use-secret-version-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  SECRET_SCOPE_LINE,
-  SECRETS_NEED_UPDATED_HOST,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * A secret's versions: each with when it was made,
@@ -38,12 +36,9 @@ function refusalText(operation: "undo" | "destroy", code: string): string {
   return secretChangeRefusalLine(operation, code) ?? "That didn't go through.";
 }
 
-/** A failed Undo or Destroy: an old host by name, else the host's words. */
+/** A failed Undo or Destroy, in the words of its refusal. */
 function errorNote(error: Error | null): string | null {
-  if (error === null) return null;
-  return error instanceof HostMethodVersionUnsatisfiedError
-    ? SECRETS_NEED_UPDATED_HOST
-    : error.message;
+  return error === null ? null : error.message;
 }
 
 function versionActionNote(
@@ -195,9 +190,8 @@ export function SecretVersionsList(props: {
   /** Undo made another version current: the list's row re-reads too. */
   readonly onChanged: () => void;
 }): ReactNode {
-  const { environmentId, resolved } = useAddressedEnvironment();
+  const { environmentId, resolved } = useSecretsEnvironment(props.client);
   const versions = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: props.secret.secretId, environmentId },
     enabled: resolved,

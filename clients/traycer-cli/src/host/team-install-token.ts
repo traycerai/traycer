@@ -88,6 +88,36 @@ export interface PreparedTeamTokenInstall {
   readonly tokenHash: string;
 }
 
+async function clearMatchingTeamInstallToken(
+  environment: Environment,
+  tokenHash: string,
+): Promise<void> {
+  const path = hostTeamInstallTokenPath(environment);
+  const lock = await acquireInstallLock(
+    `${path}.lock`,
+    "team-install-token-clear",
+  );
+  try {
+    let staged: unknown;
+    try {
+      staged = JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      return;
+    }
+    if (
+      staged !== null &&
+      typeof staged === "object" &&
+      "token" in staged &&
+      typeof staged.token === "string" &&
+      createHash("sha256").update(staged.token).digest("hex") === tokenHash
+    ) {
+      await rm(path, { force: true });
+    }
+  } finally {
+    await lock.release();
+  }
+}
+
 /**
  * Serialize staging through the caller's terminal result. The separate lock
  * leaves the host free to acquire the short token-file lock and write its receipt.
@@ -125,18 +155,50 @@ export async function withTeamTokenInstall<T>(
       exitCode: 1,
     });
   }
+  return withStagedTeamToken(environment, token, environmentId, run);
+}
+
+/**
+ * Stages a token this command minted on the person's sign-in, bound to the
+ * environment id authn resolved the slug to, so the receipt is checked
+ * against the team the host actually enrols with.
+ */
+export async function withStagedTeamToken<T>(
+  environment: Environment,
+  token: string,
+  environmentId: string,
+  run: (prepared: PreparedTeamTokenInstall) => Promise<T>,
+): Promise<T> {
   const operationLock = await acquireInstallLock(
     `${hostTeamInstallTokenPath(environment)}.operation.lock`,
     "team-install-operation",
   );
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  let staged = false;
+  let succeeded = false;
   try {
     await stageTeamInstallToken(environment, token, environmentId);
-    return await run({
+    staged = true;
+    const result = await run({
       environmentId,
-      tokenHash: createHash("sha256").update(token).digest("hex"),
+      tokenHash,
     });
+    succeeded = !(
+      result !== null &&
+      typeof result === "object" &&
+      "exitCode" in result &&
+      typeof result.exitCode === "number" &&
+      result.exitCode !== 0
+    );
+    return result;
   } finally {
-    await operationLock.release();
+    try {
+      if (staged && !succeeded) {
+        await clearMatchingTeamInstallToken(environment, tokenHash);
+      }
+    } finally {
+      await operationLock.release();
+    }
   }
 }
 

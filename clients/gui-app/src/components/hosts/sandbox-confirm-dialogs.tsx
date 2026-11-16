@@ -57,7 +57,6 @@ import {
   configurationCopy,
   formatSandboxDate,
   sandboxIdleRefusal,
-  sandboxMemberName,
   sandboxPeriodDraft,
   sandboxPeriodMinutes,
   sandboxRestingRefusal,
@@ -79,6 +78,7 @@ import {
   keptByLine,
   paidByLine,
   startedByLine,
+  teamPossessive,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -98,14 +98,14 @@ interface SandboxDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-/** The configuration a dialog speaks for; Personal before the teams read. */
+/**
+ * The configuration a dialog speaks for, or `null` while the app does not
+ * know whose sandbox it is: the dialog then says nothing about whose credits.
+ */
 function useDialogConfiguration(
   sandbox: SandboxSummary,
-): SandboxPageConfiguration {
-  const { configurations } = useSandboxConfigurations();
-  return (
-    sandboxConfigurationOf(sandbox, configurations) ?? { kind: "personal" }
-  );
+): SandboxPageConfiguration | null {
+  return sandboxConfigurationOf(sandbox, useSandboxConfigurations());
 }
 
 function useViewerUserId(): string | null {
@@ -126,18 +126,17 @@ function useDialogSessions(
   ).report;
 }
 
-/** `your Acme credits` / `Priya's Acme credits` / `your credits`. */
+/**
+ * `your credits` / `Acme's credits`: a team's sandbox is on the team's.
+ * `null` where whose sandbox it is is not known.
+ */
 function storageCredits(
-  sandbox: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string {
-  if (configuration.kind === "personal") return "your credits";
-  const payer =
-    sandbox.wakePayer === null
-      ? "you"
-      : sandboxMemberName(sandbox.wakePayer, viewerUserId);
-  return `${payer === "you" ? "your" : `${payer}'s`} ${configuration.teamName} credits`;
+  configuration: SandboxPageConfiguration | null,
+): string | null {
+  if (configuration === null) return null;
+  return configuration.kind === "personal"
+    ? "your credits"
+    : `${teamPossessive(configuration.teamName)} credits`;
 }
 
 /**
@@ -276,16 +275,12 @@ function VerbConfirmDialog(
 
 export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
-  const team = configuration.kind === "team";
-  const storage = team
-    ? `Storage uses ${storageCredits(props.sandbox, configuration, viewerUserId)} until another member wakes it.`
-    : `Storage uses ${storageCredits(props.sandbox, configuration, viewerUserId)}.`;
+  const storage = storageCredits(configuration);
   const outcome = [
     wake === null ? null : `${wake}.`,
     "Finish or stop running agent turns and shells before suspending.",
-    storage,
+    storage === null ? null : `Storage uses ${storage}.`,
   ]
     .filter((part): part is string => part !== null)
     .join(" ");
@@ -302,8 +297,8 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
 
 export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const now = useSampledNow();
+  const storage = storageCredits(configuration);
   // A withdrawn row gets no destroy date: the resting pass will not destroy
   // it, so naming the date its period would have fallen on promises something
   // that is not going to happen. The sentence is already nullable for a row
@@ -318,7 +313,9 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
       title={`Stop ${props.sandbox.displayName}?`}
       outcome={[
         "Finish or stop running agent turns and shells before stopping. Start boots the sandbox again.",
-        `The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}.`,
+        storage === null
+          ? "The disk is kept at the lower storage rate."
+          : `The disk is kept at the lower storage rate on ${storage}.`,
         destroyed,
       ]
         .filter((part): part is string => part !== null)
@@ -405,16 +402,17 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
   const keep = useSandboxKeep(props.sandbox.id);
   const [lost, setLost] = useState(false);
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
   const now = useSampledNow();
   const name = props.sandbox.displayName;
   const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
   const restsUntil = now + SANDBOX_DEFAULT_RESTING_MINUTES * MS_PER_MINUTE;
-  const payer =
-    props.sandbox.wakePayer === null
-      ? "you"
-      : sandboxMemberName(props.sandbox.wakePayer, viewerUserId);
+  // A team's sandbox is paid by the team whoever keeps it. Whose it is not
+  // known, nothing is said about who pays or whose defaults it takes.
+  let payer: string | null = null;
+  if (configuration !== null) {
+    payer = configuration.kind === "personal" ? "you" : configuration.teamName;
+  }
   const who = [startedByLine("an agent"), keptByLine("you")].join(" · ");
   const idle = [`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`, wake]
     .filter((part): part is string => part !== null)
@@ -453,12 +451,16 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
           <p className="wrap-anywhere" data-testid="sandbox-confirm-keep-who">
             {who}
           </p>
-          <p className="wrap-anywhere">{`${paidByLine(payer)} while awake.`}</p>
+          {payer === null ? null : (
+            <p className="wrap-anywhere">{`${paidByLine(payer)} while awake.`}</p>
+          )}
           <p>{idle}</p>
           <p>Listed under Sandboxes you started</p>
-          <p className="text-ui-xs text-muted-foreground">
-            {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards.`}
-          </p>
+          {configuration === null ? null : (
+            <p className="text-ui-xs text-muted-foreground">
+              {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards.`}
+            </p>
+          )}
           {lost ? (
             <p
               className="font-medium text-destructive"

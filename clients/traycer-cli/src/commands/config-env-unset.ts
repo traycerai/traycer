@@ -1,6 +1,7 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setEnvOverride } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config env unset --key KEY`. Records an explicit
 // removal of a host-process env var, distinct from `delete` which removes
@@ -23,7 +24,12 @@ export function buildConfigEnvUnsetCommand(
         exitCode: 1,
       });
     }
-    await setEnvOverride(args.key, null);
+    const response = await writeConfigViaRunningHost("config.env.set", {
+      key: args.key,
+      value: null,
+      executableWriteGrant: null,
+    });
+    if (response === null) await setEnvOverride(args.key, null);
     return {
       data: { key: args.key, value: null },
       human: ctx.runtime.json ? null : `unset ${args.key}`,

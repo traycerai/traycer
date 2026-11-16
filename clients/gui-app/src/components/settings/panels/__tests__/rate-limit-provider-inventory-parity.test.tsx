@@ -342,6 +342,7 @@ async function createHarness(
       hostTokenRenewals.push({ hostId, delayed });
     },
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `inventory-${++requestSeq}`,

@@ -14,7 +14,7 @@ export interface ConfigurationPlan {
 export function PlansCard(props: {
   readonly teamName: string;
   readonly plans: readonly ConfigurationPlan[];
-  readonly canAdminister: boolean;
+  readonly canEdit: boolean;
   readonly isPending: boolean;
   readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
@@ -38,7 +38,7 @@ export function PlansCard(props: {
         />
       )}
       <PlanActionRow
-        canAdminister={props.canAdminister}
+        canEdit={props.canEdit}
         isPending={props.isPending}
         selected={selected}
         onPreviewUnlink={props.onPreviewUnlink}
@@ -76,13 +76,13 @@ function LinkedPlanPicker(props: {
 }
 
 function PlanActionRow(props: {
-  readonly canAdminister: boolean;
+  readonly canEdit: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
   readonly onPreviewUnlink: ((plan: ConfigurationPlan) => void) | null;
 }): ReactNode {
   const onPreviewUnlink = props.onPreviewUnlink;
-  if (!props.canAdminister || onPreviewUnlink === null) return null;
+  if (!props.canEdit || onPreviewUnlink === null) return null;
   const selected = props.selected;
   return (
     <div className="flex flex-wrap items-center gap-2">

@@ -344,6 +344,7 @@ function mountSession(input: {
             <BotSessionView
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={null}
               botTitle={botTitle}
               session={{
                 chatId: input.chatId,

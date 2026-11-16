@@ -39,14 +39,21 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [], isError: false, isLoading: false }),
 }));
+const PERSONAL_ENVIRONMENT_ID = vi.hoisted(() => "env-personal");
+
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
   async (importOriginal) => ({
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-configurations")
     >()),
+    // Every listed team has answered (there are none), and the person's own
+    // environment is named, so a row in it is theirs.
     useSandboxConfigurations: () => ({
       configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+      personalEnvironmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   }),
 );
@@ -94,7 +101,12 @@ function listed(state: "awake" | "stopped"): SandboxListFetchResult {
     kind: "ok",
     response: {
       sandboxes: [
-        sandboxSummaryFixture({ hostId: HOST, displayName: "test-box", state }),
+        sandboxSummaryFixture({
+          hostId: HOST,
+          displayName: "test-box",
+          environmentId: PERSONAL_ENVIRONMENT_ID,
+          state,
+        }),
       ],
     },
   };

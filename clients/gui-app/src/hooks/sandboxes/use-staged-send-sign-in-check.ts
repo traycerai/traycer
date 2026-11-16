@@ -1,5 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useTeamBillingAdminOf } from "@/hooks/sandboxes/use-team-billing-admin";
+import {
+  useReadTeamBundleBalance,
+  useTeamBundleBalances,
+} from "@/hooks/sandboxes/use-team-bundle-balances";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { sandboxAddCreditsUrl } from "@/lib/sandboxes/sandbox-row-lines";
@@ -7,14 +12,19 @@ import {
   stageBalanceMc,
   stageNeedsCredits,
   stagePrice,
+  type StageConfiguration,
+  type TeamBalanceMc,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
   CHECKING_SANDBOX_AGENTS,
   notEnoughCreditsLine,
-  teamAllowanceShortLine,
+  teamCreditsShortLine,
 } from "@/lib/sandboxes/sandbox-strings";
-import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
+import type {
+  ComposerHostNoticeAction,
+  ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
@@ -35,6 +45,11 @@ export interface StagedSendSignInCheck {
     stage: StagedSandbox,
   ) => Promise<ComposerHostNoticeState | null>;
 }
+
+const NO_TEAMS: readonly string[] = [];
+
+/** No team balance known: a check that reads none. */
+const NO_TEAM_BALANCE: TeamBalanceMc = () => null;
 
 const CHECKING_NOTICE: ComposerHostNoticeState = {
   kind: "mirror",
@@ -74,8 +89,36 @@ export function useStagedSendSignInCheck(
   const modelsPending =
     traycerModels.isPending && traycerModels.fetchStatus !== "idle";
   const authUser = useAuthUser();
+  const teamIds = useMemo(
+    () =>
+      authUser.data?.teamSubscriptions.map((entry) => entry.team.id) ??
+      NO_TEAMS,
+    [authUser.data],
+  );
+  const isTeamAdmin = useTeamBillingAdminOf(teamIds);
+  const teamBalanceMc = useTeamBundleBalances();
+  const readTeamBalance = useReadTeamBundleBalance();
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
+  // A team's credits are offered to its Admin only: anyone else reads the
+  // same notice with no action.
+  const addCreditsAction = useCallback(
+    (configuration: StageConfiguration): ComposerHostNoticeAction | null => {
+      if (configuration.kind === "team" && !isTeamAdmin(configuration.teamId))
+        return null;
+      const url = sandboxAddCreditsUrl(
+        runnerHost.signInUrl,
+        configuration.kind === "team"
+          ? { ...configuration, environmentId: null }
+          : configuration,
+      );
+      return {
+        label: ADD_CREDITS_LINK,
+        onAction: () => void openLink(url, "account", null),
+      };
+    },
+    [isTeamAdmin, openLink, runnerHost.signInUrl],
+  );
   const offeredAgents = catalogue.data?.offeredAgents;
   const pending = catalogue.data === undefined && catalogue.isFetching;
   // A read that ended with no catalogue is not permission: creating or waking
@@ -103,6 +146,7 @@ export function useStagedSendSignInCheck(
     (
       stage: StagedSandbox,
       user: AuthenticatedUser | null,
+      teamBalance: TeamBalanceMc,
     ): ComposerHostNoticeState | null => {
       if (
         active &&
@@ -111,7 +155,7 @@ export function useStagedSendSignInCheck(
       ) {
         const { configuration, shape } = stage.target;
         const price = stagePrice(catalogue.data, shape);
-        const balance = stageBalanceMc(user, configuration);
+        const balance = stageBalanceMc(user, configuration, teamBalance);
         if (
           stageNeedsCredits(balance, price) &&
           price !== null &&
@@ -122,22 +166,9 @@ export function useStagedSendSignInCheck(
             kind: "refused",
             message:
               configuration.kind === "team"
-                ? teamAllowanceShortLine(configuration.teamName, shortfall)
+                ? teamCreditsShortLine(configuration.teamName, shortfall)
                 : notEnoughCreditsLine(shortfall),
-            action: {
-              label: ADD_CREDITS_LINK,
-              onAction: () =>
-                void openLink(
-                  sandboxAddCreditsUrl(
-                    runnerHost.signInUrl,
-                    configuration.kind === "team"
-                      ? { ...configuration, environmentId: null }
-                      : configuration,
-                  ),
-                  "account",
-                  null,
-                ),
-            },
+            action: addCreditsAction(configuration),
             secondaryActions:
               onChooseAnotherHost === undefined
                 ? []
@@ -169,8 +200,7 @@ export function useStagedSendSignInCheck(
     [
       active,
       catalogue.data,
-      runnerHost.signInUrl,
-      openLink,
+      addCreditsAction,
       harnessId,
       pending,
       unread,
@@ -185,23 +215,31 @@ export function useStagedSendSignInCheck(
     ],
   );
   const check = useCallback(
-    (stage: StagedSandbox) => checkWithUser(stage, authUser.data ?? null),
-    [checkWithUser, authUser.data],
+    (stage: StagedSandbox) =>
+      checkWithUser(stage, authUser.data ?? null, teamBalanceMc),
+    [checkWithUser, authUser.data, teamBalanceMc],
   );
   const refetch = authUser.refetch;
   const beforeSend = useCallback(
     async (stage: StagedSandbox): Promise<ComposerHostNoticeState | null> => {
       if (!active || stage.target.kind !== "new") {
-        return checkWithUser(stage, null);
+        return checkWithUser(stage, null, NO_TEAM_BALANCE);
       }
       // Cached balances are advice; a failed read leaves the spend gate authoritative.
-      const fresh = await refetch({ cancelRefetch: true }).catch(() => null);
+      const { configuration } = stage.target;
+      const [fresh, freshTeam] = await Promise.all([
+        refetch({ cancelRefetch: true }).catch(() => null),
+        configuration.kind === "team"
+          ? readTeamBalance(configuration.teamId)
+          : Promise.resolve(null),
+      ]);
       return checkWithUser(
         stage,
         fresh === null || fresh.isError ? null : (fresh.data ?? null),
+        () => freshTeam,
       );
     },
-    [active, checkWithUser, refetch],
+    [active, checkWithUser, readTeamBalance, refetch],
   );
   return useMemo(() => ({ check, beforeSend }), [check, beforeSend]);
 }

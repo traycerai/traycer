@@ -38,6 +38,8 @@ async function requestInvitations<T>(
           },
           body:
             environmentId === null ? null : JSON.stringify({ environmentId }),
+          // A credential-bearing request never follows a redirect; a 3xx is
+          // an answered failure.
           redirect: "manual",
           signal: abort.signal,
         },

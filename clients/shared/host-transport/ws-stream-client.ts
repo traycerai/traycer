@@ -1088,7 +1088,10 @@ export class WsStreamClient<
     try {
       outcome = await mint({ hostId, reason: state });
     } catch (cause) {
-      console.warn(
+      console.warn("[stream] host-credential mint flow threw", {
+        kind: "error",
+      });
+      console.debug(
         `[stream] host-credential mint flow threw (client=${this.instanceId}, host=${hostId})`,
         cause,
       );
@@ -3125,7 +3128,10 @@ class StreamSession<
     try {
       observe(hostId, state, this.credentialSocketSequence);
     } catch (cause) {
-      console.warn(
+      console.warn("[stream] host-credential state observer threw", {
+        kind: "error",
+      });
+      console.debug(
         `[stream] host-credential state observer threw (method=${this.config.method}, host=${hostId})`,
         cause,
       );

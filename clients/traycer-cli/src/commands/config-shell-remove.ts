@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { removeShell } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config shell remove`. Forgets a `shell.entries` launch
 // spec; if it was the selected shell, the selection falls back to the
@@ -22,7 +23,12 @@ export function buildConfigShellRemoveCommand(args: {
         exitCode: 1,
       });
     }
-    const next = await removeShell(args.path);
+    const response = await writeConfigViaRunningHost("config.shell.remove", {
+      path: args.path,
+      executableWriteGrant: null,
+      selection: { kind: "not_stated" },
+    });
+    const next = response ?? (await removeShell(args.path));
     return {
       data: { removed: next.removed, path: next.path },
       human: ctx.runtime.json

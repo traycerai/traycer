@@ -73,6 +73,7 @@ import {
 import {
   BOT,
   BOT_ID,
+  BOUND_HOST,
   endBotTabSurfaceCase,
   resetBotTabSurfaceMocks,
   snapshot,
@@ -347,6 +348,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
 // tab hands it and what its links do to the tab.
 vi.mock("@/components/bots/bot-session-view", () => ({
   BotSessionView: (props: {
+    hostId: string;
+    boundHostId: string | null;
     session: BotOpenSession;
     onClose: () => void;
     onOpenChannel: (messageId: string | null) => void;
@@ -354,6 +357,8 @@ vi.mock("@/components/bots/bot-session-view", () => ({
   }) => (
     <div
       data-testid="stub-session"
+      data-host-id={props.hostId}
+      data-bound-host-id={props.boundHostId ?? "none"}
       data-chat-id={props.session.chatId}
       data-thread-id={props.session.threadId ?? "none"}
       data-land-on={props.session.landOn?.messageId ?? "none"}
@@ -1025,6 +1030,17 @@ describe("<BotTabSurface /> views", () => {
     expect(session.getAttribute("data-thread-id")).toBe("none");
     expect(screen.queryByTestId("stub-activity")).toBeNull();
     expect(screen.queryAllByRole("tab")).toEqual([]);
+  });
+
+  it("hands the session the tab's host for its reads and the bot's bound host, not the tab's, as the host whose payer its error rows read", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    await user.click(screen.getByTestId("stub-activity-open-trunk"));
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(session.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {

@@ -85,15 +85,6 @@ export function useCanEditConfiguration(): boolean {
   );
 }
 
-export function useCanAdministerConfiguration(): boolean {
-  const source = useConfigurationSource();
-  return (
-    source.kind === "host" ||
-    (!source.transportReadOnly &&
-      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
-  );
-}
-
 /** Team account edits use the person's session, independent of the serving computer. */
 export function canManageTeamProviderAccounts(
   source: ConfigurationSource,

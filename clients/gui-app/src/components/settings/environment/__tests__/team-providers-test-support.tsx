@@ -180,6 +180,7 @@ export function teamProviderEnvironmentStatus() {
     returnedFromTeam: null,
     stoppedAt: null,
     acceptedUploads: [],
+    move: null,
   };
 }
 

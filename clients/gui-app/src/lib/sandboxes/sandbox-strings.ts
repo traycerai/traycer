@@ -11,6 +11,7 @@ import type {
   SandboxCreditSource,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -155,16 +156,25 @@ export const NO_MATCH_ELSEWHERE_LINE =
 
 // ── Money ─────────────────────────────────────────────────────────────────
 
-/** `uses your credits` / `uses your Acme credits`. */
+/**
+ * `Acme's`: whose credits a team's sandbox uses. A team's sandbox is paid
+ * from the team's credits, whoever woke it, so every sentence about its
+ * credits names the team.
+ */
+export function teamPossessive(teamName: string): string {
+  return `${teamName}'s`;
+}
+
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
   return configuration.kind === "personal"
     ? "uses your credits"
-    : `uses your ${configuration.teamName} credits`;
+    : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses your Acme credits`. */
+/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -230,6 +240,51 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
+/**
+ * Board C25's Alternative, waiting for the owner's ruling: said after a
+ * team's frozen cause on its row, to a member who is not the team's Admin.
+ * Not shown until it is ruled in; showing it is the one change of `shown`.
+ */
+export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
+  "Only team admins can add credits.";
+export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
+  shown: false,
+};
+
+// ── Telling a member to add credits ───────────────────────────────────────
+//
+// Built to the Proposal of board C29, provisional until that board is ruled;
+// its Alternative takes these out and gives everyone today's sentences back.
+// Only a team's Admin can buy the team's credits, so on a team's sandbox
+// anyone else reads these in place of a sentence telling them to add credits.
+// The Admin and a Personal sandbox keep today's, except the chat's title,
+// which the team's Admin reads too. A wake refused by an older server, which
+// does not say whose credits were short, keeps today's sentence.
+
+/** Under a message sent to a team's sandbox that is out of credits. */
+export function teamCreditsRanOutLine(teamName: string): string {
+  return `${teamPossessive(teamName)} credits ran out.`;
+}
+
+/** After "Couldn't resume build-box." on a team's sandbox row. */
+export function teamSandboxOutOfCreditsLine(teamName: string): string {
+  return `${SANDBOX_OUT_OF_CREDITS} ${teamPossessive(teamName)} bundle is out.`;
+}
+
+/** A chat's title when a team's sandbox ran out of credits mid-turn. */
+export function teamOutOfCreditsHeadline(teamName: string): string {
+  return `Paused: ${teamName} is out of credits`;
+}
+
+/** The line under that title. */
+export function onceTeamHasCreditsLine(teamName: string): string {
+  return `This sandbox ran out of credits, which ended the turn. Once ${teamName} has credits again, send a message to pick up where it stopped.`;
+}
+
+/** A team sandbox's create or wake refused for want of the team's credits. */
+export const TEAM_CREDITS_DONT_COVER_AN_HOUR =
+  "The team's credits don't cover an hour of this sandbox.";
+
 // ── The consequences block ────────────────────────────────────────────────
 
 /** The audience clause: the task has or may gain readers beyond the person. */
@@ -264,12 +319,10 @@ export function teamAccessClause(teamName: string): string {
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
-
-export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
@@ -418,24 +471,52 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/** Short for an hour on a team allowance; `null` names no amount. */
-export function teamAllowanceShortLine(
+/**
+ * Short for an hour of a team's sandbox, which the team's credits pay;
+ * `null` names no amount.
+ */
+export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
 ): string {
+  const whose = teamPossessive(teamName);
   if (shortfallMc === null) {
-    return `Your ${teamName} allowance is too short to start this sandbox for an hour.`;
+    return `${whose} credits don't cover an hour of this sandbox.`;
   }
   const amount = formatSandboxDollarsRequired(shortfallMc);
-  return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
+  return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
+}
+
+/** The team's name where the configuration is a known team's, else `null`. */
+function knownTeamName(
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  return configuration?.kind === "team" ? configuration.teamName : null;
 }
 
 /**
  * A spend refusal names the pot checked, with amounts rounded up for top-up.
  * Sentence/clause context is independent of whether this starts or wakes.
+ * `configuration` is `null` where the app does not know whose sandbox it is:
+ * nothing is then told as the person's own, neither their balance nor an
+ * amount for them to add, and a team pot reads as no team configuration
+ * known.
  */
 export function sandboxCreditShortLine(
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  if (configuration === null && creditSource !== "team") {
+    return notEnoughCreditsText(null, options);
+  }
+  return potCreditShortLine(configuration, creditSource, shortfallMc, options);
+}
+
+/** The refusal's sentence once the owner is known, or for a team pot. */
+function potCreditShortLine(
+  configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,
   options: SandboxCreditLineOptions,
@@ -445,17 +526,25 @@ export function sandboxCreditShortLine(
     return notEnoughCreditsText(shortfallMc, options);
   }
   const allowance = creditSource === "team-allowance";
-  const whose = context === "sentence" ? "Your" : "your";
+  const sentence = context === "sentence";
+  const whose = sentence ? "Your" : "your";
   // The refusal names the pot; the configuration only supplies the team's
   // name. A refusal from a team pot with no team configuration known (the
   // directory had no row) still says it was the team's, never the person's.
+  // A member's allowance is the member's own; the team's credits are the
+  // team's, whoever woke the sandbox.
+  const teamName = knownTeamName(configuration);
   let pot = `${whose} credits`;
-  if (creditSource !== "personal") {
-    if (configuration.kind === "team") {
-      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
-    } else {
-      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
-    }
+  if (allowance) {
+    pot =
+      teamName === null
+        ? `${whose} team allowance`
+        : `${whose} ${teamName} allowance`;
+  } else if (creditSource === "team") {
+    pot =
+      teamName === null
+        ? `${whose} team's credits`
+        : `${teamPossessive(teamName)} credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)

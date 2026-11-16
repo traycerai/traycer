@@ -44,6 +44,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsDestroyRequest,
@@ -54,6 +58,7 @@ import type {
   EnvironmentSecretsRotationResponse,
   EnvironmentSecretsUndoRequest,
   EnvironmentSecretsUndoResponse,
+  EnvironmentSecretRemovalV12,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -67,11 +72,11 @@ import {
 import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import {
   SECRET_CUSTODY_SENTENCE,
-  SECRET_SAVED_OFFLINE,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { RunnerHostContext } from "@/providers/runner-host-context";
@@ -101,6 +106,7 @@ interface RotationHostState {
   secrets: EnvironmentSecretV12[];
   rotation: Rotation;
   versions: SecretVersion[];
+  removal: EnvironmentSecretRemovalV12 | null;
   replaceAnswer: EnvironmentSecretsReplaceValueResponse;
   undoAnswer: EnvironmentSecretsUndoResponse;
   destroyAnswer: EnvironmentSecretsDestroyResponse;
@@ -150,6 +156,15 @@ function versionFixture(overrides: Partial<SecretVersion>): SecretVersion {
     current: false,
     rotationState: null,
     ...overrides,
+  };
+}
+
+function revokedRemovalFixture(): EnvironmentSecretRemovalV12 {
+  return {
+    outcome: "revoked",
+    revokedAt: 1,
+    destroyedAt: null,
+    targets: [],
   };
 }
 
@@ -248,6 +263,7 @@ function mountRotationHost(
     secrets: [secretFixture({})],
     rotation: null,
     versions: threeVersions(),
+    removal: null,
     replaceAnswer: {
       outcome: "accepted",
       rotationId: "rot-1",
@@ -271,6 +287,8 @@ function mountRotationHost(
   const undoRequests: EnvironmentSecretsUndoRequest[] = [];
   const destroyRequests: EnvironmentSecretsDestroyRequest[] = [];
   const harness = mountTeamPage(source, {
+    "environment.status": () =>
+      environmentStatusFixture({ principal: { kind: "personal" } }),
     "environment.list": () => ({
       environments: [
         {
@@ -302,7 +320,7 @@ function mountRotationHost(
     },
     "environment.secrets.versions": () => {
       reads.versions += 1;
-      return { versions: [...state.versions], removal: null };
+      return { versions: [...state.versions], removal: state.removal };
     },
     "environment.secrets.replaceValue": (request) => {
       replaceRequests.push(request);
@@ -342,19 +360,20 @@ function buildRotationHost(
   return mountRotationHost(overrides, personalPoolSource());
 }
 
-/**
- * A Local pick on a computer's own settings (`source.kind === "host"`) names no
- * environment (`useAddressedEnvironment`), so its secrets calls stay the
- * host's own: the only list that carries a revoked row, and the only replace
- * that answers pending. A named environment's are authn's: live rows only.
- */
+/** A Local pick resolves the viewed host's own environment before authn reads it. */
 function buildLocalRotationHost(
   overrides: Partial<RotationHostState>,
 ): RotationHost {
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
-  return mountRotationHost(overrides, { kind: "host" });
+  const host = mountRotationHost(overrides, { kind: "host" });
+  const hostId = host.client.getActiveHostId();
+  if (hostId === null) {
+    throw new Error("the Local Secrets fixture has no selected host");
+  }
+  recordNegotiatedHostMethods(hostId, ["environment.status"]);
+  return host;
 }
 
 function renderPage(host: RotationHost): QueryClient {
@@ -373,6 +392,7 @@ function renderPage(host: RotationHost): QueryClient {
 }
 
 beforeEach(() => {
+  resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
   });
@@ -387,6 +407,7 @@ afterEach(() => {
   vi.useRealTimers();
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out" });
   openLinkMock.mockReset();
 });
@@ -648,28 +669,14 @@ describe("Replace", () => {
     });
   });
 
-  it("keeps the dialog and says the save is waiting when the host queued it", async () => {
-    const host = buildLocalRotationHost({
-      replaceAnswer: { outcome: "pending", uploadId: "u1" },
-    });
-    renderPage(host);
-
-    await typeAndReplace();
-
-    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
-      SECRET_SAVED_OFFLINE,
-    );
-    expect(screen.queryByTestId("secret-restart-line")).toBeNull();
-  });
-
   it("offers no Replace on a revoked secret", async () => {
-    renderPage(
-      buildLocalRotationHost({ secrets: [secretFixture({ revoked: true })] }),
-    );
+    renderPage(buildLocalRotationHost({ removal: revokedRemovalFixture() }));
 
     await screen.findByTestId("secret-row");
+    await waitFor(() => {
+      expect(screen.queryByTestId("secret-row-replace")).toBeNull();
+    });
 
-    expect(screen.queryByTestId("secret-row-replace")).toBeNull();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });
 
@@ -777,7 +784,7 @@ describe("a secret's versions", () => {
 
   it("restores a revoked secret's version with the re-grant, under the label Restore", async () => {
     const host = buildLocalRotationHost({
-      secrets: [secretFixture({ revoked: true })],
+      removal: revokedRemovalFixture(),
     });
     renderPage(host);
     const rows = await openVersions();
@@ -792,7 +799,7 @@ describe("a secret's versions", () => {
           secretId: "sec-1",
           versionId: "ver-2",
           regrant: true,
-          environmentId: null,
+          environmentId: PERSONAL_ENV,
         },
       ]);
     });
