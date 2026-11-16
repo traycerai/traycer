@@ -51,7 +51,6 @@ interface RefusedRevision {
 }
 
 const NO_ENTRIES: readonly TeamReviewEntry[] = [];
-const PROFILE_NEEDS_LINK_LABEL: string | null = null;
 
 /** Only a settled directory read can authorize this organization target. */
 function mayEditReview(
@@ -238,7 +237,6 @@ function TeamReviewDialog(props: {
                     <TeamReviewValueReadout
                       entry={row.entry}
                       value={row.proposed}
-                      profileNeedsLinkLabel={PROFILE_NEEDS_LINK_LABEL}
                       onRetry={retry}
                     />
                     <div className="flex flex-col gap-1">
@@ -251,7 +249,6 @@ function TeamReviewDialog(props: {
                       <TeamReviewValueReadout
                         entry={row.entry}
                         value={row.current}
-                        profileNeedsLinkLabel={PROFILE_NEEDS_LINK_LABEL}
                         onRetry={retry}
                       />
                     </div>

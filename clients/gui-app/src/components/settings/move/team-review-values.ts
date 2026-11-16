@@ -45,7 +45,6 @@ export type TeamReviewValue =
       readonly harnessId: string;
       readonly accountIdentity: string | null;
       readonly enabled: boolean;
-      readonly needsLink: boolean;
     }
   | {
       readonly kind: "pack";
@@ -210,7 +209,6 @@ function reviewValue(
             ? null
             : maskedText(profile.accountIdentity),
         enabled: profile.enabled,
-        needsLink: profile.needsLink,
       };
     }
     case "pack_policy": {

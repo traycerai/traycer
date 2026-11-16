@@ -10,30 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 
-function ProfileLinkHint(props: {
-  readonly needsLink: boolean;
-  readonly label: string | null;
-  readonly id: string;
-}): ReactNode {
-  if (!props.needsLink || props.label === null) return null;
-  return (
-    <label htmlFor={props.id} className="flex items-center gap-2 text-ui-sm">
-      {props.label}
-      <Switch
-        id={props.id}
-        aria-label={props.label}
-        checked={props.needsLink}
-        disabled
-      />
-    </label>
-  );
-}
-
 /** A validated public value only; never an editor, host read or raw JSON. */
 export function TeamReviewValueReadout(props: {
   readonly entry: ReviewHeldEntry;
   readonly value: TeamReviewValue | null;
-  readonly profileNeedsLinkLabel: string | null;
   readonly onRetry: () => void;
 }): ReactNode {
   const id = useId();
@@ -109,11 +89,6 @@ export function TeamReviewValueReadout(props: {
           {value.accountIdentity === null ? null : (
             <p>{value.accountIdentity}</p>
           )}
-          <ProfileLinkHint
-            id={`${id}-needs-link`}
-            needsLink={value.needsLink}
-            label={props.profileNeedsLinkLabel}
-          />
         </div>
       );
     case "mcp":
