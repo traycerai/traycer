@@ -365,7 +365,6 @@ function RailChannel(props: { readonly replyMode: BotReplyMode }): ReactNode {
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
       onOpenTurn={vi.fn()}
-      onOpenSession={vi.fn()}
       landOn={null}
       openMemory={null}
       onOpenMemory={vi.fn()}

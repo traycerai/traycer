@@ -280,7 +280,6 @@ function mount(openThread: BotOpenThread | null): void {
               appConversationChatId={CHANNEL_ID}
               trunkChatId="trunk-chat"
               onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
               landOn={null}
               openMemory={null}
               onOpenMemory={vi.fn()}

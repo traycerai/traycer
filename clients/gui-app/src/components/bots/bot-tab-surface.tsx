@@ -1,4 +1,15 @@
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { createPortal } from "react-dom";
+import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
+import {
   useCallback,
   useEffect,
   useEffectEvent,
@@ -325,6 +336,7 @@ function TracySurfaceShell(props: {
           {threadsShown ? (
             <BotThreadsView
               hostId={hostId}
+              channelId={botId}
               channelTitle={channelTitle}
               onBack={leaveThreads}
               level2={level2}
@@ -1041,8 +1053,8 @@ function useChannelSearchEntry(args: {
 
 /**
  * The bot's session shown in place of the channel's views,
- * and where the channel lands once it is back. A receipt, a check-in's link
- * or a thread's "Thread session" opens a session; each open is a new visit,
+ * and where the channel lands once it is back. A receipt or a check-in's
+ * link opens a session; each open is a new visit,
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
@@ -1459,6 +1471,28 @@ function useRailDrawnReport(
   }, [onRailDrawn, railDrawn]);
 }
 
+function MobileBotSessionTitle(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly title: string;
+  readonly threadsView: BotThreadsViewState;
+}): ReactNode {
+  const slot = useMobileBotHeaderSlot();
+  if (props.level2 !== "menu" && props.level2 !== "bar") return null;
+  if (!slot?.target) return null;
+  return createPortal(
+    <BotChannelTitle
+      level2={props.level2}
+      title={props.title}
+      activeBotId={props.botId}
+      hostId={props.hostId}
+      threadsView={props.threadsView}
+    />,
+    slot.target,
+  );
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1675,6 +1709,13 @@ function BotTabContent(props: {
                     boundHostId: snapshot.boundHost.hostId,
                   }}
                 >
+                  <MobileBotSessionTitle
+                    level2={level2}
+                    botId={botId}
+                    hostId={hostId}
+                    title={snapshot.bot.title}
+                    threadsView={threadsView}
+                  />
                   <BotSessionView
                     key={session.chatId}
                     botId={botId}
@@ -1706,6 +1747,8 @@ function BotTabContent(props: {
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
                     onOpenSearch={openSearch}
+                    view={view}
+                    onViewChange={onViewChange}
                     activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
@@ -1754,7 +1797,6 @@ function BotTabContent(props: {
                       openThread={openThread}
                       onOpenThread={setOpenThread}
                       onOpenTurn={openTurn}
-                      onOpenSession={openSession}
                       landOn={channelLanding}
                       openMemory={openMemory}
                       onOpenMemory={setOpenMemory}
@@ -1945,14 +1987,7 @@ function ErrorNotice(props: {
   );
 }
 
-/**
- * Slack's channel header: the bot's picture (its card on hover and click),
- * its name with the main bot's star, the ⋮ that opens the channel's settings,
- * and the channel's views under it. What the bot is for is the top of its channel; nothing else
- * sits here but, on the phone, Talk. A session started here is focused on
- * this channel. Activity's count is the tasks its list shows.
- */
-function BotChannelHeader(props: {
+type BotChannelHeaderProps = {
   readonly level2: MobileLevel2Form | null;
   readonly botId: string;
   readonly hostId: string;
@@ -1963,10 +1998,158 @@ function BotChannelHeader(props: {
   readonly onToggleSettings: () => void;
   /** Opens the channel's search; `null` where the tab's host has none. */
   readonly onOpenSearch: (() => void) | null;
+  readonly view: BotTabView;
+  readonly onViewChange: (view: BotTabView) => void;
   /** How many tasks the Activity list shows. */
   readonly activityCount: number;
+};
+
+function BotChannelActions({
+  header: props,
+  titleTarget,
+  settingsButtonRef,
+}: {
+  readonly header: BotChannelHeaderProps;
+  readonly titleTarget: HTMLDivElement | null;
+  readonly settingsButtonRef: React.RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { settingsOpen } = props;
+  const pendingDestination = useRef<(() => void) | null>(null);
+  // A channel departure drops its deferred action instead of opening it later.
+  useEffect(
+    () => () => {
+      pendingDestination.current = null;
+    },
+    [],
+  );
+  return titleTarget === null ? (
+    <>
+      {props.onOpenSearch === null ? null : (
+        <TooltipWrapper
+          label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Search in ${props.title}`}
+            data-testid="bot-channel-search-open"
+            className="ml-auto"
+            onClick={props.onOpenSearch}
+          >
+            <Search aria-hidden="true" />
+          </Button>
+        </TooltipWrapper>
+      )}
+      <Button
+        ref={settingsButtonRef}
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Channel settings"
+        aria-expanded={settingsOpen}
+        data-testid="bot-channel-settings-open"
+        className={props.onOpenSearch === null ? "ml-auto" : undefined}
+        onClick={props.onToggleSettings}
+      >
+        <EllipsisVertical aria-hidden="true" />
+      </Button>
+    </>
+  ) : (
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) pendingDestination.current = null;
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-touch"
+          aria-label={
+            props.activityCount > 0
+              ? `Channel actions, ${props.activityCount} active`
+              : "Channel actions"
+          }
+          data-testid="bot-channel-actions-open"
+          className="relative ml-auto"
+        >
+          <EllipsisVertical aria-hidden="true" />
+          <UnreadCountBadge
+            count={props.activityCount}
+            size="xs"
+            testId="bot-channel-actions-activity-count"
+            corner="absolute top-0 right-0"
+            noun="active"
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          const destination = pendingDestination.current;
+          pendingDestination.current = null;
+          if (destination !== null) {
+            event.preventDefault();
+            destination();
+          }
+        }}
+      >
+        <DropdownMenuRadioGroup
+          value={props.view}
+          onValueChange={(next) => {
+            if (isTracyChannelView(next)) props.onViewChange(next);
+          }}
+        >
+          <DropdownMenuRadioItem value="messages">
+            Messages
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="activity">
+            Activity
+            <UnreadCountBadge
+              count={props.activityCount}
+              size="xs"
+              testId="bot-channel-actions-menu-activity-count"
+              corner={null}
+              noun="active"
+            />
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {props.onOpenSearch === null ? null : (
+          <DropdownMenuItem
+            onSelect={() => {
+              pendingDestination.current = props.onOpenSearch;
+            }}
+          >
+            Search
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem
+          onSelect={() => {
+            if (settingsOpen) props.onToggleSettings();
+            else pendingDestination.current = props.onToggleSettings;
+          }}
+        >
+          Channel settings
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Activity counts the tasks shown in the channel’s Activity view. */
+function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
+  const { settingsOpen } = props;
+  const botHeaderSlot = useMobileBotHeaderSlot();
+  const titleTarget =
+    props.level2 === "menu" || props.level2 === "bar"
+      ? (botHeaderSlot?.target ?? null)
+      : null;
   const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
@@ -1985,6 +2168,42 @@ function BotChannelHeader(props: {
     if (wasOpenRef.current && !settingsOpen) settingsButtonRef.current?.focus();
     wasOpenRef.current = settingsOpen;
   }, [settingsOpen]);
+  const titleRow = (
+    <div
+      hidden={threadHasFocus}
+      className={cn(
+        "flex min-w-0 items-center gap-2",
+        titleTarget !== null && "w-full",
+        focusOwner !== null && "min-h-11",
+      )}
+    >
+      <BotIdentityTrigger>
+        <button
+          type="button"
+          aria-label={props.title}
+          className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+          data-testid="bot-tab-avatar"
+        >
+          <ExpressiveBotAvatar size="sm" expression={expression} />
+        </button>
+      </BotIdentityTrigger>
+      <BotChannelTitle
+        level2={props.level2}
+        title={props.title}
+        activeBotId={props.botId}
+        hostId={props.hostId}
+        threadsView={props.threadsView}
+      />
+      {props.isMain ? (
+        <MainBotBadge testId="bot-tab-main" tone="muted" />
+      ) : null}
+      <BotChannelActions
+        header={props}
+        titleTarget={titleTarget}
+        settingsButtonRef={settingsButtonRef}
+      />
+    </div>
+  );
   return (
     <header
       ref={setHeader}
@@ -1994,72 +2213,13 @@ function BotChannelHeader(props: {
       style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
-        focusOwner === null && "pt-3",
+        focusOwner === null && titleTarget === null && "pt-3",
         background.className,
       )}
     >
-      <div
-        className={cn(
-          "flex min-w-0 items-center gap-2",
-          focusOwner !== null && "min-h-11",
-        )}
-      >
-        <BotIdentityTrigger>
-          <button
-            type="button"
-            aria-label={props.title}
-            className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
-            data-testid="bot-tab-avatar"
-          >
-            <ExpressiveBotAvatar size="sm" expression={expression} />
-          </button>
-        </BotIdentityTrigger>
-        <BotChannelTitle
-          level2={props.level2}
-          title={props.title}
-          activeBotId={props.botId}
-          hostId={props.hostId}
-          threadsView={props.threadsView}
-        />
-        {props.isMain ? (
-          <MainBotBadge testId="bot-tab-main" tone="muted" />
-        ) : null}
-        {props.onOpenSearch === null ? null : (
-          <TooltipWrapper
-            label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
-            side="bottom"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Search in ${props.title}`}
-              data-testid="bot-channel-search-open"
-              className="ml-auto"
-              onClick={props.onOpenSearch}
-            >
-              <Search aria-hidden="true" />
-            </Button>
-          </TooltipWrapper>
-        )}
-        <Button
-          ref={settingsButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Channel settings"
-          aria-expanded={settingsOpen}
-          data-testid="bot-channel-settings-open"
-          className={props.onOpenSearch === null ? "ml-auto" : undefined}
-          onClick={props.onToggleSettings}
-        >
-          <EllipsisVertical aria-hidden="true" />
-        </Button>
-      </div>
+      {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
       <TabsList
-        hidden={focusOwner !== null}
+        hidden={focusOwner !== null || titleTarget !== null}
         variant="line"
         aria-label="Channel view"
       >

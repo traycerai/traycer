@@ -296,9 +296,25 @@ vi.mock("@/hooks/bots/use-bot-subscription", () => ({
     resubscribe: vi.fn(),
   }),
 }));
+// The settings panel's own mutations, idle: the panel reads their state and
+// calls them only on an edit, which no suite here makes.
+const idleMutation = {
+  mutate: vi.fn(),
+  mutateAsync: vi.fn(),
+  isPending: false,
+  isError: false,
+  error: null,
+  variables: undefined,
+};
 // One stable mutation object, like TanStack's `mutate`: the surface opens the
 // bot from an effect keyed on it. The host serves every bot here.
-vi.mock("@/hooks/bots/use-bot-mutations", () => ({
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
+  useBotUpdateTitleMutation: () => idleMutation,
+  useBotUpdateRunSettingsMutation: () => idleMutation,
+  useBotUpdateReplyModeMutation: () => idleMutation,
+  useBotUpdateAppearanceMutation: () => idleMutation,
+  useBotDeleteMutation: () => idleMutation,
   useBotOpenMutation: () => openMutation,
   useBotConversationSendMutation: () => ({
     mutate: vi.fn(),
@@ -433,22 +449,11 @@ vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
 }));
-vi.mock("@/components/bots/bot-message-composer", () => ({
-  BotMessageComposer: (props: { testId: string }) => (
-    <div data-testid={`stub-${props.testId}`} />
-  ),
-}));
 vi.mock("@/components/bots/bot-session-view", () => ({
   BotSessionView: () => <div data-testid="stub-session" />,
 }));
 vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: () => <div data-testid="stub-activity" />,
-}));
-vi.mock("@/components/bots/bot-threads-view", () => ({
-  BotThreadsView: () => <div data-testid="stub-threads" />,
-}));
-vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotChannelSettingsPanel: () => <div data-testid="stub-settings" />,
 }));
 vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
   BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,

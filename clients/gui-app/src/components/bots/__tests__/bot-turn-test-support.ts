@@ -633,8 +633,7 @@ export const THREAD_REPLY_TURN: BotTurnRef = turnRef({
 
 /**
  * The sessions the channel harness asked the tab to open in the channel's
- * place, oldest first: a receipt's turn, or a thread's session from its
- * panel. A suite empties it before each case.
+ * place, oldest first: a receipt's turn. A suite empties it before each case.
  */
 export const openedSessions: BotSessionTarget[] = [];
 
