@@ -116,7 +116,7 @@ function removeSurfaceHost(): void {
 
 describe("team pages on a build with a server pool", () => {
   it("reads items through authn and team membership from the pool without a surface host", async () => {
-    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+    const harness = mountTeamPageOnPoolBuild(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [
           configurationItem({
@@ -134,7 +134,7 @@ describe("team pages on a build with a server pool", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(await screen.findByText("Ada can change this.")).toBeTruthy();
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
     });
@@ -185,7 +185,7 @@ describe("team pages on a build with a server pool", () => {
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
     removeSurfaceHost();
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 

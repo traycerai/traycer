@@ -1385,6 +1385,8 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual({
+      profileMode: null,
+      profileSignIns: [],
       choices: [
         { kind: "variable", key: "LOG_LEVEL", choice: "keep_locally" },
         {

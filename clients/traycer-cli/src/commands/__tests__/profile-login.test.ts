@@ -586,6 +586,7 @@ describe("profile add (create)", () => {
     expect(startParams).toEqual({
       providerId: "claude-code",
       holderId: HOLDER_ID,
+      target: null,
       profileId: null,
       createProfile: { label: "Work", shareSkillsAndPlugins: false },
     });
@@ -841,6 +842,7 @@ describe("profile login (existing)", () => {
     expect(startParams).toEqual({
       providerId: "claude-code",
       holderId: HOLDER_ID,
+      target: null,
       profileId: "prof_work",
       createProfile: null,
     });
@@ -1127,6 +1129,7 @@ describe("profile login (ambient)", () => {
     expect(startParams).toEqual({
       providerId: "claude-code",
       holderId: HOLDER_ID,
+      target: null,
       profileId: null,
       createProfile: null,
     });

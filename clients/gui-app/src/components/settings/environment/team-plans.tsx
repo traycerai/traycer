@@ -14,7 +14,7 @@ import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-d
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
@@ -32,13 +32,12 @@ import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
-  readonly adminNames: readonly string[];
 }): ReactNode {
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
-  const canAdminister = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
   // Linking goes through this window's host, and a team's computer cannot
   // check the caller's seat for it, so it is not offered through one, nor
   // until the registry has said whose computer this is.
@@ -84,9 +83,8 @@ export function TeamPlans(props: {
       <PlansCard
         teamName={name}
         plans={plans}
-        canAdminister={canAdminister}
+        canEdit={canEdit}
         linkReachable={linkReachable}
-        adminNames={props.adminNames}
         isPending={target !== null}
         onLink={() => {
           if (source.kind === "pool")
@@ -100,7 +98,7 @@ export function TeamPlans(props: {
           setTarget({ plan, previewId: crypto.randomUUID() })
         }
       />
-      {target !== null && canAdminister ? (
+      {target !== null && canEdit ? (
         <TeamPlanUnlink
           key={target.previewId}
           plan={target.plan}
@@ -201,7 +199,6 @@ function TeamPlanUnlink(props: {
     );
   const counted = countedPlanWork(workNow);
   return (
-    <>
       <PlanUnlinkPreview
         teamName={props.teamName}
         plan={props.plan}
@@ -232,11 +229,5 @@ function TeamPlanUnlink(props: {
           );
         }}
       />
-      {unlink.data?.outcome === "forbidden" ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Admins unlink plans.
-        </p>
-      ) : null}
-    </>
   );
 }

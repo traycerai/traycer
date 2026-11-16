@@ -162,6 +162,7 @@ export function useSandboxDefaultsEnvironments(
   enabled: boolean,
 ): ReadonlyMap<string, SandboxDefaultsEnvironment> {
   const list = useEnvironmentListQuery(enabled);
+  const listFailed = list.isError;
   return useMemo(
     () =>
       new Map(
@@ -171,13 +172,18 @@ export function useSandboxDefaultsEnvironments(
               descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
               {
                 environmentId: descriptor.environmentId,
-                role: configurationRoleOf(descriptor),
+                // A failed re-read makes a team role not known, whatever an
+                // earlier answer said. Personal's is not read.
+                role:
+                  listFailed && descriptor.ownerKind === "organization"
+                    ? null
+                    : configurationRoleOf(descriptor),
               },
             ];
           },
         ),
       ),
-    [list.data],
+    [list.data, listFailed],
   );
 }
 
