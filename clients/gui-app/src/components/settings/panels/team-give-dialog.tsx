@@ -266,6 +266,35 @@ function shownGiveAttempt(
     : null;
 }
 
+function capturedGiveOwnershipReader(
+  attempt: GiveAttempt | null,
+): () => Promise<GiveOwnership> {
+  return async () => {
+    if (attempt === null) return "sign_in_changed";
+    const { press } = attempt;
+    if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+    const era = press.runtime.auth.currentAuthEra();
+    if (era.identity !== press.userId) return "sign_in_changed";
+    try {
+      const result = await press.runtime.auth.readHostOwnership(
+        press.hostId,
+        era,
+      );
+      if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+      return result.kind === "ok" &&
+        result.host.hostId === press.hostId &&
+        result.host.owner.kind === "team" &&
+        result.host.owner.id === press.team.ownerId
+        ? "confirmed"
+        : "not_confirmed";
+    } catch {
+      return press.operation.onOriginSignIn()
+        ? "not_confirmed"
+        : "sign_in_changed";
+    }
+  };
+}
+
 function useGiveOwnership(
   attempt: GiveAttempt | null,
   originAttempt: GiveAttempt | null,
@@ -273,8 +302,6 @@ function useGiveOwnership(
 ): UseQueryResult<GiveOwnership> {
   const queryClient = useQueryClient();
   const ownership = useQuery(
-    // The immutable attempt id owns its private press capture, not cache data.
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps
     queryOptions<GiveOwnership>({
       queryKey: authQueryKeys.hostOwnershipAfterMove(
         attempt?.press.runtime.auth ?? null,
@@ -282,30 +309,7 @@ function useGiveOwnership(
         attempt?.press.hostId ?? null,
         attempt?.attemptId ?? null,
       ),
-      queryFn: async () => {
-        if (attempt === null) return "sign_in_changed";
-        const { press } = attempt;
-        if (!press.operation.onOriginSignIn()) return "sign_in_changed";
-        const era = press.runtime.auth.currentAuthEra();
-        if (era.identity !== press.userId) return "sign_in_changed";
-        try {
-          const result = await press.runtime.auth.readHostOwnership(
-            press.hostId,
-            era,
-          );
-          if (!press.operation.onOriginSignIn()) return "sign_in_changed";
-          return result.kind === "ok" &&
-            result.host.hostId === press.hostId &&
-            result.host.owner.kind === "team" &&
-            result.host.owner.id === press.team.ownerId
-            ? "confirmed"
-            : "not_confirmed";
-        } catch {
-          return press.operation.onOriginSignIn()
-            ? "not_confirmed"
-            : "sign_in_changed";
-        }
-      },
+      queryFn: capturedGiveOwnershipReader(attempt),
       // One read for this attempt, never an earlier Overview read or a poll.
       enabled: (query) =>
         given &&
