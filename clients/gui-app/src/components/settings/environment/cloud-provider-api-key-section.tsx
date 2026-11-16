@@ -66,13 +66,14 @@ function CloudProviderApiKeyField(props: {
   if (list?.profileSyncEnabled === false) return null;
   if (read.failed)
     return <ConfigurationReadFailed page="keys" onRetry={read.retry} />;
-  if (list === undefined) return read.pending ? <MutedAgentSpinner /> : null;
+  if (list === undefined) return <MutedAgentSpinner />;
   const configured = list.providerKeys.some(
     (record) =>
       record.providerId === props.providerId && record.state === "live",
   );
   const refusal = providerApiKeyRefusal(props.providerId, draft);
   const disabled = !props.scope.canEdit || mutation.isPending;
+  const pendingAction = mutation.isPending ? mutation.variables.action : null;
   const change = (action: "set" | "clear"): void => {
     if (
       outstanding.current ||
@@ -125,9 +126,7 @@ function CloudProviderApiKeyField(props: {
           onClick={() => change("set")}
           disabled={disabled || draft.trim() === "" || refusal !== null}
         >
-          {mutation.isPending && mutation.variables.action === "set" ? (
-            <MutedAgentSpinner />
-          ) : null}
+          {pendingAction === "set" ? <MutedAgentSpinner /> : null}
           Save
         </Button>
         {configured ? (
@@ -137,9 +136,7 @@ function CloudProviderApiKeyField(props: {
             onClick={() => change("clear")}
             disabled={disabled}
           >
-            {mutation.isPending && mutation.variables.action === "clear" ? (
-              <MutedAgentSpinner />
-            ) : null}
+            {pendingAction === "clear" ? <MutedAgentSpinner /> : null}
             Clear
           </Button>
         ) : null}

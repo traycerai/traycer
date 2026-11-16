@@ -418,16 +418,16 @@ function providerRailRows(input: {
     let word: string | null;
     if (usesKeyRecords) {
       // Enabled record mode owns absence too: a removed key cannot be revived by a stale legacy secret.
-      if ((count !== null && count > 0) || linkedPlan || recordKey)
-        standing = "configured";
-      else if (
-        count === null ||
-        input.plans === null ||
-        input.keyRecords === null
-      )
-        standing = "unknown";
-      else standing = "absent";
-      word = linkedPlan ? "plan" : recordKey ? "key" : null;
+      standing = recordProviderStanding({
+        profileCount: count,
+        linkedPlan,
+        recordKey,
+        plansKnown: input.plans !== null,
+        recordsKnown: input.keyRecords !== null,
+      });
+      if (linkedPlan) word = "plan";
+      else if (recordKey) word = "key";
+      else word = null;
     } else {
       word = teamProviderStateWord({
         providerId: provider.providerId,
@@ -450,6 +450,25 @@ function providerRailRows(input: {
       subtitle: word === "key" ? "key" : null,
     };
   });
+}
+
+/** A broker key read owns both presence and absence, after known profiles/plans. */
+function recordProviderStanding(input: {
+  readonly profileCount: number | null;
+  readonly linkedPlan: boolean;
+  readonly recordKey: boolean;
+  readonly plansKnown: boolean;
+  readonly recordsKnown: boolean;
+}): CloudProviderStanding {
+  if (
+    (input.profileCount !== null && input.profileCount > 0) ||
+    input.linkedPlan ||
+    input.recordKey
+  )
+    return "configured";
+  if (input.profileCount === null || !input.plansKnown || !input.recordsKnown)
+    return "unknown";
+  return "absent";
 }
 
 function providerRailClass(standing: CloudProviderStanding): RailClass {
