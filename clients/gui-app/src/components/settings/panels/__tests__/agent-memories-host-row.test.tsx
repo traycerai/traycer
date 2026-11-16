@@ -1584,7 +1584,7 @@ describe("Memories ▸ the host row's write", () => {
 
     await waitFor(() => expect(toast.info).toHaveBeenCalledTimes(1));
     expect(toast.info).toHaveBeenCalledWith(
-      "This setting was changed in the dashboard just now.",
+      "This setting was changed just now.",
       { id: "environment-write-stale" },
     );
     expect(toast.error).not.toHaveBeenCalled();

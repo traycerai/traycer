@@ -381,10 +381,7 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
     await settle();
     // And the person is told where the change came from.
     expect(toastInfo.mock.calls).toEqual([
-      [
-        "This setting was changed in the dashboard just now.",
-        { id: "environment-write-stale" },
-      ],
+      ["This setting was changed just now.", { id: "environment-write-stale" }],
     ]);
   });
 

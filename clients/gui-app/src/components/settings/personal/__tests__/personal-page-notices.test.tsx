@@ -466,9 +466,7 @@ describe("a Personal page's convergence notices", () => {
     const rows = await screen.findAllByTestId("personal-notice");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("LOG_LEVEL from dev-box now applies everywhere."),
-      expect.stringContaining(
-        "DATABASE_URL from the dashboard now applies everywhere.",
-      ),
+      expect.stringContaining("DATABASE_URL now applies everywhere."),
     ]);
     // Under the page's heading, in the shell's header with the status line.
     const header = rows[0].closest("header");
