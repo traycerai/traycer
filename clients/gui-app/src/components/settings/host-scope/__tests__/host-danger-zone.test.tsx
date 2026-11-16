@@ -135,7 +135,7 @@ function registeredRemoteHost(
   hostId: string,
   owner: HostOwnerPrincipal,
 ): HostScopeOption {
-  const kind = owner.kind === "team" ? "machine" : "personal";
+  const kind = "personal";
   const item: HostListItem = {
     hostId,
     displayName: hostId,
