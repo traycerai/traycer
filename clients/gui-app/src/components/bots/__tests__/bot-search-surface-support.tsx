@@ -605,6 +605,19 @@ export async function typeIntoPanel(text: string): Promise<void> {
   await settle();
 }
 
+/**
+ * Opens the search from the header, widens it to every bot, and types `text`,
+ * through the debounce and the follow-up page its first answer asks for.
+ */
+export async function searchAllBots(text: string): Promise<void> {
+  fireEvent.click(
+    screen.getByRole("button", { name: "Search in Release Bot" }),
+  );
+  fireEvent.click(screen.getByTestId("bot-search-scope-remove"));
+  await typeIntoPanel(text);
+  await settle();
+}
+
 export function panel(): HTMLElement {
   return screen.getByTestId("bot-search-panel");
 }
