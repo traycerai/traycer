@@ -4,10 +4,11 @@
  * bot's bound host and takes the nonce; a nonce request names the authority
  * it was made under (the bound host and its epoch), which the pending row's id
  * derives with; a refusal that the binding moved sends the app to read the
- * bot again; Retry is offered only under the authority the send was made
- * under; and a held send is drawn by its bot and chat, whichever host the tab
- * is on. The real tab surface, channel and box over a host that holds each
- * send; what is asserted is the host's request log and the page.
+ * bot again; Retry goes out with the authority the send was made under, and
+ * is offered only through the host that authority names, at its epoch or a
+ * newer one; and a held send is drawn by its bot and chat, whichever host
+ * the tab is on. The real tab surface, channel and box over a host that holds
+ * each send; what is asserted is the host's request log and the page.
  */
 import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import {
@@ -47,7 +48,7 @@ import {
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 import { QueryClient } from "@tanstack/react-query";
 import type { RenderResult } from "@testing-library/react";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   endBotTabSurfaceCase,
@@ -323,11 +324,27 @@ function rowIdUnder(
   return conversationRequestMessageId(botSendRequestId(identity));
 }
 
+/**
+ * Runs `press`, and waits for the host to record the request it makes: the
+ * wait is armed first and is the host's own record of the request's arrival.
+ * The press is not wrapped in an `act` of its own: that holds back the send
+ * the press sets off, so the arrival would never come. One empty `act` then
+ * flushes what the arrival set off.
+ */
+async function hostHoldsTheSendOf(press: () => void): Promise<void> {
+  const before = loggedSends().length;
+  const arrived = heldHost().nextSend();
+  press();
+  await arrived;
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(loggedSends()).toHaveLength(before + 1);
+}
+
 /** A presses Send on `text`, and the host holds the request. */
 async function aSends(text: string): Promise<void> {
-  const before = loggedSends().length;
-  pressSend(text);
-  await waitFor(() => expect(loggedSends()).toHaveLength(before + 1));
+  await hostHoldsTheSendOf(() => pressSend(text));
 }
 
 /** How many times the surface read the bot again, through its subscription's `resubscribe`. */
@@ -464,8 +481,7 @@ describe("a send the host refused because the bot's binding moved", () => {
     await theFirstSendIsRefusedAsMoved();
     bindNow({ kind: "team", hostId: ELSEWHERE, epoch: 2 });
 
-    act(() => pressEnter());
-    await waitFor(() => expect(loggedSends()).toHaveLength(2));
+    await hostHoldsTheSendOf(pressEnter);
 
     expect(
       sendAt(1).sendNonce,
@@ -478,8 +494,7 @@ describe("a send the host refused because the bot's binding moved", () => {
     await theFirstSendIsRefusedAsMoved();
     bindNow({ ...HERE, epoch: 5 });
 
-    act(() => pressEnter());
-    await waitFor(() => expect(loggedSends()).toHaveLength(2));
+    await hostHoldsTheSendOf(pressEnter);
 
     const second = sendAt(1);
     expect(
@@ -499,8 +514,9 @@ describe("Retry of an unconfirmed send follows the binding it was made under", (
     await aSends(TEXT_A);
     await theSendTurnsUncertain();
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(loggedSends()).toHaveLength(2));
+    await hostHoldsTheSendOf(() =>
+      fireEvent.click(screen.getByRole("button", { name: "Retry" })),
+    );
 
     expect(sendAt(1)).toEqual(sendAt(0));
   });
@@ -574,8 +590,9 @@ describe("a send the host refused as moved, by how many attempts it has made", (
     await mountBoundAs(HERE);
     await aSends(TEXT_A);
     await theSendTurnsUncertain();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(loggedSends()).toHaveLength(2));
+    await hostHoldsTheSendOf(() =>
+      fireEvent.click(screen.getByRole("button", { name: "Retry" })),
+    );
     const resubscribes = botReadsSoFar();
 
     await act(async () => {
@@ -626,9 +643,8 @@ function offeredRetry(step: string): HTMLButtonElement {
 
 /** Presses the offered Retry, and waits for the host to hold its request. */
 async function pressRetry(step: string): Promise<void> {
-  const before = loggedSends().length;
-  fireEvent.click(offeredRetry(step));
-  await waitFor(() => expect(loggedSends()).toHaveLength(before + 1));
+  const retry = offeredRetry(step);
+  await hostHoldsTheSendOf(() => fireEvent.click(retry));
 }
 
 /** The host answers the send it holds at `index` as refused because the binding moved. */

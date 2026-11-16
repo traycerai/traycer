@@ -37,6 +37,11 @@ export interface HeldHost {
   readonly spine: HostClient<HostRpcRegistry>;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly sends: HeldSend[];
+  /**
+   * Resolves with the next send the host records, armed before whatever makes
+   * the client send: the host's own record of it is the moment to wait for.
+   */
+  nextSend(): Promise<HeldSend>;
 }
 
 /** What one commit drew, read from the DOM before any passive effect ran. */

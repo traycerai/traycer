@@ -182,6 +182,7 @@ export function createChannelStore(
 
 function createHeldHost(): HeldHost {
   const sends: HeldSend[] = [];
+  const waiting: Array<(send: HeldSend) => void> = [];
   // `spine` is read when a send is asked, so the answer is made for the
   // account whose context the request left under.
   const holder: { spine: HostClient<HostRpcRegistry> | null } = {
@@ -198,7 +199,7 @@ function createHeldHost(): HeldHost {
       "bot.conversation.send": (params) =>
         new Promise((resolve, reject) => {
           const sentBy = holder.spine?.getRequestContextUserId() ?? null;
-          sends.push({
+          const held: HeldSend = {
             request: params,
             sentBy,
             // A host that takes no nonce answers ids of its own.
@@ -214,7 +215,9 @@ function createHeldHost(): HeldHost {
                   : sendReceipt(params, sentBy ?? USER_A, threadId),
               ),
             reject,
-          });
+          };
+          sends.push(held);
+          for (const arrived of waiting.splice(0)) arrived(held);
         }),
     },
   });
@@ -231,6 +234,10 @@ function createHeldHost(): HeldHost {
     spine,
     messenger,
     sends,
+    nextSend: () =>
+      new Promise<HeldSend>((arrived) => {
+        waiting.push(arrived);
+      }),
   };
 }
 
