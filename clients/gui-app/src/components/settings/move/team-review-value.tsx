@@ -139,7 +139,7 @@ export function TeamReviewValueReadout(props: {
                   {tool.name}
                   <Switch
                     id={`${id}-${group.id}-${tool.id}`}
-                    aria-label={`${group.harness} ${tool.name}`}
+                    aria-label={`${harnessLabel(group.harness)} ${tool.name}`}
                     checked={tool.enabled}
                     disabled
                   />
