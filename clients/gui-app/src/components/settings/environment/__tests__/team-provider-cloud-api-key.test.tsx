@@ -663,7 +663,7 @@ describe("TeamProviders cloud API keys", () => {
       ),
     ).toBe("Bearer user-2-token");
 
-    await act(async () => {
+    act(() => {
       releaseOnMutate.resolve();
     });
     await waitFor(() => {
