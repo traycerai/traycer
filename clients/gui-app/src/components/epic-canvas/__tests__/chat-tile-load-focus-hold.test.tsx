@@ -10,6 +10,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import {
   advanceLegendListFrames,
@@ -396,7 +397,7 @@ function tree(queryClient: QueryClient, isActive: boolean): ReactNode {
 /** What the reader opened elsewhere in the window while the chat loaded. */
 function ReaderSurfaces(): ReactNode {
   return (
-    <>
+    <div role="region" aria-label="reader controls">
       <input aria-label="rename" />
       <button type="button" aria-expanded="true" aria-haspopup="dialog">
         Monitor
@@ -411,8 +412,13 @@ function ReaderSurfaces(): ReactNode {
           item
         </div>
       </div>
-    </>
+    </div>
   );
+}
+
+// Scoped to the reader's own controls, so no query can match inside the tile.
+function readerControls() {
+  return within(screen.getByRole("region", { name: "reader controls" }));
 }
 
 function renderLoadingTile(isActive: boolean) {
@@ -433,36 +439,14 @@ function renderLoadingTile(isActive: boolean) {
           <ReaderSurfaces />
         </>,
       ),
-    renameInput: (): HTMLInputElement => {
-      const input =
-        view.container.ownerDocument.querySelector<HTMLInputElement>(
-          "input[aria-label='rename']",
-        );
-      if (input === null) throw new Error("expected the rename input");
-      return input;
-    },
-    popoverTrigger: (): HTMLElement => {
-      const trigger = view.container.ownerDocument.querySelector<HTMLElement>(
-        "button[aria-expanded='true']",
-      );
-      if (trigger === null) throw new Error("expected the popover trigger");
-      return trigger;
-    },
-    treeRowButton: (): HTMLElement => {
-      const row = view.container.ownerDocument.querySelector<HTMLElement>(
-        "[role='treeitem'] button",
-      );
-      if (row === null) throw new Error("expected the tree row button");
-      return row;
-    },
-    menuItem: (): HTMLElement => {
-      const item =
-        view.container.ownerDocument.querySelector<HTMLElement>(
-          "[role='menuitem']",
-        );
-      if (item === null) throw new Error("expected the menu item");
-      return item;
-    },
+    renameInput: (): HTMLElement =>
+      readerControls().getByRole("textbox", { name: "rename" }),
+    popoverTrigger: (): HTMLElement =>
+      readerControls().getByRole("button", { name: "Monitor" }),
+    treeRowButton: (): HTMLElement =>
+      readerControls().getByRole("button", { name: "chat row" }),
+    menuItem: (): HTMLElement =>
+      readerControls().getByRole("menuitem", { name: "item" }),
   };
 }
 
