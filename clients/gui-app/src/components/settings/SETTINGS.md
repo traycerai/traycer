@@ -6017,8 +6017,7 @@ wrap`). Each row names the account its first usable match runs on, the
       - On a team only, first: **Archive idle agents automatically**
         (`environment/team-chat-auto-archive-row.tsx`, definition
         `STORAGE.chatAutoArchive`, board C24's Proposal): "Tidy up chats
-        agents started once they go quiet. Applies on every host in this
-        environment." The team's own setting, read and saved by the app on
+        agents started once they go quiet." The team's own setting, read and saved by the app on
         the person's sign-in (`GET` / `PUT
 /api/traycer/chat-auto-archive/teams/:teamId` on traycer-server,
         through the runner host's `getTeamChatAutoArchive` /

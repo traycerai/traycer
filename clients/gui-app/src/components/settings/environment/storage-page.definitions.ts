@@ -64,8 +64,7 @@ export const STORAGE = defineSettingsSection("storage", {
     group: "archivedChats",
     search: { contributesTo: "page" },
     label: "Archive idle agents automatically",
-    description:
-      "Tidy up chats agents started once they go quiet. Applies on every host in this environment.",
+    description: "Tidy up chats agents started once they go quiet.",
     availableWhen: alwaysAvailable,
     keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
   },
