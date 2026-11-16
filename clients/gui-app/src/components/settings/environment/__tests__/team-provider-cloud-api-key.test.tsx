@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -22,6 +23,7 @@ import {
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { cloudProviderKeyKeys } from "@/lib/query-keys/cloud-provider-key-keys";
 import {
   configurationItem,
   personalPoolSource,
@@ -168,6 +170,12 @@ function routeRequest(
   request: OwnEnvironmentTransportRequest,
   state: TransportFixtureState,
 ): Response | Promise<Response> | undefined {
+  return authValidationRequest(request) ?? environmentRequest(request, state);
+}
+
+function authValidationRequest(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
   if (
     request.url.origin === AUTHN_BASE &&
     request.url.pathname === "/api/v3/user/negotiated"
@@ -180,7 +188,13 @@ function routeRequest(
     response.headers.set("x-traycer-user-record-version", "3.0");
     return response;
   }
+  return undefined;
+}
 
+function environmentRequest(
+  request: OwnEnvironmentTransportRequest,
+  state: TransportFixtureState,
+): Response | Promise<Response> | undefined {
   if (request.url.toString() === DIRECTORY_URL) {
     return jsonResponse(200, { environments: [] });
   }
@@ -192,48 +206,75 @@ function routeRequest(
   const route = match?.[2];
   if (environmentId === undefined || route === undefined) return undefined;
 
-  if (route === "profile-records" && request.method === "GET") {
-    state.profileReads.push(request);
-    if (state.failedProfileRecords.has(environmentId)) {
-      return jsonResponse(503, {});
-    }
-    if (state.disabledProfileRecords.has(environmentId)) {
-      return jsonResponse(200, { enabled: false });
-    }
-    return jsonResponse(
-      200,
-      profileRecordsResponse(state.keysByEnvironment.get(environmentId) ?? []),
-    );
-  }
+  return (
+    profileRecordsRequest(request, environmentId, route, state) ??
+    providerKeyWriteRequest(request, environmentId, route, state) ??
+    environmentReadRequest(request, environmentId, route, state)
+  );
+}
 
+function profileRecordsRequest(
+  request: OwnEnvironmentTransportRequest,
+  environmentId: string,
+  route: string,
+  state: TransportFixtureState,
+): Response | undefined {
+  if (route !== "profile-records" || request.method !== "GET") return undefined;
+  state.profileReads.push(request);
+  if (state.failedProfileRecords.has(environmentId)) {
+    return jsonResponse(503, {});
+  }
+  if (state.disabledProfileRecords.has(environmentId)) {
+    return jsonResponse(200, { enabled: false });
+  }
+  return jsonResponse(
+    200,
+    profileRecordsResponse(state.keysByEnvironment.get(environmentId) ?? []),
+  );
+}
+
+function providerKeyWriteRequest(
+  request: OwnEnvironmentTransportRequest,
+  environmentId: string,
+  route: string,
+  state: TransportFixtureState,
+): Response | Promise<Response> | undefined {
   if (
-    route.startsWith("provider-keys/") &&
-    (request.method === "PUT" || request.method === "DELETE")
+    !route.startsWith("provider-keys/") ||
+    (request.method !== "PUT" && request.method !== "DELETE")
   ) {
-    state.writes.push(request);
-    const providerId = route.slice("provider-keys/".length);
-    if (!isProviderKeyProviderId(providerId)) return jsonResponse(404, {});
-    const revision = state.writes.length;
-    const next = keyWireRow(
-      environmentId,
-      providerId,
-      request.method === "PUT" ? "live" : "removed",
-      revision,
-    );
-    if (request.method === "PUT" && state.holdNextSet) {
-      state.holdNextSet = false;
-      const pending = Promise.withResolvers<Response>();
-      state.releasePendingSet = () => {
-        state.keysByEnvironment.set(environmentId, [next]);
-        pending.resolve(jsonResponse(200, keyWriteResponse(next)));
-        state.releasePendingSet = null;
-      };
-      return pending.promise;
-    }
-    state.keysByEnvironment.set(environmentId, [next]);
-    return jsonResponse(200, keyWriteResponse(next));
+    return undefined;
   }
+  state.writes.push(request);
+  const providerId = route.slice("provider-keys/".length);
+  if (!isProviderKeyProviderId(providerId)) return jsonResponse(404, {});
+  const revision = state.writes.length;
+  const next = keyWireRow(
+    environmentId,
+    providerId,
+    request.method === "PUT" ? "live" : "removed",
+    revision,
+  );
+  if (request.method === "PUT" && state.holdNextSet) {
+    state.holdNextSet = false;
+    const pending = Promise.withResolvers<Response>();
+    state.releasePendingSet = () => {
+      state.keysByEnvironment.set(environmentId, [next]);
+      pending.resolve(jsonResponse(200, keyWriteResponse(next)));
+      state.releasePendingSet = null;
+    };
+    return pending.promise;
+  }
+  state.keysByEnvironment.set(environmentId, [next]);
+  return jsonResponse(200, keyWriteResponse(next));
+}
 
+function environmentReadRequest(
+  request: OwnEnvironmentTransportRequest,
+  environmentId: string,
+  route: string,
+  state: TransportFixtureState,
+): Response | undefined {
   if (request.method !== "GET") return undefined;
   if (route === "hosts") return jsonResponse(200, { hosts: [] });
   if (route === "items") {
@@ -321,9 +362,7 @@ function createHarness(source: ConfigurationSource): ProviderPageHarness {
   return harness;
 }
 
-async function renderPage(
-  harness: ProviderPageHarness,
-): Promise<ReturnType<typeof render>> {
+async function renderPage(harness: ProviderPageHarness): Promise<RenderResult> {
   await signInOwnEnvironment(harness.runtime);
   return render(<TeamProviders />, { wrapper: harness.wrapper });
 }
@@ -555,6 +594,96 @@ describe("TeamProviders cloud API keys", () => {
       "Bearer user-1-token",
     );
     expect(await screen.findByText("Not set")).toBeTruthy();
+  });
+
+  it("abandons A's save paused in onMutate after B takes over", async () => {
+    const harness = createHarness(noHostSource(PERSONAL_ENVIRONMENT));
+    await signInOwnEnvironment(harness.runtime);
+    const onMutateStarted = Promise.withResolvers<void>();
+    const releaseOnMutate = Promise.withResolvers<void>();
+    harness.queryClient.setMutationDefaults(
+      cloudProviderKeyKeys.change(
+        "user-1",
+        harness.runtime.auth.getIdentityGeneration(),
+        PERSONAL_ENVIRONMENT,
+        "cursor",
+      ),
+      {
+        onMutate: async () => {
+          onMutateStarted.resolve();
+          await releaseOnMutate.promise;
+        },
+      },
+    );
+    const view = render(<TeamProviders />, { wrapper: harness.wrapper });
+
+    await selectProvider("Cursor");
+    await userEvent.type(await screen.findByLabelText("API key"), TEST_KEY);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await onMutateStarted.promise;
+    expect(harness.state.writes).toEqual([]);
+
+    const rail = screen.getByRole("navigation", { name: "Providers" });
+    await userEvent.click(
+      within(rail).getByRole("button", { name: /OpenRouter/ }),
+    );
+    expect(
+      within(rail)
+        .getByRole("button", { name: /OpenRouter/ })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    const previousEnvironmentReads = profileReadsFor(
+      harness,
+      PERSONAL_ENVIRONMENT,
+    ).length;
+
+    await act(async () => {
+      await harness.runtime.auth.signOut();
+      useAuthStore.setState({ status: "signed-out" });
+    });
+    harness.source.current = noHostSource(SECOND_PERSONAL_ENVIRONMENT);
+    await signInOwnEnvironmentAs(harness.runtime, "user-2", "user-2-token");
+    await waitFor(() => {
+      expect(harness.runtime.auth.chosenSignIn().userId).toBe("user-2");
+    });
+    view.rerender(<TeamProviders />);
+
+    await selectProvider("Cursor");
+    const nextInput = await screen.findByLabelText("API key");
+    await userEvent.type(nextInput, "user-two-unsent-draft");
+    expect(nextInput).toHaveProperty("value", "user-two-unsent-draft");
+    await waitFor(() => {
+      expect(
+        profileReadsFor(harness, SECOND_PERSONAL_ENVIRONMENT).length,
+      ).toBeGreaterThan(0);
+    });
+    expect(
+      profileReadsFor(harness, SECOND_PERSONAL_ENVIRONMENT)[0]?.headers.get(
+        "authorization",
+      ),
+    ).toBe("Bearer user-2-token");
+
+    await act(async () => {
+      releaseOnMutate.resolve();
+    });
+    await waitFor(() => {
+      expect(
+        harness.queryClient
+          .getMutationCache()
+          .getAll()
+          .every((mutation) => mutation.state.status !== "pending"),
+      ).toBe(true);
+      expect(nextInput).toHaveProperty("value", "user-two-unsent-draft");
+    });
+    expect(harness.state.writes).toEqual([]);
+    expect(profileReadsFor(harness, PERSONAL_ENVIRONMENT)).toHaveLength(
+      previousEnvironmentReads,
+    );
+    expect(await screen.findByText("Not set")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Save" }).getAttribute("disabled"),
+    ).toBeNull();
+    view.unmount();
   });
 
   it("allows the existing Editor role to set a team key", async () => {
