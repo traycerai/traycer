@@ -1479,8 +1479,8 @@ export const WINDOWED_SNAPSHOT_MAX_BYTES = 1024 * 1024;
 /**
  * What the frame costs on top of the snapshot payload itself.
  *
- * {@link windowedSnapshotFitsFrame} is handed the SNAPSHOT, but what the relay
- * classifies is the encoded BODY: the frame's own `kind`, `epicId` and `chatId`
+ * {@link windowedSnapshotFitsFrame} takes the snapshot's size, but the relay
+ * classifies the encoded BODY: the frame's own `kind`, `epicId` and `chatId`
  * around it, plus the five-byte body header `encodeMuxMessageBody` prepends
  * before `BULK_QOS_BODY_THRESHOLD_BYTES` is applied. That threshold is 1 MiB -
  * the SAME value as the ceiling above - so without a reserve a snapshot
