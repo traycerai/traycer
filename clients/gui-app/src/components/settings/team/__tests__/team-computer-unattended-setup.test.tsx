@@ -28,7 +28,8 @@ type MintResult =
       readonly code:
         | "broker_unavailable"
         | "environment_action_forbidden"
-        | "seat_without_write";
+        | "seat_without_write"
+        | null;
     };
 
 interface AuthFacade {
@@ -207,30 +208,32 @@ describe("TeamComputerUnattendedSetup", () => {
     ).not.toBeNull();
   });
 
-  it("does not automatically retry a refused mint when global mutation retries are enabled", async () => {
-    signIn(ACCOUNT_A);
-    const mint = vi.fn(() =>
-      Promise.resolve<MintResult>({
-        kind: "refused",
-        status: 503,
-        code: "broker_unavailable",
-      }),
-    );
-    hostBindingMock.current = {
-      auth: { mintTeamComputerInstallToken: mint },
-    };
-    mountSetup();
+  it.each([
+    [503, "broker_unavailable"],
+    [429, null],
+  ] as const)(
+    "does not automatically retry a refused mint after HTTP %s when global mutation retries are enabled",
+    async (status, code) => {
+      signIn(ACCOUNT_A);
+      const mint = vi.fn(() =>
+        Promise.resolve<MintResult>({ kind: "refused", status, code }),
+      );
+      hostBindingMock.current = {
+        auth: { mintTeamComputerInstallToken: mint },
+      };
+      mountSetup();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create install token" }),
-    );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Create install token" }),
+      );
 
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Couldn't create the install token. Try again.",
-    );
-    expect(mint).toHaveBeenCalledTimes(1);
-    expect(mint).toHaveBeenCalledWith(ENVIRONMENT_ID);
-  });
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "Couldn't create the install token. Try again.",
+      );
+      expect(mint).toHaveBeenCalledTimes(1);
+      expect(mint).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    },
+  );
 
   it.each(["environment_action_forbidden", "seat_without_write"] as const)(
     "explains the permission required after %s instead of offering a retry",
