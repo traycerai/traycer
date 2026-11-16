@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   type KeyboardEvent,
+  type MouseEvent,
   type TouchEvent,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -116,6 +117,7 @@ export interface StripTabRootProps {
   readonly "data-tab-index": number;
   readonly onClick: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  readonly onAuxClick: (event: MouseEvent<HTMLDivElement>) => void;
   readonly onTouchStart: (event: TouchEvent<HTMLDivElement>) => void;
   readonly onTouchMove: () => void;
   readonly onTouchEnd: () => void;
@@ -475,6 +477,16 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     [displayName, onSetTaskPinned, tab],
   );
   const close = useCallback(() => onClose(displayTab), [displayTab, onClose]);
+  // Middle-click closes, as it does on a tile's tab, through the same flow as
+  // the close button and the menu's Close Tab.
+  const handleAuxClick = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      if (canClose) close();
+    },
+    [canClose, close],
+  );
 
   const leaderBadge: StripTabLeaderBadge | null =
     modifier === null
@@ -501,6 +513,7 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
       "data-tab-index": index,
       onClick: activateTab,
       onKeyDown: handleKeyDown,
+      onAuxClick: handleAuxClick,
       onTouchStart: handleTouchStart,
       onTouchMove: cancelLongPress,
       onTouchEnd: cancelLongPress,
