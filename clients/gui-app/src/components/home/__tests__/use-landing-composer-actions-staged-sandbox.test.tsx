@@ -34,6 +34,12 @@ import {
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  createLandingAttachmentFixture,
+  landingTeamEnvironment,
+  type LandingAttachmentFixture,
+} from "./landing-attachment-fixture";
 import { toast } from "sonner";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
 import {
@@ -114,6 +120,7 @@ const landingMocks = vi.hoisted(() => ({
       list: (): Promise<readonly []> => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
     },
+    auth: null as LandingAttachmentFixture["auth"] | null,
     hostClient: {
       createRequesterForHostId: (hostId: string) => ({
         /**
@@ -354,6 +361,7 @@ registerExtraImageRootSource({ hashes: () => [...composerLiveImageRoots] });
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 const TEST_HOST_ID = "host-landing";
 const PLACEMENT_HOST_ID = "host-placement";
+let attachmentFixture: LandingAttachmentFixture;
 
 const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 
@@ -468,7 +476,14 @@ function newQueryClient(): QueryClient {
 }
 
 describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    attachmentFixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [landingTeamEnvironment("team-9")],
+    });
+    landingMocks.binding.auth = attachmentFixture.auth;
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.setState({ bySurface: {} });
     __resetTabNavigationControllerForTesting();
@@ -560,6 +575,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    attachmentFixture.dispose();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
     resetHostDirectoryRows();
@@ -771,6 +787,14 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         usePendingSandboxSendStore.getState().sends[send.id]?.epicConfirmed,
       ).toBe(true);
     });
+    expect(attachmentFixture.authnCalls).toEqual([
+      { kind: "list", bearer: "landing-token-a" },
+      {
+        kind: "attach",
+        bearer: "landing-token-a",
+        request: { taskId: send.epicId, environmentId: "env-team-9" },
+      },
+    ]);
     queryClient.clear();
   });
 
@@ -1907,15 +1931,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     const { refuseAttach, queryClient } = await startSendWithHeldAttach();
     const sendBefore = onlyPendingSend();
     useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
-    act(() => {
-      useAuthStore
-        .getState()
-        .setSignedIn(
-          { userId: "other-user", userName: "Other", email: "o@example.com" },
-          { userId: "other-user", username: "Other" },
-          [],
-        );
-    });
+    await switchToOtherLandingAccount();
     const shownBefore = toastLog.length;
     await refuseAttach(attachBusy());
     await refusalSettled(queryClient);
@@ -2001,15 +2017,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 
   it("says nothing when the account changed during the wait", async () => {
     const { refuseAttach, queryClient } = await startSendWithHeldAttach();
-    act(() => {
-      useAuthStore
-        .getState()
-        .setSignedIn(
-          { userId: "other-user", userName: "Other", email: "o@example.com" },
-          { userId: "other-user", username: "Other" },
-          [],
-        );
-    });
+    await switchToOtherLandingAccount();
     const shownBefore = toastLog.length;
     await refuseAttach(attachBusy());
     await refusalSettled(queryClient);
@@ -2406,17 +2414,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
     const send = onlyPendingSend();
 
-    act(() => {
-      useAuthStore.getState().setSignedIn(
-        {
-          userId: "other-user",
-          userName: "Other",
-          email: "other@example.com",
-        },
-        { userId: "other-user", username: "Other" },
-        [],
-      );
-    });
+    await switchToOtherLandingAccount();
     await act(async () => {
       attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
@@ -2746,9 +2744,26 @@ function queryClientWrapper(
 ): (props: { readonly children: ReactNode }) => ReactNode {
   return function QueryClientWrapper(props: { readonly children: ReactNode }) {
     return (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+      <RunnerHostProvider runnerHost={attachmentFixture.runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      </RunnerHostProvider>
     );
   };
+}
+
+async function switchToOtherLandingAccount(): Promise<void> {
+  await attachmentFixture.signInAs("other-user", "other-user-token");
+  act(() => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "other-user",
+        userName: "Other",
+        email: "other@example.com",
+      },
+      { userId: "other-user", username: "Other" },
+      [],
+    );
+  });
 }

@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   // bare liveness check over pid metadata, so this is what decides whether the
   // idempotent shortcut is safe.
   hostServing: true,
+  credentialProvisionMock: vi.fn(),
   statusResponses: [] as Array<{
     state: "running" | "stopped" | "not-installed" | "externally-managed";
     version: string | null;
@@ -50,6 +51,15 @@ const mocks = vi.hoisted(() => ({
     pid: number | null;
   }>,
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: mocks.credentialProvisionMock,
+  };
+});
 
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
@@ -168,6 +178,10 @@ describe("buildServiceStartCommand", () => {
     mocks.startFails = false;
     mocks.serviceJobId = null;
     mocks.hostServing = true;
+    mocks.credentialProvisionMock.mockReset().mockResolvedValue({
+      kind: "active",
+      minted: true,
+    });
   });
 
   afterEach(() => {
@@ -191,7 +205,7 @@ describe("buildServiceStartCommand", () => {
     })(fakeCtx());
 
     expect(result.human).toBe(
-      "requested start for service 'ai.traycer.host.agent'; a host is now serving (pid 4242)",
+      "requested start for service 'ai.traycer.host.agent'; a host is now serving (pid 4242); host authorized",
     );
     expect(result.data).toMatchObject({ label: "ai.traycer.host" });
   });
@@ -258,6 +272,18 @@ describe("buildServiceStartCommand", () => {
       alreadyRunning: false,
     });
     expect(result.exitCode).toBe(0);
+    expect(result.data).toMatchObject({
+      credentialProvision: { kind: "active" },
+    });
+    expect(result.data).toHaveProperty("credentialProvision", {
+      kind: "active",
+    });
+    expect(result.human).toContain("host authorized");
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
+    );
     // "requested ... a host is now serving", not "started the service". The
     // post-start readback shares the shortcut's blind spot: it can be
     // observing a FOREGROUND host while this service's supervisor exited after
@@ -289,6 +315,7 @@ describe("buildServiceStartCommand", () => {
     })(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(result.data).toMatchObject({
       priorState: "running",
       state: "running",

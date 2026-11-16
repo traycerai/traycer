@@ -7,6 +7,20 @@ export const authQueryKeys = {
     userId: string | null,
     hostId: string | null,
   ): readonly unknown[] => ["auth", "host-ownership", auth, userId, hostId],
+  // A give's readback cannot reuse the Overview answer from before the move.
+  hostOwnershipAfterMove: (
+    auth: object | null,
+    userId: string | null,
+    hostId: string | null,
+    attemptId: string | null,
+  ): readonly unknown[] => [
+    "auth",
+    "host-ownership-after-move",
+    auth,
+    userId,
+    hostId,
+    attemptId,
+  ],
   hostOwnershipAll: (): readonly unknown[] => ["auth", "host-ownership"],
   teamComputers: (
     auth: object | null,

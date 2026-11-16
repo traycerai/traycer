@@ -243,10 +243,15 @@ export async function provisionInstalledHostCredential(
       }
     } catch (err) {
       options.logger.warn("Host credential provisioning endpoint poll failed", {
-        environment: options.environment,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
+        kind: "error",
       });
+      options.logger.debug(
+        "Host credential provisioning endpoint poll failed",
+        {
+          errorName: errorFromUnknown(err).name,
+          errorMessage: errorFromUnknown(err).message,
+        },
+      );
     } finally {
       pollInFlight = false;
     }
@@ -484,6 +489,9 @@ export async function provisionInstalledHostCredential(
         },
         (err: unknown) => {
           options.logger.warn("Host credential provisioning mint flow threw", {
+            kind: "error",
+          });
+          options.logger.debug("Host credential provisioning mint flow threw", {
             errorName: errorFromUnknown(err).name,
             errorMessage: errorFromUnknown(err).message,
           });
@@ -781,7 +789,9 @@ export async function provisionInstalledHostCredential(
   } catch (err) {
     const error = errorFromUnknown(err);
     options.logger.warn("Host credential provisioning failed unexpectedly", {
-      environment: options.environment,
+      kind: "error",
+    });
+    options.logger.debug("Host credential provisioning failed unexpectedly", {
       errorName: error.name,
       errorMessage: error.message,
     });
