@@ -203,15 +203,19 @@ describe("TeamPlans", () => {
   it.each(["admin", "editor"] as const)(
     "lets a team %s unlink after its preview resolves",
     async (role) => {
-      let resolvePreview: (value: {
-        activeTurns: number | null;
-        localHostId: string | null;
-        keepsWorking: string[];
-      }) => void = () => undefined;
+      let resolvePreview: (
+        value: EnvironmentPreviewLocalFactsResponse,
+      ) => void = () => undefined;
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
       const harness = mountTeamPage(poolSource(role), {
         "environment.plans.list": () => plans,
         "environment.list": () => environmentList,
-        "environment.plans.unlinkPreview": () =>
+        "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+        "environment.configuration.items": () => ({ items: [] }),
+        "environment.host.list": () => ({ hosts: [host] }),
+        "environment.previewLocalFacts": () =>
           new Promise((resolve) => {
             resolvePreview = resolve;
           }),
@@ -227,8 +231,11 @@ describe("TeamPlans", () => {
       );
 
       await waitFor(() => {
-        expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([
-          { environmentId: "env-a", profileId: "prof-1" },
+        expect(harness.paramsOf("environment.previewLocalFacts")).toEqual([
+          {
+            environmentId: "env-a",
+            subject: { kind: "plan", profileId: "prof-1" },
+          },
         ]);
       });
       // The consequences are not known yet: no confirm, no unlink.
@@ -238,8 +245,7 @@ describe("TeamPlans", () => {
       act(() => {
         resolvePreview({
           activeTurns: 2,
-          localHostId: null,
-          keepsWorking: ["Team key"],
+          terminals: null,
         });
       });
       const dialog = await screen.findByRole("dialog");
