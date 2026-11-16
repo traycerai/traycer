@@ -584,6 +584,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       status: "lock-timeout",
     });
     expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(existsSync(markerPath())).toBe(false);
   });
 
@@ -616,6 +617,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(existsSync(markerPath())).toBe(false);
   });
 

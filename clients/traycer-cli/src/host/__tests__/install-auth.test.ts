@@ -1557,10 +1557,16 @@ describe("install auth helpers", () => {
   it("treats an unreadable stored sign-in as signed out and keeps its diagnostic at debug level", async () => {
     const diagnostic =
       "stored-credentials-marker path=/private/test/credentials body=distinctive";
-    const ctx = fakeCtx();
+    const baseCtx = fakeCtx();
     const warn = vi.fn();
     const debug = vi.fn();
-    ctx.runtime.logger = { ...ctx.runtime.logger, warn, debug };
+    const ctx = {
+      ...baseCtx,
+      runtime: {
+        ...baseCtx.runtime,
+        logger: { ...baseCtx.runtime.logger, warn, debug },
+      },
+    };
     mocks.resolveHostAuthMock.mockRejectedValue(new Error(diagnostic));
 
     const result = await maybeProvisionCredential(ctx, "start", null);
@@ -1580,10 +1586,16 @@ describe("install auth helpers", () => {
     // an escape would report a completed command as a failed one.
     const diagnostic =
       "credential-probe-marker path=/private/test/credentials body=distinctive";
-    const ctx = fakeCtx();
+    const baseCtx = fakeCtx();
     const warn = vi.fn();
     const debug = vi.fn();
-    ctx.runtime.logger = { ...ctx.runtime.logger, warn, debug };
+    const ctx = {
+      ...baseCtx,
+      runtime: {
+        ...baseCtx.runtime,
+        logger: { ...baseCtx.runtime.logger, warn, debug },
+      },
+    };
     mocks.resolveHostAuthMock.mockResolvedValue(storedAuth());
     mocks.provisionInstalledHostCredentialMock.mockRejectedValue(
       new Error(diagnostic),

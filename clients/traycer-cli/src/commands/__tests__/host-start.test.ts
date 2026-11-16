@@ -9849,41 +9849,55 @@ describe("runHostStart - previous-exit record", () => {
 });
 
 describe("runHostStart - advisory work after an admitted manual start", () => {
-  it("starts the advisory once after spawn and does not wait for it before supervision exits", async () => {
+  it("starts the advisory once across an intentional restart without waiting for it", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
-    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    let releaseProbe: (() => void) | null = null;
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withRestartAttempts(deps);
+    let releaseProbe: () => void = () => {
+      throw new Error("advisory probe gate was not initialized");
+    };
     let probeSettled = false;
-    let probeRun: Promise<void> | null = null;
     const probeGate = new Promise<void>((resolve) => {
       releaseProbe = resolve;
     });
+    const probeRun = probeGate.then(() => {
+      probeSettled = true;
+    });
     const onHostStarted = vi.fn(() => {
       recorded.sequence.push("credential-probe");
-      probeRun = probeGate.then(() => {
-        probeSettled = true;
-      });
       return probeRun;
     });
-    const tracking = withChildExit({ ...deps, onHostStarted }, child, 0, null);
+    let runSettled = false;
+    const supervision = runHostStart(
+      { environment: "production", cwd: null },
+      {
+        ...scripted.deps,
+        maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
+        onHostStarted,
+      },
+    ).finally(() => {
+      runSettled = true;
+    });
 
-    await runUntilExit(
-      () => runHostStart({ environment: "production", cwd: null }, tracking),
-      recorded,
-    );
+    try {
+      await vi.waitFor(() => {
+        expect(recorded.spawnCalls).toHaveLength(2);
+        expect(runSettled).toBe(true);
+      });
 
-    expect(onHostStarted).toHaveBeenCalledTimes(1);
-    expect(recorded.sequence.indexOf("spawn")).toBeLessThan(
-      recorded.sequence.indexOf("credential-probe"),
-    );
-    expect(probeSettled).toBe(false);
-    const finishProbe = releaseProbe;
-    const startedProbe = probeRun;
-    if (finishProbe === null || startedProbe === null) {
-      throw new Error("advisory probe did not start");
+      expect(onHostStarted).toHaveBeenCalledTimes(1);
+      expect(recorded.spawnCalls).toHaveLength(2);
+      expect(recorded.exited).toBe(0);
+      expect(probeSettled).toBe(false);
+      expect(recorded.sequence.indexOf("spawn")).toBeLessThan(
+        recorded.sequence.indexOf("credential-probe"),
+      );
+    } finally {
+      releaseProbe();
+      await supervision;
     }
-    finishProbe();
-    await startedProbe;
+
+    await probeRun;
     expect(probeSettled).toBe(true);
   });
 

@@ -483,9 +483,12 @@ describe("manual host start uses a stored sign-in without prompting", () => {
 
   it("uses the sign-in just stored by login and reports the real probe outcome", async () => {
     await runTokenLogin();
-    const ctx = makeCtx();
+    const baseCtx = makeCtx();
     const debug = vi.fn();
-    ctx.runtime.logger = { ...noopLogger, debug };
+    const ctx: CommandContext = {
+      ...baseCtx,
+      runtime: { ...baseCtx.runtime, logger: { ...noopLogger, debug } },
+    };
 
     await runManualStart(ctx);
 
@@ -521,11 +524,17 @@ describe("manual host start uses a stored sign-in without prompting", () => {
       "credential-probe-marker path=/private/test/credentials body=distinctive";
     await runTokenLogin();
     provisionMock.mockRejectedValueOnce(new Error(diagnostic));
-    const ctx = makeCtx();
+    const baseCtx = makeCtx();
     const warn = vi.fn();
     const info = vi.fn();
     const debug = vi.fn();
-    ctx.runtime.logger = { ...noopLogger, warn, info, debug };
+    const ctx: CommandContext = {
+      ...baseCtx,
+      runtime: {
+        ...baseCtx.runtime,
+        logger: { ...noopLogger, warn, info, debug },
+      },
+    };
 
     await runManualStart(ctx);
 
