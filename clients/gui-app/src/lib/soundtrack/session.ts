@@ -366,6 +366,7 @@ export class SoundtrackSession {
       this.logSkip("next", inFront.track, "silence");
       this.cancelPendingStart();
       startFromSilence(pendingStart.player);
+      this.replan();
       return;
     }
     const { history } = inFront;
