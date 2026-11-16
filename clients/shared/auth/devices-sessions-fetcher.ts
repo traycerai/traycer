@@ -83,12 +83,22 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
   ).toString();
 }
 
-function jsonHeaders(bearerToken: string): Record<string, string> {
-  return {
+/**
+ * Only a request with a body declares a JSON one: authn's JSON parser refuses
+ * a body-less request that declares it (`FST_ERR_CTP_EMPTY_JSON_BODY`), as a
+ * session revoke's DELETE is.
+ */
+function jsonHeaders(
+  bearerToken: string,
+  body: RequestInit["body"],
+): Record<string, string> {
+  const headers = {
     Authorization: `Bearer ${bearerToken}`,
     Accept: "application/json",
-    "Content-Type": "application/json",
   };
+  return body === undefined || body === null
+    ? headers
+    : { ...headers, "Content-Type": "application/json" };
 }
 
 /** Statuses whose `Response` cannot carry a body, even an empty one. */
@@ -122,7 +132,7 @@ async function fetchAuthn(
     const response = await untilAborted(
       fetch(authnApiUrl(authnBaseUrl, path), {
         ...init,
-        headers: jsonHeaders(bearerToken),
+        headers: jsonHeaders(bearerToken, init.body),
         signal: abort.signal,
         // The bearer rides along: a redirect is answered here, as a failure,
         // and never followed with it.
