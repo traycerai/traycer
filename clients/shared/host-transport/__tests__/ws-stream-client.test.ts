@@ -5237,10 +5237,9 @@ describe("WsStreamClient host credential provisioning", () => {
         { kind: "error" },
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
-      expect(debug.mock.calls).toContainEqual([
-        expect.stringContaining("host-credential mint flow threw"),
-        cause,
-      ]);
+      const debugCall = debug.mock.calls.find((call) => call[1] === cause);
+      expect(debugCall?.[0]).toContain("host-credential mint flow threw");
+      expect(debugCall?.[1]).toBe(cause);
     } finally {
       closeSession?.();
       warn.mockRestore();
@@ -6263,10 +6262,11 @@ describe("WsStreamClient host credential provisioning", () => {
           { kind: "error" },
         );
         expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
-        expect(debug.mock.calls).toContainEqual([
-          expect.stringContaining("host-credential state observer threw"),
-          cause,
-        ]);
+        const debugCall = debug.mock.calls.find((call) => call[1] === cause);
+        expect(debugCall?.[0]).toContain(
+          "host-credential state observer threw",
+        );
+        expect(debugCall?.[1]).toBe(cause);
       } finally {
         closeSession?.();
         warn.mockRestore();

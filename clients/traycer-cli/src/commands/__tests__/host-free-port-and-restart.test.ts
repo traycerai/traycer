@@ -292,6 +292,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       "start",
       null,
     );
+    expect(mocks.lockEvents).toContain("lock released");
     expect(mocks.lockEvents.indexOf("lock released")).toBeLessThan(
       mocks.lockEvents.indexOf("credential-probe"),
     );

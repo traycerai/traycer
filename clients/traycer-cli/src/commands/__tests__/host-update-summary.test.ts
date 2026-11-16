@@ -251,6 +251,11 @@ describe("buildHostUpdateCommand — JSON runner boundary", () => {
       if (typeof callback === "function") callback();
       return true;
     }) as never);
+    const originalConsole = {
+      log: console.log,
+      info: console.info,
+      debug: console.debug,
+    };
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
     try {
@@ -261,6 +266,9 @@ describe("buildHostUpdateCommand — JSON runner boundary", () => {
         noBootstrap: null,
       });
     } finally {
+      console.log = originalConsole.log;
+      console.info = originalConsole.info;
+      console.debug = originalConsole.debug;
       stdoutSpy.mockRestore();
       process.exitCode = priorExitCode;
     }

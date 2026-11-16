@@ -241,6 +241,7 @@ describe("host apply - activation", () => {
       "start",
       null,
     );
+    expect(mocks.lockEvents).toContain("lock-exit");
     expect(mocks.lockEvents.indexOf("lock-exit")).toBeLessThan(
       mocks.lockEvents.indexOf("credential-probe"),
     );

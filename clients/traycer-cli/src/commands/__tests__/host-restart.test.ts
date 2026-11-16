@@ -485,6 +485,7 @@ describe("buildHostRestartCommand", () => {
       kind: "active",
     });
     expect(result.human).toContain("host authorized");
+    expect(mocks.lockEvents).toContain("lock released");
     expect(mocks.lockEvents.indexOf("lock released")).toBeLessThan(
       mocks.lockEvents.indexOf("credential-probe"),
     );
