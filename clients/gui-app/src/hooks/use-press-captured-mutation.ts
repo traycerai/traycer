@@ -104,7 +104,8 @@ export function usePressCapturedMutation<
     void mutateAsync(variables, perCall).catch(() => undefined);
   };
   if (result.error && shouldThrowError(options.throwOnError, [result.error])) {
-    throw result.error;
+    const error: unknown = result.error;
+    throw error;
   }
   return { ...result, mutate, mutateAsync };
 }

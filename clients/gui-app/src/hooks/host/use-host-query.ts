@@ -629,12 +629,14 @@ export function useHostMutation<
       // (pre-flight validation) surfaces as the declared `HostRpcError`.
       mutationFn: (variables, pressed) =>
         withHostMutationErrorBoundary(args.method, async () => {
-          const client =
-            pressed !== null
-              ? pressed.client
-              : typeof args.client === "function"
-                ? args.client(variables)
-                : args.client;
+          let client: HostRequester<Registry> | null;
+          if (pressed !== null) {
+            client = pressed.client;
+          } else if (typeof args.client === "function") {
+            client = args.client(variables);
+          } else {
+            client = args.client;
+          }
           if (client === null) {
             return Promise.reject<ResponseOfMethod<Registry, Method>>(
               hostClientUnavailableError(args.method),
