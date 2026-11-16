@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { setShell } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config shell set`. The entrypoint validates the
 // `--clear-args` / positional-args conflict, leaving the command body to
@@ -37,7 +38,24 @@ export function buildConfigShellSetCommand(
         exitCode: 1,
       });
     }
-    const next = await setShell(args.path, args.args);
+    const requestArgs = args.args === null ? null : [...args.args];
+    const response = await writeConfigViaRunningHost(
+      "config.shell.set",
+      args.path !== null
+        ? {
+            path: args.path,
+            args: requestArgs,
+            executableWriteGrant: null,
+            selection: { kind: "not_stated" },
+          }
+        : {
+            path: null,
+            args: requestArgs ?? [],
+            executableWriteGrant: null,
+            selection: { kind: "not_stated" },
+          },
+    );
+    const next = response ?? (await setShell(args.path, args.args));
     return {
       data: { path: next.path, args: next.args },
       human: ctx.runtime.json
