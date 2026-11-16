@@ -35,8 +35,9 @@ function normalizedProfileId(profile: ProviderProfile): string | null {
  *   to `null` (
  *   preserving it here silently ran the account on ambient while the
  *   UI/artifact kept claiming the managed profile).
- * - `settled: true` with a non-empty `profiles` array is judged by live
- *   membership, as before.
+ * - `settled: true` with a non-empty `profiles` array keeps an exact live
+ *   id first, then resolves a unique folded alias to that row's commit id.
+ *   Missing or ambiguous matches follow the existing ambient fallback.
  */
 export function resolveSeededProfileId(
   profileId: string | null,
@@ -49,5 +50,12 @@ export function resolveSeededProfileId(
   const stillActive = profiles.some(
     (profile) => normalizedProfileId(profile) === profileId,
   );
-  return stillActive ? profileId : null;
+  if (stillActive) return profileId;
+  let aliasedProfile: ProviderProfile | null = null;
+  for (const profile of profiles) {
+    if (profile.aliases?.includes(profileId) !== true) continue;
+    if (aliasedProfile !== null) return null;
+    aliasedProfile = profile;
+  }
+  return aliasedProfile === null ? null : normalizedProfileId(aliasedProfile);
 }

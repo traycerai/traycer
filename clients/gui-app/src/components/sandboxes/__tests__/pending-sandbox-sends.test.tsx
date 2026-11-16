@@ -528,7 +528,9 @@ describe("a send waiting for the requested agent on its sandbox", () => {
         {
           ...providerRow(
             "codex",
-            ready ? { status: "installed" } : { status: "downloading", percent: 40 },
+            ready
+              ? { status: "installed" }
+              : { status: "downloading", percent: 40 },
           ),
           profiles: [
             {
