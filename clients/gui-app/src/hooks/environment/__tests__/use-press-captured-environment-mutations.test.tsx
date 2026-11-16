@@ -168,7 +168,7 @@ function stagedResponse(
       planRevision: 1,
       hostVersion: "1.0.0",
       itemCount: 0,
-      keyChoices: request.keyChoices,
+      keyChoices: [...request.keyChoices],
       sourceHostId: hostId,
       sharingGeneration: 1,
       targetKind: "personal",
