@@ -1,8 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
-  useMutation,
   useQueryClient,
-  type MutationFunctionContext,
   type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -29,7 +27,11 @@ import {
   shellRevertSelection,
   shellSetSelection,
 } from "@/components/settings/panels/shell/shell-save-selection";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import {
+  captureSettingsSaveOrigin,
+  type SettingsSaveOrigin,
+} from "@/lib/environment/settings-save-origin";
 import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
@@ -41,6 +43,13 @@ import {
   sendFollowedSave,
   type PendingSettingsSave,
 } from "@/lib/environment/settings-save-follow";
+
+interface PressedEnvRename {
+  readonly prepare: PrepareSettingsSave;
+  readonly origin: SettingsSaveOrigin;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+}
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -228,23 +237,8 @@ export function useRpcShellConfigController(props: {
     invalidateMethods: ["config.env.list"],
   });
 
-  // Both writes inside ONE `mutationFn`, so there is no observer boundary
-  // between them to lose the second half at. The host id is captured in
-  // `onMutate` and used for the invalidation, matching every other write here.
-  // So are the save preparation and the sign-in it is pressed on: the
-  // function runs with a newer render's options, `onMutate` with the render
-  // the person acted in, as they act (see `useHostMutation`).
-  const [pressedIn] = useState(
-    () =>
-      new WeakMap<
-        MutationFunctionContext,
-        {
-          readonly prepare: PrepareSettingsSave;
-          readonly pressedOn: EnvironmentCloud | null;
-        }
-      >(),
-  );
-  const envRenameMutation = useMutation<
+  // Both host writes use one press's editor, sign-in classification and client.
+  const envRenameMutation = usePressCapturedMutation<
     void,
     HostRpcError,
     {
@@ -252,64 +246,63 @@ export function useRpcShellConfigController(props: {
       readonly newKey: string;
       readonly value: string | null;
     },
+    PressedEnvRename,
     { readonly hostId: string | null }
-  >({
-    mutationKey: configMutationKeys.envRename(),
-    mutationFn: async (rename, mutationContext) => {
-      if (client === null) {
-        // Normalized so `onError` always receives the `HostRpcError` shape the
-        // toast helper reads, rather than a bare `Error` it cannot classify.
-        throw toHostRpcError(
-          new Error("No host client to rename the environment variable"),
-          "config.env.set",
+  >(
+    () => ({
+      prepare: prepareSave,
+      origin: captureSettingsSaveOrigin(cloudSource),
+      client,
+      hostId: client?.getActiveHostId() ?? null,
+    }),
+    {
+      mutationKey: configMutationKeys.envRename(),
+      mutationFn: async (rename, pressed) => {
+        const { client: pressedClient, hostId: sentOn } = pressed;
+        if (pressedClient === null) {
+          // Normalized so `onError` always receives the `HostRpcError` shape the
+          // toast helper reads, rather than a bare `Error` it cannot classify.
+          throw toHostRpcError(
+            new Error("No host client to rename the environment variable"),
+            "config.env.set",
+          );
+        }
+        const prepare = (save: SettingsSave): Promise<PendingSettingsSave> =>
+          pressed.prepare(save, sentOn, pressed.origin);
+        const set = {
+          key: rename.newKey,
+          value: rename.value,
+          executableWriteGrant: null,
+        };
+        await sendFollowedSave(
+          await prepare({ method: "config.env.set", request: set }),
+          () => pressedClient.request("config.env.set", set),
+          everyAnswerProposes,
         );
-      }
-      const sentOn = client.getActiveHostId();
-      const pressed = pressedIn.get(mutationContext);
-      // A rename with no press recorded is not sent.
-      const prepare = (save: SettingsSave): Promise<PendingSettingsSave> =>
-        pressed === undefined
-          ? Promise.resolve({ kind: "abandoned", method: save.method })
-          : pressed.prepare(save, sentOn, pressed.pressedOn);
-      const set = {
-        key: rename.newKey,
-        value: rename.value,
-        executableWriteGrant: null,
-      };
-      await sendFollowedSave(
-        await prepare({ method: "config.env.set", request: set }),
-        () => client.request("config.env.set", set),
-        everyAnswerProposes,
-      );
-      if (rename.oldKey.length === 0) return;
-      const remove = { key: rename.oldKey };
-      await sendFollowedSave(
-        await prepare({ method: "config.env.delete", request: remove }),
-        () => client.request("config.env.delete", remove),
-        everyAnswerProposes,
-      );
+        if (rename.oldKey.length === 0) return;
+        const remove = { key: rename.oldKey };
+        await sendFollowedSave(
+          await prepare({ method: "config.env.delete", request: remove }),
+          () => pressedClient.request("config.env.delete", remove),
+          everyAnswerProposes,
+        );
+      },
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // SETTLED, not success - the same two-write staleness the bridge twin has:
+      // a set that lands followed by a delete that rejects leaves both keys on
+      // the host with the editor showing the pre-rename list.
+      onSettled: (_data, _error, _variables, context) => {
+        const hostId = context?.hostId ?? null;
+        if (hostId === null) return;
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
+        });
+      },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't rename the variable");
+      },
     },
-    onMutate: (_rename, mutationContext) => {
-      pressedIn.set(mutationContext, {
-        prepare: prepareSave,
-        pressedOn: cloudSource === null ? null : cloudSource(),
-      });
-      return { hostId: client?.getActiveHostId() ?? null };
-    },
-    // SETTLED, not success - the same two-write staleness the bridge twin has:
-    // a set that lands followed by a delete that rejects leaves both keys on
-    // the host with the editor showing the pre-rename list.
-    onSettled: (_data, _error, _variables, context) => {
-      const hostId = context?.hostId ?? null;
-      if (hostId === null) return;
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
-      });
-    },
-    onError: (error) => {
-      toastFromHostError(error, "Couldn't rename the variable");
-    },
-  });
+  );
 
   const probeSource = useMemo(
     (): ShellProbeSource => ({
