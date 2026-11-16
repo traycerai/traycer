@@ -362,7 +362,7 @@ describe("SupportEnvironmentBridge's states", () => {
             rotation: rotation("enforced", true),
             lastVerify: null,
           };
-        }),
+        },
       },
     });
     harness.hostId = "host-a";
