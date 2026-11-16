@@ -177,6 +177,11 @@ describe("status polling while a computer's move runs", () => {
     });
   }
 
+  // A settled read reaches the render through the query notifier's zero-delay timer, which a fake clock runs one millisecond later.
+  async function deliverSettledRead(): Promise<void> {
+    await advance(1);
+  }
+
   function rowOf(
     rig: ReturnType<typeof mountStatuses>,
     hostId: string,
@@ -209,11 +214,13 @@ describe("status polling while a computer's move runs", () => {
 
     // The running lane's first delay is 500 ms.
     await advance(500);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(3);
     expect(rowOf(rig, MOVED_HOST)).toBe("none");
 
     // Its longest delay is 2 s, so `done` lands inside this window.
     await advance(2_000);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(4);
     expect(rowOf(rig, MOVED_HOST)).toBe("none");
 
@@ -246,11 +253,13 @@ describe("status polling while a computer's move runs", () => {
 
     // The running lane starts at 500 ms and ends at 2 s.
     await advance(2_000);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(3);
     expect(rowOf(rig, MOVED_HOST)).toBe("local");
 
     // `done` is on the steady 5 s lane, and its Local row still stands.
     await advance(5_000);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(4);
     expect(rowOf(rig, MOVED_HOST)).toBe("none");
 
@@ -268,10 +277,12 @@ describe("status polling while a computer's move runs", () => {
     expect(rowOf(rig, MOVED_HOST)).toBe("local");
 
     await advance(5_000);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(2);
     expect(rowOf(rig, MOVED_HOST)).toBe("local");
 
     await advance(5_000);
+    await deliverSettledRead();
     expect(rig.reads()).toBe(3);
     expect(rowOf(rig, MOVED_HOST)).toBe("none");
 
