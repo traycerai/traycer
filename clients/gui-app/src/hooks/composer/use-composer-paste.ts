@@ -459,6 +459,18 @@ interface ComposerDragState {
   readonly overlayVariant: FileTransferDragOverlayVariant | null;
 }
 
+/**
+ * Whether a drag event is over the zone's own DOM. A layer portalled out of
+ * the zone (a dialog, a menu) bubbles to the zone's handlers through React
+ * without being in it, and a drop there is not the zone's.
+ */
+export function dragIsInZone(
+  zone: HTMLElement | null,
+  target: EventTarget | null,
+): boolean {
+  return zone !== null && target instanceof Node && zone.contains(target);
+}
+
 const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
   depth: 0,
   overlayVariant: null,
@@ -1100,6 +1112,7 @@ export function useComposerPasteEvents<Attrs>(args: {
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
     if (overlayVariant === null) return;
     event.preventDefault();
@@ -1113,11 +1126,35 @@ export function useComposerPasteEvents<Attrs>(args: {
     });
   }, []);
 
+  // The element the handlers are on, as the drag last entered it.
+  const dragZoneRef = useRef<HTMLElement | null>(null);
+  const draggingOverZone = dragState.depth > 0;
+  // A zone that is hidden or loses its content under the pointer is sent no
+  // dragleave, so the affordance also ends when the drag is next seen outside
+  // the zone, and when it ends anywhere.
+  useEffect(() => {
+    if (!draggingOverZone) return;
+    const end = (): void => setDragState(IDLE_COMPOSER_DRAG_STATE);
+    const endOutsideZone = (event: Event): void => {
+      if (!dragIsInZone(dragZoneRef.current, event.target)) end();
+    };
+    window.addEventListener("dragover", endOutsideZone, true);
+    window.addEventListener("drop", end, true);
+    window.addEventListener("dragend", end, true);
+    return () => {
+      window.removeEventListener("dragover", endOutsideZone, true);
+      window.removeEventListener("drop", end, true);
+      window.removeEventListener("dragend", end, true);
+    };
+  }, [draggingOverZone]);
+
   const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
     if (overlayVariant === null) return;
     event.preventDefault();
     event.stopPropagation();
+    dragZoneRef.current = event.currentTarget;
     setDragState((state) => ({
       depth: state.depth + 1,
       overlayVariant,
@@ -1125,6 +1162,7 @@ export function useComposerPasteEvents<Attrs>(args: {
   }, []);
 
   const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     if (classifyFileTransferDrag(event.dataTransfer) === null) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1140,6 +1178,7 @@ export function useComposerPasteEvents<Attrs>(args: {
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!dragIsInZone(event.currentTarget, event.target)) return;
       // Drag-enter can only inspect the transfer's type names, so an ordinary
       // HTTPS URI is intentionally shown as potentially file-like until its
       // payload is readable here. A drop does not reliably emit dragleave,
