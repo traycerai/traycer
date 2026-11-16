@@ -1,5 +1,6 @@
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
-import { useWorktreeHostIndex } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useOptionalHostClient } from "@/lib/host/runtime";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
@@ -659,8 +660,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, [items, sweepEpicIds]);
   // The history query's own index read, observed for its settledness: an
   // empty map while the listing is in flight, or after it failed, is not
-  // "owns nothing".
-  const surfaceWorktreeIndex = useWorktreeHostIndex(true);
+  // "owns nothing". Through the optional client: History can mount with no
+  // host runtime above it, and the history query's own read tolerates that.
+  const surfaceWorktreeIndex = useWorktreeHostIndexForClient(
+    useOptionalHostClient(),
+    true,
+  );
   const surfaceWorktreesUnsettled =
     surfaceWorktreeIndex.isFetching || surfaceWorktreeIndex.error !== null;
   // Asked of the whole sweep target: one other machine has to account for
