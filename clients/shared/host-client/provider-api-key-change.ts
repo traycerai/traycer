@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
@@ -89,11 +90,13 @@ export async function changeProviderKeyRecordViaHttp(
           change.action === "set"
             ? JSON.stringify({ key: change.apiKey, onlyIfAbsent: false })
             : null,
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status))
+      return { kind: "refused", code: "RPC_ERROR" };
     if (response.status === 401)
       return { kind: "refused", code: "UNAUTHORIZED" };
     if (response.status === 403) return { kind: "refused", code: "FORBIDDEN" };

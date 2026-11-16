@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import {
   TUI_HARNESS_ID_TO_PROVIDER_ID,
   providerProfileAccentColorSchema,
@@ -174,11 +175,13 @@ async function callRecord(
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        redirect: "error",
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status))
+      return { status: response.status, body: null };
     if (response.status === 401) return { status: response.status, body: null };
     const text = await untilAborted(response.text(), abort.signal);
     let parsed: unknown = null;
