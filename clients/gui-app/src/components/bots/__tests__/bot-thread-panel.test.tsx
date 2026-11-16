@@ -1712,8 +1712,11 @@ describe("<BotThreadPanel /> Reply on a row of the thread", () => {
     (reach) => {
       panelReplyReach = reach;
       mountPanel(listed("user-teammate"), [botReply(null)]);
+      const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+        "bot-reply-row",
+      );
 
-      expect(screen.queryByTestId("bot-message-reply")).toBeNull();
+      expect(within(row).queryByTestId("bot-message-reply")).toBeNull();
     },
   );
 });

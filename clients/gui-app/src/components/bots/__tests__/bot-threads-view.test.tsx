@@ -1790,16 +1790,39 @@ describe("<BotThreadsView /> a thread opened on a channel question, drawn withou
     };
   }
 
-  /** The fake clock moves until `check` holds: what the view starts on a timer, and what the host's replies feed, finishes in it. */
+  /** When the running case started, on the real clock, which the fake one leaves alone. */
+  let caseStartedAt = 0;
+  /** The running case's own timeout, as the runner holds it. */
+  let caseTimeout = 0;
+  beforeEach(({ task }) => {
+    caseStartedAt = performance.now();
+    caseTimeout = task.timeout;
+  });
+
+  /**
+   * The fake clock moves until `check` holds: what the view starts on a timer,
+   * and what the host's replies feed, finishes in it. Some of what it waits
+   * on runs on the real event loop, so the steps it takes are not countable:
+   * it gives up on the real clock instead, once another step would end past
+   * the case's own timeout, and throws the check's last error rather than
+   * leave the runner to time out.
+   */
   async function untilOnFakeClock(check: () => void): Promise<void> {
+    const deadline = caseStartedAt + caseTimeout;
+    let last: unknown = null;
     for (;;) {
+      const stepStartedAt = performance.now();
       try {
         check();
         return;
-      } catch {
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(50);
-        });
+      } catch (error) {
+        last = error;
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      if (performance.now() + (performance.now() - stepStartedAt) >= deadline) {
+        throw last;
       }
     }
   }

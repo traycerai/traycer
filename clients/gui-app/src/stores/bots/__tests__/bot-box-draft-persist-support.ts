@@ -8,7 +8,10 @@ import type {
 } from "@/lib/bots/bot-box-draft-storage";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { BOT_TOKEN_CONTEXT_TYPE } from "@/lib/composer/tiptap-json-content";
-import type { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import type {
+  BotThreadBoxDraft,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
 import { botBoxDraftsKey } from "@/lib/persist";
 
 /**
@@ -68,10 +71,31 @@ export async function startSignedOutApp(): Promise<App> {
   return app;
 }
 
+/** What a box keeps of its draft through a retirement: the draft itself, or an empty box. */
+function keptOrEmptyBox(kept: BotThreadBoxDraft | null): BotThreadBoxDraft {
+  return kept ?? { text: "", content: null, seedId: 0, replyTo: null };
+}
+
+/** The first step of signing in (`BotDraftsPersistLifecycleBridge`): `userId` takes the store, which holds none of its drafts until they are read. */
+export function retireDraftsStoreAs(app: App, userId: string): void {
+  app.drafts.getState().retire(keptOrEmptyBox, { userId });
+}
+
+/** The second step: the store points at `userId`'s key and starts reading it. */
+export function readDraftsStoreAs(app: App, userId: string): void {
+  app.drafts.persist.setOptions({ name: botBoxDraftsKey(userId) });
+  void app.drafts.persist.rehydrate();
+}
+
+/** Signing in as `userId`, both steps. */
+export function signInDraftsStoreAs(app: App, userId: string): void {
+  retireDraftsStoreAs(app, userId);
+  readDraftsStoreAs(app, userId);
+}
+
 /** What signing in as {@link TEST_USER_ID} does to the store: points it at the account's key and starts reading. */
 function readAsTestAccount(app: App): void {
-  app.drafts.persist.setOptions({ name: botBoxDraftsKey(TEST_USER_ID) });
-  void app.drafts.persist.rehydrate();
+  readDraftsStoreAs(app, TEST_USER_ID);
 }
 
 /**

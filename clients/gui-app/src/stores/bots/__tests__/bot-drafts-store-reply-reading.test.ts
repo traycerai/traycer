@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { StoredBoxDraft } from "@/lib/bots/bot-box-draft-storage";
 import { base64ToBytes } from "@/lib/composer/image-base64";
-import { botBoxDraftsKey } from "@/lib/persist";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import {
   BOT_ID,
@@ -21,6 +20,8 @@ import {
   boxDoc,
   failFirstReadOf,
   hydrated,
+  readDraftsStoreAs,
+  retireDraftsStoreAs,
   hashedImage,
   restart,
   startFresh,
@@ -69,9 +70,6 @@ const REPLY: BotReplyTarget = {
 
 const OTHER_REPLY: BotReplyTarget = { ...REPLY, messageId: "message-0" };
 
-const FOLD = (kept: BotThreadBoxDraft | null): BotThreadBoxDraft =>
-  kept ?? { text: "", content: null, seedId: 0, replyTo: null };
-
 let app: App;
 /** Box `a`'s stored draft names the fixture image; box `c`'s names none. */
 let storedA: StoredBoxDraft;
@@ -114,10 +112,9 @@ async function startReading(
   storeDraftsAsLeft({ [BOT_ID]: boxes });
   const started = await startSignedOutApp();
   app = started;
-  started.drafts.getState().retire(FOLD, { userId: TEST_USER_ID });
+  retireDraftsStoreAs(started, TEST_USER_ID);
   expect(started.drafts.getState().ownDraftsRead).toBe(false);
-  started.drafts.persist.setOptions({ name: botBoxDraftsKey(TEST_USER_ID) });
-  void started.drafts.persist.rehydrate();
+  readDraftsStoreAs(started, TEST_USER_ID);
   whileRead(started);
   return started;
 }
@@ -358,8 +355,7 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
     it("keeps the stored text and image hashes of the waiting box under the reply chosen before the text read", async () => {
       const started = await startReadingUntilAnotherWindowStores(
         { key: "a" },
-        (reading) =>
-          reading.drafts.getState().retire(FOLD, { userId: "user-next" }),
+        (reading) => retireDraftsStoreAs(reading, "user-next"),
       );
 
       expect(storedBox(started, "a")).toEqual({ ...storedA, replyTo: REPLY });
@@ -378,7 +374,7 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
       const started = await startOver({ a: storedA, c: STORED_C });
 
       started.drafts.getState().setReplyTarget(BOT_ID, "a", REPLY);
-      started.drafts.getState().retire(FOLD, { userId: "user-next" });
+      retireDraftsStoreAs(started, "user-next");
 
       expect(storedBox(started, "a")).toEqual({ ...storedA, replyTo: REPLY });
     });
@@ -391,7 +387,7 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
         { key: "a" },
         (reading) => {
           failFirstReadOf(BOX_DRAFTS_KEY);
-          reading.drafts.getState().retire(FOLD, { userId: "user-next" });
+          retireDraftsStoreAs(reading, "user-next");
         },
       );
 
@@ -405,7 +401,7 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
       expect(before).toContain(REPLY.messageId);
 
       failFirstReadOf(BOX_DRAFTS_KEY);
-      started.drafts.getState().retire(FOLD, { userId: "user-next" });
+      retireDraftsStoreAs(started, "user-next");
 
       expect(localStorage.getItem(BOX_DRAFTS_KEY)).toBe(before);
     });
