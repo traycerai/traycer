@@ -10,7 +10,10 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
   RequestOfMethod,
@@ -35,9 +38,11 @@ import {
   providersPreviewProfileMoveResponseSchema,
 } from "@traycer/protocol/host/profile-move-schemas";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MOVE_ERROR_FALLBACKS } from "../profile-move-copy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { ProfileMoveDialog } from "../profile-move-dialog";
 import { ComposerDraftEditorHarness } from "@/components/chat/composer/__tests__/composer-draft-test-support";
 import type { ComposerDraftSelectionRef } from "@/components/chat/composer/__tests__/composer-draft-test-support";
@@ -65,6 +70,8 @@ vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
 }));
 
 const HOST_ID = mockLocalHostEntry.hostId;
+const REMOTE_HOST = mockRemoteHostEntry.hostId;
+const THIRD_HOST = "third-host";
 const OLDER_COMPUTER_NOTICE = `Computer ${HOST_ID} is running an older version. Update it to move its agents.`;
 const SOURCE: ProvidersPreviewProfileMoveRequest["source"] =
   providersPreviewProfileMoveRequestSchema.parse({
@@ -146,6 +153,9 @@ interface MoveDialogHarness {
     RequestOfMethod<HostRpcRegistry, "providers.previewProfileMove">
   >;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly hosts: Map<string, HostDirectoryEntry>;
 }
 
 function createHarness(input: {
@@ -205,10 +215,15 @@ function createHarness(input: {
       },
     },
   });
+  const hosts = new Map<string, HostDirectoryEntry>([
+    [HOST_ID, mockLocalHostEntry],
+    [REMOTE_HOST, mockRemoteHostEntry],
+    [THIRD_HOST, { ...mockRemoteHostEntry, hostId: THIRD_HOST }],
+  ]);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) => (hostId === HOST_ID ? mockLocalHostEntry : null),
+    findHostById: (hostId) => hosts.get(hostId) ?? null,
     messenger,
   });
   spine.setRequestContext(
@@ -227,7 +242,15 @@ function createHarness(input: {
     );
   }
 
-  return { client, requests, previewCalls, Wrapper };
+  return {
+    client,
+    requests,
+    previewCalls,
+    Wrapper,
+    messenger,
+    queryClient,
+    hosts,
+  };
 }
 
 function skippedBotResult(
@@ -301,6 +324,295 @@ afterAll(() => {
 });
 
 describe("ProfileMoveDialog", () => {
+  it("commits 70 targets directly on their owning computers, with the bot once on the anchor", async () => {
+    const user = userEvent.setup();
+    const targets: PreviewTarget[] = [
+      ...Array.from({ length: 67 }, (_value, index) => ({
+        ...AGENT_ROW,
+        agentId: `local-${index}`,
+      })),
+      { ...BOT_ROW, hostId: null },
+      { ...AGENT_ROW, agentId: "remote-one", hostId: REMOTE_HOST },
+      { ...AGENT_ROW, agentId: "remote-two", hostId: THIRD_HOST },
+    ];
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets }),
+      commit: (request) => ({
+        operationId: request.operationId,
+        extent: request.extent,
+        mode: request.mode,
+        results: request.targets.map((target) => ({
+          target,
+          row: null,
+          outcome: "moved",
+        })),
+      }),
+    });
+    for (const hostId of [HOST_ID, REMOTE_HOST, THIRD_HOST, "unrelated-host"]) {
+      harness.queryClient.setQueryData(
+        hostQueryKeys.methodScope(hostId, "agent.list"),
+        ["before-move"],
+      );
+    }
+    renderDialog(harness);
+    await screen.findByText(
+      "70 agents and bots are waiting on Source profile.",
+    );
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 70" }));
+    await screen.findByText("Moved 70 to Destination profile.");
+    const commits = harness.messenger.calls.filter(
+      (call) => call.method === "providers.commitProfileMove",
+    );
+    expect(
+      commits.map((call) => ({
+        hostId: call.authority.endpoint.hostId,
+        request: providersCommitProfileMoveRequestSchema.parse(call.params),
+        floor: call.requiredHostMethodVersion,
+      })),
+    ).toEqual(
+      [HOST_ID, REMOTE_HOST, THIRD_HOST].map((hostId) => ({
+        hostId,
+        request: {
+          operationId: harness.requests[0]?.operationId,
+          extent: "this-computer",
+          mode: "waiting",
+          source: SOURCE,
+          destinationProfileId: "destination-profile",
+          targets: targets
+            .filter((target) =>
+              target.kind === "bot"
+                ? hostId === HOST_ID
+                : target.hostId === hostId,
+            )
+            .map((target) =>
+              target.kind === "bot"
+                ? { kind: "bot", botId: target.botId }
+                : {
+                    kind: "agent",
+                    epicId: target.epicId,
+                    agentId: target.agentId,
+                  },
+            ),
+        },
+        floor: {
+          method: "providers.commitProfileMove",
+          version: { major: 1, minor: 0 },
+        },
+      })),
+    );
+    expect(
+      [HOST_ID, REMOTE_HOST, THIRD_HOST, "unrelated-host"].map(
+        (hostId) =>
+          harness.queryClient.getQueryState(
+            hostQueryKeys.methodScope(hostId, "agent.list"),
+          )?.isInvalidated,
+      ),
+    ).toEqual([true, true, true, false]);
+  });
+
+  it.each(["unreachable", "unsupported", "not-allowed"] as const)(
+    "keeps a remote computer's %s result separate from the anchor's move",
+    async (reason) => {
+      const user = userEvent.setup();
+      const remote = { ...AGENT_ROW, agentId: "remote", hostId: REMOTE_HOST };
+      const harness = createHarness({
+        preview: () => ({ ...PREVIEW, targets: [AGENT_ROW, remote] }),
+        commit: (request) => {
+          if (
+            request.targets.some(
+              (target) =>
+                target.kind === "agent" && target.agentId === "remote",
+            )
+          ) {
+            const details = {
+              code: (
+                {
+                  unsupported: "E_HOST_UNSUPPORTED",
+                  "not-allowed": "E_ROLE_FORBIDDEN",
+                  unreachable: "RPC_ERROR",
+                } as const
+              )[reason],
+              message: "synthetic remote refusal",
+              method: "providers.commitProfileMove",
+              requestId: "remote-refusal",
+              fatalDetails: null,
+            };
+            throw reason === "unreachable"
+              ? new HostTransportFailureError(details)
+              : new HostRpcError(details);
+          }
+          return {
+            operationId: request.operationId,
+            extent: request.extent,
+            mode: request.mode,
+            results: request.targets.map((target) => ({
+              target,
+              row: null,
+              outcome: "moved",
+            })),
+          };
+        },
+      });
+      renderDialog(harness);
+      await screen.findByText(
+        "2 agents and bots are waiting on Source profile.",
+      );
+      await user.click(screen.getByRole("combobox"));
+      await user.click(
+        await screen.findByRole("option", { name: "Destination profile" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Move 2" }));
+      await screen.findByText("Moved 1 to Destination profile.");
+      expect(
+        await screen.findByText(
+          {
+            unreachable: `Computer ${REMOTE_HOST} can't be reached. These move when you run this again while it is online.`,
+            unsupported: `Computer ${REMOTE_HOST} is running an older version`,
+            "not-allowed": "You can't move this one",
+          }[reason],
+        ),
+      ).toBeTruthy();
+      expect(
+        harness.messenger.calls
+          .filter((call) => call.method === "providers.commitProfileMove")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual([HOST_ID, REMOTE_HOST]);
+      expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+    },
+  );
+
+  it("retries the same owning-host bodies after a later host's answer is lost", async () => {
+    const user = userEvent.setup();
+    const remote = {
+      ...AGENT_ROW,
+      agentId: "remote-first",
+      hostId: REMOTE_HOST,
+    };
+    let anchorCalls = 0;
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote, AGENT_ROW] }),
+      commit: (request) => {
+        if (
+          request.targets.some(
+            (target) =>
+              target.kind === "agent" && target.agentId === AGENT_ROW.agentId,
+          )
+        ) {
+          anchorCalls += 1;
+          if (anchorCalls === 1)
+            throw new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "unreachable",
+              requestId: "lost-answer",
+              method: "providers.commitProfileMove",
+              fatalDetails: null,
+            });
+        }
+        return {
+          operationId: request.operationId,
+          extent: request.extent,
+          mode: request.mode,
+          results: request.targets.map((target) => ({
+            target,
+            row: null,
+            outcome: "moved",
+          })),
+        };
+      },
+    });
+    const view = renderDialog(harness);
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+    await screen.findByRole("heading", { name: "Still waiting" });
+    view.rerender(
+      <ProfileMoveDialog
+        client={harness.client.createRequesterForHostId(THIRD_HOST)}
+        source={{ ...SOURCE, profileId: "other-source" }}
+        sourceLabel="Other source"
+        profiles={PROFILES}
+        onClose={vi.fn()}
+        onRestartTerminal={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+    await screen.findByText("Moved 2 to Destination profile.");
+    const commits = harness.messenger.calls.filter(
+      (call) => call.method === "providers.commitProfileMove",
+    );
+    expect(commits.map((call) => call.authority.endpoint.hostId)).toEqual([
+      REMOTE_HOST,
+      HOST_ID,
+      REMOTE_HOST,
+      HOST_ID,
+    ]);
+    expect(harness.requests.slice(2)).toEqual(harness.requests.slice(0, 2));
+  });
+
+  it("leaves a target pending when its named computer is absent, without sending it to another computer", async () => {
+    const user = userEvent.setup();
+    const remote = { ...AGENT_ROW, hostId: "absent-computer" };
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote] }),
+      commit: () => {
+        throw new Error("No computer should receive this target");
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("1 agent is waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 1" }));
+    await screen.findByText(
+      "Computer absent-computer can't be reached. These move when you run this again while it is online.",
+    );
+    expect(harness.requests).toEqual([]);
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+  });
+
+  it("rejects an owning computer's response for an unrequested target", async () => {
+    const user = userEvent.setup();
+    const remote = { ...AGENT_ROW, hostId: REMOTE_HOST };
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote] }),
+      commit: (request) => ({
+        operationId: request.operationId,
+        extent: request.extent,
+        mode: request.mode,
+        results: [
+          {
+            target: {
+              kind: "agent",
+              epicId: remote.epicId,
+              agentId: "another-agent",
+            },
+            row: null,
+            outcome: "moved",
+          },
+        ],
+      }),
+    });
+    renderDialog(harness);
+    await screen.findByText("1 agent is waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 1" }));
+    await waitFor(() => expect(sonnerErrors.error.mock.calls).toHaveLength(1));
+    expect(screen.queryByText("Moved 1 to Destination profile.")).toBeNull();
+    expect(harness.requests).toHaveLength(1);
+  });
+
   it("preserves the typed composer draft through a waiting profile move", async () => {
     const user = userEvent.setup();
     const harness = createHarness({
@@ -392,7 +704,7 @@ describe("ProfileMoveDialog", () => {
 
     await waitFor(() => expect(harness.requests).toHaveLength(1));
     expect(harness.requests[0]).toMatchObject({
-      extent: "fleet",
+      extent: "this-computer",
       mode: "waiting",
       source: SOURCE,
       destinationProfileId: "destination-profile",

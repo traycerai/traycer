@@ -86,6 +86,7 @@ vi.mock("@/lib/host-error-toast", async (importOriginal) => {
 });
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -145,6 +146,7 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import {
   buildEnvironmentClient,
+  hostEntryFixture,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -230,6 +232,7 @@ interface MoveDialogHarness {
   readonly done: Mock<() => void>;
   readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
   readonly commitRequests: ProvidersCommitProfileMoveRequest[];
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
 }
 
 afterEach(() => {
@@ -582,7 +585,7 @@ function renderMoveDialog(input: MoveDialogInput): MoveDialogHarness {
   const commitRequests: ProvidersCommitProfileMoveRequest[] = [];
   let previewCount = 0;
   let commitCount = 0;
-  const { client } = buildEnvironmentClient({
+  const { client, messenger, hosts } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "providers.previewProfileMove": (params) => {
@@ -603,11 +606,23 @@ function renderMoveDialog(input: MoveDialogInput): MoveDialogHarness {
           operationId: params.operationId,
           extent: params.extent,
           mode: params.mode,
-          results: input.commitResults,
+          results: input.commitResults.filter((row) =>
+            params.targets.some((target) =>
+              target.kind === "bot"
+                ? row.target.kind === "bot" && target.botId === row.target.botId
+                : row.target.kind === "agent" &&
+                  target.epicId === row.target.epicId &&
+                  target.agentId === row.target.agentId,
+            ),
+          ),
         };
       },
     },
   });
+  for (const target of input.preview.targets) {
+    if (target.kind === "agent")
+      hosts.set(target.hostId, hostEntryFixture(target.hostId));
+  }
   clientMock.current = client;
   registerSwitchMethods(input.supportedMoves, false);
   const queryClient = new QueryClient({
@@ -631,7 +646,7 @@ function renderMoveDialog(input: MoveDialogInput): MoveDialogHarness {
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  return { done, previewRequests, commitRequests };
+  return { done, previewRequests, commitRequests, messenger };
 }
 
 function emptyPreview(): ProvidersPreviewProfileMoveResponse {
@@ -871,7 +886,7 @@ describe("Switch account moves only previewed work", () => {
       { kind: "bot", botId: BOT_ID },
     ]);
     expect(harness.commitRequests[0]).toMatchObject({
-      extent: "fleet",
+      extent: "this-computer",
       mode: "switch",
       source: { providerId: "claude-code", profileId: SOURCE_ID },
       destinationProfileId: DESTINATION_ID,
@@ -1290,6 +1305,67 @@ describe("Switch account moves only previewed work", () => {
     expect(screen.getByText("Preview agent")).toBeTruthy();
     expect(screen.getByText("No longer exists")).toBeTruthy();
     expect(harness.commitRequests).toHaveLength(1);
+  });
+
+  it("sends switch commits to each owning host and keeps the environment bot on the anchor", async () => {
+    const idle = agentTarget("epic-idle", "idle-agent", "Idle agent", "idle");
+    const running = {
+      ...agentTarget(
+        "epic-running",
+        "running-agent",
+        "Running agent",
+        "running",
+      ),
+      hostId: "other-computer",
+    };
+    const bot = { ...botTarget(BOT_ID, "Team bot"), hostId: running.hostId };
+    const harness = renderMoveDialog({
+      moveHostId: HOST_ID,
+      teamName: "Design Team",
+      preview: { ...emptyPreview(), targets: [idle, running, bot] },
+      commitResults: [
+        {
+          target: agentRef(idle.epicId, idle.agentId),
+          row: idle,
+          outcome: "moved",
+        },
+        {
+          target: agentRef(running.epicId, running.agentId),
+          row: running,
+          outcome: "deferred",
+        },
+        { target: botRef(bot.botId), row: bot, outcome: "moved" },
+      ],
+      supportedMoves: true,
+      failFirstPreview: false,
+      failFirstCommit: false,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Move 3" }));
+    await screen.findByText("Moved 2 to New account.");
+    expect(screen.getByText("1 more moves when its turn ends.")).toBeTruthy();
+    expect(harness.commitRequests).toEqual([
+      {
+        operationId: harness.commitRequests[0]?.operationId,
+        extent: "this-computer",
+        mode: "switch",
+        source: { providerId: "claude-code", profileId: SOURCE_ID },
+        destinationProfileId: DESTINATION_ID,
+        targets: [agentRef(idle.epicId, idle.agentId), botRef(bot.botId)],
+      },
+      {
+        operationId: harness.commitRequests[0]?.operationId,
+        extent: "this-computer",
+        mode: "switch",
+        source: { providerId: "claude-code", profileId: SOURCE_ID },
+        destinationProfileId: DESTINATION_ID,
+        targets: [agentRef(running.epicId, running.agentId)],
+      },
+    ]);
+    expect(
+      harness.messenger.calls
+        .filter((call) => call.method === "providers.commitProfileMove")
+        .map((call) => call.authority.endpoint.hostId),
+    ).toEqual([HOST_ID, running.hostId]);
   });
 
   it("keeps the completed move result when a later manifest drops move support", async () => {
