@@ -18,6 +18,7 @@ export interface CloudProviderKeyChange {
 }
 
 interface CapturedKeyChange {
+  readonly action: CloudProviderKeyChange["action"];
   readonly environmentId: string;
   readonly providerId: ProviderKeyProviderId;
   readonly onOriginSignIn: () => boolean;
@@ -58,7 +59,7 @@ export function useCloudProviderApiKeyMutation(
     CloudProviderKeyChange,
     CapturedKeyChange
   >(
-    () => {
+    (variables) => {
       const chosen = auth.chosenSignIn();
       if (
         !scope.canEdit ||
@@ -70,6 +71,7 @@ export function useCloudProviderApiKeyMutation(
         throw abandonedKeyChange(false);
       }
       return {
+        action: variables.action,
         environmentId: scope.environmentId,
         providerId,
         onOriginSignIn: auth.environmentCloud().onOriginSignIn,
@@ -84,10 +86,10 @@ export function useCloudProviderApiKeyMutation(
         providerId,
       ),
       retry: false,
-      mutationFn: async (variables, captured) => {
+      mutationFn: async (_variables, captured) => {
         if (!captured.onOriginSignIn()) throw abandonedKeyChange(false);
         let apiKey = "";
-        if (variables.action === "set") {
+        if (captured.action === "set") {
           try {
             apiKey = captured.readValue();
           } catch {
@@ -100,7 +102,7 @@ export function useCloudProviderApiKeyMutation(
           const result = await auth.changeProviderKeyRecord(
             captured.environmentId,
             captured.providerId,
-            variables.action === "set"
+            captured.action === "set"
               ? { action: "set", apiKey }
               : { action: "clear" },
             null,
@@ -110,7 +112,7 @@ export function useCloudProviderApiKeyMutation(
             throw new HostRpcError({
               code: result.kind === "refused" ? result.code : "RPC_ERROR",
               message:
-                variables.action === "set"
+                captured.action === "set"
                   ? "Couldn't save the API key."
                   : "Couldn't clear the API key.",
               requestId: "",
