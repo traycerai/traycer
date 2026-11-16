@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
+  epicListChatRecordsUpgradeV14ToV15,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
+  epicListChatRecordsV14,
+  epicListChatRecordsV15,
 } from "@traycer/protocol/host/epic/contracts";
 import {
   hostChatRecordsSubscribeServerFrameSchemaV13,
@@ -14,6 +17,7 @@ import {
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
+  listChatRecordsResponseV15Schema,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   epicListTuiAgentsUpgradeV12ToV13,
@@ -32,8 +36,9 @@ import {
 } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
- * Contract tests for the additive `@1.3` minors of `epic.listChatRecords`
- * and `epic.listTuiAgents`, and `host.chatRecords.subscribe@1.4`. These four
+ * Contract tests for the additive minors of `epic.listChatRecords`
+ * (`@1.3` and `@1.5`) and `epic.listTuiAgents`, and
+ * `host.chatRecords.subscribe@1.4`. These four
  * minors landed on one branch (`322d48c24`); see that commit and
  * `record-list-revision.ts` / `agent-session-state.ts` for the vocabulary.
  */
@@ -200,6 +205,111 @@ describe("epic.listChatRecords@1.4", () => {
     expect(epicListChatRecordsUpgradeV13ToV14.upgradeRequest(request)).toEqual(
       request,
     );
+  });
+});
+
+describe("epic.listChatRecords@1.5 redirect revision", () => {
+  const snapshotV15 = {
+    kind: "snapshot" as const,
+    listStamp: STAMP,
+    chats: [{ ...CHAT_ROW, evicted: false }],
+    publicationRedirectRevision: "redirect-revision-9",
+  };
+  const unchangedV15 = {
+    kind: "unchanged" as const,
+    listStamp: STAMP,
+    touched: [],
+    publicationRedirectRevision: "redirect-revision-9",
+  };
+
+  it("requires a nullable revision on both response arms and older projection strips it", () => {
+    expect(listChatRecordsResponseV15Schema.parse(snapshotV15)).toEqual(
+      snapshotV15,
+    );
+    expect(listChatRecordsResponseV15Schema.parse(unchangedV15)).toEqual(
+      unchangedV15,
+    );
+    expect(
+      listChatRecordsResponseV15Schema.safeParse({
+        ...snapshotV15,
+        publicationRedirectRevision: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      listChatRecordsResponseV15Schema.safeParse({
+        ...unchangedV15,
+        publicationRedirectRevision: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      listChatRecordsResponseV15Schema.safeParse(
+        Object.fromEntries(
+          Object.entries(snapshotV15).filter(
+            ([key]) => key !== "publicationRedirectRevision",
+          ),
+        ),
+      ).success,
+    ).toBe(false);
+    expect(
+      listChatRecordsResponseV15Schema.safeParse(
+        Object.fromEntries(
+          Object.entries(unchangedV15).filter(
+            ([key]) => key !== "publicationRedirectRevision",
+          ),
+        ),
+      ).success,
+    ).toBe(false);
+
+    expect(listChatRecordsResponseV14Schema.parse(snapshotV15)).toEqual({
+      kind: "snapshot",
+      listStamp: STAMP,
+      chats: [{ ...CHAT_ROW, evicted: false }],
+    });
+    expect(listChatRecordsResponseV14Schema.parse(unchangedV15)).toEqual({
+      kind: "unchanged",
+      listStamp: STAMP,
+      touched: [],
+    });
+  });
+
+  it("upgrades @1.4 snapshots and unchanged answers with a null revision", () => {
+    const snapshotV14 = {
+      kind: "snapshot" as const,
+      listStamp: STAMP,
+      chats: [{ ...CHAT_ROW, evicted: false }],
+    };
+    const unchangedV14 = {
+      kind: "unchanged" as const,
+      listStamp: STAMP,
+      touched: [],
+    };
+
+    expect(
+      epicListChatRecordsUpgradeV14ToV15.upgradeResponse(snapshotV14),
+    ).toEqual({ ...snapshotV14, publicationRedirectRevision: null });
+    expect(
+      epicListChatRecordsUpgradeV14ToV15.upgradeResponse(unchangedV14),
+    ).toEqual({ ...unchangedV14, publicationRedirectRevision: null });
+  });
+
+  it("keeps the request unchanged and advances the contract version to @1.5", () => {
+    const request = {
+      epicId: "epic-1",
+      hasDocReplica: true,
+      knownRevision: STAMP,
+    };
+    expect(epicListChatRecordsUpgradeV14ToV15.upgradeRequest(request)).toEqual(
+      request,
+    );
+
+    expect(epicListChatRecordsV14.schemaVersion).toEqual({
+      major: 1,
+      minor: 4,
+    });
+    expect(epicListChatRecordsV15.schemaVersion).toEqual({
+      major: 1,
+      minor: 5,
+    });
   });
 });
 

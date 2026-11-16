@@ -28,7 +28,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -39,6 +39,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -52,10 +56,25 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import {
+  invalidateEpicChatRecords,
+  useEpicSyncChatRecords,
+} from "@/hooks/chats/use-epic-chat-records";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  publicationTargetMap,
+  readCachedChatPublicationId,
+  useChatPublicationTargets,
+} from "@/hooks/chats/use-chat-publication-targets";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
-import { useEpicChatIds } from "@/lib/epic-selectors";
+import {
+  useEpicChatIds,
+  useEpicChatPublicationRedirectRevision,
+  useEpicChatPublicationRedirectRevisionSupported,
+  useEpicChatRecordListAuthoritative,
+  useEpicChatRecordListFailed,
+} from "@/lib/epic-selectors";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { selectUnfoldedCloudChats } from "@/lib/chats/unified-chat-list";
 import {
   cloudChatListQueryKey,
@@ -217,7 +236,20 @@ interface Fixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenedStoreForTest;
   readonly listCalls: { value: number };
+  readonly listGate: {
+    promise: Promise<void> | null;
+    release: (() => void) | null;
+  };
   readonly cloudListCalls: { value: number };
+  readonly cloudListGate: {
+    promise: Promise<void> | null;
+    release: (() => void) | null;
+  };
+  readonly targetRequests: Array<readonly string[]>;
+  readonly publicationRedirectRevision: { value: string | null };
+  readonly targetRedirects: {
+    value: Array<{ chatId: string; publicationChatId: string }>;
+  };
   readonly records: ChatRecordSummaryV14[];
   readonly cloudRows: CloudChatSummary[];
   readonly deleteGate: DeleteGate;
@@ -266,7 +298,17 @@ function createFixture(
     ...(overrides?.cloudRows ?? defaultCloudRows()),
   ];
   const listCalls = { value: 0 };
+  const listGate: Fixture["listGate"] = { promise: null, release: null };
   const cloudListCalls = { value: 0 };
+  const cloudListGate: Fixture["cloudListGate"] = {
+    promise: null,
+    release: null,
+  };
+  const targetRequests: Array<readonly string[]> = [];
+  const publicationRedirectRevision: { value: string | null } = {
+    value: "redirect-r1",
+  };
+  const targetRedirects: Fixture["targetRedirects"] = { value: [] };
   const requestSeq = { value: 0 };
   const deleteGate: DeleteGate = { resolve: null, answer: null, reject: null };
   const queryClient = new QueryClient({
@@ -289,11 +331,14 @@ function createFixture(
       handlers: {
         "epic.listChatRecords": () => {
           listCalls.value += 1;
-          return Promise.resolve({
+          const response = () => ({
             kind: "snapshot" as const,
+            publicationRedirectRevision: publicationRedirectRevision.value,
             listStamp: null,
             chats: records.map((row) => ({ ...row })),
           });
+          if (listGate.promise === null) return Promise.resolve(response());
+          return listGate.promise.then(response);
         },
         "epic.listCloudChats": () => {
           cloudListCalls.value += 1;
@@ -301,9 +346,16 @@ function createFixture(
           // mutates it, on purpose: the cloud retraction lagging behind a
           // local delete (the "still stale" case this suite pins) is
           // exactly a refetch that keeps answering with the deleted row.
-          return Promise.resolve({
+          const response = () => ({
             chats: cloudRows.map((row) => ({ ...row })),
           });
+          if (cloudListGate.promise === null)
+            return Promise.resolve(response());
+          return cloudListGate.promise.then(response);
+        },
+        "epic.listChatPublicationTargets": (params) => {
+          targetRequests.push([...params.chatIds]);
+          return Promise.resolve({ redirected: targetRedirects.value });
         },
         // Held open until the test explicitly resolves or rejects it, so
         // the PENDING window (after `onMutate`, before the RPC settles) is
@@ -333,6 +385,9 @@ function createFixture(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   const client = spine.createRequester(mockLocalHostEntry);
+  recordNegotiatedHostManifest(HOST_ID, {
+    "epic.listChatRecords": { major: 1, minor: 5 },
+  });
   runtime.client = client;
   const handle = newSession();
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
@@ -354,7 +409,12 @@ function createFixture(
     queryClient,
     handle,
     listCalls,
+    listGate,
     cloudListCalls,
+    cloudListGate,
+    targetRequests,
+    publicationRedirectRevision,
+    targetRedirects,
     records,
     cloudRows,
     deleteGate,
@@ -388,10 +448,11 @@ afterEach(() => {
   runtime.client = null;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
   useCloudChatDeletions.setState({ pending: new Map(), confirmed: new Set() });
+  resetNegotiatedManifests();
 });
 
 /** Renders the record channel, the cloud list, the delete mutation and the fold - as the sidebar does. */
-function renderChannel() {
+function renderChannel(withPublicationTargets: boolean) {
   return renderHook(
     () => {
       useEpicSyncChatRecords(EPIC_ID);
@@ -401,13 +462,33 @@ function renderChannel() {
         taskId: EPIC_ID,
         enabled: true,
       });
+      const chatIdsAuthoritative = useEpicChatRecordListAuthoritative();
+      const chatRecordListFailed = useEpicChatRecordListFailed();
+      const publicationRedirectRevision =
+        useEpicChatPublicationRedirectRevision();
+      const publicationRedirectRevisionSupported =
+        useEpicChatPublicationRedirectRevisionSupported();
+      const recordListStore = useOpenEpicHandle().store;
+      const publicationTargets = useChatPublicationTargets({
+        client: fixture.client,
+        epicId: EPIC_ID,
+        chatIds,
+        publicationRedirectRevision,
+        publicationRedirectRevisionSupported,
+        recordListStore,
+        chatIdsAuthoritative,
+        chatRecordListFailed,
+        enabled: withPublicationTargets,
+      });
       const deleteChat = useEpicDeleteChat();
       const unfolded = selectUnfoldedCloudChats({
         chats: cloudList.data?.chats ?? [],
         localChatIds: chatIds,
-        publicationChatIdByChatId: new Map(),
+        publicationChatIdByChatId: withPublicationTargets
+          ? publicationTargetMap(publicationTargets.data)
+          : new Map<string, string>(),
       });
-      return { chatIds, cloudList, deleteChat, unfolded };
+      return { chatIds, cloudList, publicationTargets, deleteChat, unfolded };
     },
     { wrapper: fixture.Wrapper },
   );
@@ -439,8 +520,236 @@ const OTHER_ROW_TITLES = [
 ].sort();
 
 describe("cloud-chat deletion suppression", () => {
+  it("gates targets on the record list and refreshes them for its revision, not cloud-list changes", async () => {
+    fixture.handle.store.getState().dispose();
+    fixture = createFixture({
+      cloudRows: [
+        cloudChat({
+          identity: {
+            taskId: EPIC_ID,
+            chatId: "foreign-row",
+            ownerUserId: VIEWER_ID,
+          },
+          ownerHostId: OTHER_HOST_ID,
+          isOwnedByViewer: true,
+          title: "Other host chat",
+        }),
+        cloudChat({
+          identity: {
+            taskId: EPIC_ID,
+            chatId: "other-host-row",
+            ownerUserId: VIEWER_ID,
+          },
+          ownerHostId: OTHER_HOST_ID,
+          isOwnedByViewer: true,
+          title: "Other-host chat",
+        }),
+      ],
+    });
+    fixture.listGate.promise = new Promise<void>((resolve) => {
+      fixture.listGate.release = resolve;
+    });
+    fixture.cloudListGate.promise = new Promise<void>((resolve) => {
+      fixture.cloudListGate.release = resolve;
+    });
+
+    const rendered = renderChannel(true);
+    await waitFor(() => {
+      expect(fixture.listCalls.value).toBe(1);
+      expect(fixture.cloudListCalls.value).toBe(1);
+    });
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBeNull();
+    expect(fixture.targetRequests).toEqual([]);
+
+    fixture.listGate.release?.();
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(
+        fixture.handle.store.getState()
+          .chatPublicationRedirectRevisionSupported,
+      ).toBe(true);
+      expect(fixture.targetRequests).toEqual([["chat-1"]]);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+    });
+
+    fixture.cloudListGate.release?.();
+    await waitFor(() => {
+      expect(rendered.result.current.cloudList.isSuccess).toBe(true);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+    });
+    expect(fixture.targetRequests).toEqual([["chat-1"]]);
+    expect(
+      rendered.result.current.unfolded.map((chat) => chat.identity.chatId),
+    ).toEqual(["foreign-row", "other-host-row"]);
+
+    const cloudCallsBeforeRefetch = fixture.cloudListCalls.value;
+    await fixture.queryClient.invalidateQueries({
+      queryKey: cloudChatListQueryKey({
+        hostId: HOST_ID,
+        viewerUserId: VIEWER_ID,
+        taskId: EPIC_ID,
+      }),
+    });
+    await waitFor(() => {
+      expect(fixture.cloudListCalls.value).toBe(cloudCallsBeforeRefetch + 1);
+    });
+    expect(fixture.targetRequests).toEqual([["chat-1"]]);
+
+    fixture.targetRedirects.value = [
+      { chatId: "chat-1", publicationChatId: "foreign-row" },
+    ];
+    fixture.publicationRedirectRevision.value = "redirect-r2";
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(
+        rendered.result.current.unfolded.map((chat) => chat.identity.chatId),
+      ).toEqual(["other-host-row"]);
+    });
+    expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
+
+    fixture.records.push(record({ chatId: "chat-local-new", revision: 1 }));
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(rendered.result.current.chatIds).toEqual([
+        "chat-1",
+        "chat-local-new",
+      ]);
+    });
+    expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
+  });
+
+  it("fails closed during a viewer mismatch, then deletes from B's slot at the same revision", async () => {
+    fixture.targetRedirects.value = [
+      { chatId: "chat-1", publicationChatId: "published-viewer-a" },
+    ];
+    const rendered = renderChannel(true);
+    await settleFirstRead();
+    await waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-1"]]);
+      expect(
+        rendered.result.current.publicationTargets.data?.redirected,
+      ).toEqual([
+        { chatId: "chat-1", publicationChatId: "published-viewer-a" },
+      ]);
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+    });
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevision,
+    ).toBe("redirect-r1");
+
+    act(() => {
+      useAuthStore.setState({
+        profile: {
+          userId: OTHER_USER_ID,
+          userName: OTHER_USER_ID,
+          email: "viewer-b@example.com",
+        },
+      });
+    });
+
+    rendered.result.current.deleteChat.mutate({
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      hostId: HOST_ID,
+    });
+    await waitFor(() => {
+      expect(fixture.deleteGate.reject).not.toBeNull();
+      expect(useCloudChatDeletions.getState().pending.size).toBe(1);
+    });
+    const mismatchedViewerIdentity = [
+      ...useCloudChatDeletions.getState().pending.values(),
+    ].join(",");
+    expect(mismatchedViewerIdentity).toContain('"chat-1"');
+    expect(mismatchedViewerIdentity).not.toContain("published-viewer-a");
+    fixture.deleteGate.reject?.(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Reject the pending delete after its identity is captured.",
+        requestId: "delete-mismatch",
+        method: "epic.deleteChat",
+        fatalDetails: null,
+      }),
+    );
+    await waitFor(() => {
+      expect(rendered.result.current.deleteChat.isError).toBe(true);
+      expect(useCloudChatDeletions.getState().pending.size).toBe(0);
+    });
+
+    fixture.targetRedirects.value = [
+      { chatId: "chat-1", publicationChatId: "published-viewer-b" },
+    ];
+    act(() => {
+      useAuthStore.setState({
+        contextMetadata: {
+          userId: OTHER_USER_ID,
+          username: OTHER_USER_ID,
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
+      expect(
+        rendered.result.current.publicationTargets.data?.redirected,
+      ).toEqual([
+        { chatId: "chat-1", publicationChatId: "published-viewer-b" },
+      ]);
+      expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
+      expect(
+        fixture.handle.store.getState().chatPublicationRedirectRevision,
+      ).toBe("redirect-r1");
+    });
+    expect(
+      readCachedChatPublicationId(fixture.queryClient, HOST_ID, EPIC_ID, {
+        chatId: "chat-1",
+        viewerUserId: OTHER_USER_ID,
+      }),
+    ).toBe("published-viewer-b");
+
+    const targetEntries = fixture.queryClient.getQueryCache().findAll({
+      queryKey: queryKeys.hostMethodScope(
+        HOST_ID,
+        "epic.listChatPublicationTargets",
+      ),
+      predicate: (entry) => entry.state.dataUpdateCount > 0,
+    });
+    expect(targetEntries.map((entry) => entry.queryKey[4]).sort()).toEqual(
+      [OTHER_USER_ID, VIEWER_ID].sort(),
+    );
+    expect(targetEntries.map((entry) => entry.queryKey[3])).toEqual([
+      { epicId: EPIC_ID, chatIds: [] },
+      { epicId: EPIC_ID, chatIds: [] },
+    ]);
+
+    rendered.result.current.deleteChat.mutate({
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      hostId: HOST_ID,
+    });
+    await waitFor(() => {
+      expect(fixture.deleteGate.resolve).not.toBeNull();
+      expect(useCloudChatDeletions.getState().pending.size).toBe(1);
+    });
+    const pendingIdentity = [
+      ...useCloudChatDeletions.getState().pending.values(),
+    ].join(",");
+    expect(pendingIdentity).toContain("published-viewer-b");
+    expect(pendingIdentity).not.toContain("published-viewer-a");
+    fixture.deleteGate.resolve?.(null);
+    await waitFor(() => {
+      expect(rendered.result.current.deleteChat.isSuccess).toBe(true);
+    });
+  });
+
   it("hides the deleted row through the pending delete, the confirmed delete, and a refetch that still answers stale", async () => {
-    const rendered = renderChannel();
+    const rendered = renderChannel(false);
     await settleFirstRead();
     await waitFor(() => {
       expect(rendered.result.current.cloudList.isSuccess).toBe(true);
@@ -532,7 +841,7 @@ describe("cloud-chat deletion suppression", () => {
   });
 
   it("restores the cloud row when the delete fails, and never touches the collaborator's or the other-host row", async () => {
-    const rendered = renderChannel();
+    const rendered = renderChannel(false);
     await settleFirstRead();
     await waitFor(() => {
       expect(rendered.result.current.cloudList.isSuccess).toBe(true);
@@ -649,7 +958,7 @@ describe("authoritative publication identity from the delete response", () => {
       ],
     });
 
-    const rendered = renderChannel();
+    const rendered = renderChannel(false);
     await settleFirstRead();
     await waitFor(() => {
       expect(rendered.result.current.cloudList.isSuccess).toBe(true);
@@ -759,15 +1068,20 @@ describe("authoritative publication identity from the delete response", () => {
     // A stale (or simply wrong) cached publication-target answer for
     // "chat-1", seeded exactly as the real hook would have cached it.
     fixture.queryClient.setQueryData(
-      queryKeys.hostMethod<HostRpcRegistry, "epic.listChatPublicationTargets">(
-        HOST_ID,
-        "epic.listChatPublicationTargets",
-        { epicId: EPIC_ID, chatIds: ["chat-1"] },
-      ),
+      [
+        ...queryKeys.hostMethod<
+          HostRpcRegistry,
+          "epic.listChatPublicationTargets"
+        >(HOST_ID, "epic.listChatPublicationTargets", {
+          epicId: EPIC_ID,
+          chatIds: [],
+        }),
+        VIEWER_ID,
+      ],
       { redirected: [{ chatId: "chat-1", publicationChatId: STALE_GUESS_ID }] },
     );
 
-    const rendered = renderChannel();
+    const rendered = renderChannel(false);
     await settleFirstRead();
     await waitFor(() => {
       expect(rendered.result.current.cloudList.isSuccess).toBe(true);
@@ -781,6 +1095,21 @@ describe("authoritative publication identity from the delete response", () => {
     await waitFor(() => {
       expect(fixture.deleteGate.resolve).not.toBeNull();
     });
+    expect([...useCloudChatDeletions.getState().pending.values()]).toEqual([
+      JSON.stringify([EPIC_ID, VIEWER_ID, HOST_ID, STALE_GUESS_ID]),
+    ]);
+    expect(
+      rowVisible(rendered.result.current.cloudList.data?.chats ?? [], {
+        chatId: STALE_GUESS_ID,
+        ownerHostId: HOST_ID,
+      }),
+    ).toBe(false);
+    expect(
+      rowVisible(rendered.result.current.cloudList.data?.chats ?? [], {
+        chatId: CLONE_ID,
+        ownerHostId: HOST_ID,
+      }),
+    ).toBe(true);
     // The response disagrees with the stale cache - it wins.
     fixture.deleteGate.resolve?.(CLONE_ID);
     await waitFor(() => {
@@ -848,7 +1177,7 @@ describe("a requested delete answer, by which fields it carries", () => {
           }),
         ),
       });
-      const rendered = renderChannel();
+      const rendered = renderChannel(false);
       await settleFirstRead();
       await waitFor(() => {
         expect(rendered.result.current.cloudList.isSuccess).toBe(true);

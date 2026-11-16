@@ -596,6 +596,32 @@ export type ListChatRecordsResponseV14 = z.infer<
 >;
 
 /**
+ * The session host's persisted redirect revision rides every record-list poll,
+ * even when the chat rows are unchanged. It changes on every redirect write,
+ * including re-decisions, and does not repeat across restarts. Null means the
+ * host could not read the revision for this answer, not that it has no redirects.
+ */
+export const listChatRecordsResponseV15Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV14Schema),
+      publicationRedirectRevision: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+      publicationRedirectRevision: z.string().nullable(),
+    }),
+  ]),
+);
+export type ListChatRecordsResponseV15 = z.infer<
+  typeof listChatRecordsResponseV15Schema
+>;
+
+/**
  * The `host.chatRecords.subscribe@1.3` chat row: the FROZEN base row plus the
  * publication head - and deliberately NOT {@link chatRecordSummaryV12Schema}.
  *
