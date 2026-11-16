@@ -282,7 +282,10 @@ describe("the Secrets page header", () => {
     });
 
     const page = await screen.findByTestId("secrets-page");
-    const details = await screen.findByRole("button", { name: "Details" });
+    const details = (
+      await screen.findAllByRole("button", { name: "Details" })
+    ).find((button) => button.closest("li") === null);
+    if (details === undefined) throw new Error("the page has no Details");
     const header = details.closest("header");
     if (header === null) throw new Error("Details is not inside a header");
     expect(within(header).getByTestId("page-chip")).toBeTruthy();

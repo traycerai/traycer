@@ -18,6 +18,7 @@ import { ConfigurationWriteFeedback } from "@/components/settings/environment/co
 import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { TeamChatAutoArchiveRow } from "@/components/settings/environment/team-chat-auto-archive-row";
+import type { SandboxDefaultsEnvironment } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -101,6 +102,20 @@ export function StoragePolicySection(props: {
 }): ReactNode {
   const viewerUserId = useCloudChatViewerId();
   return <StoragePolicySectionBody key={viewerUserId} pick={props.pick} />;
+}
+
+/** A team's own auto-archive row; Personal has none. */
+function TeamAutoArchive(props: {
+  readonly pick: Exclude<EnvironmentPick, { readonly kind: "local" }>;
+  readonly environment: SandboxDefaultsEnvironment | null;
+}): ReactNode {
+  if (props.pick.kind !== "team") return null;
+  return (
+    <TeamChatAutoArchiveRow
+      environmentId={props.pick.environmentId}
+      role={props.environment?.role ?? null}
+    />
+  );
 }
 
 function StoragePolicySectionBody(props: {
@@ -290,12 +305,7 @@ function StoragePolicySectionBody(props: {
         dataTestId={undefined}
         fill={false}
       >
-        {props.pick.kind === "team" ? (
-          <TeamChatAutoArchiveRow
-            environmentId={props.pick.environmentId}
-            role={environment?.role ?? null}
-          />
-        ) : null}
+        <TeamAutoArchive pick={props.pick} environment={environment} />
         <SettingsRow
           row={STORAGE.definitions.fileEditSnapshotWindow}
           control={

@@ -98,6 +98,7 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
   isAttachEnvironmentUnsupported: () => false,
+  pressedSignInCurrent: () => true,
   toastAttachEnvironmentNeedsOwnHost: () => undefined,
   useEpicAttachEnvironment: () => ({
     isPending: false,
