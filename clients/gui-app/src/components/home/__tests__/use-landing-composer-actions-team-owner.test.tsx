@@ -15,7 +15,7 @@
  */
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
-import { AuthService, SupersededAuthEraError } from "@/lib/auth/auth-service";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
@@ -62,19 +62,16 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import { HostDirectoryService } from "@/lib/host/host-directory-service";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
-import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import {
+  createLandingAttachmentFixture,
+  landingTeamEnvironment,
+  type LandingAttachmentFixture,
+} from "./landing-attachment-fixture";
 
 interface CapturedNavigation {
   readonly search?: (
@@ -205,36 +202,11 @@ const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 const SIGN_IN_FOR_ACME = "Sign in to create a task for acme.";
 const NOT_ON_TEAM_SANDBOXES = "Not available on team sandboxes.";
+const STAGED_TEAM_ENVIRONMENT = landingTeamEnvironment("t2");
 const LOCAL_OWNERSHIP_ERA: AuthEra = {
   identity: "user-landing",
   credentialGeneration: 1,
 };
-
-const STAGED_TEAM_ENVIRONMENT = {
-  environmentId: "env-staged-team",
-  ownerKind: "organization" as const,
-  ownerId: "t2",
-  roomId: "room-staged-team",
-  label: "Team",
-};
-
-interface LandingAttachmentFixture {
-  readonly auth: AuthService;
-  readonly runnerHost: MockRunnerHost;
-  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
-  readonly authnCalls: Array<
-    | { readonly kind: "list"; readonly bearer: string }
-    | {
-        readonly kind: "attach";
-        readonly bearer: string;
-        readonly request: {
-          readonly taskId: string;
-          readonly environmentId: string;
-        };
-      }
-  >;
-  readonly dispose: () => void;
-}
 
 const attachmentFixtureDisposers: Array<() => void> = [];
 
@@ -396,150 +368,11 @@ function newQueryClient(): QueryClient {
   });
 }
 
-function landingSignedInResponse(): Response {
-  return new Response(
-    JSON.stringify({
-      user: {
-        id: "user-landing",
-        name: "U",
-        providerId: "gh-user-landing",
-        providerHandle: "U",
-        providerType: "GITHUB",
-        email: "u@example.com",
-        avatarUrl: null,
-        activatedAt: null,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        updatedAt: "2024-01-01T00:00:00.000Z",
-        lastSeenAt: null,
-        privacyMode: false,
-        isLearningEnabled: true,
-      },
-      userSubscription: {
-        id: "sub-user-landing",
-        userID: "user-landing",
-        orgID: null,
-        teamID: null,
-        customerId: "cus-user-landing",
-        createdAt: "2024-01-01T00:00:00.000Z",
-        updatedAt: "2024-01-01T00:00:00.000Z",
-        subscriptionExpiry: null,
-        trialEndsAt: null,
-        subscriptionStatus: "FREE",
-        hasPaymentMethod: false,
-        isInTrial: false,
-        rechargeRateSeconds: 0,
-      },
-      teamSubscriptions: [],
-      payAsYouGoUsage: { allowPayAsYouGo: false },
-    }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "x-traycer-user-record-version": "2.0",
-      },
-    },
-  );
-}
-
-async function createLandingAttachmentFixture(): Promise<LandingAttachmentFixture> {
-  const runnerHost = new MockRunnerHost({
-    signInUrl: "https://auth.traycer.invalid/sign-in",
-    authnBaseUrl: "https://authn.traycer.invalid",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
-  vi.stubGlobal("fetch", () => Promise.resolve(landingSignedInResponse()));
-  const auth = new AuthService({ runnerHost });
-  await runnerHost.tokenStore.signIn(
-    { token: "landing-token-a", refreshToken: "landing-token-a-refresh" },
-    { id: "user-landing", email: "u@example.com", name: "U" },
-  );
-  await auth.start();
-  const directory = new HostDirectoryService({
-    runnerHost,
-    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
-    onRegistryPollTick: null,
-    authContextId: () => auth.currentAuthEra().identity,
-    credentialGeneration: () => auth.getCredentialGeneration(),
-    localHostIdSeeder: () => Promise.resolve(TEST_HOST_ID),
-  });
-  const queryClient = new QueryClient();
-  let requestId = 0;
-  const runtime = new HostRuntime<HostRpcRegistry>({
-    runnerHost,
-    onHostTokenRenewal: () => undefined,
-    registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `landing-auth-${++requestId}`,
-      handlers: {},
-    }),
-    requestContextProvider: auth.getRequestContextProvider(),
-    directory,
-    invalidator: createHostQueryInvalidator(queryClient),
-    schedulingPolicy: hostRpcSchedulingPolicy,
-    authorityRegistry: null,
-    requestCoordinator: null,
-    connectionRegistry: null,
-    selectedHostId: () => TEST_HOST_ID,
-    singleAttemptMessenger: null,
-  });
-  const authnCalls: LandingAttachmentFixture["authnCalls"] = [];
-  vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
-    authnCalls.push({ kind: "list", bearer });
-    return Promise.resolve({
-      kind: "ok",
-      list: { environments: [STAGED_TEAM_ENVIRONMENT] },
-    });
-  });
-  vi.spyOn(runnerHost, "attachTaskEnvironment").mockImplementation(
-    (bearer, request) => {
-      authnCalls.push({ kind: "attach", bearer, request });
-      return Promise.resolve({ kind: "ok" });
-    },
-  );
-  const fixture: LandingAttachmentFixture = {
-    auth,
-    runnerHost,
-    authnCalls,
-    binding: {
-      runtime,
-      hostClient: runtime.hostClient,
-      directory,
-      auth,
-      hostId: TEST_HOST_ID,
-    },
-    dispose: () => {
-      runtime.dispose();
-      directory.dispose();
-      auth.dispose();
-      queryClient.clear();
-    },
-  };
-  attachmentFixtureDisposers.push(fixture.dispose);
-  return fixture;
-}
-
 async function reenterLandingAccount(
   fixture: LandingAttachmentFixture,
 ): Promise<void> {
-  await fixture.auth.signOut();
   useAuthStore.getState().setSignedOut();
-  await fixture.auth.signIn();
-  fixture.runnerHost.deviceFlow.emitResult({
-    kind: "authorized",
-    token: "landing-token-a-again",
-    refreshToken: "landing-token-a-again-refresh",
-  });
-  await waitFor(() => {
-    expect(fixture.auth.getCurrentSessionSnapshot().token).toBe(
-      "landing-token-a-again",
-    );
-  });
+  await fixture.signInAs("user-landing", "landing-token-a-again");
   useAuthStore
     .getState()
     .setSignedIn(
@@ -1208,7 +1041,13 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     recordNegotiatedHostManifest(TEST_HOST_ID, {
       "epic.create": { major: 1, minor: 3 },
     });
-    const fixture = await createLandingAttachmentFixture();
+    const fixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [STAGED_TEAM_ENVIRONMENT],
+    });
+    attachmentFixtureDisposers.push(fixture.dispose);
     landingMocks.getHostBinding.mockReturnValue(fixture.binding);
     const createResponse = deferredValue<unknown>();
     holdCreateAndPrepareAttachment(createResponse.promise);
@@ -1272,7 +1111,13 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     recordNegotiatedHostManifest(TEST_HOST_ID, {
       "epic.create": { major: 1, minor: 3 },
     });
-    const fixture = await createLandingAttachmentFixture();
+    const fixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [STAGED_TEAM_ENVIRONMENT],
+    });
+    attachmentFixtureDisposers.push(fixture.dispose);
     landingMocks.getHostBinding.mockReturnValue(fixture.binding);
     const createResponse = deferredValue<unknown>();
     holdCreateAndPrepareAttachment(createResponse.promise);
