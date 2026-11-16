@@ -38,6 +38,7 @@ import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets
 import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { cn } from "@/lib/utils";
+import { useConfigurationSource } from "./configuration-source";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import {
@@ -211,6 +212,7 @@ function TeamProvidersView(props: {
     harness,
     onOutcome,
   } = props;
+  const source = useConfigurationSource();
   return (
     <SettingsPanelShell
       title="Providers"
@@ -275,11 +277,16 @@ function TeamProvidersView(props: {
                   profiles={profiles}
                   onOutcome={onOutcome}
                 />
-                <CloudProviderApiKeySection
-                  scope={props.keyScope}
-                  providerId={providerId}
-                  query={props.keyQuery}
-                />
+                {/* A team's Viewer, or a role the app does not know, sees no key field. */}
+                {source.kind === "pool" &&
+                source.configuration === "team" &&
+                !props.keyScope.canEdit ? null : (
+                  <CloudProviderApiKeySection
+                    scope={props.keyScope}
+                    providerId={providerId}
+                    query={props.keyQuery}
+                  />
+                )}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
