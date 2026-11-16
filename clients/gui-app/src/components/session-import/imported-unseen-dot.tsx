@@ -22,9 +22,10 @@ export function ImportedUnseenDot(props: { readonly epicId: string }) {
   const harness = useImportedUnseenStore((state) => state.unseen[props.epicId]);
   const tooltipOpen = useStatusGlyphTooltipOpen();
   if (harness === undefined) return null;
-  // `null` means the task holds imported work from more than one provider,
-  // which one task per repository makes ordinary. Naming one of them would be
-  // wrong, and naming all of them is more than a dot's tooltip is for.
+  // `null` means the task holds imported work from more than one provider: a
+  // task an earlier build shared across a repository's sessions. Naming one
+  // of them would be wrong, and naming all of them is more than a dot's
+  // tooltip is for.
   const sentence =
     harness === null
       ? "Imported, not opened yet"
