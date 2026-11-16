@@ -259,7 +259,7 @@ function SecretDetailsControls(props: {
         hostName={props.hostName}
       />
       <SecretVersionsList
-        secret={props.secret}
+        secret={{ ...props.secret, revoked: props.revoked }}
         client={props.client}
         hostId={props.hostId}
         onChanged={props.onChanged}
