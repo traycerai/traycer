@@ -30,6 +30,7 @@ interface ProfileMoveHostCommit {
 }
 
 export interface ProfileMoveCommitPlan {
+  readonly anchorHostId: string | null;
   readonly request: ProvidersCommitProfileMoveRequest;
   readonly groups: readonly ProfileMoveHostCommit[];
 }
@@ -61,6 +62,7 @@ export function createProfileMoveCommitPlan(
     refs.push(ref);
   }
   return {
+    anchorHostId,
     request: { ...request, extent: "this-computer", targets: refs },
     groups: [...groups].map(([hostId, body]) => ({ hostId, request: body })),
   };
@@ -87,6 +89,20 @@ function assertGroupResponse(
     response.results.some((row) => !expected.has(targetKey(row.target)))
   )
     throw new Error("The other computer answered a different move.");
+}
+
+function failureOutcome(
+  error: HostRpcError,
+): "pending" | "unsupported" | "not-allowed" {
+  if (isHostTransportFailure(error)) return "pending";
+  if (
+    error.code === "E_HOST_UNSUPPORTED" ||
+    classifyHostRequestFailure(error).kind === "downgrade-unsupported"
+  )
+    return "unsupported";
+  if (error.code === "FORBIDDEN" || error.code === "E_ROLE_FORBIDDEN")
+    return "not-allowed";
+  throw error;
 }
 
 export function useProvidersPreviewProfileMove(
@@ -181,7 +197,7 @@ export function useProvidersCommitProfileMove(
           ProvidersCommitProfileMoveResponse["results"][number]
         >();
         let answered = false;
-        let transportError: HostRpcError | null = null;
+        let fallbackError: HostRpcError | null = null;
         for (const group of plan.groups) {
           let response: ProvidersCommitProfileMoveResponse;
           try {
@@ -190,26 +206,20 @@ export function useProvidersCommitProfileMove(
             );
           } catch (error) {
             if (!(error instanceof HostRpcError)) throw error;
-            const unsupported =
-              error.code === "E_HOST_UNSUPPORTED" ||
-              classifyHostRequestFailure(error).kind ===
-                "downgrade-unsupported";
-            const denied =
-              error.code === "FORBIDDEN" || error.code === "E_ROLE_FORBIDDEN";
-            if (isHostTransportFailure(error)) transportError = error;
-            else if (denied || unsupported) answered = true;
-            else throw error;
+            const outcome = failureOutcome(error);
+            if (fallbackError === null || group.hostId === plan.anchorHostId)
+              fallbackError = error;
             for (const target of group.request.targets) {
               results.set(
                 targetKey(target),
-                denied || unsupported
-                  ? {
+                outcome === "pending"
+                  ? { target, row: null, outcome: "pending" }
+                  : {
                       target,
                       row: null,
                       outcome: "skipped",
-                      reason: denied ? "not-allowed" : "unsupported",
-                    }
-                  : { target, row: null, outcome: "pending" },
+                      reason: outcome,
+                    },
               );
             }
             continue;
@@ -219,7 +229,7 @@ export function useProvidersCommitProfileMove(
           for (const row of response.results)
             results.set(targetKey(row.target), row);
         }
-        if (!answered && transportError !== null) throw transportError;
+        if (!answered && fallbackError !== null) throw fallbackError;
         return providersCommitProfileMoveResponseSchema.parse({
           operationId: plan.request.operationId,
           extent: "this-computer",

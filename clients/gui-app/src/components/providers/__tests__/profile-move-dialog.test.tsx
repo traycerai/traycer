@@ -573,6 +573,49 @@ describe("ProfileMoveDialog", () => {
     expect(sonnerErrors.error.mock.calls).toHaveLength(0);
   });
 
+  it("uses the anchor's unsupported notice when another owner fails by transport and nothing succeeds", async () => {
+    const user = userEvent.setup();
+    const remote = {
+      ...AGENT_ROW,
+      agentId: "remote-first",
+      hostId: REMOTE_HOST,
+    };
+    const harness = createHarness({
+      preview: () => ({ ...PREVIEW, targets: [remote, AGENT_ROW] }),
+      commit: (request) => {
+        if (
+          request.targets.some(
+            (target) =>
+              target.kind === "agent" && target.agentId === remote.agentId,
+          )
+        ) {
+          throw new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "unreachable",
+            requestId: "remote-down",
+            method: "providers.commitProfileMove",
+            fatalDetails: null,
+          });
+        }
+        throw moveFloorFailure("providers.commitProfileMove");
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      OLDER_COMPUTER_NOTICE,
+    );
+    expect(screen.queryByRole("heading", { name: "Still waiting" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Not moved" })).toBeNull();
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+    expect(harness.requests).toHaveLength(2);
+  });
+
   it("retries the same owning-host bodies after a later host's answer is lost", async () => {
     const remote = {
       ...AGENT_ROW,
@@ -1028,7 +1071,7 @@ describe("ProfileMoveDialog", () => {
     expect(sonnerErrors.error.mock.calls).toHaveLength(0);
   });
 
-  it("reports unsupported targets when commit is below the dispatch floor", async () => {
+  it("shows the older-computer notice when commit is below the dispatch floor", async () => {
     const user = userEvent.setup();
     const harness = createHarness({
       preview: () => PREVIEW,
@@ -1044,10 +1087,8 @@ describe("ProfileMoveDialog", () => {
     );
     await user.click(screen.getByRole("button", { name: "Move 2" }));
 
-    await screen.findByRole("heading", { name: "Not moved" });
-    expect(
-      screen.getAllByText(`Computer ${HOST_ID} is running an older version`),
-    ).toHaveLength(2);
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toBe(OLDER_COMPUTER_NOTICE);
     expect(
       screen.queryByText(
         /DOWNGRADE_UNSUPPORTED|negotiated|not advertised|below the/,
