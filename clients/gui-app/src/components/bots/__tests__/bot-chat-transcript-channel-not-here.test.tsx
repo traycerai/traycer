@@ -26,6 +26,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -291,6 +295,10 @@ beforeEach(() => {
   // The mutation cache tells its observers on a timer by default; synchronous
   // here, so a send has reached the transcript when its `act` returns.
   notifyManager.setScheduler((notify) => notify());
+  resetNegotiatedManifests();
+  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+    "bot.conversation.send": { major: 1, minor: 0 },
+  });
   retry = vi.fn<() => void>();
   queryClient = new QueryClient();
 });
@@ -299,6 +307,7 @@ afterEach(() => {
   cleanup();
   queryClient.clear();
   notifyManager.setScheduler(defaultScheduler);
+  resetNegotiatedManifests();
   mocks.handle = null;
 });
 
