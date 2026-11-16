@@ -167,6 +167,7 @@ vi.mock("../../logger", () => ({
   createCliLogger: () => loggerMock,
   errorFromUnknown: (value: unknown) =>
     value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
 }));
 
 vi.mock(

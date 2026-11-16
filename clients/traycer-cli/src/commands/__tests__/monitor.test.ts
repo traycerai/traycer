@@ -312,6 +312,7 @@ beforeEach(async () => {
     userId: "u1",
   });
   resolveAuthMock.mockClear();
+  pidMock.mockReset();
   pidMock.mockResolvedValue({
     pid: 1,
     hostId: "d1",
