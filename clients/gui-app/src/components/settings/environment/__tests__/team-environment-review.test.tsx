@@ -799,7 +799,7 @@ describe("Team Review through the addressed page", () => {
     const refreshedApprove = await within(row).findByRole("button", {
       name: "Approve",
     });
-    expect(refreshedApprove.disabled).toBe(false);
+    expect(refreshedApprove.hasAttribute("disabled")).toBe(false);
     fireEvent.click(refreshedApprove);
     await waitFor(() =>
       expect(choiceRequests(scenario.harness)).toHaveLength(2),
