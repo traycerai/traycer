@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type {
-  ProvidersCommitProfileMoveRequest,
   ProvidersCommitProfileMoveResponse,
   ProvidersPreviewProfileMoveRequest,
   ProvidersPreviewProfileMoveResponse,
@@ -22,6 +21,8 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   useProvidersCommitProfileMove,
   useProvidersPreviewProfileMove,
+  createProfileMoveCommitPlan,
+  type ProfileMoveCommitPlan,
 } from "@/hooks/providers/use-profile-move";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { MOVE_ERROR_FALLBACKS } from "./profile-move-copy";
@@ -121,8 +122,7 @@ function useSwitchAccountMove(session: SwitchAccountMoveSession) {
     canPreview,
   );
   const commit = useProvidersCommitProfileMove(client);
-  const [request, setRequest] =
-    useState<ProvidersCommitProfileMoveRequest | null>(null);
+  const [request, setRequest] = useState<ProfileMoveCommitPlan | null>(null);
   const unsupported =
     previewSupport === false ||
     commitSupport === false ||
@@ -141,16 +141,18 @@ function useSwitchAccountMove(session: SwitchAccountMoveSession) {
       data.targets.length === 0
     )
       return;
-    const body: ProvidersCommitProfileMoveRequest = request ?? {
-      ...previewRequest,
-      operationId: crypto.randomUUID(),
-      destinationProfileId: session.destination.profileId,
-      targets: data.targets.map((target) =>
-        target.kind === "agent"
-          ? { kind: "agent", epicId: target.epicId, agentId: target.agentId }
-          : { kind: "bot", botId: target.botId },
-      ),
-    };
+    const body =
+      request ??
+      createProfileMoveCommitPlan(
+        {
+          mode: previewRequest.mode,
+          source: previewRequest.source,
+          operationId: crypto.randomUUID(),
+          destinationProfileId: session.destination.profileId,
+        },
+        data.targets,
+        session.moveHostId,
+      );
     setRequest(body);
     commit.mutate(body, {
       onError: (error) =>
