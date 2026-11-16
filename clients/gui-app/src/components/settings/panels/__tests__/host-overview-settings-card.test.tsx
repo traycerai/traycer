@@ -26,9 +26,7 @@ import type {
   EnvironmentMoveStopRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type {
-  EnvironmentMovePlanResponseV20,
   EnvironmentMoveStageRequest,
-  EnvironmentMoveStageResponse,
   EnvironmentMoveStartRequest,
   EnvironmentMovePlanRequestV20,
   EnvironmentMoveOutcomeRequest,
@@ -59,6 +57,16 @@ import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
+import {
+  GIVE_ACCEPTANCE_ID,
+  GIVE_ATTEMPT_ID,
+  GIVE_DISCLOSURE_HASH,
+  GIVE_PLAN,
+  GIVE_PLAN_HASH,
+  GIVE_TEAM_ID,
+  giveMoveStatus,
+  giveStageFixture,
+} from "@/components/settings/panels/__tests__/team-give-test-support";
 
 const hostBindingMock = vi.hoisted(
   (): {
@@ -170,12 +178,7 @@ const TEAM_BINDING: EnvironmentHostBinding = {
 };
 const CURRENT_USER: HostOwnerPrincipal = { kind: "user", id: "user-a" };
 const GIVE_HOST_ID = "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60";
-const GIVE_TEAM_ID = "2b7e9d10-4c5a-4f6e-8d3b-a1c2e3f40516";
 const GIVE_ENVIRONMENT_ID = "team-admin";
-const GIVE_PLAN_HASH = "a".repeat(64);
-const GIVE_ATTEMPT_ID = "c3d4e5f6-0718-4a29-8b3c-4d5e6f708192";
-const GIVE_ACCEPTANCE_ID = "a7b8c9d0-e1f2-4a3b-8c5d-6e7f8091a2b3";
-const GIVE_DISCLOSURE_HASH = "b".repeat(64);
 const GIVE_DIRECTORY_ROW: EnvironmentDescriptor = {
   environmentId: GIVE_ENVIRONMENT_ID,
   ownerKind: "organization",
@@ -183,37 +186,11 @@ const GIVE_DIRECTORY_ROW: EnvironmentDescriptor = {
   roomId: "room-admin",
   label: "Admin team",
 };
-const GIVE_PLAN: EnvironmentMovePlanResponseV20 = {
-  planHash: GIVE_PLAN_HASH,
-  planRevision: 1,
-  hostVersion: "1.5.0",
-  disclosureVersion: 2,
-  rows: {
-    moves: [],
-    staysOnThisComputer: [],
-    alreadyInPersonal: [],
-    differsMasked: [],
-  },
-  guideDiffers: false,
-  personalHoldsSecrets: false,
-};
-const GIVE_STAGE: EnvironmentMoveStageResponse = {
-  evidence: {
-    attemptId: GIVE_ATTEMPT_ID,
-    planHash: GIVE_PLAN_HASH,
-    planRevision: 1,
-    hostVersion: "1.5.0",
-    itemCount: 0,
-    keyChoices: [],
-    sourceHostId: GIVE_HOST_ID,
-    sharingGeneration: 1,
-    targetKind: "team",
-    environmentId: GIVE_ENVIRONMENT_ID,
-    teamId: GIVE_TEAM_ID,
-    disclosureVersion: 2,
-  },
-  authorization: { disclosureHash: GIVE_DISCLOSURE_HASH },
-};
+const GIVE_STAGE = giveStageFixture({
+  hostId: GIVE_HOST_ID,
+  environmentId: GIVE_ENVIRONMENT_ID,
+  teamId: GIVE_TEAM_ID,
+});
 
 interface GiveCalls {
   readonly plans: EnvironmentMovePlanRequestV20[];
@@ -263,32 +240,6 @@ function giveHandlers(
 
 function giveCalls(): GiveCalls {
   return { plans: [], stages: [], starts: [], outcomes: [], localFacts: [] };
-}
-
-function giveMoveStatus(
-  state: "running" | "needs_person" | "done",
-  attemptId: string,
-): EnvironmentStatusResponseV13 {
-  let move: EnvironmentStatusResponseV13["move"];
-  switch (state) {
-    case "needs_person":
-      move = {
-        state: "needs_person",
-        reason: "consumed",
-        attemptId,
-        acceptanceId: GIVE_ACCEPTANCE_ID,
-      };
-      break;
-    case "done":
-      move = { state: "done", attemptId, acceptanceId: GIVE_ACCEPTANCE_ID };
-      break;
-    case "running":
-      move = { state: "running", attemptId, acceptanceId: GIVE_ACCEPTANCE_ID };
-      break;
-  }
-  return environmentStatusFixture({
-    move,
-  });
 }
 
 async function openAdminGiveDialog(
