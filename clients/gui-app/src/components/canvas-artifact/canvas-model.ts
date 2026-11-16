@@ -21,16 +21,40 @@ const LIVE_BOARD_BYTES_PER_SLOT = 40 * 1024;
  * dense page near 500 MB, and most pages never unload a board, which loses
  * the state it had.
  *
- * Every other shell holds the boards in the app's own content process, and a
- * phone has far less memory to spare, so it keeps 24.
+ * Every other shell holds the boards in the app's own content process. A
+ * browser on a computer keeps 24 there.
+ *
+ * A phone or tablet ends that process when it grows too large, and the app
+ * reloads: an iPhone 13 did so on a pinch over 24 live mockups. A phone shows
+ * two or three boards at a time, so 8 covers the screen and a ring around it;
+ * a tablet shows more and keeps 12.
  */
 export function liveBoardSlotBudget(
   bridge: Pick<SandboxArtifactBridge, "artifactOrigin"> | null,
   artifactId: string,
+  device: CanvasDevice,
 ): number {
-  return bridge !== null && artifactMountsShareSite(bridge, artifactId)
-    ? 48
-    : 24;
+  if (bridge !== null && artifactMountsShareSite(bridge, artifactId)) return 48;
+  if (device === "phone") return 8;
+  return device === "tablet" ? 12 : 24;
+}
+/** The hardware a canvas is drawn on, as far as its memory to spare goes. */
+export type CanvasDevice = "phone" | "tablet" | "computer";
+// The narrowest tablet's short side is 600 CSS pixels and up; no phone's is.
+const TABLET_SHORT_SIDE = 600;
+/**
+ * Touch-first hardware is a phone or a tablet whichever app or browser it
+ * runs, and the screen tells the two apart: its short side does not change
+ * with the window or with rotation.
+ */
+export function canvasDevice(
+  coarsePointer: boolean,
+  screen: { readonly width: number; readonly height: number },
+): CanvasDevice {
+  if (!coarsePointer) return "computer";
+  return Math.min(screen.width, screen.height) < TABLET_SHORT_SIDE
+    ? "phone"
+    : "tablet";
 }
 /** The selection/board inspector is parked, not removed: the panels stay in
  * the tree behind this flag until the inspector earns its place in the UI. */

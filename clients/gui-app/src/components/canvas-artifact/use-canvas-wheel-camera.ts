@@ -31,19 +31,26 @@ export const CANVAS_BACKDROP_CLASS =
 
 /** How long a zoom gesture stays quiet before the canvas redraws at its scale. */
 const ZOOM_COMMIT_QUIET_MS = 120;
-/** How long any wheel gesture stays quiet before the live boards are picked again. */
+/** How long any gesture here stays quiet before the live boards are picked again. */
 const SETTLE_QUIET_MS = 200;
 
 export interface CanvasWheelCamera {
   /** Takes one wheel event's move; the next animation frame applies it. */
   readonly push: (step: CanvasWheelStep) => void;
   /**
+   * Offers a move from a gesture React Flow recognises itself, a finger
+   * pinch. A move that changes the zoom, or joins a zoom still on the layer,
+   * is taken and drawn like a wheel zoom; the answer is whether it was. A
+   * move left alone is a pan, the caller's to hand React Flow.
+   */
+  readonly follow: (viewport: Viewport) => boolean;
+  /**
    * Another camera move takes over: hand React Flow the zoom the reader has
    * been shown, then forget where the wheel left the camera and stop the
    * settle it was waiting for.
    */
   readonly cancel: () => void;
-  /** Whether a wheel gesture has yet to settle the live board set. */
+  /** Whether a gesture here has yet to settle the live board set. */
   readonly settling: () => boolean;
   /**
    * React Flow reports each viewport it puts on screen, from the commit that
@@ -66,6 +73,12 @@ export interface CanvasWheelCamera {
  * scales the pixels already drawn, and React Flow gets the final viewport
  * once the gesture has been quiet for {@link ZOOM_COMMIT_QUIET_MS}. The
  * layer lets go in the commit that draws the next viewport, so nothing jumps.
+ *
+ * A finger pinch never arrives as wheel events: React Flow follows the
+ * fingers and reports each viewport. Left to draw them itself it redraws the
+ * canvas, and every board at a new scale, on every one, which a phone runs
+ * out of memory doing. Those viewports are taken here instead and end the
+ * same way.
  */
 export function useCanvasWheelCamera({
   flow,
@@ -221,10 +234,8 @@ export function useCanvasWheelCamera({
     releaseLayer();
   }, [suspended, dropQueued, onMove, releaseLayer]);
 
-  const push = useCallback(
-    (step: CanvasWheelStep): void => {
-      if (flow === null) return;
-      steps.current.push(step);
+  const awaitQuiet = useCallback(
+    (zoom: boolean): void => {
       if (settleTimer.current !== null)
         window.clearTimeout(settleTimer.current);
       settleTimer.current = window.setTimeout(() => {
@@ -235,7 +246,7 @@ export function useCanvasWheelCamera({
         const settled = camera.current ?? shown.current;
         if (settled !== null) onSettle(settled);
       }, SETTLE_QUIET_MS);
-      if (zooming.current || step.kind === "zoom") {
+      if (zooming.current || zoom) {
         if (commitTimer.current !== null)
           window.clearTimeout(commitTimer.current);
         commitTimer.current = window.setTimeout(() => {
@@ -247,7 +258,34 @@ export function useCanvasWheelCamera({
       }
       frame.current ??= window.requestAnimationFrame(onFrame);
     },
-    [flow, applyQueued, commitZoom, onFrame, onSettle],
+    [applyQueued, commitZoom, onFrame, onSettle],
+  );
+  const push = useCallback(
+    (step: CanvasWheelStep): void => {
+      if (flow === null) return;
+      steps.current.push(step);
+      awaitQuiet(step.kind === "zoom");
+    },
+    [flow, awaitQuiet],
+  );
+  const follow = useCallback(
+    (viewport: Viewport): boolean => {
+      const from = camera.current ?? shown.current;
+      if (flow === null || from === null) return false;
+      if (!zooming.current && viewport.zoom === from.zoom) {
+        // A settle still waiting reads the camera, so a pan handed back
+        // moves it too: the live boards are picked where the pan ended.
+        if (camera.current !== null) camera.current = viewport;
+        return false;
+      }
+      // Each report is the whole viewport, so the latest one is the camera
+      // and the next frame draws only that.
+      camera.current = viewport;
+      zooming.current = true;
+      awaitQuiet(true);
+      return true;
+    },
+    [flow, awaitQuiet],
   );
   const settling = useCallback((): boolean => settleTimer.current !== null, []);
   const onShown = useCallback(
@@ -268,7 +306,7 @@ export function useCanvasWheelCamera({
     },
     [paintLayer, releaseLayer],
   );
-  return { push, cancel, settling, onShown };
+  return { push, follow, cancel, settling, onShown };
 }
 
 function sameViewport(a: Viewport, b: Viewport): boolean {

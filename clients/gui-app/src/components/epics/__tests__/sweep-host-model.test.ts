@@ -7,6 +7,7 @@ import {
   namesHostOutsideSurface,
   sweepHostCountLabel,
   sweepNeedsHostPicker,
+  sweepOpeningHostId,
 } from "@/components/epics/sweep-host-model";
 import { parseHostIdStamp, stampHostIds } from "@/lib/host/host-id-stamp";
 
@@ -58,6 +59,41 @@ describe("sweepNeedsHostPicker", () => {
 });
 
 describe("namesHostOutsideSurface", () => {
+  it.each([
+    {
+      name: "the one other host, when the surface owns nothing",
+      hostIds: ["host-a", "host-b"],
+      surfaceWorktreeCount: 0,
+      expected: "host-b",
+    },
+    {
+      name: "the surface while its own listing is unsettled",
+      hostIds: ["host-b"],
+      surfaceWorktreeCount: null,
+      expected: null,
+    },
+    {
+      name: "the surface when it owns worktrees itself",
+      hostIds: ["host-b"],
+      surfaceWorktreeCount: 2,
+      expected: null,
+    },
+    {
+      name: "the surface when two other hosts could be the answer",
+      hostIds: ["host-b", "host-c"],
+      surfaceWorktreeCount: 0,
+      expected: null,
+    },
+  ])("opens on $name", ({ hostIds, surfaceWorktreeCount, expected }) => {
+    expect(
+      sweepOpeningHostId({
+        hostIds,
+        surfaceHostId: "host-a",
+        surfaceWorktreeCount,
+      }),
+    ).toBe(expected);
+  });
+
   it("says yes when provenance reaches past the surface's host", () => {
     // The gate clause that keeps the picker reachable for a multi-host Task.
     expect(
