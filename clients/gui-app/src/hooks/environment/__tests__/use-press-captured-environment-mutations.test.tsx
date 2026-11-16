@@ -3,13 +3,13 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
-import type { EnvironmentMoveResult } from "@traycer-clients/shared/environment/environment-move-flow";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   EnvironmentMoveAcceptance,
-  EnvironmentMoveStageResponse,
-} from "@traycer/protocol/host/environment/move-contracts";
+  EnvironmentMoveResult,
+} from "@traycer-clients/shared/environment/environment-move-flow";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { EnvironmentMoveStageResponse } from "@traycer/protocol/host/environment/move-contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { useRemoteAccessTurnOnMutation } from "@/hooks/environment/use-remote-access-turn-on-mutation";
