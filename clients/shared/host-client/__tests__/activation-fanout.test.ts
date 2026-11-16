@@ -194,6 +194,7 @@ function buildFanOutFixture(): FanOutFixture {
       hostTokenRenewals.push({ hostId, delayed });
     },
     registry,
+    singleAttemptMessenger: null,
     messenger,
     requestContextProvider: provider,
     directory,

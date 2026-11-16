@@ -56,7 +56,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
@@ -305,25 +304,20 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
 }
 
 /** Keeps each of the team's secret reads, authn's own, observed while an action runs. */
-function SecretReadProbe(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-}): ReactNode {
+function SecretReadProbe(): ReactNode {
   const list = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.list",
     params: { environmentId: "env-a" },
     enabled: true,
     poll: false,
   });
   const versions = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: "sec-1", environmentId: "env-a" },
     enabled: true,
     poll: false,
   });
   const rotation = useSecretsRead({
-    client: props.client,
     method: "environment.secrets.rotation",
     params: { secretId: "sec-1", environmentId: "env-a" },
     enabled: true,
@@ -388,7 +382,7 @@ function mountPage(
       ) : (
         <>
           {page}
-          <SecretReadProbe client={client} />
+          <SecretReadProbe />
         </>
       )}
     </ConfigurationSourceBoundary>,

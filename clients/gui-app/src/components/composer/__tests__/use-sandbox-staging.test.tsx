@@ -35,7 +35,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -100,7 +100,7 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   catalogueError: false,
   catalogueRefetch: vi.fn(),
-  registeredStatuses: new Map<string, EnvironmentStatusResponseV12 | null>(),
+  registeredStatuses: new Map<string, EnvironmentStatusResponseV13 | null>(),
   defaults: {} as Record<string, SandboxConfigurationDefaults>,
   costs: null as UserSandboxCost | null,
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),

@@ -19,13 +19,15 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  NotificationsSettingsPanel,
-  NotificationsSettingsPanelForClient,
-} from "@/components/settings/panels/notifications-settings-panel";
+import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
@@ -115,140 +117,27 @@ afterEach(() => {
   hostScopeMocks.status = null;
 });
 
-describe("<NotificationsSettingsPanel /> severity policy", () => {
-  it("keeps app-local notification sound controls out of the host panel", async () => {
-    renderNotificationsSettings(undefined);
+describe("computer Notifications tab", () => {
+  it("keeps the account policy and account-only copy on the account page", async () => {
+    renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({ hooks: [] }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
 
+    await screen.findByTestId("notification-hooks-empty-state");
+    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     expect(
-      screen.queryByRole("combobox", { name: "Needs action sound" }),
-    ).toBeNull();
-    expect(screen.queryByText("Push notifications")).toBeNull();
-    await screen.findByRole("switch", {
-      name: "Needs action In-app notifications",
-    });
-  });
-
-  it("renders four single-channel severity rows, including Info", async () => {
-    renderNotificationsSettings(undefined);
-
-    const info = await screen.findByRole("switch", {
-      name: "Info In-app notifications",
-    });
-    const needsAction = screen.getByRole("switch", {
-      name: "Needs action In-app notifications",
-    });
-    const failure = screen.getByRole("switch", {
-      name: "Failure In-app notifications",
-    });
-    const done = screen.getByRole("switch", {
-      name: "Done In-app notifications",
-    });
-    const policy = screen.getByTestId("notifications-severity-policy");
-
-    expect(
-      within(policy).getByRole("heading", {
-        name: "In-app notifications",
-      }),
-    ).toBeTruthy();
-    expect(info.getAttribute("data-state")).toBe("checked");
-    expect(needsAction.getAttribute("data-state")).toBe("checked");
-    expect(failure.getAttribute("data-state")).toBe("checked");
-    expect(done.getAttribute("data-state")).toBe("checked");
-    expect(
-      within(policy).getByTestId("notifications-severity-info"),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByTestId("notifications-severity-needs_action"),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByTestId("notifications-severity-failure"),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByTestId("notifications-severity-done"),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByText("Updates that need nothing from you."),
-    ).toBeTruthy();
-    expect(within(policy).getByText("Approvals and interviews.")).toBeTruthy();
-    expect(
-      within(policy).getByText(
-        "Errored turns, stalls, crashes, and rate limits.",
+      screen.queryByText(
+        /Which events you're told about, and what your automation receives/,
       ),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByText("Completed or intentionally stopped turns."),
-    ).toBeTruthy();
-
-    // One switch per severity only - no channel-by-severity matrix cells.
-    expect(within(policy).getAllByRole("switch")).toHaveLength(4);
-    expect(screen.queryByTestId(/notifications-matrix-/)).toBeNull();
-    expect(
-      screen.queryByRole("switch", { name: /webhook notifications/i }),
     ).toBeNull();
-    expect(screen.queryByLabelText("Webhook URL")).toBeNull();
     expect(
-      screen.queryByRole("switch", { name: /email notifications/i }),
+      screen.queryByText(
+        "A hook that runs a script, or reads a value from a computer, is set on that computer.",
+      ),
     ).toBeNull();
-    expect(screen.queryByLabelText("SMTP password")).toBeNull();
-  });
-
-  it("writes severity toggles through setConfig while preserving email channel state", async () => {
-    const fixture = renderNotificationsSettings(undefined);
-
-    const infoRenderer = await screen.findByRole("switch", {
-      name: "Info In-app notifications",
-    });
-    fireEvent.click(infoRenderer);
-
-    await waitFor(() => {
-      expect(fixture.setRequests).toHaveLength(1);
-    });
-    expect(fixture.setRequests[0].matrix.info.renderer).toBe(false);
-    expect(fixture.setRequests[0].matrix.info.email).toBe(
-      makeNotificationConfig().matrix.info.email,
-    );
-    expect(fixture.setRequests[0].channels.email).toEqual({
-      host: "smtp.example.com",
-      port: 587,
-      user: "me@example.com",
-      from: "Traycer <me@example.com>",
-      password: { kind: "leaveUnchanged" },
-    });
-  });
-
-  it("keeps severity toggles disabled while a post-save config refetch is in flight", async () => {
-    const fixture = renderNotificationsSettingsWithDeferredRefetch();
-
-    const doneRenderer = await screen.findByRole("switch", {
-      name: "Done In-app notifications",
-    });
-    expect(doneRenderer.hasAttribute("disabled")).toBe(false);
-
-    fireEvent.click(doneRenderer);
-
-    await waitFor(() => {
-      expect(fixture.setRequests).toHaveLength(1);
-    });
-    await waitFor(() => {
-      expect(fixture.getConfigCalls.value).toBe(2);
-    });
-
-    const failureRenderer = screen.getByRole("switch", {
-      name: "Failure In-app notifications",
-    });
-    expect(failureRenderer.hasAttribute("disabled")).toBe(true);
-
-    fireEvent.click(failureRenderer);
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-    expect(fixture.setRequests).toHaveLength(1);
-
-    await act(async () => {
-      fixture.resolveRefetch(fixture.config.value);
-      await fixture.refetchPromise;
-    });
-    await waitFor(() => {
-      expect(failureRenderer.hasAttribute("disabled")).toBe(false);
-    });
+    expect(screen.getByTestId("notification-hooks-manager")).toBeTruthy();
   });
 });
 
@@ -287,7 +176,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(configPath.className).not.toContain("max-w-48");
   });
 
-  it("shows host-unavailable policy and manager states with both group boundaries", async () => {
+  it("keeps a host-unavailable state on the computer hooks list", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -301,24 +190,13 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     );
 
     expect(
-      await screen.findByText("Notification settings unavailable"),
+      await screen.findByText("Notification hooks unavailable"),
     ).toBeTruthy();
-    const policy = screen.getByTestId("notifications-severity-policy");
     const manager = screen.getByTestId("notification-hooks-manager");
 
-    expect(
-      within(policy).getByRole("heading", {
-        name: "In-app notifications",
-      }),
-    ).toBeTruthy();
+    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     expect(
       within(manager).getByRole("heading", { name: "Notification hooks" }),
-    ).toBeTruthy();
-    expect(
-      within(policy).getByText("Connect to a host to configure delivery."),
-    ).toBeTruthy();
-    expect(
-      within(manager).getByText("Notification hooks unavailable"),
     ).toBeTruthy();
     expect(
       within(manager).getByText(
@@ -332,7 +210,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     ).toBe(true);
   });
 
-  it("keeps policy and manager boundaries when hooks status query errors", async () => {
+  it("shows a hooks query error without an account policy on the computer tab", async () => {
     renderNotificationsSettings({
       hooksStatus: undefined,
       hooksStatusError: "host offline",
@@ -342,11 +220,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(
       await screen.findByText("Couldn't load notification hooks"),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("heading", {
-        name: "In-app notifications",
-      }),
-    ).toBeTruthy();
+    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     const manager = screen.getByTestId("notification-hooks-manager");
     expect(
       within(manager).getByRole("heading", { name: "Notification hooks" }),
@@ -455,6 +329,16 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
             name: "Untested",
             lastResult: null,
           }),
+          makeHook({
+            id: "account-hook",
+            name: "Account hook",
+            action: {
+              type: "http",
+              url: "https://hooks.example.com/account",
+              headers: {},
+            },
+            localOnly: false,
+          }),
         ],
       }),
       hooksStatusError: undefined,
@@ -464,6 +348,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(await screen.findByText("Phone alerts")).toBeTruthy();
     const manager = screen.getByTestId("notification-hooks-manager");
     expect(within(manager).getByText("3 hooks")).toBeTruthy();
+    expect(within(manager).queryByText("Account hook")).toBeNull();
 
     const scriptRow = within(manager).getByTestId(
       "notification-hook-row-script-hook",
@@ -571,10 +456,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
   });
 
-  // The flip tests render the SCOPE-BOUND panel, not the ForClient variant
-  // the shared harness uses: `NotificationsSettingsPanelForClient` passes
-  // `scope={null}` (its caller owns the gating), so it never mounts the
-  // `HostScopeGate` whose hidden-`<Activity>` preservation is under test.
+  // The tab's caller owns host scoping; render the real gate around the
+  // computer panel so these cases exercise its hidden Activity lifecycle.
   function renderScopedPanel(): {
     readonly client: HostClient<HostRpcRegistry>;
     readonly rerender: () => void;
@@ -607,11 +490,26 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     // A FRESH element per (re)render: with a referentially identical element
     // React bails out of the whole subtree and never re-reads the mutated
     // scope mock, so the flip under test silently would not happen.
-    const makeUi = () => (
-      <Providers queryClient={queryClient}>
-        <NotificationsSettingsPanel />
-      </Providers>
-    );
+    const makeUi = () => {
+      const host =
+        hostScopeMocks.hostId === null
+          ? null
+          : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId });
+      const scope = hostScopeFixture({
+        host,
+        client: hostScopeMocks.client,
+        ...(hostScopeMocks.status === null
+          ? {}
+          : { status: hostScopeMocks.status }),
+      });
+      return (
+        <Providers queryClient={queryClient}>
+          <HostScopeGate scope={scope} skeleton={<div />}>
+            <NotificationsSettingsPanelForClient client={scope.client} />
+          </HostScopeGate>
+        </Providers>
+      );
+    };
     const view = render(makeUi());
     return {
       client,
@@ -842,10 +740,10 @@ function renderNotificationsSettings(
             hooks: params.hooks.map((hook) => ({
               ...hook,
               lastResult: null,
-              localOnly: null,
+              localOnly: true,
             })),
           };
-          return hooksStatus;
+          return { ...hooksStatus, accountHooks: null };
         },
         "host.notificationHooks.test": (params) => {
           testRequests.push(params);
@@ -885,75 +783,6 @@ function renderNotificationsSettings(
     testRequests,
     testPromise,
     resolveTest,
-  };
-}
-
-function renderNotificationsSettingsWithDeferredRefetch(): {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly config: { value: NotificationConfig };
-  readonly getConfigCalls: { value: number };
-  readonly refetchPromise: Promise<NotificationConfig>;
-  readonly resolveRefetch: (value: NotificationConfig) => void;
-  readonly setRequests: SetConfigRequest[];
-} {
-  const setRequests: SetConfigRequest[] = [];
-  const config = { value: makeNotificationConfig() };
-  const getConfigCalls = { value: 0 };
-  let resolveRefetch: (value: NotificationConfig) => void = () => undefined;
-  const refetchPromise = new Promise<NotificationConfig>((resolve) => {
-    resolveRefetch = resolve;
-  });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "host.notifications.getConfig": () => {
-          getConfigCalls.value += 1;
-          if (getConfigCalls.value === 1) return config.value;
-          return refetchPromise;
-        },
-        "host.notifications.setConfig": (params) => {
-          setRequests.push(params);
-          config.value = responseFromSetRequest(config.value, params);
-          return config.value;
-        },
-        "host.notificationHooks.status": () => makeHooksStatus(undefined),
-      },
-    }),
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({
-      origin: "renderer",
-      bearerToken: "tok-1",
-    }),
-  );
-  const client = spine.createRequester(mockLocalHostEntry);
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
-  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <Providers queryClient={queryClient}>{props.children}</Providers>
-  );
-
-  render(<NotificationsSettingsPanelForClient client={client} />, {
-    wrapper,
-  });
-
-  return {
-    client,
-    config,
-    getConfigCalls,
-    refetchPromise,
-    resolveRefetch,
-    setRequests,
   };
 }
 
@@ -1004,7 +833,20 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
 
     hostScopeMocks.client = client;
     hostScopeMocks.hostId = "host-a";
-    const { rerender } = render(<NotificationsSettingsPanel />, { wrapper });
+    const makeUi = () => {
+      const scope = hostScopeFixture({
+        host: hostScopeOptionFixture({
+          hostId: hostScopeMocks.hostId ?? "host-a",
+        }),
+        client: hostScopeMocks.client,
+      });
+      return (
+        <HostScopeGate scope={scope} skeleton={<div />}>
+          <NotificationsSettingsPanelForClient client={scope.client} />
+        </HostScopeGate>
+      );
+    };
+    const { rerender } = render(makeUi(), { wrapper });
 
     // Arm a delete against host-a's hook.
     await waitFor(() => {
@@ -1021,7 +863,7 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
     // host, so confirming rewrote host-b's whole hooks file to delete a hook
     // chosen on host-a.
     hostScopeMocks.hostId = "host-b";
-    rerender(<NotificationsSettingsPanel />);
+    rerender(makeUi());
 
     await waitFor(() => {
       expect(screen.queryByText("Delete hook?")).toBeNull();
@@ -1093,7 +935,7 @@ function makeHook(
     },
     lastResult:
       overrides.lastResult === undefined ? null : overrides.lastResult,
-    localOnly: overrides.localOnly === undefined ? null : overrides.localOnly,
+    localOnly: overrides.localOnly === undefined ? true : overrides.localOnly,
   };
 }
 
@@ -1463,9 +1305,18 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
       failsSave: false,
       readError: null,
     });
-    hostScopeMocks.client = rig.client;
-    hostScopeMocks.hostId = "host-a";
-    const { rerender } = render(<NotificationsSettingsPanel />, {
+    const makeUi = (hostId: string, client: HostClient<HostRpcRegistry>) => {
+      const scope = hostScopeFixture({
+        host: hostScopeOptionFixture({ hostId }),
+        client,
+      });
+      return (
+        <HostScopeGate scope={scope} skeleton={<div />}>
+          <NotificationsSettingsPanelForClient client={client} />
+        </HostScopeGate>
+      );
+    };
+    const { rerender } = render(makeUi("host-a", rig.client), {
       wrapper: rig.wrapper,
     });
     await amountShows("4");
@@ -1487,9 +1338,7 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
       >("host-b", "host.notifications.getLongTurnAlert", {}),
       { thresholdMs: 4 * HOUR_MS },
     );
-    hostScopeMocks.hostId = "host-b";
-    hostScopeMocks.client = secondClient;
-    rerender(<NotificationsSettingsPanel />);
+    rerender(makeUi("host-b", secondClient));
 
     await amountShows("4");
     fireEvent.blur(amountField(), { relatedTarget: null });
@@ -1521,9 +1370,10 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     expect(
       screen.queryByText(LONG_TURN_ALERT_LABEL, { exact: true }),
     ).toBeNull();
-    await screen.findByRole("switch", {
-      name: "Needs action In-app notifications",
-    });
+    expect(
+      await screen.findByTestId("notification-hooks-manager"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
   });
 
   it("shows a retryable error for an ordinary get failure and loads the row on retry", async () => {

@@ -234,7 +234,9 @@ function renderView(options: {
           invitePending={false}
           setRolePending={false}
           removePending={false}
-          hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
+          hostLabel={(hostId) =>
+            hostId === mockLocalHostEntry.hostId ? "This Mac" : null
+          }
           onNoticeSeen={onNoticeSeen}
         />
       </RunnerHostContext.Provider>
@@ -280,19 +282,32 @@ interface DeferredPreviews {
  * change nothing can wait for it before asserting that nothing changed.
  */
 function deferredPreviews(): DeferredPreviews {
+  const answers = new Map<
+    string,
+    Promise<EnvironmentMembersRemovePreviewResponse>
+  >();
   const pending = new Map<
     string,
     (preview: EnvironmentMembersRemovePreviewResponse) => void
   >();
   const delivered = new Set<string>();
   return {
-    answer: (userId) =>
-      new Promise<EnvironmentMembersRemovePreviewResponse>((resolve) => {
-        pending.set(userId, resolve);
-      }).then((preview) => {
+    answer: (userId) => {
+      const existing = answers.get(userId);
+      if (existing !== undefined) return existing;
+      // Authn's preview and the computer's counts ask separately. Both
+      // consume the member's held answer without replacing its resolver.
+      const answer = new Promise<EnvironmentMembersRemovePreviewResponse>(
+        (resolve) => {
+          pending.set(userId, resolve);
+        },
+      ).then((preview) => {
         delivered.add(userId);
         return preview;
-      }),
+      });
+      answers.set(userId, answer);
+      return answer;
+    },
     resolve: (userId, preview) => {
       const settle = pending.get(userId);
       if (settle === undefined) throw new Error(`no preview for ${userId}`);

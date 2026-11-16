@@ -1,13 +1,27 @@
-import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
-import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
-import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
-import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
-import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type {
   TeamChatAutoArchiveReadResult,
   TeamChatAutoArchiveSetRequest,
   TeamChatAutoArchiveWriteResult,
 } from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
@@ -182,15 +196,14 @@ export interface AuthBridgeSurface {
   readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
-  getTeamChatAutoArchive(
+  saveAutoPolicy(
     bearerToken: string,
-    teamId: string,
-  ): Promise<TeamChatAutoArchiveReadResult>;
-  setTeamChatAutoArchive(
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
     bearerToken: string,
-    teamId: string,
-    request: TeamChatAutoArchiveSetRequest,
-  ): Promise<TeamChatAutoArchiveWriteResult>;
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -264,6 +277,18 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -293,6 +318,17 @@ export interface AuthBridgeSurface {
   ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export function buildAuthBridge(): AuthBridgeSurface {
@@ -407,20 +443,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<EnvironmentDirectoryResult>,
 
-    getTeamChatAutoArchive: (bearerToken, teamId) =>
+    saveAutoPolicy: (bearerToken, body) =>
       ipcRenderer.invoke(
-        RunnerHostInvoke.getTeamChatAutoArchive,
+        RunnerHostInvoke.saveAutoPolicy,
         bearerToken,
-        teamId,
-      ) as Promise<TeamChatAutoArchiveReadResult>,
+        body,
+      ) as Promise<AutoPolicySaveResult>,
 
-    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+    attachTaskEnvironment: (bearerToken, request) =>
       ipcRenderer.invoke(
-        RunnerHostInvoke.setTeamChatAutoArchive,
+        RunnerHostInvoke.attachTaskEnvironment,
         bearerToken,
-        teamId,
         request,
-      ) as Promise<TeamChatAutoArchiveWriteResult>,
+      ) as Promise<TaskEnvironmentAttachmentResult>,
 
     getSandboxCosts: (bearerToken) =>
       ipcRenderer.invoke(
@@ -569,6 +604,27 @@ export function buildAuthBridge(): AuthBridgeSurface {
         request,
       ) as Promise<SlackAppWriteResult>,
 
+    updateBotRunSettings: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    deleteBot: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deleteBot,
+        bearerToken,
+        request,
+      ) as Promise<BotDeleteResult>,
+
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxGrants,
@@ -613,6 +669,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
   };
 }
 

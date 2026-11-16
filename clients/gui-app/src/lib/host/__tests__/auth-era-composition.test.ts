@@ -299,6 +299,7 @@ function buildComposition(): Composition {
       hostTokenRenewals.push({ hostId, delayed });
     },
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `auth-era-${++requestSeq}`,

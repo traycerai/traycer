@@ -8,6 +8,11 @@ import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-tok
 import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
 import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
+import { saveAutoPolicyViaHttp } from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
 import {
   fetchTeamChatAutoArchiveViaHttp,
@@ -75,6 +80,11 @@ import {
   registerSlackAppViaHttp,
   setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+} from "@traycer-clients/shared/host-client/bot-setup";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -92,6 +102,9 @@ import {
   assertNumber,
   assertNullableString,
   assertString,
+  parseBotDeleteRequest,
+  parseBotUpdateReplyModeRequest,
+  parseBotUpdateRunSettingsRequest,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
   parseRequiredId,
@@ -296,6 +309,20 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   );
 }
 
+/** The renderer's attachment request, checked field by field before it is sent. */
+function attachmentRequestOf(value: unknown): TaskEnvironmentAttachmentRequest {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(
+      "attachTaskEnvironment.request requires an object argument",
+    );
+  }
+  const taskId: unknown = Reflect.get(value, "taskId");
+  const environmentId: unknown = Reflect.get(value, "environmentId");
+  assertString(taskId, "attachTaskEnvironment.request.taskId");
+  assertString(environmentId, "attachTaskEnvironment.request.environmentId");
+  return { taskId, environmentId };
+}
+
 /** The renderer's mint request, checked field by field before it is sent. */
 function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   if (typeof value !== "object" || value === null) {
@@ -383,6 +410,35 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         fetchEnvironmentTransport,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.saveAutoPolicy,
+    async (_event, bearerToken: unknown, body: unknown) => {
+      assertString(bearerToken, "saveAutoPolicy.bearerToken");
+      assertString(body, "saveAutoPolicy.body");
+      return saveAutoPolicyViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        body,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.attachTaskEnvironment,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "attachTaskEnvironment.bearerToken");
+      return attachTaskEnvironmentViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        attachmentRequestOf(request),
       );
     },
   );
@@ -682,10 +738,12 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown, request: unknown) => {
       assertString(bearerToken, "registerSlackApp.bearerToken");
       const parsedRequest = parseSlackAppRegisterRequest(request);
+      // The app's secrets ride in the body: sent once, following no redirect.
       return registerSlackAppViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        fetchEnvironmentTransport,
         parsedRequest,
       );
     },
@@ -700,6 +758,53 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        parsedRequest,
+      );
+    },
+  );
+
+  // A bot's settings, on the same server and with the same proxy token, sent
+  // through the transport that follows no redirect.
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateBotRunSettings,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "updateBotRunSettings.bearerToken");
+      const parsedRequest = parseBotUpdateRunSettingsRequest(request);
+      return updateBotRunSettingsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateBotReplyMode,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "updateBotReplyMode.bearerToken");
+      const parsedRequest = parseBotUpdateReplyModeRequest(request);
+      return updateBotReplyModeViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.deleteBot,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "deleteBot.bearerToken");
+      const parsedRequest = parseBotDeleteRequest(request);
+      return deleteBotViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
         parsedRequest,
       );
     },

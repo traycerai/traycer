@@ -1,4 +1,5 @@
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -102,6 +103,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachmentClient,
@@ -2687,6 +2689,7 @@ function useStagedTaskAttachment(input: {
     input.sessionClient ?? input.placementClient,
   );
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "modal");
+  const takeOperation = useEnvironmentCloud();
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const stageAttachmentRef = useRef<StagedSandbox | null>(null);
   // A team's sandbox can serve this task only after the person's own host
@@ -2707,6 +2710,8 @@ function useStagedTaskAttachment(input: {
         return;
       }
       const userId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in the attachment goes out on, taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const generation = captureComposerSubmitGeneration(
         () =>
           useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -2721,13 +2726,16 @@ function useStagedTaskAttachment(input: {
             current: generation.stillCurrent(),
             owns: true,
             epicConfirmed: true,
-            accountActive:
-              (useAuthStore.getState().profile?.userId ?? null) === userId,
+            accountActive: pressedSignInCurrent(operation, userId),
             stageCurrent: readStagedSandbox(surfaceKey) === staged,
           },
         ).effects.includes("handoff");
       stageAttachmentRef.current = staged;
-      void attachEnvironmentAsync({ epicId, teamId: configuration.teamId })
+      void attachEnvironmentAsync({
+        epicId,
+        teamId: configuration.teamId,
+        operation,
+      })
         .then(() => {
           if (stillCurrent()) hand();
         })
@@ -2740,7 +2748,13 @@ function useStagedTaskAttachment(input: {
           }
         });
     },
-    [attachClient, attachEnvironmentAsync, epicId, taskHostTeamId],
+    [
+      attachClient,
+      attachEnvironmentAsync,
+      epicId,
+      takeOperation,
+      taskHostTeamId,
+    ],
   );
   return {
     isSubmitting: input.otherCreatePending || attachEnvironment.isPending,

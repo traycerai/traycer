@@ -1,5 +1,14 @@
 import { nativeEnvironmentTransport } from "./native-environment-transport";
 import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "@traycer-clients/shared/host-client/environment-directory";
@@ -170,6 +179,18 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
+  type BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -880,31 +901,28 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
-  // The same native request, for the same reason.
-  getTeamChatAutoArchive(
+  saveAutoPolicy(
     bearerToken: string,
-    teamId: string,
-  ): Promise<TeamChatAutoArchiveReadResult> {
-    return fetchTeamChatAutoArchiveViaHttp(
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
       nativeEnvironmentTransport,
-      teamId,
+      body,
     );
   }
 
-  setTeamChatAutoArchive(
+  attachTaskEnvironment(
     bearerToken: string,
-    teamId: string,
-    request: TeamChatAutoArchiveSetRequest,
-  ): Promise<TeamChatAutoArchiveWriteResult> {
-    return putTeamChatAutoArchiveViaHttp(
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
       nativeEnvironmentTransport,
-      teamId,
       request,
     );
   }
@@ -1083,10 +1101,13 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     request: SlackAppRegisterRequest,
   ): Promise<SlackAppWriteResult> {
+    // The app's secrets ride in the body: through the native request that
+    // follows no redirect, not the patched `fetch`.
     return registerSlackAppViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
+      nativeEnvironmentTransport,
       request,
     );
   }
@@ -1123,6 +1144,47 @@ export class MobileRunnerHost implements IRunnerHost {
       this.serverBaseUrl,
       bearerToken,
       null,
+      request,
+    );
+  }
+
+  // A bot's settings: through the native request that follows no redirect,
+  // as the environment list goes.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
       request,
     );
   }
@@ -1314,6 +1376,35 @@ export class MobileRunnerHost implements IRunnerHost {
   async forceRestartUnresponsiveHost(): Promise<HostRestartRequestResult> {
     // The phone runs no local host, so it never offers this restart.
     return this.requestHostRespawn();
+  }
+
+  // The same native request, for the same reason.
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return fetchTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      teamId,
+    );
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return putTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      teamId,
+      request,
+    );
   }
 }
 

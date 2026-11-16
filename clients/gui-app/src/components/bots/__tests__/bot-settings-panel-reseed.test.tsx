@@ -67,7 +67,6 @@ function modelOption(harnessId: string, slug: string, efforts: string[]) {
 const mocks = vi.hoisted(() => ({
   tabHostClient: null as HostClient<HostRpcRegistry> | null,
   stores: [] as ComposerToolbarStore[],
-  runSettingsClients: [] as Array<HostClient<HostRpcRegistry> | null>,
   updateRunSettings: vi.fn<(variables: object) => void>(),
 }));
 
@@ -142,18 +141,16 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => {
       isError: false,
       variables: undefined,
     }),
-    useBotUpdateRunSettingsMutation: (
-      client: HostClient<HostRpcRegistry> | null,
-    ) => {
-      mocks.runSettingsClients.push(client);
-      return {
-        isPending: false,
-        error: null,
-        mutate: mocks.updateRunSettings,
-      };
-    },
+    useBotUpdateRunSettingsMutation: () => ({
+      isPending: false,
+      error: null,
+      mutate: mocks.updateRunSettings,
+    }),
   };
 });
+vi.mock("@/hooks/bots/use-bot-may-change", () => ({
+  useBotMayChange: () => true,
+}));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
   useBotNotificationLevelsQuery: () => ({ data: undefined, error: null }),
   useBotNotificationLevelSetMutation: () => ({
@@ -225,7 +222,6 @@ beforeEach(() => {
   queryClient = new QueryClient();
   mocks.tabHostClient = buildTabHostClient();
   mocks.stores.length = 0;
-  mocks.runSettingsClients.length = 0;
   useComposerHarnessMemoryStore.getState().resetForTests();
 });
 
@@ -257,7 +253,6 @@ describe("<BotChannelSettingsPanel /> model, over the real toolbar store", () =>
       effort: "high",
       profile: "profile-1",
     });
-    expect(mocks.runSettingsClients.at(-1)).toBe(mocks.tabHostClient);
 
     // The refetched row names a tuple other than the one in the picker.
     rerender(

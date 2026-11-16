@@ -149,6 +149,9 @@ function buildFakeBridge(
       Promise.resolve({ kind: "unauthorized" as const }),
     setTeamChatAutoArchive: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -227,6 +230,9 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    updateBotRunSettings: async () => ({ kind: "no_response" as const }),
+    updateBotReplyMode: async () => ({ kind: "no_response" as const }),
+    deleteBot: async () => ({ kind: "no_response" as const }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -1030,6 +1036,46 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
       "send",
       87_000,
     );
+  });
+});
+
+describe("DesktopRunnerHost bot setup writes", () => {
+  it("forwards each bearer and request unchanged to the preload bridge", async () => {
+    const runSettings = vi.fn<DesktopPreloadBridge["updateBotRunSettings"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const replyMode = vi.fn<DesktopPreloadBridge["updateBotReplyMode"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const deleteBot = vi.fn<DesktopPreloadBridge["deleteBot"]>(async () => ({
+      kind: "no_response",
+    }));
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...buildFakeBridge(null).bridge,
+        updateBotRunSettings: runSettings,
+        updateBotReplyMode: replyMode,
+        deleteBot,
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const settings = {
+      botId: "bot-1",
+      harness: "claude",
+      model: "model-1",
+      effort: null,
+      profile: null,
+    };
+    const reply = { botId: "bot-1", replyMode: "thread" } as const;
+    const deletion = { botId: "bot-1" };
+
+    await host.updateBotRunSettings("bearer-1", settings);
+    await host.updateBotReplyMode("bearer-1", reply);
+    await host.deleteBot("bearer-1", deletion);
+
+    expect(runSettings).toHaveBeenCalledWith("bearer-1", settings);
+    expect(replyMode).toHaveBeenCalledWith("bearer-1", reply);
+    expect(deleteBot).toHaveBeenCalledWith("bearer-1", deletion);
   });
 });
 

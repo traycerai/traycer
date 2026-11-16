@@ -71,7 +71,6 @@ afterEach(() => {
 /** A secret's rotation, as the secrets page reads it: authn's, for a named environment. */
 function RotationReader(): ReactNode {
   useSecretsRead({
-    client: requireTeamHostClient(),
     method: "environment.secrets.rotation",
     params: { environmentId: ENVIRONMENT_ID, secretId: SECRET_ID },
     enabled: true,
@@ -82,7 +81,6 @@ function RotationReader(): ReactNode {
 
 function SecretsListReader(): ReactNode {
   useSecretsRead({
-    client: requireTeamHostClient(),
     method: "environment.secrets.list",
     params: { environmentId: ENVIRONMENT_ID },
     enabled: true,

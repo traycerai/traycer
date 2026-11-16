@@ -144,6 +144,7 @@ async function createOwnerHarness(input: {
       hostTokenRenewals.push({ hostId, delayed });
     },
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-landing-owner",
