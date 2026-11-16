@@ -31,6 +31,10 @@ import {
 import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import {
+  useComposerDropScope,
+  useComposerDropScopeTarget,
+} from "@/components/chat/composer/composer-drop-scope";
 import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -885,6 +889,53 @@ describe("<UserMessageBody /> agent messages", () => {
         }),
       );
     });
+  });
+
+  it("keeps a file dropped on the edit card out of the message box of the pane around it", () => {
+    const received = vi.fn();
+    function PaneBox() {
+      useComposerDropScopeTarget({
+        onDragEnter: received,
+        onDragLeave: received,
+        onDragOver: received,
+        onDrop: received,
+        overlayVariant: null,
+      });
+      return null;
+    }
+    function Pane() {
+      const scope = useComposerDropScope();
+      return (
+        <div {...scope.zoneProps}>
+          <UserMessageBody
+            actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+          />
+          {scope.provide(<PaneBox />)}
+          {scope.overlay}
+        </div>
+      );
+    }
+    render(
+      <TooltipProvider>
+        <Pane />
+      </TooltipProvider>,
+    );
+    const send = screen.getByRole("button", { name: "Send edit" });
+    const file = new File(["x"], "notes.txt", { type: "text/plain" });
+    const transfer = {
+      files: [file],
+      types: ["Files"],
+      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      getData: () => "",
+    };
+
+    expect(fireEvent.dragEnter(send, { dataTransfer: transfer })).toBe(true);
+    expect(fireEvent.drop(send, { dataTransfer: transfer })).toBe(false);
+    expect(received).not.toHaveBeenCalled();
   });
 
   it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
