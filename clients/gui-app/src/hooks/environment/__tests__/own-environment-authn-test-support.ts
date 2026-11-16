@@ -6,6 +6,7 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
+import { noteHostTokenRenewal } from "@/lib/host/host-door-observer";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -205,14 +206,17 @@ export function createOwnEnvironmentAuthRuntime(): OwnEnvironmentAuthRuntime {
     onRegistryPollTick: null,
   });
   let requestSequence = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "own-env-" + String(++requestSequence),
+    handlers: {},
+  });
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: noteHostTokenRenewal,
     registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "own-env-" + String(++requestSequence),
-      handlers: {},
-    }),
+    messenger,
+    singleAttemptMessenger: messenger,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(

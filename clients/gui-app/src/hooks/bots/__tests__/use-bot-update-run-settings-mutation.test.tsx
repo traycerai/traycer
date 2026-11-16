@@ -194,4 +194,55 @@ describe("useBotUpdateRunSettingsMutation", () => {
       queryClient.getQueryData<BotSubscriptionSnapshot>(differentBot),
     ).toEqual(snapshot(otherBotRecord, "host-other"));
   });
+
+  it("does not dispatch run settings after the pressed sign-in ends", async () => {
+    const queryClient = createAppQueryClient();
+    const generation = { value: 1 };
+    const sent: BotUpdateRunSettingsRequest[] = [];
+    binding.current = {
+      auth: {
+        getIdentityGeneration: () => generation.value,
+        isIdentityCurrent: (pressedAt) => pressedAt === generation.value,
+        updateBotRunSettings: (request) => {
+          sent.push(request);
+          return Promise.resolve({
+            kind: "ok" as const,
+            bot: { ...request, replyMode: "thread" as const },
+          });
+        },
+      },
+    };
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBotUpdateRunSettingsMutation(), {
+      wrapper,
+    });
+    const request: BotUpdateRunSettingsRequest = {
+      botId: BOT_ID,
+      harness: "codex",
+      model: "model-x",
+      effort: null,
+      profile: null,
+    };
+
+    await act(async () => {
+      await expect(result.current.mutateAsync(request)).resolves.toMatchObject({
+        bot: { botId: BOT_ID, model: "model-x" },
+      });
+    });
+    expect(sent).toEqual([request]);
+
+    let abandoned: Promise<unknown> | undefined;
+    act(() => {
+      abandoned = result.current.mutateAsync(request);
+      generation.value += 1;
+    });
+    await act(async () => {
+      await expect(abandoned).resolves.toBeNull();
+    });
+    expect(sent).toEqual([request]);
+  });
 });

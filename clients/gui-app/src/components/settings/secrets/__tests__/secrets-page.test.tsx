@@ -67,7 +67,6 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  SECRET_REVOKED_LABEL,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
@@ -270,23 +269,6 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   return mountSecretsHost(overrides, personalPoolSource());
 }
 
-/**
- * A Local pick on a computer's own settings (`source.kind === "host"`) names no
- * environment (`useAddressedEnvironment`), so its secrets calls stay the
- * host's own: the only list that carries a revoked row, and the only create
- * whose refused and pending outcomes reach the dialog. A named environment's
- * are authn's: live rows only, and a create that answers created or a refusal
- * in its own words.
- */
-function buildLocalSecretsHost(
-  overrides: Partial<SecretsHostState>,
-): SecretsHost {
-  useSettingsEnvironmentPickStore.setState({
-    pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
-  });
-  return mountSecretsHost(overrides, { kind: "host" });
-}
-
 function renderPage(host: SecretsHost): QueryClient {
   render(
     <RunnerHostContext.Provider value={dashboardRunnerHost()}>
@@ -462,34 +444,6 @@ describe("the secrets list", () => {
     expect(line.textContent).toBe("STRIPE_KEY · Set · sent to api.stripe.com");
   });
 
-  it("marks a revoked secret, and its Details offers no Verify", async () => {
-    // authn lists live secrets only, so a revoked row is the host's own list's.
-    const host = buildLocalSecretsHost({
-      secrets: [
-        secretFixture({ secretId: "sec-1", name: "STRIPE_KEY" }),
-        secretFixture({ secretId: "sec-3", name: "OLD_KEY", revoked: true }),
-      ],
-    });
-    renderPage(host);
-
-    const rows = await screen.findAllByTestId("secret-row");
-    const live = rows[0];
-    const revoked = rows[1];
-    expect(revoked.textContent).toContain(SECRET_REVOKED_LABEL);
-    expect(live.textContent).not.toContain(SECRET_REVOKED_LABEL);
-
-    const liveControls = await openRowDetails(live);
-    expect(within(liveControls).getByTestId("secret-row-verify")).toBeTruthy();
-    cleanup();
-
-    renderPage(host);
-    const again = await screen.findAllByTestId("secret-row");
-    const revokedControls = await openRowDetails(again[1]);
-    expect(
-      within(revokedControls).queryByTestId("secret-row-verify"),
-    ).toBeNull();
-  });
-
   it("says what secrets are when there are none", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
 
@@ -613,10 +567,8 @@ describe("a row's Verify", () => {
   });
 });
 
-describe("a row's Details when Personal's environment cannot be named", () => {
-  it("keeps Verify and the versions when the environment list cannot be read", async () => {
-    // On the Personal pick of a computer's own settings, a list that cannot be
-    // read names no environment, so the page falls back to the host's own.
+describe("Personal secrets when the environment cannot be named", () => {
+  it("leaves secrets unresolved when a cold environment list cannot be read", async () => {
     const host = mountSecretsHost(
       {
         secrets: [secretFixture({ secretId: "sec-1" })],
@@ -626,20 +578,31 @@ describe("a row's Details when Personal's environment cannot be named", () => {
     );
     renderPage(host);
 
-    const row = await screen.findByTestId("secret-row");
-    fireEvent.click(
-      await within(row).findByRole("button", { name: "Details" }),
-    );
-    const controls = await screen.findByTestId("secret-details-controls");
-    expect(await within(controls).findByTestId("secret-versions")).toBeTruthy();
-    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
-
-    expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
-      "Reached the destination. The key is checked the first time an agent uses it.",
-    );
-    expect(host.verifyRequests).toEqual([
-      { target: "secret", secretId: "sec-1", environmentId: null },
-    ]);
+    await waitFor(() => {
+      expect(
+        host.harness.queryClient
+          .getQueryCache()
+          .findAll({
+            predicate: (query) =>
+              query.meta?.hostRpcMethod === "environment.list",
+          })
+          .some(
+            (query) =>
+              query.state.status === "error" &&
+              query.state.fetchStatus === "idle",
+          ),
+      ).toBe(true);
+    });
+    expect(host.harness.paramsOf("environment.list")).toHaveLength(1);
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    expect(screen.queryByTestId("secrets-add")).toBeNull();
+    expect(host.reads.list).toBe(0);
+    expect(host.verifyRequests).toEqual([]);
+    expect(
+      host.harness.messenger.calls.filter((call) =>
+        call.method.startsWith("environment.secrets."),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -890,65 +853,6 @@ describe("saving a secret", () => {
     expect(host.reads.list).toBe(1);
   });
 
-  it("says to use the provider's key variable when the name is not a provider's", async () => {
-    const host = buildLocalSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "provider_name_unknown" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(
-      "Use its provider's key variable as the name.",
-    );
-    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
-    expect(host.reads.list).toBe(1);
-  });
-
-  it("says a code it has no line for with a plain failure line", async () => {
-    const host = buildLocalSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "a_code_from_a_newer_host" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
-      "Couldn't save this secret.",
-    );
-  });
-
-  it("offers only Done once a save is waiting to reach the account, and re-reads the list", async () => {
-    const host = buildLocalSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "pending", uploadId: "u1" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(
-      "Saved. It reaches your account when this computer is connected.",
-    );
-    // One more Save would be a second secret.
-    expect(screen.queryByTestId("secret-save")).toBeNull();
-    const done = await screen.findByTestId("secret-save-done");
-    expect(host.createRequests).toHaveLength(1);
-    await waitFor(() => {
-      expect(host.reads.list).toBe(2);
-    });
-
-    fireEvent.click(done);
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
-    });
-    expect(host.createRequests).toHaveLength(1);
-  });
 });
 
 describe("the add form's words", () => {
