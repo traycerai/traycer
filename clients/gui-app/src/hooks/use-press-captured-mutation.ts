@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   MutationObserver as QueryMutationObserver,
   hashKey,
@@ -71,7 +78,7 @@ export function usePressCapturedMutation<
     () => observer.getCurrentResult(),
     () => observer.getCurrentResult(),
   );
-  const mutateAsync: UseMutateAsyncFunction<
+  const execute: UseMutateAsyncFunction<
     TData,
     TError,
     TVariables,
@@ -97,12 +104,21 @@ export function usePressCapturedMutation<
       return observer.mutate(variables, perCall);
     });
   };
-  const mutate: UseMutateFunction<TData, TError, TVariables, TContext> = (
-    variables,
-    perCall,
-  ) => {
-    void mutateAsync(variables, perCall).catch(() => undefined);
-  };
+  const committedExecute = useRef(execute);
+  useLayoutEffect(() => {
+    committedExecute.current = execute;
+  }, [execute]);
+  const mutateAsync = useCallback<
+    UseMutateAsyncFunction<TData, TError, TVariables, TContext>
+  >((variables, perCall) => committedExecute.current(variables, perCall), []);
+  const mutate = useCallback<
+    UseMutateFunction<TData, TError, TVariables, TContext>
+  >(
+    (variables, perCall) => {
+      void mutateAsync(variables, perCall).catch(() => undefined);
+    },
+    [mutateAsync],
+  );
   if (result.error && shouldThrowError(options.throwOnError, [result.error])) {
     const error: unknown = result.error;
     throw error;
