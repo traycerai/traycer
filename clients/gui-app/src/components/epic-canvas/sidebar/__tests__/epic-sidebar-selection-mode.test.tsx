@@ -157,6 +157,8 @@ interface TestState {
   >;
   activeAgentIds: ReadonlySet<string>;
   activityTierById: Map<string, "turn" | "background">;
+  /** Subscribers of the tier mock, as the activity store's would be. */
+  activityTierListeners: Set<() => void>;
   chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   /**
@@ -281,6 +283,7 @@ const testState = vi.hoisted<TestState>(() => ({
   indicatorChatsByHost: {},
   activeAgentIds: new Set<string>(),
   activityTierById: new Map<string, "turn" | "background">(),
+  activityTierListeners: new Set<() => void>(),
   chatHarnessIds: {},
   tuiHarnessIds: {},
   tuiAgentById: {},
@@ -1147,100 +1150,117 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
   }),
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useAncestorIds: () => new Set<string>(),
-  useChildIds: (parentId: string) =>
-    testState.tree.childrenByParent[parentId] ?? [],
-  useEpicActiveAgentIds: () => testState.activeAgentIds,
-  useEpicAgentRoleClaims: () => [],
-  // The row's session facet, sourced from the same `tuiAgentById` fixture the
-  // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
-  // badge (this selector) and the row's aria-label (which reads the same
-  // facet through `useEpicStore`, per the production comment on that read)
-  // cannot disagree in a fixture.
-  useEpicAgentSessionFacet: (nodeId: string) => {
-    const agent = testState.tuiAgentById[nodeId];
-    return {
-      sessionState: agent?.sessionState ?? null,
-      lastExit: agent?.lastExit ?? null,
+vi.mock("@/lib/epic-selectors", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribeActivityTiers = (listener: () => void): (() => void) => {
+    testState.activityTierListeners.add(listener);
+    return () => {
+      testState.activityTierListeners.delete(listener);
     };
-  },
-  // Awareness reports a tier per working agent. An agent whose host did not
-  // classify it reads as "turn", so tests that only set `activeAgentIds` keep
-  // their pre-tier behaviour.
-  useEpicAgentActivityTiers: () =>
-    new Map(
-      [...testState.activeAgentIds].map((id) => [
-        id,
-        testState.activityTierById.get(id) ?? "turn",
-      ]),
-    ),
-  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
-  // the same data, so a whole-module mock has to answer that form too.
-  useRegisteredEpicAgentActivityTiers: () =>
-    new Map(
-      [...testState.activeAgentIds].map((id) => [
-        id,
-        testState.activityTierById.get(id) ?? "turn",
-      ]),
-    ),
-  useEpicArtifact: (artifactId: string | null) => {
-    if (artifactId === null) return null;
-    const node = testState.tree.nodeById[artifactId];
-    if (node === undefined) return null;
-    return {
-      id: node.id,
-      kind: node.type,
-      title: node.title,
-      updatedAt: node.updatedAt,
-    };
-  },
-  useEpicArchivedNodeIds: () => testState.archivedIds,
-  // The sidebar's archive-hidden and chat-order hooks read the tree and the
-  // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
-  // also resolve on the Start Page where there is no epic session. A
-  // whole-module mock has to answer those forms too, with the same test state
-  // as their strict twins below - a fake that disagreed would make the panel
-  // and the picker read different trees.
-  useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
-  useMaybeEpicTreeIndex: () => testState.tree,
-  useEpicArtifactRecords: () => testState.records,
-  // Dedup input for the cloud-chat section. Empty: this suite is about the
-  // LOCAL tree, and the section hides itself when the cloud list has nothing
-  // to add - which, with no host client bound here, it never does.
-  useEpicChatIds: () => [],
-  useEpicChatIdsNamedByCloudRows: () => [],
-  useEpicFileArtifactViewer: () => null,
-  useEpicArtifactStatus: (artifactId: string) =>
-    testState.tree.nodeById[artifactId]?.status ?? null,
-  useEpicChatHarnessId: (nodeId: string) =>
-    testState.chatHarnessIds[nodeId] ?? null,
-  useEpicConnectionStatus: () => "open",
-  useEpicNodeArchived: (nodeId: string) =>
-    testState.archivedIds.includes(nodeId),
-  useEpicNodeHostId: () => testState.rowHostId,
-  useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
-    nodeIds.map(() => testState.rowHostId ?? "host-1"),
-  useEpicNodeOwnerUserId: () => "user-1",
-  useEpicNodeOwnerKind: () => "chat",
-  // The row's last-activity time. Production reads the chat/TUI PROJECTION
-  // rather than the tree node (the node's copy lags - see the selector's doc),
-  // but these fixtures only ever set it on the node, so the fake sources it
-  // from there. Rows without one read 0, which the row renders as no time.
-  useEpicNodeUpdatedAt: (nodeId: string) =>
-    testState.tree.nodeById[nodeId]?.updatedAt ?? 0,
-  // Stable empty array (reference-stable across renders) so the chat-row seed
-  // effect's dependency never changes and it never seeds in these tests.
-  useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
-  useEpicPermissionRole: () => testState.permissionRole,
-  useRegisteredEpicPermissionRole: () => testState.permissionRole,
-  useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
-  useEpicTreeIndex: () => testState.tree,
-  useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
-  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
-    testState.tuiHarnessIds[nodeId] ?? null,
-  useRootIds: () => testState.tree.rootIds,
-}));
+  };
+  return {
+    useAncestorIds: () => new Set<string>(),
+    useChildIds: (parentId: string) =>
+      testState.tree.childrenByParent[parentId] ?? [],
+    useEpicActiveAgentIds: () => testState.activeAgentIds,
+    useEpicAgentRoleClaims: () => [],
+    // The row's session facet, sourced from the same `tuiAgentById` fixture the
+    // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
+    // badge (this selector) and the row's aria-label (which reads the same
+    // facet through `useEpicStore`, per the production comment on that read)
+    // cannot disagree in a fixture.
+    useEpicAgentSessionFacet: (nodeId: string) => {
+      const agent = testState.tuiAgentById[nodeId];
+      return {
+        sessionState: agent?.sessionState ?? null,
+        lastExit: agent?.lastExit ?? null,
+      };
+    },
+    // Awareness reports a tier per working agent. An agent whose host did not
+    // classify it reads as "turn", so tests that only set `activeAgentIds` keep
+    // their pre-tier behaviour.
+    // Subscribed like the real hook, so a tier change re-renders exactly the
+    // components that read it.
+    useEpicAgentActivityTiers: () => {
+      const tierById = useSyncExternalStore(
+        subscribeActivityTiers,
+        () => testState.activityTierById,
+      );
+      return new Map(
+        [...testState.activeAgentIds].map((id) => [
+          id,
+          tierById.get(id) ?? "turn",
+        ]),
+      );
+    },
+    // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+    // the same data, so a whole-module mock has to answer that form too.
+    useRegisteredEpicAgentActivityTiers: () =>
+      new Map(
+        [...testState.activeAgentIds].map((id) => [
+          id,
+          testState.activityTierById.get(id) ?? "turn",
+        ]),
+      ),
+    useEpicArtifact: (artifactId: string | null) => {
+      if (artifactId === null) return null;
+      const node = testState.tree.nodeById[artifactId];
+      if (node === undefined) return null;
+      return {
+        id: node.id,
+        kind: node.type,
+        title: node.title,
+        updatedAt: node.updatedAt,
+      };
+    },
+    useEpicArchivedNodeIds: () => testState.archivedIds,
+    // The sidebar's archive-hidden and chat-order hooks read the tree and the
+    // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
+    // also resolve on the Start Page where there is no epic session. A
+    // whole-module mock has to answer those forms too, with the same test state
+    // as their strict twins below - a fake that disagreed would make the panel
+    // and the picker read different trees.
+    useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
+    useMaybeEpicTreeIndex: () => testState.tree,
+    useEpicArtifactRecords: () => testState.records,
+    // Dedup input for the cloud-chat section. Empty: this suite is about the
+    // LOCAL tree, and the section hides itself when the cloud list has nothing
+    // to add - which, with no host client bound here, it never does.
+    useEpicChatIds: () => [],
+    useEpicChatIdsNamedByCloudRows: () => [],
+    useEpicFileArtifactViewer: () => null,
+    useEpicArtifactStatus: (artifactId: string) =>
+      testState.tree.nodeById[artifactId]?.status ?? null,
+    useEpicChatHarnessId: (nodeId: string) =>
+      testState.chatHarnessIds[nodeId] ?? null,
+    useEpicConnectionStatus: () => "open",
+    useEpicNodeArchived: (nodeId: string) =>
+      testState.archivedIds.includes(nodeId),
+    useEpicNodeHostId: () => testState.rowHostId,
+    useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
+      nodeIds.map(() => testState.rowHostId ?? "host-1"),
+    useEpicNodeOwnerUserId: () => "user-1",
+    useEpicNodeOwnerKind: () => "chat",
+    // The row's last-activity time. Production reads the chat/TUI PROJECTION
+    // rather than the tree node (the node's copy lags - see the selector's doc),
+    // but these fixtures only ever set it on the node, so the fake sources it
+    // from there. Rows without one read 0, which the row renders as no time.
+    useEpicNodeUpdatedAt: (nodeId: string) =>
+      testState.tree.nodeById[nodeId]?.updatedAt ?? 0,
+    // Stable empty array (reference-stable across renders) so the chat-row seed
+    // effect's dependency never changes and it never seeds in these tests.
+    useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
+    useEpicPermissionRole: () => testState.permissionRole,
+    useRegisteredEpicPermissionRole: () => testState.permissionRole,
+    useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
+    useEpicTreeIndex: () => testState.tree,
+    useEpicTreeNode: (nodeId: string) =>
+      testState.tree.nodeById[nodeId] ?? null,
+    useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+      testState.tuiHarnessIds[nodeId] ?? null,
+    useRootIds: () => testState.tree.rootIds,
+  };
+});
 
 function fakeEpicStoreState() {
   const tuiAgentEntries = Object.entries(testState.tuiAgentById).flatMap(
@@ -1480,6 +1500,12 @@ function clearLocalChatFailure(chatId: string): void {
 // defaults to `signed-out`, under which every "settled" assertion in this
 // file would fail closed vacuously - stage `signed-in` for the whole file,
 // module-scope, so every describe block below gets it without its own copy.
+/** Moves the agents' tiers and notifies the tier mock's subscribers. */
+function setActivityTiers(next: Map<string, "turn" | "background">): void {
+  testState.activityTierById = next;
+  for (const listener of testState.activityTierListeners) listener();
+}
+
 beforeEach(() => {
   queryClient.clear();
   useAuthStore.setState({ status: "signed-in" });
@@ -4012,7 +4038,7 @@ describe("chat descendant status rollup", () => {
     testState.activeAgentIds = new Set(["chat-grandchild"]);
     testState.activityTierById = new Map([["chat-grandchild", "background"]]);
 
-    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     const backgroundIcon = screen.getByTestId(
       "chat-descendant-status-background-chat-root",
     );
@@ -4025,15 +4051,18 @@ describe("chat descendant status rollup", () => {
       screen.queryByTestId("chat-descendant-status-running-chat-root"),
     ).toBeNull();
 
-    // Same descendant, now genuinely mid-turn: the busier tier takes the slot.
-    // The tier hook here is a plain function, not the activity store's
-    // subscription, so the surface is drawn again rather than re-rendered.
-    testState.activityTierById = new Map([["chat-grandchild", "turn"]]);
-    view.unmount();
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Same descendant, now genuinely mid-turn: the busier tier takes the slot
+    // in the same mounted row, through the tier subscription alone.
+    const row = backgroundIcon.closest('[role="treeitem"]');
+    expect(row).not.toBeNull();
+    act(() => {
+      setActivityTiers(new Map([["chat-grandchild", "turn"]]));
+    });
     expect(
-      screen.getByTestId("chat-descendant-status-running-chat-root"),
-    ).toBeTruthy();
+      screen
+        .getByTestId("chat-descendant-status-running-chat-root")
+        .closest('[role="treeitem"]'),
+    ).toBe(row);
     expect(
       screen.queryByTestId("chat-descendant-status-background-chat-root"),
     ).toBeNull();
