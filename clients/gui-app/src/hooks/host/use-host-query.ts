@@ -645,7 +645,8 @@ export function useHostMutation<
             args.prepareRequest === undefined
               ? mapped
               : await args.prepareRequest(mapped, client);
-          const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+          const requirement =
+            args.requiredHostMethodVersion?.(variables) ?? null;
           const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
           // A keyed dispatch carries both retry identity and version floor.
           const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {

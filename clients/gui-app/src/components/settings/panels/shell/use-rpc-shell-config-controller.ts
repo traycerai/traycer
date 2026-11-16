@@ -1,8 +1,5 @@
 import { useMemo } from "react";
-import {
-  useQueryClient,
-  type QueryKey,
-} from "@tanstack/react-query";
+import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   toHostRpcError,
