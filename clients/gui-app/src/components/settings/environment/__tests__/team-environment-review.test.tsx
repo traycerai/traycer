@@ -455,8 +455,8 @@ describe("Team Review through the addressed page", () => {
       held({ id: "focus-refresh", kind: "variable", key: "FOCUSED_SETTING" }),
     ];
     holdDirectory = true;
-    await act(async () => {
-      await window.dispatchEvent(new Event("focus"));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
     });
     await directoryReadStarted;
     await waitFor(() => {
