@@ -2,9 +2,13 @@ import { createContext, useCallback, useContext } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
-import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
-  selectNotificationIndicatorState,
+  useAppLocalNotificationsStore,
+  type AppLocalNotificationsState,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
   type NotificationIndicatorState,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
@@ -57,19 +61,37 @@ export function useSurfaceNotificationIndicatorState(
   entity: HostNotificationsEntityRef,
   originHostId: string | null,
 ): NotificationIndicatorState {
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
   const { epicId, chatId } = entity;
+  // This entity's unread app-local failures alone, not every app-local row:
+  // a terminal closing elsewhere re-renders no other row.
+  const selectLocalFailures = useCallback(
+    (state: AppLocalNotificationsState) =>
+      selectUnreadLocalFailures(
+        state,
+        entityRefOf(epicId, chatId),
+        originHostId,
+      ),
+    [epicId, chatId, originHostId],
+  );
+  const localFailures = useAppLocalNotificationsStore(selectLocalFailures);
   const select = useCallback(
     (indicators: SurfaceNotificationIndicators): NotificationIndicatorState =>
-      selectNotificationIndicatorState(
-        { byId },
-        chatId === undefined ? { epicId } : { epicId, chatId },
+      notificationIndicatorStateOf(
+        localFailures,
+        entityRefOf(epicId, chatId),
         originHostId,
         indicators,
       ),
-    [byId, epicId, chatId, originHostId],
+    [localFailures, epicId, chatId, originHostId],
   );
   return useNotificationIndicatorsSelector(select, sameIndicatorState);
+}
+
+function entityRefOf(
+  epicId: string,
+  chatId: string | undefined,
+): HostNotificationsEntityRef {
+  return chatId === undefined ? { epicId } : { epicId, chatId };
 }
 
 export function sameIndicatorState(

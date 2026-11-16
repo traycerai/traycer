@@ -79,11 +79,14 @@ import {
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import { useShallow } from "zustand/react/shallow";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
   type NotificationIndicatorState,
+  type UnreadLocalFailures,
 } from "@/stores/notifications/notification-indicator-state";
 
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
@@ -598,20 +601,31 @@ function useTaskAgentStates(
 ): ReadonlyArray<TaskAgentState> {
   const chatIndicators = useContext(ChatIndicatorAttestedContext);
   const freshHosts = useContext(ChatIndicatorFreshHostsContext);
-  const localRows = useAppLocalNotificationsStore((state) => state.byId);
+  // The agents' unread app-local failures alone, not every app-local row.
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      (agents?.nodes ?? []).map((node) =>
+        selectUnreadLocalFailures(
+          state,
+          { epicId: taskId, chatId: node.id },
+          agentHostOf(node, agents),
+        ),
+      ),
+    ),
+  );
   return useMemo(
     () =>
-      (agents?.nodes ?? []).map((node) => ({
+      (agents?.nodes ?? []).map((node, index) => ({
         id: node.id,
         fresh: freshHosts[agentHostOf(node, agents)],
-        indicator: selectNotificationIndicatorState(
-          { byId: localRows },
+        indicator: notificationIndicatorStateOf(
+          localFailures[index],
           { epicId: taskId, chatId: node.id },
           agentHostOf(node, agents),
           chatIndicators,
         ),
       })),
-    [agents, chatIndicators, freshHosts, localRows, taskId],
+    [agents, chatIndicators, freshHosts, localFailures, taskId],
   );
 }
 

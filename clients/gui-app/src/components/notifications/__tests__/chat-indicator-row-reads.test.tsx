@@ -27,6 +27,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
 /**
@@ -344,6 +345,7 @@ afterEach(() => {
     useCloudNotificationsStore.getInitialState(),
     true,
   );
+  useAppLocalNotificationsStore.getState().resetForTests();
 });
 
 describe("rows of a surface whose requests answer one by one", () => {
@@ -396,6 +398,34 @@ describe("rows of a surface whose requests answer one by one", () => {
     await answerEveryChunk(harness);
     await expectNothingInFlight(harness);
     expect(log.length - mark).toBe(0);
+  });
+
+  it("re-renders only the row whose app-local failure changed", async () => {
+    const harness = createHarness();
+    const log: RenderedRow[] = [];
+    renderScope(harness, BOUND_ROWS, log);
+    await expectReads(harness, 3);
+    const mark = log.length;
+
+    act(() => {
+      const notifications = useAppLocalNotificationsStore.getState();
+      notifications.activateIdentity("user-a");
+      notifications.upsert({
+        id: "terminal-closed",
+        originHostId: HOST_ID,
+        updatedAt: 1,
+        readAt: null,
+        kind: "terminal.closed",
+        sourceRef: "terminal-closed",
+        payload: { kind: "chat", epicId: "epic-1", chatId: MIDDLE },
+        message: "Terminal closed",
+        detail: null,
+      });
+    });
+
+    await expectShown(rowOf(MIDDLE), "unreadFailure,unreadTerminalFailure");
+    expect(log.length - mark).toBe(1);
+    expect(log[mark].rowId).toBe(rowIdOf(rowOf(MIDDLE)));
   });
 
   it("keeps the dots of a failed request and still lights the others", async () => {

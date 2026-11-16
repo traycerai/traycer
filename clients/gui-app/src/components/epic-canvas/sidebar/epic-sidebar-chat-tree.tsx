@@ -108,7 +108,9 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import { StatusGlyph } from "@/components/notifications/status-glyph";
 import {
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
+  type UnreadLocalFailures,
   EMPTY_INDICATOR_STATE_RESPONSE,
   type NotificationIndicatorState,
   type SurfaceNotificationIndicators,
@@ -520,7 +522,19 @@ function useChatDescendantStatus(args: {
   );
   const descendantHostIds = useEpicNodeHostIds(descendants);
   const activityTiers = useEpicAgentActivityTiers();
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
+  // The descendants' unread app-local failures alone, each answer a shared
+  // object, so the shallow compare holds unless one of them changes.
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      descendants.map((chatId, index) =>
+        selectUnreadLocalFailures(
+          state,
+          { epicId, chatId },
+          descendantHostIds[index] ?? null,
+        ),
+      ),
+    ),
+  );
   const selectRollup = useCallback(
     (
       indicators: SurfaceNotificationIndicators,
@@ -529,8 +543,8 @@ function useChatDescendantStatus(args: {
       return chatDescendantStatusRollup(
         descendants.map((chatId, index) =>
           chatDescendantKind(
-            selectNotificationIndicatorState(
-              { byId },
+            notificationIndicatorStateOf(
+              localFailures[index],
               { epicId, chatId },
               descendantHostIds[index] ?? null,
               indicators,
@@ -540,7 +554,7 @@ function useChatDescendantStatus(args: {
         ),
       );
     },
-    [activityTiers, byId, descendantHostIds, descendants, epicId],
+    [activityTiers, descendantHostIds, descendants, epicId, localFailures],
   );
   return useNotificationIndicatorsSelector(selectRollup, shallow);
 }

@@ -5,13 +5,16 @@ import {
   type ReactNode,
 } from "react";
 import { ChevronRight } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { useNotificationIndicatorsSelector } from "@/components/notifications/notification-indicator-context";
 import { cn } from "@/lib/utils";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
   type SurfaceNotificationIndicators,
+  type UnreadLocalFailures,
 } from "@/stores/notifications/notification-indicator-state";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
@@ -172,15 +175,21 @@ function CollapsedGroupBadge(props: {
   readonly memberEntities: ReadonlyArray<HostNotificationsEntityRef>;
   readonly size: "tile" | "leading";
 }): ReactNode {
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      props.memberEntities.map((entity) =>
+        selectUnreadLocalFailures(state, entity, null),
+      ),
+    ),
+  );
   const { memberEntities } = props;
   const selectBadge = useCallback(
     (indicators: SurfaceNotificationIndicators): RailBadgeKind | null =>
       worstRailBadge(
-        memberEntities.map((entity) =>
+        memberEntities.map((entity, index) =>
           railBadgeOf(
-            selectNotificationIndicatorState(
-              { byId },
+            notificationIndicatorStateOf(
+              localFailures[index],
               entity,
               null,
               indicators,
@@ -188,7 +197,7 @@ function CollapsedGroupBadge(props: {
           ),
         ),
       ),
-    [byId, memberEntities],
+    [localFailures, memberEntities],
   );
   const badge = useNotificationIndicatorsSelector(selectBadge, Object.is);
   if (badge === null) return null;

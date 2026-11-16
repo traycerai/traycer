@@ -159,6 +159,8 @@ interface TestState {
   activityTierById: Map<string, "turn" | "background">;
   /** Subscribers of the tier mock, as the activity store's would be. */
   activityTierListeners: Set<() => void>;
+  /** The id of every chat row that rendered, one entry per render (the row's `useEpicNodeUpdatedAt` read). */
+  rowRenders: string[];
   chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   /**
@@ -284,6 +286,7 @@ const testState = vi.hoisted<TestState>(() => ({
   activeAgentIds: new Set<string>(),
   activityTierById: new Map<string, "turn" | "background">(),
   activityTierListeners: new Set<() => void>(),
+  rowRenders: [],
   chatHarnessIds: {},
   tuiHarnessIds: {},
   tuiAgentById: {},
@@ -1011,14 +1014,31 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
 
+// Most cases rely on every row re-rendering with the panel, so they read the
+// `testState` they mutate. A case that counts row renders turns `stable` on, so
+// the mocks hand back what the real selectors do while nothing moves: the same
+// actions and the same empty list, not fresh ones per render that would
+// re-mint every row's `expansion` prop and the sharing context.
+const rowRenderMode = vi.hoisted(() => ({ stable: false }));
+const NO_CHAT_IDS = vi.hoisted<readonly string[]>(() => Object.freeze([]));
+const STABLE_EXPANSION_ACTIONS = vi.hoisted(() => ({
+  collapse: vi.fn(),
+  collapseAll: vi.fn(),
+  expand: vi.fn(),
+}));
+
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
   useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
   useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      collapse: vi.fn(),
-      collapseAll: vi.fn(),
-      expand: vi.fn(),
-    }),
+    selector(
+      rowRenderMode.stable
+        ? STABLE_EXPANSION_ACTIONS
+        : {
+            collapse: vi.fn(),
+            collapseAll: vi.fn(),
+            expand: vi.fn(),
+          },
+    ),
 }));
 
 // The rail's shape and its per-panel Hide/Show live beside the bijection
@@ -1226,7 +1246,7 @@ vi.mock("@/lib/epic-selectors", async () => {
     // Dedup input for the cloud-chat section. Empty: this suite is about the
     // LOCAL tree, and the section hides itself when the cloud list has nothing
     // to add - which, with no host client bound here, it never does.
-    useEpicChatIds: () => [],
+    useEpicChatIds: () => (rowRenderMode.stable ? NO_CHAT_IDS : []),
     useEpicChatIdsNamedByCloudRows: () => [],
     useEpicFileArtifactViewer: () => null,
     useEpicArtifactStatus: (artifactId: string) =>
@@ -1245,8 +1265,10 @@ vi.mock("@/lib/epic-selectors", async () => {
     // rather than the tree node (the node's copy lags - see the selector's doc),
     // but these fixtures only ever set it on the node, so the fake sources it
     // from there. Rows without one read 0, which the row renders as no time.
-    useEpicNodeUpdatedAt: (nodeId: string) =>
-      testState.tree.nodeById[nodeId]?.updatedAt ?? 0,
+    useEpicNodeUpdatedAt: (nodeId: string) => {
+      testState.rowRenders.push(nodeId);
+      return testState.tree.nodeById[nodeId]?.updatedAt ?? 0;
+    },
     // Stable empty array (reference-stable across renders) so the chat-row seed
     // effect's dependency never changes and it never seeds in these tests.
     useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
@@ -6668,5 +6690,63 @@ describe("chat tree on a mounting surface", () => {
     expect(
       desktop.container.querySelector('[class*="before:-inset-2"]'),
     ).toBeNull();
+  });
+});
+
+describe("chat row re-renders in a task with an archived chat", () => {
+  beforeEach(() => {
+    rowRenderMode.stable = true;
+  });
+
+  afterEach(() => {
+    rowRenderMode.stable = false;
+    cleanup();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.archivedIds = [];
+    testState.openTileContentIds = new Set<string>();
+    testState.indicatorChats = {};
+    testState.expandedIds = new Set<string>();
+    testState.rowRenders = [];
+  });
+
+  it("re-renders no row body when a plain chat lights in a task with archived chats", () => {
+    const nodes = ["chat-a", "chat-b", "chat-archived", "chat-revealed"].map(
+      (id) => treeNode(id, null, id, "chat"),
+    );
+    testState.rowRenders = [];
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: nodes.map((node) => node.id),
+      childrenByParent: {},
+      nodeById: Object.fromEntries(nodes.map((node) => [node.id, node])),
+    };
+    testState.records = nodes.map(recordFromNode);
+    // `chat-revealed` is archived but open in a tile, so the default view
+    // always shows it; `chat-archived` stays hidden.
+    testState.archivedIds = ["chat-archived", "chat-revealed"];
+    testState.openTileContentIds = new Set(["chat-revealed"]);
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.getByTestId("epic-sidebar-item-chat-revealed")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-chat-archived")).toBeNull();
+    expect(new Set(testState.rowRenders)).toEqual(
+      new Set(["chat-a", "chat-b", "chat-revealed"]),
+    );
+
+    testState.rowRenders = [];
+    testState.indicatorChats = {
+      "chat-b": {
+        unreadFailure: false,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: true,
+      },
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(leadingStatusKinds("chat-b")).toEqual(["done"]);
+    expect(testState.rowRenders).toEqual([]);
   });
 });

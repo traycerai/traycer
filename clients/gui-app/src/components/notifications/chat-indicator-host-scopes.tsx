@@ -248,23 +248,31 @@ function ChatIndicatorHostLayer(props: {
           },
     [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
   );
-  const attested = hostFresh
-    ? {
-        ...mergeIndicatorStateResponses(inheritedAttested, host.data),
-        byOriginHostId: {
-          ...inheritedAttested.byOriginHostId,
-          [props.hostId]: mergeIndicatorStateResponses(
-            inheritedAttested.byOriginHostId?.[props.hostId] ??
-              EMPTY_INDICATOR_STATE_RESPONSE,
-            host.data,
-          ),
-        },
-      }
-    : inheritedAttested;
+  // Both context values keep their identity while their inputs do, so a
+  // layer re-rendered by its query's status re-renders none of their readers.
+  const attested = useMemo(
+    () =>
+      hostFresh
+        ? {
+            ...mergeIndicatorStateResponses(inheritedAttested, host.data),
+            byOriginHostId: {
+              ...inheritedAttested.byOriginHostId,
+              [props.hostId]: mergeIndicatorStateResponses(
+                inheritedAttested.byOriginHostId?.[props.hostId] ??
+                  EMPTY_INDICATOR_STATE_RESPONSE,
+                host.data,
+              ),
+            },
+          }
+        : inheritedAttested,
+    [hostFresh, inheritedAttested, host.data, props.hostId],
+  );
+  const freshHosts = useMemo(
+    () => ({ ...inheritedFresh, [props.hostId]: fresh }),
+    [inheritedFresh, props.hostId, fresh],
+  );
   return (
-    <ChatIndicatorFreshHostsContext.Provider
-      value={{ ...inheritedFresh, [props.hostId]: fresh }}
-    >
+    <ChatIndicatorFreshHostsContext.Provider value={freshHosts}>
       <ChatIndicatorAttestedContext.Provider value={attested}>
         <NotificationIndicatorsProvider indicators={merged}>
           {props.children}

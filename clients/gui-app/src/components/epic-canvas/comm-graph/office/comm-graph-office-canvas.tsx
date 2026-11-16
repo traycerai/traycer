@@ -34,6 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import { Maximize, Minus, Plus } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { shallow } from "zustand/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -49,8 +50,10 @@ import { useNotificationIndicatorsSelector } from "@/components/notifications/no
 import { attentionTone } from "@/components/notifications/notification-indicator-tones";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
   type SurfaceNotificationIndicators,
+  type UnreadLocalFailures,
 } from "@/stores/notifications/notification-indicator-state";
 import {
   useCommGraphCursor,
@@ -3003,12 +3006,22 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // ONE subscription for both signals. They are read from the same indicator
   // state and split by the SAME rule `attentionTone` applies internally, so a
   // crashed screen and a "!" bubble can never disagree about one agent.
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      agents.map((agent) =>
+        selectUnreadLocalFailures(
+          state,
+          { epicId, chatId: agent.id },
+          agent.hostId,
+        ),
+      ),
+    ),
+  );
   const selectFlaggedIds = useCallback(
     (indicators: SurfaceNotificationIndicators): ReadonlyArray<string> =>
-      agents.flatMap((agent) => {
-        const indicatorState = selectNotificationIndicatorState(
-          { byId },
+      agents.flatMap((agent, index) => {
+        const indicatorState = notificationIndicatorStateOf(
+          localFailures[index],
           { epicId, chatId: agent.id },
           agent.hostId,
           indicators,
@@ -3016,7 +3029,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         if (attentionTone(indicatorState) === null) return [];
         return [`${officeFlagKind(indicatorState)}:${agent.id}`];
       }),
-    [agents, byId, epicId],
+    [agents, epicId, localFailures],
   );
   const flaggedIdList = useNotificationIndicatorsSelector(
     selectFlaggedIds,

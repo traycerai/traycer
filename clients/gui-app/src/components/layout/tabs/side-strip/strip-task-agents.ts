@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   ownChatStatusKind,
   type ChatDescendantStatusKind,
@@ -21,9 +22,11 @@ import {
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
 import {
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
   type NotificationIndicatorState,
   type SurfaceNotificationIndicators,
+  type UnreadLocalFailures,
 } from "@/stores/notifications/notification-indicator-state";
 import { useStripTaskNeedsYou } from "./strip-needs-you-context";
 
@@ -120,10 +123,18 @@ export function needsYouAgentKind(
 export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
   const tiers = agentActivityTiers(useEpicAgentActivity(epicId));
-  const localRows = useAppLocalNotificationsStore((state) => state.byId);
   const liveAgentIdList = useMemo(
     () => (liveAgentIds === null ? null : [...liveAgentIds]),
     [liveAgentIds],
+  );
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      epicId === null || liveAgentIdList === null
+        ? NO_LOCAL_FAILURES
+        : liveAgentIdList.map((id) =>
+            selectUnreadLocalFailures(state, { epicId, chatId: id }, null),
+          ),
+    ),
   );
   const selectAgentStates = useCallback(
     (
@@ -131,15 +142,15 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
     ): ReadonlyArray<NotificationIndicatorState> =>
       epicId === null || liveAgentIdList === null
         ? NO_AGENT_STATES
-        : liveAgentIdList.map((id) =>
-            selectNotificationIndicatorState(
-              { byId: localRows },
+        : liveAgentIdList.map((id, index) =>
+            notificationIndicatorStateOf(
+              localFailures[index],
               { epicId, chatId: id },
               null,
               indicators,
             ),
           ),
-    [epicId, liveAgentIdList, localRows],
+    [epicId, liveAgentIdList, localFailures],
   );
   const agentStates = useNotificationIndicatorsSelector(
     selectAgentStates,
@@ -207,6 +218,7 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
 }
 
 const NO_AGENT_STATES: ReadonlyArray<NotificationIndicatorState> = [];
+const NO_LOCAL_FAILURES: ReadonlyArray<UnreadLocalFailures> = [];
 
 function sameIndicatorStates(
   left: ReadonlyArray<NotificationIndicatorState>,
