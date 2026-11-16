@@ -9,7 +9,10 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 // so the pane stays connecting; the claim is measured on the spinner glyph,
 // since a full-size wrapper is trivially centred.
 
-const CENTRE_TOLERANCE_PX = 2;
+// The intended offset is zero: flex centring puts the glyph's centre on the
+// pane's centre. The half pixel allows for layout rounding and pixel snapping
+// of an odd free space.
+const CENTRE_TOLERANCE_PX = 0.5;
 
 interface Case {
   readonly name: string;
