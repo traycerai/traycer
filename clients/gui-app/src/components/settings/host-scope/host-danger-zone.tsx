@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { TraycerRemoved } from "@traycer-clients/shared/platform/runner-host";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { toast } from "sonner";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -35,6 +36,12 @@ export function HostDangerZone(props: {
   if (scope.host === null) return null;
   if (scope.host.isLocalMachine && hostManagement === null) return null;
   if (!scope.host.isLocalMachine && !scope.host.registered) return null;
+  if (
+    !scope.host.isLocalMachine &&
+    scope.host.sandbox === null &&
+    isTeamOwnedHost(scope.host)
+  )
+    return null;
   // Both removal paths stay available when the host cannot answer RPCs.
   // Local uninstall uses the CLI bridge; remote account removal writes to the
   // account. File edit snapshots are host RPC and now live in the Data tab.
@@ -48,6 +55,19 @@ export function HostDangerZone(props: {
     >
       <HostRemovalRow host={scope.host} onRemoved={scope.returnToActive} />
     </SettingsGroup>
+  );
+}
+
+function isTeamOwnedHost(host: HostScopeOption): boolean {
+  const entry = host.entry;
+  // The machine kind identifies a team computer even without owner details.
+  // The directory can learn a new owner before the registry refreshes.
+  return (
+    host.kind === "machine" ||
+    host.item?.owner?.kind === "team" ||
+    (entry !== null &&
+      isRemoteHostDirectoryEntry(entry) &&
+      entry.owner?.kind === "team")
   );
 }
 
