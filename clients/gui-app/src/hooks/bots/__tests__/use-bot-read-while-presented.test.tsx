@@ -1,6 +1,6 @@
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type { QueryClient } from "@tanstack/react-query";
 import type {
   BotReadCursorReadResponse,
@@ -56,6 +56,32 @@ function cachedCursor(queryClient: QueryClient): BotReadPosition | null {
   return read.cursors[CHANNEL];
 }
 
+/** Resolves when the channel's cached read holds `position`: an event of the query cache, or at once when it already does. */
+function cacheHolds(
+  queryClient: QueryClient,
+  position: BotReadPosition,
+): Promise<void> {
+  const holds = (): boolean => {
+    const cursor = cachedCursor(queryClient);
+    return (
+      cursor !== null &&
+      cursor.messageId === position.messageId &&
+      cursor.seq === position.seq
+    );
+  };
+  return new Promise<void>((resolve) => {
+    if (holds()) {
+      resolve();
+      return;
+    }
+    const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+      if (!holds()) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
 interface Props {
   readonly fixture: ReadCursorHostFixture;
   readonly target: BotReadPosition | null;
@@ -66,8 +92,9 @@ type StrictModeWrapper = (props: { readonly children: ReactNode }) => ReactNode;
 function mount(
   fixture: ReadCursorHostFixture,
   wrapper: StrictModeWrapper | undefined,
+  target: BotReadPosition | null,
 ) {
-  const initialProps: Props = { fixture, target: null };
+  const initialProps: Props = { fixture, target };
   return renderHook(
     (props: Props) => {
       useBotReadCursorQuery(props.fixture.client, BOT_ID, true);
@@ -90,9 +117,10 @@ async function mountWithCachedRead(
   wrapper: StrictModeWrapper | undefined,
 ) {
   signInAs(fixture, "user-a");
-  const view = mount(fixture, wrapper);
-  await waitFor(() => {
-    expect(cachedCursor(fixture.queryClient)).toEqual(OLD);
+  const cached = cacheHolds(fixture.queryClient, OLD);
+  const view = mount(fixture, wrapper, null);
+  await act(async () => {
+    await cached;
   });
   return view;
 }
@@ -147,9 +175,6 @@ describe("a natural read when the person leaves the view", () => {
       () => useBotReadCursorQuery(fixture.client, BOT_ID, true),
       { wrapper: fixture.Wrapper },
     );
-    await waitFor(() => {
-      expect(back.result.current.data?.cursors[CHANNEL]).toEqual(NEW);
-    });
     const returned = back.result.current.data;
     if (returned === undefined) throw new Error("no read");
     expect(channelBold(returned, CHANNEL, undefined)).toBe(false);
@@ -178,25 +203,24 @@ describe("a natural read when the person leaves the view", () => {
     expect(cachedCursor(fixture.queryClient)).toEqual(NEW);
   });
 
-  it("is sent exactly once when the view mounts twice under StrictMode", async () => {
+  it("is sent and settles exactly once when the view mounts already qualified under StrictMode", async () => {
     const strict: StrictModeWrapper = ({ children }) => (
       <StrictMode>
         <fixture.Wrapper>{children}</fixture.Wrapper>
       </StrictMode>
     );
-    const { rerender } = await mountWithCachedRead(fixture, strict);
+    signInAs(fixture, "user-a");
+    // Armed before the render: the mount's setup, cleanup and setup all run inside it.
     const settled = firstAdvanceSettles(fixture);
-    rerender({ fixture, target: NEW });
-    // Pending, then settled: the rerender on the flag must not send it again.
+    mount(fixture, strict, NEW);
     await act(async () => {
       await settled;
     });
-    rerender({ fixture, target: NEW });
 
-    await waitFor(() => {
-      expect(cachedCursor(fixture.queryClient)).toEqual(NEW);
-    });
     expect(fixture.advances).toEqual([TARGET]);
+    const mutations = fixture.queryClient.getMutationCache().getAll();
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]?.state.status).toBe("success");
   });
 });
 

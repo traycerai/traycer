@@ -92,7 +92,13 @@ function advanceIsCurrent(variables: CapturedAdvance): boolean {
   );
 }
 
-/** Cursor writes and cache updates belong to the viewer who initiated them. */
+/**
+ * Cursor writes and cache updates belong to the viewer who initiated them.
+ * Earned reads survive navigation, including while queued before dispatch.
+ * The lifetime is an account epoch, not a fence for deleted bots; a cursor
+ * write does not recreate its target. Any future mark-unread or rewind must
+ * be ordered against already-sent forward advances.
+ */
 export function useBotReadCursorAdvanceMutation(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<

@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { BotReadCursorAdvanceRequest } from "@traycer/protocol/host/bot/schemas";
-import { useBotReadCursorAdvanceMutation } from "@/hooks/bots/use-bot-read-cursor";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import type { MutateOptions, UseMutationResult } from "@tanstack/react-query";
+import type {
+  BotReadCursorAdvanceRequest,
+  BotReadCursorAdvanceResponse,
+} from "@traycer/protocol/host/bot/schemas";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  useBotReadCursorAdvanceMutation,
+  type BotReadCursorAdvanceVariables,
+} from "@/hooks/bots/use-bot-read-cursor";
 import {
   createReadCursorHostFixture,
   type ReadCursorHostFixture,
@@ -28,24 +36,69 @@ afterEach(() => {
   cleanup();
 });
 
+type AdvanceSuccessCallback = NonNullable<
+  MutateOptions<
+    BotReadCursorAdvanceResponse,
+    HostRpcError,
+    BotReadCursorAdvanceVariables
+  >["onSuccess"]
+>;
+
+type AdvanceResult = UseMutationResult<
+  BotReadCursorAdvanceResponse,
+  HostRpcError,
+  BotReadCursorAdvanceVariables
+>;
+
+/**
+ * Renders the hook. The mutation cache reports a terminal state before the
+ * observer re-renders the hook (TanStack notifies observers on its own
+ * scheduler), so `until` resolves from the render that first shows a result
+ * `test` accepts, never from the cache's event.
+ */
 function mount() {
-  return renderHook(() => useBotReadCursorAdvanceMutation(fixture.client), {
-    wrapper: fixture.Wrapper,
-  });
+  const waiters: Array<{
+    readonly test: (result: AdvanceResult) => boolean;
+    readonly resolve: () => void;
+  }> = [];
+  const view = renderHook(
+    () => {
+      const result = useBotReadCursorAdvanceMutation(fixture.client);
+      for (const waiter of waiters.splice(0)) {
+        if (waiter.test(result)) waiter.resolve();
+        else waiters.push(waiter);
+      }
+      return result;
+    },
+    { wrapper: fixture.Wrapper },
+  );
+  const until = (test: (result: AdvanceResult) => boolean): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (test(view.result.current)) resolve();
+      else waiters.push({ test, resolve });
+    });
+  return { ...view, until };
 }
 
 describe("the advance mutation's result", () => {
   it("calls a per-call onSuccess with the answer and the variables the caller passed", async () => {
-    const onSuccess = vi.fn();
+    let called = (): void => undefined;
+    const answered = new Promise<void>((resolve) => {
+      called = resolve;
+    });
+    const onSuccess = vi.fn<AdvanceSuccessCallback>(() => {
+      called();
+    });
     const { result } = mount();
 
     act(() => {
       result.current.mutate(REQUEST, { onSuccess });
     });
-
-    await waitFor(() => {
-      expect(onSuccess).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await answered;
     });
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
     expect(onSuccess.mock.calls[0]?.[0]).toEqual({
       cursor: { messageId: "m-new", seq: 2_000 },
     });
@@ -53,37 +106,41 @@ describe("the advance mutation's result", () => {
   });
 
   it("reports the caller's variables on its result", async () => {
-    const { result } = mount();
+    const { result, until } = mount();
 
+    const succeeded = until((current) => current.isSuccess);
     act(() => {
       result.current.mutate(REQUEST);
     });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
+    await act(async () => {
+      await succeeded;
     });
+
     expect(result.current.variables).toEqual(REQUEST);
   });
 
   it("reports the refusal as its error and returns to idle on reset", async () => {
     fixture.refuseAdvances.value = true;
-    const { result } = mount();
+    const { result, until } = mount();
 
+    const failed = until((current) => current.isError);
     act(() => {
       result.current.mutate(REQUEST);
     });
-    await waitFor(() => {
-      expect(result.current.isError).toBe(true);
+    await act(async () => {
+      await failed;
     });
     expect(result.current.error).not.toBeNull();
 
+    const idle = until((current) => current.isIdle);
     act(() => {
       result.current.reset();
     });
-
-    await waitFor(() => {
-      expect(result.current.isIdle).toBe(true);
+    await act(async () => {
+      await idle;
     });
+
+    expect(result.current.isIdle).toBe(true);
     expect(result.current.error).toBeNull();
     expect(result.current.variables).toBeUndefined();
   });
