@@ -398,6 +398,9 @@ function ReaderSurfaces(): ReactNode {
   return (
     <>
       <input aria-label="rename" />
+      <button type="button" aria-expanded="true" aria-haspopup="dialog">
+        Monitor
+      </button>
       <div role="menu">
         <div role="menuitem" tabIndex={-1}>
           item
@@ -433,6 +436,13 @@ function renderLoadingTile(isActive: boolean) {
       if (input === null) throw new Error("expected the rename input");
       return input;
     },
+    popoverTrigger: (): HTMLElement => {
+      const trigger = view.container.ownerDocument.querySelector<HTMLElement>(
+        "button[aria-expanded='true']",
+      );
+      if (trigger === null) throw new Error("expected the popover trigger");
+      return trigger;
+    },
     menuItem: (): HTMLElement => {
       const item =
         view.container.ownerDocument.querySelector<HTMLElement>(
@@ -449,15 +459,26 @@ async function waitForStream(): Promise<void> {
   if (streamCallbacks === null) throw new Error("expected the chat stream");
 }
 
+function deliver(
+  messages: ReadonlyArray<Message>,
+  pendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+): void {
+  act(() => {
+    deliverFirstSnapshot({ messages, pendingInterviews });
+  });
+}
+
+async function flushFrames(): Promise<void> {
+  await settleLegendList();
+  await advanceLegendListFrames(4);
+}
+
 async function deliverAndFlush(
   messages: ReadonlyArray<Message>,
   pendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
 ): Promise<void> {
-  act(() => {
-    deliverFirstSnapshot({ messages, pendingInterviews });
-  });
-  await settleLegendList();
-  await advanceLegendListFrames(4);
+  deliver(messages, pendingInterviews);
+  await flushFrames();
 }
 
 function composerEditor(): HTMLElement {
@@ -535,6 +556,36 @@ describe("<ChatTile /> first-snapshot focus hold", () => {
       screen.getByTestId("interview-card").querySelector("textarea"),
     ).not.toBeNull();
     expect(document.activeElement).toBe(tile.menuItem());
+  });
+
+  it("leaves the trigger of an open popover that keeps focus on it", async () => {
+    const tile = renderLoadingTile(true);
+    await waitForStream();
+    fireEvent.pointerDown(document.body);
+    tile.popoverTrigger().focus();
+
+    await deliverAndFlush([userMessage()], []);
+
+    expect(document.activeElement).toBe(tile.popoverTrigger());
+  });
+
+  it("leaves the field the reader typed in when a key lands between the free-text field mounting and its frame", async () => {
+    const tile = renderLoadingTile(true);
+    await waitForStream();
+    fireEvent.pointerDown(document.body);
+    tile.renameInput().focus();
+
+    deliver(
+      [userMessage(), freeTextInterviewMessage()],
+      [{ blockId: "question-1", requestedAt: 3 }],
+    );
+    expect(
+      screen.getByTestId("interview-card").querySelector("textarea"),
+    ).not.toBeNull();
+    fireEvent.keyDown(tile.renameInput(), { key: "a" });
+    await flushFrames();
+
+    expect(document.activeElement).toBe(tile.renameInput());
   });
 
   it("focuses the composer at load when the reader did nothing meanwhile", async () => {

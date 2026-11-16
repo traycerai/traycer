@@ -98,6 +98,9 @@ export function QuestionPage(props: QuestionPageProps) {
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
       if (!focusActive || disabled || node === null || isMobileApp()) return;
+      // Decided at scheduling as well as before the focus: a key pressed in
+      // between releases the hold, and must not let this load's focus land.
+      if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
       const frame = window.requestAnimationFrame(() => {
         if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
         node.focus({ preventScroll: true });

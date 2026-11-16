@@ -21,7 +21,9 @@ const OVERLAY_SELECTOR = [
 
 /**
  * Whether focus sits in something the reader is in the middle of using
- * outside `surface`: a field they are typing in, or an open menu or popover.
+ * outside `surface`: a field they are typing in, an open menu or popover, or
+ * the trigger of one that keeps focus on its trigger while open (the resource
+ * monitor's popover does).
  * Focus on a plain control (the sidebar row that opened the chat) or on an
  * ancestor of the surface (the pane container route sync focuses) is not held.
  */
@@ -33,7 +35,8 @@ function focusIsHeldOutside(surface: Element | null): boolean {
   }
   return (
     active.matches(TEXT_ENTRY_SELECTOR) ||
-    active.closest(OVERLAY_SELECTOR) !== null
+    active.closest(OVERLAY_SELECTOR) !== null ||
+    active.closest("[aria-expanded='true']") !== null
   );
 }
 
