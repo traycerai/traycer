@@ -783,6 +783,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["sandboxes", "personal"],
   ["storage", "personal"],
   ["members", "personal"],
+  ["notification-hooks", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
   // Dev-only proof pages: offered whenever `import.meta.env.DEV` holds, which
@@ -913,7 +914,8 @@ describe("<SettingsSidebar /> scope groups", () => {
         id === "machine-setup" ||
         id === "agent-definitions" ||
         id === "browser-agent-access" ||
-        id === "members"
+        id === "members" ||
+        id === "notification-hooks"
       ) {
         continue;
       }
@@ -1136,6 +1138,10 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+    expect(environmentRows()).toEqual([
+      ...PERSONAL_ROWS,
+      "Members",
+      "Notification hooks",
+    ]);
   });
 });

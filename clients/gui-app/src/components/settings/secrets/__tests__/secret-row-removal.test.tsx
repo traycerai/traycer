@@ -458,6 +458,9 @@ describe("Remove on Personal", () => {
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "This is the current value. Replace or revoke it first.",
     );
+    expect(document.body.textContent).not.toContain(
+      "These secrets need an updated host.",
+    );
     expect(destroyRequests(harness, 0)).toEqual([
       {
         method: "POST",
@@ -503,29 +506,6 @@ describe("Remove on Personal", () => {
       ),
     ).toEqual([]);
     expect(within(replaced).queryByTestId("secret-version-note")).toBeNull();
-  });
-
-  it("keeps the host version floor for its own unscoped environment", async () => {
-    const harness = mountPersonalRowAtDestroy10(
-      freshHost({
-        destroyAnswer: { outcome: "refused", code: "version_current" },
-      }),
-      "local",
-    );
-    const user = userEvent.setup();
-
-    await user.click(await screen.findByTestId("secret-row-remove"));
-    const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
-
-    expect((await within(dialog).findByRole("alert")).textContent).toBe(
-      "These secrets need an updated host.",
-    );
-    expect(harness.paramsOf("environment.secrets.list")).toContainEqual({
-      environmentId: null,
-    });
-    expect(destroyRequests(harness, 0)).toEqual([]);
-    expect(destroyCalls(harness)).toEqual([]);
   });
 });
 

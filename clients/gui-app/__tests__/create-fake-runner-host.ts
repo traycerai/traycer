@@ -286,6 +286,9 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "unauthorized" as const }),
     setTeamChatAutoArchive: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
@@ -322,6 +325,10 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     setSlackAppDms: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    updateBotRunSettings: () =>
+      Promise.resolve({ kind: "no_response" as const }),
+    updateBotReplyMode: () => Promise.resolve({ kind: "no_response" as const }),
+    deleteBot: () => Promise.resolve({ kind: "no_response" as const }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>

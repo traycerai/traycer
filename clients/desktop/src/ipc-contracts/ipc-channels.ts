@@ -95,6 +95,10 @@ export const RunnerHostInvoke = {
   listSandboxes: "runnerHost:sandboxes:list",
   // The environment directory (traycer-server `/api/environments`), same reason.
   listEnvironments: "runnerHost:environments:list",
+  // The account's auto-approve policy (traycer-server `/api/traycer/auto-policy`), same reason.
+  saveAutoPolicy: "runnerHost:autoPolicy:save",
+  // A task's team-environment attachment (traycer-server `/api/tasks/environment-attachment`), same reason.
+  attachTaskEnvironment: "runnerHost:tasks:attachEnvironment",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
@@ -128,6 +132,10 @@ export const RunnerHostInvoke = {
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
   setSlackAppDms: "runnerHost:slackApps:dms",
+  // A bot's settings (traycer-server `/api/bots/*`), for the same reason.
+  updateBotRunSettings: "runnerHost:bots:updateRunSettings",
+  updateBotReplyMode: "runnerHost:bots:updateReplyMode",
+  deleteBot: "runnerHost:bots:delete",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",

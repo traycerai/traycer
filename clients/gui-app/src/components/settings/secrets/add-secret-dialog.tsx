@@ -1,7 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
+import type { AuthnSecretsCreateResponse } from "@traycer-clients/shared/environment/configuration-secrets";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
@@ -45,11 +44,7 @@ import {
   secretVerifyLine,
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
-import {
-  PROVIDER_KEYS_LINE,
-  SECRET_SAVED_OFFLINE,
-  SECRETS_NEED_UPDATED_HOST,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { PROVIDER_KEYS_LINE } from "@/lib/sandboxes/secrets-page-copy";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -94,26 +89,18 @@ const NOTE_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
 };
 
 function errorText(error: unknown, fallback: string): string {
-  if (error instanceof HostMethodVersionUnsatisfiedError) {
-    return SECRETS_NEED_UPDATED_HOST;
-  }
   return error instanceof Error && error.message.length > 0
     ? error.message
     : fallback;
 }
 
 function createOutcomeNote(
-  outcome: EnvironmentSecretsCreateResponse,
+  outcome: AuthnSecretsCreateResponse,
   form: SecretFormState,
 ): SecretVerifyLine | null {
   switch (outcome.outcome) {
     case "created":
       return null;
-    case "pending":
-      return {
-        tone: "success",
-        text: SECRET_SAVED_OFFLINE,
-      };
     case "refused":
       return {
         tone: "warning",
@@ -445,22 +432,7 @@ export function AddSecretDialog(props: {
             </Button>
           </DialogFooter>
         ) : null}
-        {step.kind === "confirm" && saveNote?.tone === "success" ? (
-          // Saved and waiting to reach the account: one more Save would be a
-          // second secret, so only Done is offered.
-          <DialogFooter>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => close(false)}
-              data-testid="secret-save-done"
-            >
-              Done
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {step.kind === "confirm" && saveNote?.tone !== "success" ? (
+        {step.kind === "confirm" ? (
           <DialogFooter>
             <Button
               type="button"

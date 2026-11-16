@@ -1,11 +1,14 @@
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
 import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
-import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
-import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -178,8 +181,10 @@ export function HostOverviewSettingsCard(props: {
               client={props.client}
               hostId={props.hostId}
               hostName={props.hostName}
-              isLocalMachine={props.isLocalMachine}
               owner={props.owner}
+              currentEnvironmentId={
+                props.binding?.environment.environmentId ?? null
+              }
               onTransferred={setOwnershipReceipt}
               value={model.value}
               options={model.options}
@@ -382,20 +387,18 @@ function EnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
-    readonly isLocalMachine: boolean;
     readonly owner: HostOwnerPrincipal | null;
+    readonly currentEnvironmentId: string | null;
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
-  const bindVersion = useHostMethodSchemaVersion(
+  // The same give card on every computer the person owns, at that computer
+  // or from another app, once its host plans a give (`plan@2.0`).
+  const planVersion = useHostMethodSchemaVersion(
     props.hostId,
-    "environment.host.bind",
+    "environment.move.plan",
   );
-  const mayTransfer =
-    props.isLocalMachine &&
-    props.owner?.kind === "user" &&
-    bindVersion?.major === 1 &&
-    bindVersion.minor >= 1;
+  const mayTransfer = props.owner?.kind === "user" && planVersion?.major === 2;
   return mayTransfer ? (
     <TeamEnvironmentSourceControl {...props} />
   ) : (
@@ -412,25 +415,18 @@ function TeamEnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
+    readonly currentEnvironmentId: string | null;
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
   const environments = useEnvironmentListQuery(true);
   const teams = (environments.data?.environments ?? []).filter(
-    (environment) => environment.ownerKind === "organization",
+    (environment) =>
+      environment.ownerKind === "organization" &&
+      mayChangeConfiguration(configurationRoleOf(environment)),
   );
   const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
     null,
-  );
-  const mutation = useTeamComputerTransfer(
-    props.client,
-    props.hostId,
-    (team) => {
-      props.onTransferred(
-        `${props.hostName} now belongs to ${team.label}. Any member of the team can claim it as their own.`,
-      );
-      setSelected(null);
-    },
   );
   return (
     <>
@@ -443,66 +439,25 @@ function TeamEnvironmentSourceControl(
       <EnvironmentSourceSelect
         {...props}
         teams={teams}
-        onChooseTeam={(team) => {
-          mutation.reset();
-          setSelected(team);
-        }}
+        onChooseTeam={setSelected}
       />
-      <Dialog
-        open={selected !== null}
-        onOpenChange={(open) => {
-          if (!open && !mutation.isPending) setSelected(null);
-        }}
-      >
-        <DialogContent className="w-full sm:max-w-prose">
-          <DialogHeader>
-            <DialogTitle>
-              Use {props.hostName} for {selected?.label}?
-            </DialogTitle>
-            <DialogDescription>
-              The team will own this computer. Any member of the team can claim
-              it as their own. Traycer restarts once on this computer.
-            </DialogDescription>
-          </DialogHeader>
-          <ul className="list-disc space-y-2 pl-5 text-ui-sm">
-            {TEAM_TRANSFER_DISCLOSURE.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          {mutation.isError ? (
-            <p role="alert" className="text-ui-sm text-destructive">
-              {mutation.error.message}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={mutation.isPending}
-              onClick={() => setSelected(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={mutation.isPending || selected === null}
-              onClick={() => {
-                if (selected === null) return;
-                mutation.mutate(selected);
-              }}
-            >
-              {mutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="team-computer-transfer-progress"
-                  variant={undefined}
-                />
-              ) : null}
-              Confirm at this computer
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {selected === null ? null : (
+        <TeamGiveDialog
+          key={selected.environmentId}
+          client={props.client}
+          hostId={props.hostId}
+          hostName={props.hostName}
+          currentEnvironmentId={props.currentEnvironmentId}
+          team={selected}
+          onClose={() => setSelected(null)}
+          onGiven={(team) => {
+            props.onTransferred(
+              `${props.hostName} now belongs to ${team.label}. Any member of the team can claim it as their own.`,
+            );
+            setSelected(null);
+          }}
+        />
+      )}
     </>
   );
 }

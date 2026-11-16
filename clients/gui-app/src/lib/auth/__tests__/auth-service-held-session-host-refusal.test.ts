@@ -26,6 +26,7 @@ import {
   AuthService,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
+  type AuthSessionSnapshot,
   type RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
 import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
@@ -1309,6 +1310,12 @@ describe("AuthService - a host refusing the bearer of a session authn refused", 
       service.onCloudAuthorizationRevoked((revoked) => {
         fanOuts.push(revoked);
       });
+      // The window bridge hands main what this listener hears.
+      const projected: AuthSessionSnapshot[] = [];
+      service.onSessionSnapshotChange((snapshot) => {
+        projected.push(snapshot);
+      });
+      expect(projected.at(-1)?.status).toBe("signed-in");
 
       authn.answerValidation = () => status(401);
       authn.answerRefresh = () => status(401);
@@ -1317,6 +1324,12 @@ describe("AuthService - a host refusing the bearer of a session authn refused", 
       expect(verdict?.kind).toBe("rejected");
       expect(useAuthStore.getState().status).toBe("unverified");
       expect(fanOuts).toEqual([{ token: LONG_LIVED_TOKEN, revocation: null }]);
+      // The demotion reaches a snapshot listener: the session stays as the
+      // local plane's identity (`unverified`) on the same bearer, not a sign-out.
+      expect(projected.at(-1)).toMatchObject({
+        status: "unverified",
+        token: LONG_LIVED_TOKEN,
+      });
     });
   });
 });

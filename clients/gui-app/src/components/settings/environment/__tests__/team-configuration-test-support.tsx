@@ -485,6 +485,7 @@ function buildTeamPage(
     runnerHost,
     registry: hostRpcRegistry,
     messenger,
+    singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(queryClient),

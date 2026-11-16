@@ -397,7 +397,8 @@ const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
 };
 
 /**
- * This computer's move into Personal, while it can still progress.
+ * This computer's move into Personal, while it can still progress, and a
+ * started move or give while `move` answers `running`.
  *
  * `environment.status` is the ONLY source of the move's own state, so this
  * read's cadence IS the frame rate of the line a person is watching - the
@@ -649,6 +650,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.accountSettings.refresh": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
@@ -2610,7 +2612,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("environment.status", {
       classify: (data) => {
         if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
-        return moveIsRunning(data)
+        return moveIsRunning(data) || data.move?.state === "running"
           ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
           : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
       },
@@ -2710,6 +2712,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // pool, members and the retrospective sheet. Reads take the latest answer;
   // every write is ordered and never joined.
   "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.outcome": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.revision": {
     ...LATEST_SCHEDULING,
@@ -2760,6 +2763,16 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

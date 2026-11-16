@@ -308,11 +308,14 @@ export const kit = {
   mutationFails: false,
   // The host's sentence refusing a bot-row write; `null` takes the write.
   botWriteRefusal: null as string | null,
+  realBotWrite: false,
+  queryClient: null as import("@tanstack/react-query").QueryClient | null,
+  botWriteBinding: null as object | null,
   deferResponses: false,
   pendingResponses: [] as Array<() => void>,
   // What the two publishers received.
-  confirmed: [] as unknown[],
-  unattended: [] as unknown[],
+  confirmed: new Array<unknown>(),
+  unattended: new Array<unknown>(),
   toast: vi.fn<(message: string) => void>(),
   // The providers list.
   providers: [] as ProviderCliState[],
@@ -344,6 +347,9 @@ export function resetKit(): void {
   kit.mutationResult = { outcome: "applied", detail: null };
   kit.mutationFails = false;
   kit.botWriteRefusal = null;
+  kit.realBotWrite = false;
+  kit.queryClient = null;
+  kit.botWriteBinding = null;
   kit.deferResponses = false;
   kit.pendingResponses = [];
   kit.confirmed = [];
@@ -808,43 +814,61 @@ export function hostScopedMutationModule() {
   };
 }
 
+/** The write's sign-in, still current: the retry follows it. */
+const WRITE_SIGN_IN = { isCurrent: () => true };
+
 /**
  * `@/hooks/bots/use-bot-mutations`: the bot-row write a bot's chat sends
  * before its retry, recorded into the same `mutations` as the verbs so a
- * suite reads the order, and rejected with `botWriteRefusal` as the error's
- * message when set. Its promise settles whether or not the caller is still
+ * suite reads the order (with no client: it is the app's own call to the
+ * server), and rejected with `botWriteRefusal` as the error's message when
+ * set. Its promise settles whether or not the caller is still
  * mounted, as TanStack's `mutateAsync` does. `deferResponses` holds its
  * answer like theirs.
  */
-export function botMutationsModule<T extends object>(actual: T) {
+export function botMutationsModule<
+  T extends {
+    readonly useBotUpdateRunSettingsMutation: () => unknown;
+  },
+>(actual: T) {
+  // The hook is chosen from the flag and then called unconditionally, so a
+  // component keeps one hook order while the flag holds.
+  function useRecordedBotWrite() {
+    const [pending, setPending] = useState(false);
+    return {
+      mutateAsync: (variables: Record<string, unknown>) => {
+        kit.mutations.push({
+          clientId: null,
+          method: "bot.updateRunSettings",
+          variables,
+        });
+        setPending(true);
+        return new Promise<{
+          readonly signIn: { readonly isCurrent: () => boolean };
+        }>((resolve, reject) => {
+          const deliver = (): void => {
+            setPending(false);
+            const refusal = kit.botWriteRefusal;
+            if (refusal === null) resolve({ signIn: WRITE_SIGN_IN });
+            else reject(new Error(refusal));
+          };
+          if (kit.deferResponses) {
+            kit.pendingResponses.push(deliver);
+            return;
+          }
+          deliver();
+        });
+      },
+      isPending: pending,
+    };
+  }
   return {
     ...actual,
-    useBotUpdateRunSettingsMutation: (client: KitClient | null) => {
-      const [pending, setPending] = useState(false);
-      return {
-        mutateAsync: (variables: Record<string, unknown>) => {
-          kit.mutations.push({
-            clientId: idOf(client),
-            method: "bot.updateRunSettings",
-            variables,
-          });
-          setPending(true);
-          return new Promise<void>((resolve, reject) => {
-            const deliver = (): void => {
-              setPending(false);
-              const refusal = kit.botWriteRefusal;
-              if (refusal === null) resolve();
-              else reject(new Error(refusal));
-            };
-            if (kit.deferResponses) {
-              kit.pendingResponses.push(deliver);
-              return;
-            }
-            deliver();
-          });
-        },
-        isPending: pending,
-      };
+    useBotUpdateRunSettingsMutation: () => {
+      const useWrite = kit.realBotWrite
+        ? actual.useBotUpdateRunSettingsMutation
+        : useRecordedBotWrite;
+      return useWrite();
     },
   };
 }

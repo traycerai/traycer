@@ -27,6 +27,8 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { BotSetupRow } from "@traycer-clients/shared/host-client/bot-setup";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -39,6 +41,13 @@ import {
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
+import { applyBotSettingsToViews } from "@/hooks/bots/use-bot-subscription";
+import { botSetupError } from "@/hooks/bots/bot-setup-error";
+import {
+  captureBotWriteOrigin,
+  type BotWriteOrigin,
+  type PressSignIn,
+} from "@/hooks/bots/bot-write-sign-in";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -49,6 +58,11 @@ import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
  *
  * The bot tab's Settings writes (rename, model, delete) carry no toast: the
  * panel states a refusal inline, under the control that made the call.
+ *
+ * The run settings, the reply mode and the delete are the exceptions to the
+ * client argument: they are the app's own calls to the server on the
+ * person's sign-in, with no host in the path, so they need no host, the
+ * bot's included.
  *
  * Each write invalidates `bot.list` on EVERY host scope rather than on one:
  * the list is cloud-backed and identical everywhere, so a create on host B
@@ -79,19 +93,37 @@ export function useBotCreateMutation(
   });
 }
 
-export function useBotDeleteMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<BotDeleteResponse, HostRpcError, BotDeleteRequest> {
+/**
+ * Archives the bot. A repeat answers `deleted: false`, which is a success.
+ * Every list is read again, and a surface showing the bot leaves it when
+ * the list no longer carries it.
+ */
+export function useBotDeleteMutation(): UseMutationResult<
+  BotDeleteResponse | null,
+  Error,
+  BotDeleteRequest
+> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.delete">({
-    client,
-    method: "bot.delete",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.delete(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotDeleteResponse | null,
+    Error,
+    BotDeleteRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.delete(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.deleteBot(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { deleted: result.deleted };
+    },
+    onSuccess: (answer) => {
+      if (answer === null) return;
+      invalidateBotLists(queryClient);
     },
   });
 }
@@ -113,44 +145,81 @@ export function useBotUpdateTitleMutation(
   });
 }
 
-export function useBotUpdateRunSettingsMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
+/**
+ * The harness, model, effort and profile the bot's next turn runs on. The
+ * answer is laid over every view of the bot this app holds, since no host
+ * re-sends one for a change it did not make, and every list is read again.
+ * `null` is a write whose sign-in ended before the answer (`pressSignIn`):
+ * nothing is laid over, read again or said.
+ */
+export function useBotUpdateRunSettingsMutation(): UseMutationResult<
+  BotRunSettingsWrite | null,
+  Error,
   BotUpdateRunSettingsRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.updateRunSettings">({
-    client,
-    method: "bot.updateRunSettings",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateRunSettings(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotRunSettingsWrite | null,
+    Error,
+    BotUpdateRunSettingsRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateRunSettings(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotRunSettings(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { bot: result.bot, signIn };
+    },
+    onSuccess: (written) => {
+      if (written === null) return;
+      applyBotSettingsToViews(queryClient, written.bot);
+      invalidateBotLists(queryClient);
     },
   });
 }
 
-export function useBotUpdateReplyModeMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
+/**
+ * A run-settings write the server took, with the sign-in it was pressed
+ * under: a later step on its answer (the fallback's retry) asks that sign-in
+ * first.
+ */
+export interface BotRunSettingsWrite {
+  readonly bot: BotSetupRow;
+  readonly signIn: PressSignIn;
+}
+
+export function useBotUpdateReplyModeMutation(): UseMutationResult<
+  BotSetupRow | null,
+  Error,
   BotUpdateReplyModeRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.updateReplyMode">({
-    client,
-    method: "bot.updateReplyMode",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateReplyMode(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotSetupRow | null,
+    Error,
+    BotUpdateReplyModeRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateReplyMode(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotReplyMode(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return result.bot;
+    },
+    onSuccess: (bot) => {
+      if (bot === null) return;
+      applyBotSettingsToViews(queryClient, bot);
+      invalidateBotLists(queryClient);
     },
   });
 }

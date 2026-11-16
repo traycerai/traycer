@@ -4,6 +4,11 @@ import {
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -78,6 +83,15 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -2128,9 +2142,10 @@ export class AuthService {
    * service is not disposed). Async credential tails capture the generation
    * before their first await and re-check through this after each one, so a
    * newer `signIn()` / `signOut()` / `dispose()` always wins over an
-   * already-started save/rotate/provision.
+   * already-started save/rotate/provision. A direct bot write's caller fences
+   * its own later steps the same way (`hooks/bots/bot-write-sign-in.ts`).
    */
-  private isIdentityCurrent(generation: number): boolean {
+  isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
   }
 
@@ -3203,6 +3218,22 @@ export class AuthService {
     return this.runnerHost.listEnvironments(bearer);
   }
 
+  /** Saves the account's auto-approve policy on traycer-server, on the signed-in person's bearer. */
+  async saveAutoPolicy(body: string): Promise<AutoPolicySaveResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.saveAutoPolicy(bearer, body);
+  }
+
+  /** Attaches a task to a team's environment on traycer-server, on the signed-in person's bearer. */
+  async attachTaskEnvironment(
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.attachTaskEnvironment(bearer, request);
+  }
+
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
@@ -3604,6 +3635,33 @@ export class AuthService {
       environmentId,
       signal,
     );
+  }
+
+  /**
+   * A bot's settings on traycer-server with the person's bearer: the app's
+   * own call, with no host in the path. Signed out, it answers `no_response`
+   * without a request, as an environment call does.
+   */
+  async updateBotRunSettings(
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotRunSettings(bearer, request);
+  }
+
+  async updateBotReplyMode(
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotReplyMode(bearer, request);
+  }
+
+  async deleteBot(request: BotDeleteRequest): Promise<BotDeleteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.deleteBot(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

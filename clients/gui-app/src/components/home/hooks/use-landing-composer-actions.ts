@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -33,6 +34,7 @@ import {
   ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
   isAttachEnvironmentUnsupported,
   isAttachPromotionPending,
+  pressedSignInCurrent,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
@@ -445,6 +447,7 @@ export function useLandingComposerActions(
   const attachClient = useEpicAttachmentClient(target.client);
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const takeOperation = useEnvironmentCloud();
   const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
@@ -1735,6 +1738,8 @@ export function useLandingComposerActions(
       const handed = args.hand(epicId);
       if (handed === null) return null;
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in the attachment goes out on, taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const tabId = uuidv4();
       // The task opens at once, with no agent yet: its first one is created
       // on the sandbox once the agent the person asked for is ready there.
@@ -1747,8 +1752,9 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
+      // The sign-in sent on, not only its account: a sign-in again ends it.
       const sameAccount = (): boolean =>
-        (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
+        pressedSignInCurrent(operation, dispatchUserId);
       // A create or attachment refusal returns the only message copy. An
       // attachment refused because the task is still reaching the cloud then
       // deletes it, unless an agent was started in it meanwhile: the next Send
@@ -1832,6 +1838,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({
                 epicId,
                 teamId: settledAttachTeamId,
+                operation,
               });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
@@ -1852,6 +1859,7 @@ export function useLandingComposerActions(
       discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
+      takeOperation,
     ],
   );
 

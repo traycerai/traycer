@@ -1,6 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
@@ -23,7 +22,6 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 import {
   SECRET_RESTART_LINE,
   SECRET_SCOPE_LINE,
-  SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
@@ -121,10 +119,6 @@ export function ReplaceSecretValueDialog(props: {
       setNote(outcome.text);
     } catch (error) {
       if (openGeneration.current !== sentFrom) return;
-      if (error instanceof HostMethodVersionUnsatisfiedError) {
-        setNote(SECRETS_NEED_UPDATED_HOST);
-        return;
-      }
       setNote(
         error instanceof Error && error.message.length > 0
           ? error.message

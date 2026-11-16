@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ConfigurationRemovalPreview } from "@traycer-clients/shared/environment/configuration-members";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
 import { DemotionPreviewDialog } from "@/components/settings/members/demotion-preview";
 import { InviteDialog } from "@/components/settings/members/invite-dialog";
 import { InviteSeatLine } from "@/components/settings/members/invite-seat-line";
@@ -51,8 +50,12 @@ import type {
 import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useEnvironmentMemberWorkNow } from "@/hooks/environment/use-environment-member-work-now";
 import { useEnvironmentMembersRemovalPreviewQuery } from "@/hooks/environment/use-environment-members-removal-preview-query";
+import {
+  useTeamComputerWorkNow,
+  type TeamComputerCounts,
+  type TeamComputerWorkNow,
+} from "@/hooks/environment/use-team-computer-work-now";
 
 type PendingRemove =
   | { readonly kind: "accepted"; readonly member: MembersListMember }
@@ -94,30 +97,40 @@ function announceRemoval(removed: PendingRemove, teamName: string): void {
 }
 
 /**
- * The removal confirm's preview from authn's read: the answer once read
- * (while no re-read after a failure is in flight), the failure once a read is
- * refused, and loading otherwise. Never an answer read for another member.
+ * The removal confirm's preview from authn's read joined with the team
+ * computer's count: the answer once both are in (while no re-read after a
+ * failure is in flight), the failure once authn's read is refused, and
+ * loading otherwise, so the work row never says no count while one is still
+ * being made. Never an answer read for another member.
  */
 function previewState(
   query: UseQueryResult<ConfigurationRemovalPreview, HostRpcError>,
-  workNow: MemberWorkNow | null,
+  workNow: TeamComputerWorkNow,
+  hostLabel: (hostId: string) => string | null,
 ): PreviewState<RemovePreviewModel> {
   if (query.isError) {
     return query.isFetching ? { status: "loading" } : { status: "failed" };
   }
-  if (query.data === undefined) return { status: "loading" };
+  if (query.data === undefined || workNow.status === "pending") {
+    return { status: "loading" };
+  }
   return {
     status: "ready",
-    preview: { sandboxesToRekey: query.data.sandboxesToRekey, workNow },
+    preview: {
+      sandboxesToRekey: query.data.sandboxesToRekey,
+      workNow: memberWorkNow(workNow.answer, workNow.hostId, hostLabel),
+    },
   };
 }
 
 /**
  * The member's running work where the window's own host, a team computer,
- * counted it. No answer, or that host's "cannot count", is no count.
+ * counted it, named by that host. No answer, or that host's "cannot count",
+ * is no count.
  */
 function memberWorkNow(
-  counts: EnvironmentMembersRemovePreviewResponse | null,
+  counts: TeamComputerCounts | null,
+  hostId: string | null,
   hostLabel: (hostId: string) => string | null,
 ): MemberWorkNow | null {
   if (
@@ -130,8 +143,7 @@ function memberWorkNow(
   return {
     activeTurns: counts.activeTurns,
     terminals: counts.terminals,
-    hostName:
-      counts.localHostId === null ? null : hostLabel(counts.localHostId),
+    hostName: hostId === null ? null : hostLabel(hostId),
   };
 }
 
@@ -327,14 +339,15 @@ export function MembersView(props: {
     environmentId,
     targetUserId(removing),
   );
-  const workNowCounts = useEnvironmentMemberWorkNow(
+  const workNow = useTeamComputerWorkNow({
     environmentId,
-    targetUserId(removing),
-  );
-  const removePreview = previewState(
-    removeQuery,
-    memberWorkNow(workNowCounts, hostLabel),
-  );
+    subject: targetUserId(removing),
+    read: {
+      method: "environment.members.removePreview",
+      paramsFor: (userId) => ({ environmentId, userId }),
+    },
+  });
+  const removePreview = previewState(removeQuery, workNow, hostLabel);
 
   const membersReady = membersRead === "ready";
   // Dismissed here: hidden at once, before the read that carries the seen

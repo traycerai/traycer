@@ -6,6 +6,7 @@
  * request bodies are built from the protocol's request types by the callers.
  */
 import { z } from "zod";
+import { NOTIFICATION_HOOKS_ITEM } from "./notification-hook-item-kind";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const ITEM_OS_VALUES = ["any", "linux", "macos", "windows"] as const;
@@ -32,6 +33,7 @@ export const ITEM_ROUTE_KINDS = [
   "auto_policy",
   "sandbox_defaults",
   "storage_policy",
+  NOTIFICATION_HOOKS_ITEM.kind,
 ] as const;
 
 const revisionSchema = lazySchema(() => z.number().int().nonnegative());

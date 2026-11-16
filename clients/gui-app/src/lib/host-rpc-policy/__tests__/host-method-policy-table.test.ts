@@ -54,6 +54,7 @@ import type {
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -448,6 +449,26 @@ describe("host method poll policy table", () => {
     // retained `liveBusySessionCount` to `null` — inverting the two would make
     // a healthy query flicker between live and unknown on every tick.
     expect(intervalMs).toBeLessThan(30_000);
+  });
+
+  it("polls a running move through environment.status and never polls move.outcome", () => {
+    const statusPolicy = HOST_METHOD_POLL_TABLE["environment.status"].poll;
+    expect(
+      statusPolicy.classify(
+        environmentStatusFixture({
+          move: {
+            state: "running",
+            attemptId: "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60",
+            acceptanceId: "c3d4e5f6-0718-4a29-8b3c-4d5e6f708192",
+          },
+        }),
+      ),
+    ).toEqual({
+      id: "environment.status.move-running",
+      initialDelayMs: 500,
+      maxDelayMs: 2_000,
+    });
+    expect(HOST_METHOD_POLL_TABLE["environment.move.outcome"].poll).toBeNull();
   });
 
   // `host.getInstallationInfo` used to have no cadence at all. It is now

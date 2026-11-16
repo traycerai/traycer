@@ -31,7 +31,10 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
-import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
+import {
+  DELTA_FED_READS,
+  SECRET_READS,
+} from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
@@ -109,8 +112,10 @@ function aboutThisHost(
  * On a host that runs Personal, Personal's configuration reads move with it,
  * on every host that read them (`personalEnvironmentId`, `null` elsewhere).
  * A read the app makes itself about this host (the review sheet, keyed by its
- * `hostId`) moves with it too, whatever environment the host runs. The first
- * status a reader sees for a host only records the revision.
+ * `hostId`) moves with it too, whatever environment the host runs, and so do
+ * the secrets reads ({@link SECRET_READS}), which name the environment rather
+ * than the host. The first status a reader sees for a host only records the
+ * revision.
  */
 function useRereadOnRevision(
   hostId: string | null,
@@ -154,6 +159,10 @@ function useRereadOnRevision(
             personalEnvironmentId,
             PERSONAL_REVISION_READS,
           )) ||
+        // The secrets reads, which the app makes itself from authn.
+        SECRET_READS.some((method) =>
+          hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, method),
+        ) ||
         aboutThisHost(query.queryKey, hostId),
     };
     // Retire an initial GET before refreshing; overlapping read sets must refresh once.

@@ -122,7 +122,8 @@ import {
   type HostMaintenanceLeaseAdmission,
 } from "./commands/host-maintenance-lease";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
+import type { RunHostStartOptions } from "./commands/host-start";
+import { runHostStartCommand } from "./commands/host-start-command";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import { LIFECYCLE_ORIGIN_COMMANDS } from "@traycer/protocol/config/lifecycle-origin-commands";
 import {
@@ -179,7 +180,8 @@ import {
 } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
-import { readonlyEnv } from "./runner/runtime";
+import { readonlyEnv, resolveRuntimeContext } from "./runner/runtime";
+import { createOutput } from "./runner/output";
 import {
   agentWorktreeCreateOffered,
   assertAgentWorktreeCreateAllowed,
@@ -1178,7 +1180,12 @@ function registerHostCommands(program: Command): void {
     // going through the runner, so nothing else resolves them for it.
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const opts = command.optsWithGlobals() as Record<string, unknown>;
-    const logger = createCliLogger(config.environment);
+    const runtime = resolveRuntimeContext(
+      extractRunnerFlags(opts),
+      readonlyEnv(),
+    );
+    const logger = runtime.logger;
+    const output = createOutput(runtime);
     const serviceLabel =
       typeof opts.serviceLabel === "string" ? opts.serviceLabel : null;
     const transitionId =
@@ -1218,7 +1225,8 @@ function registerHostCommands(program: Command): void {
       {},
     );
     try {
-      await runHostStart(
+      await runHostStartCommand(
+        { runtime, output, progress: (info) => output.progress(info) },
         hostStartOptionsFromCommand({
           environment: config.environment,
           cwd: typeof opts.cwd === "string" ? opts.cwd : null,

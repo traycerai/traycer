@@ -1738,13 +1738,13 @@ describe("stated-item contracts", () => {
     });
   });
 
-  it("parses the account settings refresh, which the registry cannot reach yet", () => {
+  it("parses the registered account settings refresh", () => {
     expect(hostAccountSettingsRefreshV10.method).toEqual(
       "host.accountSettings.refresh",
     );
     expect(hostAccountSettingsRefreshV10.requestSchema.parse({})).toEqual({});
     expect(hostAccountSettingsRefreshV10.responseSchema.parse({})).toEqual({});
-    expect("host.accountSettings.refresh" in hostRpcRegistry).toBe(false);
+    expect("host.accountSettings.refresh" in hostRpcRegistry).toBe(true);
   });
 });
 
