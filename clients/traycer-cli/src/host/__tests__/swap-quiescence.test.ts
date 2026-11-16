@@ -108,7 +108,7 @@ vi.mock("../../service/platforms/linux", async (importOriginal) => {
     ...actual,
     linuxServiceMayRespawn: mocks.linuxServiceMayRespawnMock,
     // Left real, the reachability probe would run a genuine `systemctl
-    // --user show-environment` inside the fake-timer window of every test
+    // --user show --property=Version --value` inside the fake-timer window of every test
     // that spends the settle window.
     linuxUserManagerUnreachable: mocks.linuxUserManagerUnreachableMock,
   };
