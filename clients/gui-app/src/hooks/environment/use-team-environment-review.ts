@@ -92,6 +92,7 @@ export type TeamReviewMutation = UseMutationResult<
 interface TeamReviewPress {
   readonly cloud: EnvironmentCloud;
   readonly environmentId: string;
+  readonly choice: HeldApplyChoice;
   readonly entry: Pick<
     ReviewHeldEntry,
     "entryId" | "heldRevision" | "liveRevision"
@@ -117,7 +118,7 @@ export function useTeamEnvironmentReviewApply(
     TeamReviewChoice,
     TeamReviewPress
   >(
-    ({ heldId }) => {
+    ({ heldId, choice }) => {
       cloudVerdictPreflight(APPLY_METHOD)();
       if (
         source === null ||
@@ -141,6 +142,7 @@ export function useTeamEnvironmentReviewApply(
       return {
         cloud,
         environmentId,
+        choice,
         entry,
         allowed:
           canEdit &&
@@ -153,7 +155,7 @@ export function useTeamEnvironmentReviewApply(
         environmentId,
         viewerId,
       ),
-      mutationFn: ({ choice }, press) =>
+      mutationFn: (_variables, press) =>
         withHostQueryErrorBoundary(
           APPLY_METHOD,
           async (): Promise<ReviewChoiceOutcome> => {
@@ -164,7 +166,7 @@ export function useTeamEnvironmentReviewApply(
                 press.cloud,
                 press.environmentId,
                 press.entry,
-                choice,
+                press.choice,
               );
             } catch (error) {
               throw environmentCloudHostError(APPLY_METHOD, error);

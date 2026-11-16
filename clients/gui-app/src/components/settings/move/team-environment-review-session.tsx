@@ -82,6 +82,7 @@ export function TeamEnvironmentReviewSession(props: {
   const canEdit =
     directory.isFetchedAfterMount &&
     directory.isSuccess &&
+    !directory.isFetching &&
     environment !== undefined &&
     mayChangeConfiguration(configurationRoleOf(environment));
   const refetchDirectory = directory.refetch;
