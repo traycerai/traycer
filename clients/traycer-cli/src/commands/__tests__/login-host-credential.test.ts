@@ -16,7 +16,6 @@ import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures
 import { buildLoginCommand, loginCommand } from "../login";
 import { runHostStart } from "../host-start";
 import { runHostStartCommand } from "../host-start-command";
-import type { RunHostStartOptions } from "../host-start";
 import { config } from "../../config";
 import type { HostCredentialProvisionOutcome } from "../../host/credential-provisioning";
 import { noopLogger } from "../../logger";
