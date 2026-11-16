@@ -77,6 +77,8 @@ const mocks = vi.hoisted(() => {
   const state = {
     /** The optional methods the tab's host advertised. */
     supported: new Set<string>(),
+    /** Read the real negotiated-manifest registry instead of `supported`. */
+    realManifest: false,
     /** Task titles by task id, as the task-context read answers them. */
     taskTitles: {} as Record<string, string>,
     /** What the host's indicator read holds per task and per agent chat. */
@@ -189,10 +191,21 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     pendingTaskIds: new Set<string>(),
   }),
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (_hostId: string | null, method: string) =>
-    mocks.state.supported.has(method),
-}));
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return {
+    ...actual,
+    // A case sets `realManifest` to read the negotiated-manifest registry
+    // itself, so a change to it reaches only the components that subscribe.
+    useHostMethodSupport: (hostId: string | null, method: string) =>
+      mocks.state.realManifest
+        ? actual.useHostMethodSupport(hostId, method)
+        : mocks.state.supported.has(method),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-activity", () => ({
   useBotActivity: () => null,
 }));
@@ -309,6 +322,10 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   },
 }));
 
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { postThread } from "@/components/bots/__tests__/bot-turn-test-support";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
@@ -619,6 +636,8 @@ function warmTask(taskId: string, agents: ReadonlyArray<WarmAgent>): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.state.supported = new Set();
+  mocks.state.realManifest = false;
+  resetNegotiatedManifests();
   mocks.state.taskTitles = {};
   mocks.state.epicFlags = {};
   mocks.state.chatFlags = {};
@@ -3534,6 +3553,37 @@ describe("<BotActivityPage /> reporting controls that go away under an open surf
     );
   });
 
+  type HeldRequest =
+    | "stop in flight"
+    | "check-in in flight"
+    | "pause in flight";
+  /**
+   * Holds the request and returns once the person is back on the trigger: for
+   * a check-in or pause, when the menu has closed; a sent stop keeps its modal
+   * until the answer, so there is no focus return to wait for.
+   */
+  const reachHeldRequest = async (
+    user: UserEvent,
+    surface: HeldRequest,
+  ): Promise<void> => {
+    if (surface === "stop in flight") {
+      await reachReportingSurface(user, surface);
+      return;
+    }
+    const key = surface === "check-in in flight" ? "runNow" : "setPaused";
+    mocks[key].hold = true;
+    const trigger = within(row("t-every")).getByRole("button", {
+      name: "Reporting actions",
+    });
+    await focusMenuItem(
+      user,
+      surface === "check-in in flight" ? "Check in now" : "Pause reports",
+    );
+    const returned = focusReturns(trigger);
+    await user.keyboard("{Enter}");
+    await returned;
+  };
+
   describe.each([
     "stop in flight",
     "check-in in flight",
@@ -3547,12 +3597,7 @@ describe("<BotActivityPage /> reporting controls that go away under an open surf
           const user = userEvent.setup();
           mocks.state.supported = new Set(REPORT_METHODS);
           const view = render(page([tracking()], true));
-          const trigger = within(row("t-every")).getByRole("button", {
-            name: "Reporting actions",
-          });
-          const returned = focusReturns(trigger);
-          await reachReportingSurface(user, surface);
-          await returned;
+          await reachHeldRequest(user, surface);
           const elsewhere = within(row("t-other")).getByTestId(
             "bot-activity-task-open",
           );
@@ -3686,6 +3731,177 @@ describe("<BotActivityPage /> reporting controls that go away under an open surf
     },
     5_000,
   );
+});
+
+describe("<BotActivityPage /> reporting controls and the real negotiated manifest, with no parent rerender", () => {
+  const offer = (methods: ReadonlyArray<string>): void => {
+    act(() =>
+      recordNegotiatedHostMethods(HOST_ID, ["host.status", ...methods]),
+    );
+  };
+  const ui = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode => (
+    <>
+      <input aria-label="Outside" />
+      <Harness
+        threads={[]}
+        tasks={[...tasks, periodic("t-other", {})]}
+        boundHere
+        notificationSubscriptions={null}
+      />
+    </>
+  );
+  const mountReal = (): RenderResult => {
+    mocks.state.realManifest = true;
+    offer(REPORT_METHODS);
+    return render(ui([periodic("t-every", {})]));
+  };
+  const openButton = (): HTMLElement =>
+    within(row("t-every")).getByTestId("bot-activity-task-open");
+  const trigger = (): HTMLElement =>
+    within(row("t-every")).getByRole("button", { name: "Reporting actions" });
+  const outside = (): HTMLElement => screen.getByLabelText("Outside");
+
+  it("moves focus from a focused trigger to the row open button when every method is lost, and a restore steals nothing", () => {
+    mountReal();
+    trigger().focus();
+
+    offer([]);
+
+    expect(document.activeElement).toBe(openButton());
+    offer(REPORT_METHODS);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(openButton());
+    expect(mocks.actions).toHaveLength(0);
+  });
+
+  it("closes an open menu with an item focused, lands on the row open button, and a restore does not reopen it", async () => {
+    const user = userEvent.setup();
+    mountReal();
+    await focusMenuItem(user, "Check in now");
+
+    offer([]);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(openButton());
+    offer(REPORT_METHODS);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(openButton());
+    expect(mocks.actions).toHaveLength(0);
+  });
+
+  it("keeps a sent stop's modal until it settles, then lands on the row open button, and a restore does not revive it", async () => {
+    const user = userEvent.setup();
+    mountReal();
+    await reachReportingSurface(user, "stop in flight");
+
+    offer([]);
+    expect(screen.getByText("End reporting?")).toBeTruthy();
+    act(() => mocks.stop.settle?.("success"));
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(document.activeElement).toBe(openButton());
+    offer(REPORT_METHODS);
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(document.activeElement).toBe(openButton());
+    expect(mocks.actions).toHaveLength(1);
+  });
+
+  it("closes an unsent confirmation when only stop is lost, sends nothing, and does not revive it when stop returns", async () => {
+    const user = userEvent.setup();
+    mountReal();
+    await reachReportingSurface(user, "confirmation");
+
+    offer(["bot.task.runNow", "bot.task.setPaused"]);
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(mocks.actions).toHaveLength(0);
+    offer(REPORT_METHODS);
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(mocks.actions).toHaveLength(0);
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("keeps a sent stop pending when only stop is lost, closes it when it settles, and does not revive it when stop returns", async () => {
+    const user = userEvent.setup();
+    mountReal();
+    await reachReportingSurface(user, "stop in flight");
+
+    offer(["bot.task.runNow", "bot.task.setPaused"]);
+    expect(screen.getByText("End reporting?")).toBeTruthy();
+    act(() => mocks.stop.settle?.("success"));
+
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    offer(REPORT_METHODS);
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(mocks.actions).toHaveLength(1);
+  });
+
+  it("leaves focus on the body when the person has left the controls to a field and out of it, and the controls then go away by a lost manifest", () => {
+    mountReal();
+    trigger().focus();
+    outside().focus();
+    outside().blur();
+    expect(document.activeElement).toBe(document.body);
+
+    offer([]);
+
+    expect(document.activeElement).toBe(document.body);
+    offer(REPORT_METHODS);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves focus on the body in the same case when the row leaves the list", () => {
+    const view = mountReal();
+    trigger().focus();
+    outside().focus();
+    outside().blur();
+    expect(document.activeElement).toBe(document.body);
+
+    view.rerender(ui([]));
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves focus in the outside field when it holds the focus as the manifest is lost", () => {
+    mountReal();
+    trigger().focus();
+    outside().focus();
+
+    offer([]);
+
+    expect(document.activeElement).toBe(outside());
+  });
+
+  it("moves focus from a focused agent that disappears to the row open button while the row and its trigger remain", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    const agents: ReadonlyArray<WarmAgent> = [
+      { id: "a-one", parentId: null, title: "First", archivedAt: null },
+      { id: "a-two", parentId: null, title: "Second", archivedAt: null },
+    ];
+    warmTask("t-every", agents);
+    const view = render(ui([periodic("t-every", {})]));
+    await user.click(
+      within(row("t-every")).getByTestId("bot-activity-task-chevron"),
+    );
+    const agent = row("t-every").querySelector('[data-agent-id="a-one"]');
+    const control =
+      agent instanceof HTMLButtonElement
+        ? agent
+        : agent?.querySelector("button");
+    if (!(control instanceof HTMLButtonElement))
+      throw new Error("the first agent has no button");
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    act(() => warmTask("t-every", agents.slice(1)));
+    view.rerender(ui([periodic("t-every", {})]));
+
+    expect(control.isConnected).toBe(false);
+    expect(trigger().isConnected).toBe(true);
+    expect(document.activeElement).toBe(openButton());
+  });
 });
 
 describe("<BotActivityPage /> ending reporting from the keyboard", () => {

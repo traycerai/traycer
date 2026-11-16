@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { EllipsisVertical } from "lucide-react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -27,6 +27,7 @@ export function BotTaskControls(props: {
   readonly task: BotTaskEntry;
   readonly boundHere: boolean;
   readonly nameOf: (userId: string) => string;
+  readonly onReportingRemoved: () => void;
 }): ReactNode {
   const { task, boundHere } = props;
   const ended = task.state === "ended" && task.endedReason === "by-bot";
@@ -43,6 +44,7 @@ function TaskActionMenu(props: {
   readonly hostId: string;
   readonly task: BotTaskEntry;
   readonly nameOf: (userId: string) => string;
+  readonly onReportingRemoved: () => void;
 }): ReactNode {
   const { botId, hostId, task, nameOf } = props;
   const ended = task.state === "ended" && task.endedReason === "by-bot";
@@ -56,7 +58,10 @@ function TaskActionMenu(props: {
   const stop = useBotTaskStopMutation(client);
   const supported = canRun || canPause || canStop;
   const { confirmOpen, setConfirmOpen, menuOpen, setMenuOpen, visible } =
-    useReportingSurfaceState(ended, supported, stop.isPending);
+    useReportingSurfaceState(ended, supported, canStop, stop.isPending);
+  useLayoutEffect(() => {
+    props.onReportingRemoved();
+  });
   if (!visible) return null;
   const pending = runNow.isPending || setPaused.isPending;
   return (
@@ -161,6 +166,7 @@ function TaskActionMenu(props: {
 function useReportingSurfaceState(
   ended: boolean,
   supported: boolean,
+  canStop: boolean,
   stopPending: boolean,
 ): {
   confirmOpen: boolean;
@@ -176,8 +182,7 @@ function useReportingSurfaceState(
     setPreviousEnded(ended);
     if (ended && menuOpen) setMenuOpen(false);
   }
-  if ((ended || !supported) && confirmOpen && !stopPending)
-    setConfirmOpen(false);
+  if ((ended || !canStop) && confirmOpen && !stopPending) setConfirmOpen(false);
   if (!ended && !supported && menuOpen) setMenuOpen(false);
   return {
     confirmOpen,

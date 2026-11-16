@@ -1,6 +1,7 @@
 import {
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -85,6 +86,12 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 
+function reportingFocusSurface(target: HTMLElement): "menu" | "dialog" | null {
+  if (target.closest('[role="menu"]')) return "menu";
+  if (target.closest('[role="dialog"]')) return "dialog";
+  return null;
+}
+
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
 const NO_FOCUS = {
   focusedAt: undefined,
@@ -118,17 +125,30 @@ export function BotActivityPage(props: {
 }): ReactNode {
   const { botId, hostId, boundHere, active, resolveMember } = props;
   const activityRef = useRef<HTMLElement>(null);
-  const lastTaskFocus = useRef<{ taskId: string; target: HTMLElement } | null>(
-    null,
-  );
+  const lastTaskFocus = useRef<{
+    taskId: string;
+    target: HTMLElement;
+    reportingSurface: "menu" | "dialog" | null;
+  } | null>(null);
   const rememberTaskFocus = useCallback(
     (taskId: string, target: EventTarget): void => {
       if (target instanceof HTMLElement)
-        lastTaskFocus.current = { taskId, target };
+        lastTaskFocus.current = {
+          taskId,
+          target,
+          reportingSurface: reportingFocusSurface(target),
+        };
     },
     [],
   );
-  useLayoutEffect(() => {
+  useEffect(() => {
+    const clearFocusOwner = (): void => {
+      lastTaskFocus.current = null;
+    };
+    document.addEventListener("focusin", clearFocusOwner, true);
+    return () => document.removeEventListener("focusin", clearFocusOwner, true);
+  }, []);
+  const restoreTaskFocus = useCallback((): void => {
     const previous = lastTaskFocus.current;
     const activity = activityRef.current;
     if (previous === null || activity === null || previous.target.isConnected)
@@ -137,18 +157,24 @@ export function BotActivityPage(props: {
     const row = Array.from(
       activity.querySelectorAll<HTMLElement>("[data-task-id]"),
     ).find((element) => element.dataset.taskId === previous.taskId);
-    // An existing reporting trigger is Radix's own close-focus target.
-    if (
-      row?.querySelector('[aria-label="Reporting actions"]') !== null &&
-      row !== undefined
-    )
-      return;
+    const reportingTrigger =
+      previous.reportingSurface !== null
+        ? row?.querySelector<HTMLButtonElement>(
+            '[aria-label="Reporting actions"]',
+          )
+        : null;
+    if (previous.reportingSurface === "menu" && reportingTrigger) return;
     const target =
+      reportingTrigger ??
       row?.querySelector<HTMLButtonElement>(
         '[data-testid="bot-activity-task-open"]',
-      ) ?? activity;
+      ) ??
+      activity;
     lastTaskFocus.current = null;
     target.focus();
+  }, []);
+  useLayoutEffect(() => {
+    restoreTaskFocus();
   });
   const viewer = useAuthStore((s) => s.profile);
   const nameOf = useCallback(
@@ -229,6 +255,7 @@ export function BotActivityPage(props: {
                 nameOf={nameOf}
                 entry={entry}
                 onTaskFocus={rememberTaskFocus}
+                onReportingRemoved={restoreTaskFocus}
                 indicator={active.indicatorOf(entry.task.taskId)}
                 title={
                   contexts.tasksById.get(entry.task.taskId)?.epic?.light
@@ -467,6 +494,7 @@ type ActiveTaskRowProps = {
   readonly nameOf: (userId: string) => string;
   readonly entry: BotActiveTask;
   readonly onTaskFocus: (taskId: string, target: EventTarget) => void;
+  readonly onReportingRemoved: () => void;
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
@@ -607,6 +635,7 @@ function ActiveTaskRowBody(
           task={task}
           boundHere={boundHere}
           nameOf={nameOf}
+          onReportingRemoved={props.onReportingRemoved}
         />
       </div>
       {expanded && agents !== null ? (
