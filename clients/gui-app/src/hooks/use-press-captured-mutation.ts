@@ -89,10 +89,10 @@ export function usePressCapturedMutation<
       observer.reset();
       observer.setOptions({
         ...options,
-        mutationFn: (request, context) =>
-          capture.kind === "failed"
-            ? Promise.reject<TData>(capture.error)
-            : mutationFn(request, capture.captured, context),
+        mutationFn: async (request, context) => {
+          if (capture.kind === "failed") throw capture.error;
+          return mutationFn(request, capture.captured, context);
+        },
       });
       return observer.mutate(variables, perCall);
     });
