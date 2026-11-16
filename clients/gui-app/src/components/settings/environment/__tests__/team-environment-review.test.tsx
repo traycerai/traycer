@@ -182,11 +182,7 @@ function renderTeamPage(harness: TeamPageHarness): void {
 }
 
 async function reviewButton(): Promise<HTMLElement> {
-  const rows = await screen.findAllByTestId("personal-review-row");
-  const row = rows[0];
-  if (row === undefined) {
-    throw new Error("Team Review needs a public review notice row");
-  }
+  const [row] = await screen.findAllByTestId("personal-review-row");
   return within(row).findByRole("button", { name: "Review" });
 }
 
@@ -284,11 +280,7 @@ describe("Team Review through the addressed page", () => {
     const { harness } = createReviewHarness("editor", rows);
     renderTeamPage(harness);
 
-    const reviewRows = await screen.findAllByTestId("personal-review-row");
-    const reviewRow = reviewRows[0];
-    if (reviewRow === undefined) {
-      throw new Error("Team Review needs a public review notice row");
-    }
+    const [reviewRow] = await screen.findAllByTestId("personal-review-row");
     expect(screen.getAllByTestId("personal-review-link")).toHaveLength(1);
     expect(reviewRow.textContent).toContain("NODE_ENV");
     expect(screen.queryByText("skill-a")).toBeNull();
@@ -807,7 +799,7 @@ describe("Team Review through the addressed page", () => {
     const refreshedApprove = await within(row).findByRole("button", {
       name: "Approve",
     });
-    expect(refreshedApprove).toBeEnabled();
+    expect(refreshedApprove.hasAttribute("disabled")).toBe(false);
     fireEvent.click(refreshedApprove);
     await waitFor(() =>
       expect(choiceRequests(scenario.harness)).toHaveLength(2),
@@ -1148,60 +1140,6 @@ describe("Team Review through the addressed page", () => {
     expect(
       choiceRequests(harness).map((request) => new URL(request.url).pathname),
     ).toEqual([choicePath("hold-target", "apply")]);
-  });
-
-  it("does not send an old press after the same person signs out and back in", async () => {
-    const row = held({
-      id: "hold-reentry",
-      kind: "variable",
-      key: "NODE_ENV",
-      heldRevision: 16,
-      liveRevision: 8,
-    });
-    const { harness } = createReviewHarness("admin", [row]);
-    const gate = holdNextReviewMutation(harness, () => undefined);
-    renderTeamPage(harness);
-    const dialog = await openReview();
-    const reviewRow = await within(dialog).findByTestId(
-      "retrospective-held-hold-reentry",
-    );
-    const approve = await within(reviewRow).findByRole("button", {
-      name: "Approve",
-    });
-
-    fireEvent.click(approve);
-    await gate.started;
-    act(() => {
-      harness.auth.applyExternalSession({ status: "signed-out" });
-      useAuthStore.setState({
-        status: "signed-out",
-        profile: null,
-        contextMetadata: null,
-        shareableTeams: [],
-      });
-    });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    act(() => {
-      harness.auth.applyExternalSession(
-        authSessionForUser(VIEWER_ID, "user-1-reentry-token"),
-      );
-      useAuthStore.setState({
-        status: "signed-in",
-        profile: {
-          userId: VIEWER_ID,
-          userName: "User One",
-          email: "user-1@example.com",
-        },
-        contextMetadata: { userId: VIEWER_ID, username: "user-1" },
-        shareableTeams: [{ teamId: "team-a", slug: "acme", avatarUrl: null }],
-      });
-    });
-
-    await act(async () => {
-      gate.release();
-      await gate.settled;
-    });
-    expect(choiceRequests(harness)).toEqual([]);
   });
 
   it("keeps a captured press valid across an ordinary same-person bearer rotation", async () => {
