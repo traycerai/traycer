@@ -5208,6 +5208,45 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("keeps a rejected mint diagnostic at debug level and sends no credential frame", async () => {
+    const diagnostic =
+      "shared-mint-marker path=/private/test/credentials body=distinctive";
+    const cause = new Error(diagnostic);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    let closeSession: (() => void) | null = null;
+    try {
+      const mint = vi.fn<HostCredentialMintFlow>().mockRejectedValueOnce(cause);
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClient({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      closeSession = () => session.close();
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "missing");
+      await flush();
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      expect(allProvisionFrames(sockets)).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("host-credential mint flow threw"),
+        { kind: "error" },
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+      const debugCall = debug.mock.calls.find((call) => call[1] === cause);
+      expect(debugCall?.[0]).toContain("host-credential mint flow threw");
+      expect(debugCall?.[1]).toBe(cause);
+    } finally {
+      closeSession?.();
+      warn.mockRestore();
+      debug.mockRestore();
+    }
+  });
+
   it("warns once naming the host and state when the mint is unavailable, and a second ack with the same state does not ask again", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
@@ -6177,38 +6216,62 @@ describe("WsStreamClient host credential provisioning", () => {
       expect(mint).not.toHaveBeenCalled();
       session.close();
     });
-    it("does not stop the mint flow from running when the observer throws", async () => {
-      const outcome = provisioned({
-        token: "host-access-jws-throw",
-        refreshToken: "refresh-jwe-throw",
-      });
-      const mint = vi.fn(async () => outcome);
-      const { factory, sockets } = makeFactory();
-      const client = makeProvisioningClientWithObserver({
-        factory,
-        mint,
-        endpoint: () => HOST_A,
-        authToken: undefined,
-        onState: () => {
-          throw new Error("observer boom");
-        },
-      });
-      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-      await flush();
-      completeProvisionHandshake(sockets[0].socket, "missing");
-      await flush();
+    it("keeps observer diagnostics at debug level and continues the mint flow", async () => {
+      const diagnostic =
+        "shared-observer-marker path=/private/test/credentials body=distinctive";
+      const cause = new Error(diagnostic);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+      let closeSession: (() => void) | null = null;
+      try {
+        const outcome = provisioned({
+          token: "host-access-jws-throw",
+          refreshToken: "refresh-jwe-throw",
+        });
+        const mint = vi.fn(async () => outcome);
+        const { factory, sockets } = makeFactory();
+        const client = makeProvisioningClientWithObserver({
+          factory,
+          mint,
+          endpoint: () => HOST_A,
+          authToken: undefined,
+          onState: () => {
+            throw cause;
+          },
+        });
+        const session = client.subscribe("epic.subscribe", {
+          epicId: "epic-1",
+        });
+        closeSession = () => session.close();
+        await flush();
+        completeProvisionHandshake(sockets[0].socket, "missing");
+        await flush();
 
-      expect(mint).toHaveBeenCalledTimes(1);
-      const frames = provisionFrames(sockets[0].socket);
-      expect(frames).toHaveLength(1);
-      expect(frames[0]).toEqual({
-        kind: "hostCredentialProvision",
-        token: outcome.token,
-        refreshToken: outcome.refreshToken,
-        familyId: outcome.familyId,
-        provisionedAt: outcome.provisionedAt,
-      });
-      session.close();
+        expect(mint).toHaveBeenCalledTimes(1);
+        const frames = provisionFrames(sockets[0].socket);
+        expect(frames).toHaveLength(1);
+        expect(frames[0]).toEqual({
+          kind: "hostCredentialProvision",
+          token: outcome.token,
+          refreshToken: outcome.refreshToken,
+          familyId: outcome.familyId,
+          provisionedAt: outcome.provisionedAt,
+        });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("host-credential state observer threw"),
+          { kind: "error" },
+        );
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+        const debugCall = debug.mock.calls.find((call) => call[1] === cause);
+        expect(debugCall?.[0]).toContain(
+          "host-credential state observer threw",
+        );
+        expect(debugCall?.[1]).toBe(cause);
+      } finally {
+        closeSession?.();
+        warn.mockRestore();
+        debug.mockRestore();
+      }
     });
 
     it("is not called when the ack carries no hostCredentialState, or the capability is absent", async () => {
