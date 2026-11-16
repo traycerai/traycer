@@ -38,7 +38,7 @@ describe("agent inbox", () => {
       after: null,
     });
 
-    const result = await command();
+    const result = await Reflect.apply(command, null, []);
 
     expect(result).toMatchObject({
       data: { messages: [], nextCursor: null },
