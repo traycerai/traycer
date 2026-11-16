@@ -36,6 +36,11 @@ vi.mock("../use-skill-environment-route", () => ({
     write: () => Promise.resolve(null),
   }),
 }));
+// The person may change the environment the host serves.
+vi.mock("@/hooks/environment/use-served-environment-row", () => ({
+  useMayChangeServedEnvironment: () => true,
+}));
+
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const { GLOBAL_ONLY_NATIVE_SCOPE } =
     await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
@@ -84,11 +89,8 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 vi.mock("@/hooks/providers/use-providers-promote-to-personal-mutation", () => ({
   useProvidersPromoteToPersonal: () => ({
     isPending: false,
-    mutate: (request: { mutation: { scope: string; name: string } }) => {
-      shared.promotions.push({
-        scope: request.mutation.scope,
-        name: request.mutation.name,
-      });
+    mutate: (request: { scope: string; name: string }) => {
+      shared.promotions.push({ scope: request.scope, name: request.name });
     },
   }),
 }));
