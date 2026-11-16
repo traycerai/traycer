@@ -179,6 +179,8 @@ function Body(): ReactNode {
       boundHere
       active={active}
       notificationSubscriptions={null}
+      trunkChatId="trunk-1"
+      onOpenSession={vi.fn()}
       resolveMember={() => null}
       threads={[]}
     />

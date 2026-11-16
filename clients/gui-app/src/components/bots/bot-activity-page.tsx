@@ -9,6 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import type { TaskContextResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import type {
   BotInputNeeded,
   BotNotificationSubscription,
@@ -106,6 +107,8 @@ export function BotActivityPage(props: {
   readonly active: BotActiveTasks;
   readonly roomFresh: boolean;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly trunkChatId: string;
+  readonly onOpenSession: BotSessionOpen;
   /** Names the members who paused or ran something. */
   readonly resolveMember: BotMemberResolver;
   /** The bot's threads, as listed; `null` while the list is not read. */
@@ -222,6 +225,10 @@ export function BotActivityPage(props: {
         </button>
       ) : null}
       <BotActivityDetails
+        roomFresh={props.roomFresh}
+        trunkChatId={props.trunkChatId}
+        threads={props.threads}
+        onOpenSession={props.onOpenSession}
         subscriptions={
           !props.roomFresh && props.notificationSubscriptions?.length === 0
             ? null

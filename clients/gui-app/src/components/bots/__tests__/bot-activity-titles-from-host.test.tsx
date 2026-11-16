@@ -169,6 +169,8 @@ function mountOver(session: StubSession, roomFresh: boolean): void {
         notificationSubscriptions={
           subscription.snapshot.notificationSubscriptions
         }
+        trunkChatId="trunk-1"
+        onOpenSession={vi.fn()}
         resolveMember={() => null}
         threads={[]}
       />

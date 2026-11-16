@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { EllipsisVertical } from "lucide-react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { Button } from "@/components/ui/button";
@@ -65,6 +65,7 @@ function TaskActionMenu(props: {
 }): ReactNode {
   const { botId, hostId, task, nameOf } = props;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const client = useTabHostClient();
   const canRun = useHostMethodSupport(hostId, "bot.task.runNow") === true;
   const canPause = useHostMethodSupport(hostId, "bot.task.setPaused") === true;
@@ -78,6 +79,7 @@ function TaskActionMenu(props: {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
+            ref={triggerRef}
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -149,6 +151,11 @@ function TaskActionMenu(props: {
       <ConfirmDestructiveDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
+        onCloseAutoFocus={(event) => {
+          if (triggerRef.current === null) return;
+          event.preventDefault();
+          triggerRef.current.focus();
+        }}
         title="End reporting?"
         description="You can’t resume reports for this task. The task and its agents can keep working."
         cascadeSummary={null}

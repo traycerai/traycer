@@ -32,7 +32,7 @@ import {
 } from "./bot-tab-surface-mocks";
 import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -48,6 +48,7 @@ import {
   StubSession,
 } from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
+import { postThread } from "./bot-turn-test-support";
 import {
   BOT,
   BOT_ID,
@@ -194,8 +195,18 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
 vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: () => null,
 }));
+// The session view is driven in `bot-session-view.test.tsx`; here, which chat
+// the tab hands it and whether it is a thread's.
 vi.mock("@/components/bots/bot-session-view", () => ({
-  BotSessionView: () => null,
+  BotSessionView: (props: {
+    session: { chatId: string; threadId: string | null };
+  }) => (
+    <div
+      data-testid="stub-session"
+      data-chat-id={props.session.chatId}
+      data-thread-id={props.session.threadId ?? "none"}
+    />
+  ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
   BotThreadsView: () => null,
@@ -269,6 +280,17 @@ async function openActivity(): Promise<{ rerender: () => void }> {
 const pageText = (): string =>
   screen.getByTestId("bot-activity-page").textContent;
 
+/** The cached subscription stays listed, but as the last answer, not as current. */
+function expectLastKnownSubscriptions(): void {
+  const region = screen.getByRole("region", {
+    name: "Notification subscriptions",
+  });
+  expect(region.textContent).toContain("Notifications: status unknown");
+  expect(region.textContent).toContain("All notifications");
+  expect(region.textContent).not.toContain("Watching notifications");
+  expect(pageText()).not.toContain("Subscriptions unavailable");
+}
+
 describe("<BotTabSurface /> Activity over a stream snapshot that is current, held and current again", () => {
   it("says there is no activity, and shows no subscriptions section, only while the empty snapshot is current", async () => {
     mocks.state.snapshot = { ...snapshot(), notificationSubscriptions: [] };
@@ -306,8 +328,7 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
     expect(pageText()).toContain("Status unknown");
     expect(pageText()).not.toContain("No activity yet");
     expect(screen.getByText("Notification subscriptions")).toBeTruthy();
-    expect(screen.getByText("Watching notifications")).toBeTruthy();
-    expect(pageText()).not.toContain("Subscriptions unavailable");
+    expectLastKnownSubscriptions();
   });
 
   it("keeps a cached non-empty snapshot's task as before while the stream is current (control)", async () => {
@@ -320,6 +341,7 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
 
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(screen.getByText("Watching notifications")).toBeTruthy();
+    expect(pageText()).not.toContain("Notifications: status unknown");
   });
 });
 
@@ -391,8 +413,7 @@ describe("<BotTabSurface /> Activity over the real stream hook, driven through o
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).toContain("Status unknown");
     expect(pageText()).not.toContain("No activity yet");
-    expect(screen.getByText("Watching notifications")).toBeTruthy();
-    expect(pageText()).not.toContain("Subscriptions unavailable");
+    expectLastKnownSubscriptions();
   });
 });
 
@@ -471,7 +492,96 @@ describe("<BotTabSurface /> Activity while the serving host is unreachable but t
 
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).not.toContain("No activity yet");
-    expect(screen.getByText("Watching notifications")).toBeTruthy();
-    expect(pageText()).not.toContain("Subscriptions unavailable");
+    expectLastKnownSubscriptions();
+  });
+});
+
+describe("<BotTabSurface /> opening a notification subscription's transcript from Activity", () => {
+  const THREAD_SUBSCRIPTION = {
+    target: { kind: "thread", threadId: "thread-1" },
+    attentionOnly: true,
+    everySeconds: null,
+    since: null,
+    digests: null,
+  } as const;
+
+  function seedSubscriptions(): void {
+    mocks.state.threads = [
+      { ...postThread(), threadId: "thread-1", sessionChatId: "chat-thread-1" },
+    ];
+    mocks.state.snapshot = {
+      ...snapshot(),
+      notificationSubscriptions: [SUBSCRIPTION, THREAD_SUBSCRIPTION],
+    };
+  }
+
+  /** Each subscription row's transcript action, trunk first. */
+  function transcriptActions(): ReadonlyArray<HTMLElement> {
+    const region = screen.getByRole("region", {
+      name: "Notification subscriptions",
+    });
+    return within(region)
+      .getAllByRole("listitem")
+      .map((item) =>
+        within(item).getByRole("button", { name: "Open transcript" }),
+      );
+  }
+
+  it("a trunk subscription's action swaps the whole Tabs view for the bot's trunk session, not a thread", async () => {
+    const user = userEvent.setup();
+    seedSubscriptions();
+    await openActivity();
+
+    const trunk = transcriptActions().at(0);
+    if (trunk === undefined) throw new Error("no trunk transcript action");
+    await user.click(trunk);
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-chat-id")).toBe(
+      snapshot().bot.trunkChatId,
+    );
+    expect(session.getAttribute("data-thread-id")).toBe("none");
+    expect(screen.queryByTestId("bot-activity-page")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+  });
+
+  it("a thread subscription's action opens that thread's own session", async () => {
+    const user = userEvent.setup();
+    seedSubscriptions();
+    await openActivity();
+
+    const thread = transcriptActions().at(1);
+    if (thread === undefined) throw new Error("no thread transcript action");
+    await user.click(thread);
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-chat-id")).toBe("chat-thread-1");
+    expect(session.getAttribute("data-thread-id")).toBe("thread-1");
+    expect(screen.queryByTestId("bot-activity-page")).toBeNull();
+  });
+
+  it("while the snapshot is not current the subscriptions read as last known and both transcript actions still open their sessions", async () => {
+    const user = userEvent.setup();
+    seedSubscriptions();
+    stream.current = false;
+    await openActivity();
+
+    expectLastKnownSubscriptions();
+    expect(transcriptActions()).toHaveLength(2);
+    const trunk = transcriptActions().at(0);
+    if (trunk === undefined) throw new Error("no trunk transcript action");
+    await user.click(trunk);
+
+    expect(
+      screen.getByTestId("stub-session").getAttribute("data-chat-id"),
+    ).toBe(snapshot().bot.trunkChatId);
+  });
+
+  it("a current snapshot says Watching notifications for each subscription and never the last-known wording", async () => {
+    seedSubscriptions();
+    await openActivity();
+
+    expect(screen.getAllByText("Watching notifications")).toHaveLength(2);
+    expect(pageText()).not.toContain("Notifications: status unknown");
   });
 });

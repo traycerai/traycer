@@ -454,6 +454,8 @@ export function ActivityTab(): ReactElement {
           boundHere
           active={active}
           notificationSubscriptions={null}
+          trunkChatId="trunk-1"
+          onOpenSession={() => {}}
           resolveMember={UNRESOLVED_BOT_MEMBERS}
           threads={[thread]}
         />

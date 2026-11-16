@@ -9,7 +9,14 @@
  * reachability, the member actions' writes and navigation.
  */
 import { type ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -97,8 +104,18 @@ const mocks = vi.hoisted(() => {
     state,
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
+    /** Each session the page was asked to open. */
+    openSession: vi.fn(),
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
+    /**
+     * The stop call's outcome: answered at once as a success, or, while
+     * `hold` is set, only when the case calls `settle`.
+     */
+    stop: {
+      hold: false,
+      settle: null as ((outcome: "success" | "failure") => void) | null,
+    },
     asked,
     /** `hostId`'s `host.notifications.indicatorState` answer for a request. */
     answerIndicators(
@@ -174,7 +191,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   },
 }));
 // The member actions' writes: each records the method and what it was sent.
-vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
+vi.mock("@/hooks/bots/use-bot-task-action-mutations", async () => {
+  const { useState } = await import("react");
   const recording = (method: string) => () => ({
     mutate: (variables: unknown) => {
       mocks.actions.push({ method, variables });
@@ -185,7 +203,32 @@ vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
   return {
     useBotTaskRunNowMutation: recording("bot.task.runNow"),
     useBotTaskSetPausedMutation: recording("bot.task.setPaused"),
-    useBotTaskStopMutation: recording("bot.task.stop"),
+    useBotTaskStopMutation: () => {
+      const [isPending, setPending] = useState(false);
+      return {
+        mutate: (
+          variables: unknown,
+          options: {
+            onSuccess: (() => void) | undefined;
+            onError: ((error: Error) => void) | undefined;
+          },
+        ) => {
+          mocks.actions.push({ method: "bot.task.stop", variables });
+          if (!mocks.stop.hold) {
+            options.onSuccess?.();
+            return;
+          }
+          setPending(true);
+          mocks.stop.settle = (outcome) => {
+            setPending(false);
+            if (outcome === "success") options.onSuccess?.();
+            else options.onError?.(new Error("refused"));
+          };
+        },
+        isPending,
+        variables: undefined,
+      };
+    },
   };
 });
 // Opening an agent in its task is the chat row's own seam, driven elsewhere.
@@ -404,6 +447,8 @@ function HarnessBody(props: HarnessProps): ReactNode {
       boundHere={props.boundHere}
       active={active}
       notificationSubscriptions={props.notificationSubscriptions}
+      trunkChatId="bot-trunk"
+      onOpenSession={mocks.openSession}
       resolveMember={() => null}
       threads={props.threads}
     />
@@ -553,6 +598,8 @@ beforeEach(() => {
   mocks.state.indicatorRead = "ok";
   mocks.state.feedMode = "local";
   mocks.actions.length = 0;
+  mocks.stop.hold = false;
+  mocks.stop.settle = null;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
   // Every case starts with the fleet vouched, so a quiet seen row can leave.
@@ -2870,7 +2917,163 @@ describe("<BotActivityPage /> watched-task reporting controls", () => {
   });
 });
 
+/**
+ * Opens the End reporting confirmation of `t-every` with the keyboard alone:
+ * the trigger takes focus, Enter opens the menu, arrows reach End reporting…
+ * and Enter picks it. Returns the trigger the focus has to come back to.
+ */
+async function openEndReportingByKeyboard(
+  user: UserEvent,
+): Promise<HTMLElement> {
+  const trigger = within(row("t-every")).getByRole("button", {
+    name: "Reporting actions",
+  });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  const end = await screen.findByRole("menuitem", { name: "End reporting…" });
+  for (let step = 0; step < 6 && document.activeElement !== end; step += 1)
+    await user.keyboard("{ArrowDown}");
+  if (document.activeElement !== end)
+    throw new Error("arrow keys never reached End reporting…");
+  await user.keyboard("{Enter}");
+  await screen.findByText("End reporting?");
+  return trigger;
+}
+
+describe("<BotActivityPage /> ending reporting from the keyboard", () => {
+  it.each([
+    ["Cancel", "{Enter}"],
+    ["Escape", "{Escape}"],
+  ] as const)(
+    "closing the confirmation with %s returns focus to the Reporting actions trigger and makes no call",
+    async (way, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mount([periodic("t-every", {})], { boundHere: true });
+
+      const trigger = await openEndReportingByKeyboard(user);
+      if (way === "Cancel")
+        screen.getByRole("button", { name: "Cancel" }).focus();
+      await user.keyboard(key);
+
+      await waitFor(() =>
+        expect(screen.queryByText("End reporting?")).toBeNull(),
+      );
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+      expect(trigger.isConnected).toBe(true);
+      expect(trigger.getAttribute("aria-label")).toBe("Reporting actions");
+      expect(mocks.actions).toEqual([]);
+    },
+  );
+
+  it("confirming sends one stop, keeps the confirmation open and its button disabled while the answer is held, then closes it on success with focus back on the trigger", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mocks.stop.hold = true;
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    const trigger = await openEndReportingByKeyboard(user);
+    const confirm = screen.getByRole("button", { name: "End reporting" });
+    await user.click(confirm);
+    await user.click(confirm);
+
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.stop",
+        variables: { botId: BOT_ID, taskId: "t-every" },
+      },
+    ]);
+    expect(screen.getByText("End reporting?")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^End reporting/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    act(() => mocks.stop.settle?.("success"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("End reporting?")).toBeNull(),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(mocks.actions).toHaveLength(1);
+  });
+
+  it("a refused stop leaves the confirmation open with End reporting usable again, and a retry sends the stop again", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    mocks.stop.hold = true;
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await openEndReportingByKeyboard(user);
+    await user.click(screen.getByRole("button", { name: "End reporting" }));
+    act(() => mocks.stop.settle?.("failure"));
+
+    expect(screen.getByText("End reporting?")).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "End reporting" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    await user.click(retry);
+
+    expect(mocks.actions.map((action) => action.method)).toEqual([
+      "bot.task.stop",
+      "bot.task.stop",
+    ]);
+  });
+});
+
 describe("<BotActivityPage /> watching notifications", () => {
+  it("opens the trunk's session, and a thread's own, from each subscription's Open transcript action", async () => {
+    const user = userEvent.setup();
+    const thread = postThread();
+    render(
+      <Harness
+        tasks={[]}
+        threads={[thread]}
+        boundHere
+        notificationSubscriptions={[
+          {
+            target: { kind: "trunk" },
+            attentionOnly: false,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+          {
+            target: { kind: "thread", threadId: thread.threadId },
+            attentionOnly: true,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+        ]}
+      />,
+    );
+
+    const actions = screen.getAllByRole("button", { name: "Open transcript" });
+    expect(actions).toHaveLength(2);
+    expect(mocks.openSession).not.toHaveBeenCalled();
+    for (const action of actions) await user.click(action);
+
+    expect(mocks.openSession.mock.calls).toEqual([
+      [
+        {
+          chatId: "bot-trunk",
+          threadId: null,
+          messageId: null,
+          sendPostId: null,
+        },
+      ],
+      [
+        {
+          chatId: thread.sessionChatId,
+          threadId: thread.threadId,
+          messageId: null,
+          sendPostId: null,
+        },
+      ],
+    ]);
+  });
+
   it.each([
     [true, "Needs attention only"],
     [false, "All notifications"],

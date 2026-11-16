@@ -149,6 +149,8 @@ function mountOver(session: StubSession): void {
         notificationSubscriptions={
           subscription.snapshot.notificationSubscriptions
         }
+        trunkChatId="trunk-1"
+        onOpenSession={vi.fn()}
         resolveMember={() => null}
         threads={[]}
       />
@@ -206,6 +208,8 @@ function SwitchableTab(props: {
       notificationSubscriptions={
         subscription.snapshot.notificationSubscriptions
       }
+      trunkChatId="trunk-1"
+      onOpenSession={vi.fn()}
       resolveMember={() => null}
       threads={[]}
     />
