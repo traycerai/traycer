@@ -735,8 +735,9 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
   it("downgrades from @10.3 to @9.2 by dropping the commandcode row alone, archived kept", () => {
     expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 3 });
     expect(agentListDowngradeV10ToV9.to).toEqual({ major: 9, minor: 2 });
-    const downgraded =
-      agentListDowngradeV10ToV9.downgradeResponse(V100_RESPONSE);
+    const downgraded = agentListDowngradeV10ToV9.downgradeResponse(
+      agentListV103.responseSchema.parse(V100_RESPONSE),
+    );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
     expect(downgraded.value.agents.map((row) => row.id)).toEqual([
@@ -907,7 +908,9 @@ describe("agent.list@10.x run tuple and service tier", () => {
     for (const bridge of bridges) {
       const label = `to ${String(bridge.to.major)}`;
       expect(bridge.from, label).toEqual({ major: 10, minor: 3 });
-      const downgraded = bridge.downgradeResponse(LATEST_RESPONSE);
+      const downgraded = bridge.downgradeResponse(
+        agentListV103.responseSchema.parse(LATEST_RESPONSE),
+      );
       expect(downgraded.ok, label).toBe(true);
       if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
       expect(downgraded.value.agents.length, label).toBeGreaterThan(0);

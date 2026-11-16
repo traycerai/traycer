@@ -398,7 +398,9 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     const guide = screen.getByRole("link", {
       name: "Muse Code installation guide",
     });
-    expect(guide.getAttribute("href")).toBe("https://dev.meta.ai/docs/muse-code");
+    expect(guide.getAttribute("href")).toBe(
+      "https://dev.meta.ai/docs/muse-code",
+    );
     fireEvent.click(guide);
     expect(openLink).toHaveBeenCalledWith(
       "https://dev.meta.ai/docs/muse-code",

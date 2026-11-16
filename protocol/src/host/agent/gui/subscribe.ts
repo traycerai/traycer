@@ -35,7 +35,6 @@ import {
   browserAnnotationRecordSchema,
   chatEventSchema,
   chatEventSchemaPreProviderSelection,
-  chatEventSchemaPreMuse,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
   chatRunSettingsSchemaPreUltracode,
@@ -227,7 +226,9 @@ const jsonContentSchema = getRecordSchema(
 const chatSchema = lazySchema(() =>
   chatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
-    activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
+    activeSessionChain: activeSessionChainSchemaPreMuse
+      .nullable()
+      .default(null),
     messages: z.array(messageSchemaPreSlack),
     events: z.array(chatEventSchemaPreProviderSelection).default([]),
   }),
@@ -235,7 +236,9 @@ const chatSchema = lazySchema(() =>
 const openChatSchema = lazySchema(() =>
   openChatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
-    activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
+    activeSessionChain: activeSessionChainSchemaPreMuse
+      .nullable()
+      .default(null),
     messages: z.array(openMessageSchemaPreSlack),
     events: z.array(openChatEventSchemaPreProviderSelection).default([]),
   }),
@@ -243,7 +246,9 @@ const openChatSchema = lazySchema(() =>
 const chatRecordSchema = lazySchema(() =>
   chatRecordSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
-    activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
+    activeSessionChain: activeSessionChainSchemaPreMuse
+      .nullable()
+      .default(null),
   }),
 );
 
@@ -4382,7 +4387,7 @@ const activeProfileUpdateClientFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("activeProfileUpdate"),
     ...ownerActionFrameFields,
-    harnessId: guiHarnessIdSchemaV100,
+    harnessId: guiHarnessIdSchema,
     profileId: z.string().nullable(),
   }),
 );
@@ -8924,6 +8929,9 @@ const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreUltracode.extend({
     chat: chatRecordSchemaLive.extend({
       settings: chatRunSettingsSchemaPreProfileBinding.nullable().default(null),
+      activeSessionChain: activeSessionChainSchemaPreMuse
+        .nullable()
+        .default(null),
     }),
     queue: openChatQueueStateSchemaPreSlack,
     ...fallbackFieldsPreProfileBinding,
@@ -9045,38 +9053,56 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV143 =
     },
   });
 const openChatQueuedPromptItemSchemaPreMuse = lazySchema(() =>
-  openChatQueuedPromptItemSchema.extend({ settings: chatRunSettingsSchemaPreMuse }),
+  openChatQueuedPromptItemSchema.extend({
+    settings: chatRunSettingsSchemaPreMuse,
+  }),
 );
 const openChatQueueStateSchemaPreMuse = lazySchema(() =>
   openChatQueueStateSchema.extend({
-    items: z.array(z.union([
-      chatQueuedManagedCommandItemSchema,
-      chatQueuedPortForwardItemSchema,
-      chatQueuedConversationMessageItemSchema,
-      chatQueuedTaskCheckinItemSchema,
-      chatQueuedTaskOverdueItemSchema,
-      chatQueuedMemoryCurationItemSchema,
-      chatQueuedNotificationDigestItemSchema,
-      openChatQueuedPromptItemSchemaPreMuse,
-    ])),
+    items: z.array(
+      z.union([
+        chatQueuedManagedCommandItemSchema,
+        chatQueuedPortForwardItemSchema,
+        chatQueuedConversationMessageItemSchema,
+        chatQueuedTaskCheckinItemSchema,
+        chatQueuedTaskOverdueItemSchema,
+        chatQueuedMemoryCurationItemSchema,
+        chatQueuedNotificationDigestItemSchema,
+        openChatQueuedPromptItemSchemaPreMuse,
+      ]),
+    ),
   }),
 );
 const fallbackImpendingActionSchemaPreMuse = lazySchema(() =>
-  fallbackImpendingActionSchema.extend({ target: chatRunSettingsSchemaPreMuse.nullable() }),
+  fallbackImpendingActionSchema.extend({
+    target: chatRunSettingsSchemaPreMuse.nullable(),
+  }),
 );
 const fallbackFieldsPreMuse = {
-  pendingFallback: lazySchema(() => pendingFallbackSchema.extend({
-    failedTuple: chatRunSettingsSchemaPreMuse,
-    targetTuple: chatRunSettingsSchemaPreMuse.nullable(),
-    impendingAction: fallbackImpendingActionSchemaPreMuse.nullable(),
-  }).optional()),
-  pendingReturn: lazySchema(() => pendingReturnSchema.extend({
-    preferredTuple: chatRunSettingsSchemaPreMuse,
-    fallbackTuple: chatRunSettingsSchemaPreMuse,
-  }).optional()),
-  lastFailedAttempt: lazySchema(() => lastFailedAttemptSchema.extend({
-    failedTuple: chatRunSettingsSchemaPreMuse.nullable(),
-  }).optional()),
+  pendingFallback: lazySchema(() =>
+    pendingFallbackSchema
+      .extend({
+        failedTuple: chatRunSettingsSchemaPreMuse,
+        targetTuple: chatRunSettingsSchemaPreMuse.nullable(),
+        impendingAction: fallbackImpendingActionSchemaPreMuse.nullable(),
+      })
+      .optional(),
+  ),
+  pendingReturn: lazySchema(() =>
+    pendingReturnSchema
+      .extend({
+        preferredTuple: chatRunSettingsSchemaPreMuse,
+        fallbackTuple: chatRunSettingsSchemaPreMuse,
+      })
+      .optional(),
+  ),
+  lastFailedAttempt: lazySchema(() =>
+    lastFailedAttemptSchema
+      .extend({
+        failedTuple: chatRunSettingsSchemaPreMuse.nullable(),
+      })
+      .optional(),
+  ),
 };
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV144 =
   buildChatSubscribeCommonServerFrameSchemas({
@@ -9131,7 +9157,9 @@ const openChatSubscribeWindowedServerFrameSchemaV144 = lazySchema(() =>
       snapshot: openChatWindowedSnapshotSchema.extend({
         chat: chatRecordSchemaLive.extend({
           settings: chatRunSettingsSchemaPreMuse.nullable().default(null),
-          activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
+          activeSessionChain: activeSessionChainSchemaPreMuse
+            .nullable()
+            .default(null),
         }),
         activeTurn: chatActiveTurnSchemaPreMuse.nullable(),
         queue: openChatQueueStateSchemaPreMuse,
@@ -9142,8 +9170,12 @@ const openChatSubscribeWindowedServerFrameSchemaV144 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({ range: openChatRangeResponseSchemaPreMuse }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend(fallbackFieldsPreMuse),
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
+      range: openChatRangeResponseSchemaPreMuse,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend(
+      fallbackFieldsPreMuse,
+    ),
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9158,8 +9190,14 @@ const openChatSubscribeWindowedServerFrameSchemaV144 = lazySchema(() =>
       fileEditApproval: chatFileEditApprovalStateSchema,
       interviewAnswered: interviewAnsweredServerFrameSchema,
       interviewErrored: interviewErroredServerFrameSchema,
-      extraQueueChangedFields: { sendWouldQueue: lazySchema(() => z.boolean().optional()) },
-      extraActionAckFields: { ...fallbackGraceHoldLeaseFields, ...draftImageAckCauseFields, ...steerRestartAckFields },
+      extraQueueChangedFields: {
+        sendWouldQueue: lazySchema(() => z.boolean().optional()),
+      },
+      extraActionAckFields: {
+        ...fallbackGraceHoldLeaseFields,
+        ...draftImageAckCauseFields,
+        ...steerRestartAckFields,
+      },
     }),
     blockDeltaServerFrameSchema(openRuntimeEventSchemaPreMuse),
   ]),
@@ -9175,7 +9213,9 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
       range: openChatRangeResponseSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({ activeTurn: chatActiveTurnSchema.nullable() }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({
+      activeTurn: chatActiveTurnSchema.nullable(),
+    }),
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9190,7 +9230,9 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeSnapshotServerFrameSchema.extend({
       snapshot: chatSnapshotSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({ activeTurn: chatActiveTurnSchema.nullable() }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({
+      activeTurn: chatActiveTurnSchema.nullable(),
+    }),
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9297,14 +9339,22 @@ const chatSubscribeClientFrameSchemaOptionsV145 = [
   ),
   ...clientFrameOptionsAfterSettingsV140.map((schema) =>
     schema === activeProfileUpdateClientFrameSchema
-      ? activeProfileUpdateClientFrameSchema.extend({ harnessId: guiHarnessIdSchema })
+      ? activeProfileUpdateClientFrameSchema.extend({
+          harnessId: guiHarnessIdSchema,
+        })
       : schema,
   ),
 ] as const;
 const chatSubscribeClientFrameSchemaOptionsV144 = [
-  chatSubscribeClientFrameSchemaOptionsV145[0].extend({ sender: userMessageSenderSchemaPreMuse, settings: chatRunSettingsSchemaPreMuse }),
+  chatSubscribeClientFrameSchemaOptionsV145[0].extend({
+    sender: userMessageSenderSchemaPreMuse,
+    settings: chatRunSettingsSchemaPreMuse,
+  }),
   deleteMessageSuffixClientFrameSchemaLive,
-  chatSubscribeClientFrameSchemaOptionsV145[2].extend({ sender: userMessageSenderSchemaPreMuse, settings: chatRunSettingsSchemaPreMuse }),
+  chatSubscribeClientFrameSchemaOptionsV145[2].extend({
+    sender: userMessageSenderSchemaPreMuse,
+    settings: chatRunSettingsSchemaPreMuse,
+  }),
   stopClientFrameSchemaLive,
   stopBackgroundItemClientFrameSchemaLive,
   stopAllBackgroundItemsClientFrameSchemaLive,
@@ -9312,7 +9362,9 @@ const chatSubscribeClientFrameSchemaOptionsV144 = [
   queueEditClientFrameSchemaLive,
   queueCancelClientFrameSchemaLive,
   queueReorderClientFrameSchemaLive,
-  chatSubscribeClientFrameSchemaOptionsV145[10].extend({ newSettings: chatRunSettingsSchemaPreMuse.nullable().default(null) }),
+  chatSubscribeClientFrameSchemaOptionsV145[10].extend({
+    newSettings: chatRunSettingsSchemaPreMuse.nullable().default(null),
+  }),
   queueAbortSteerV140,
   queueSettingsUpdateV140.extend({ settings: chatRunSettingsSchemaPreMuse }),
   queueSettingsRestampV140.extend({ settings: chatRunSettingsSchemaPreMuse }),
@@ -9459,7 +9511,9 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeRangeServerFrameSchema.extend({
       range: chatRangeResponseSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({ activeTurn: chatActiveTurnSchema.nullable() }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144.extend({
+      activeTurn: chatActiveTurnSchema.nullable(),
+    }),
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,

@@ -275,7 +275,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
-  ChatRunSettingsPreUltracode,
+  ChatRunSettingsLivePreUltracode,
   PermissionMode,
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -445,7 +445,7 @@ export interface ConfirmedManualFallbackAction {
    * announcement metadata carries no assertion about the chat's saved request.
    * `null` for `retry` and `wait_once`, which stay put.
    */
-  readonly target: ChatRunSettingsPreUltracode | null;
+  readonly target: ChatRunSettingsLivePreUltracode | null;
   /**
    * Monotonic per store instance - the consumer's dedupe key.
    *

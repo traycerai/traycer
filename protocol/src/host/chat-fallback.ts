@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   chatRunSettingsSchemaPreUltracode,
+  chatRunSettingsSchemaLivePreUltracode,
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -181,7 +182,7 @@ export type ChatFallbackCancelResponse = z.infer<
  */
 export const chatFallbackChooseTargetRequestSchema = lazySchema(() =>
   fallbackTraversalRefSchema.extend({
-    target: chatRunSettingsSchemaPreUltracode,
+    target: chatRunSettingsSchemaLivePreUltracode,
     leaseToken: z.string().nullable(),
   }),
 );
@@ -254,7 +255,7 @@ export const chatFallbackRunManualRungRequestSchema = lazySchema(() =>
        * neither branches on, and it refuses exactly the same wire values this
        * does - so the fork buys nothing at the boundary and costs at every read.
        */
-      target: chatRunSettingsSchemaPreUltracode.nullable(),
+      target: chatRunSettingsSchemaLivePreUltracode.nullable(),
       /** The failed attempt's identity. Both fields, for the reason above. */
       userMessageId: z.string().trim().min(1),
       turnId: z.string().trim().min(1),
@@ -999,7 +1000,8 @@ export const chatFallbackListTargetsUpgradeV20ToV30 = defineUpgradePath<
   from: chatFallbackListTargetsV20.schemaVersion,
   to: chatFallbackListTargetsV30.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) =>
+    chatFallbackListTargetsResponseSchemaV30.parse(response),
 });
 export const chatFallbackListTargetsDowngradeV30ToV10 = defineDowngradePath<
   typeof chatFallbackListTargetsV30,

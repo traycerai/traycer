@@ -387,6 +387,14 @@ export type ChatRunSettingsPreUltracode = z.infer<
   typeof chatRunSettingsSchemaPreUltracode
 >;
 
+// Current selections use the live roster without requiring Ultracode settings.
+export const chatRunSettingsSchemaLivePreUltracode = lazySchema(() =>
+  chatRunSettingsSchemaPreUltracode.extend({ harnessId: guiHarnessIdSchema }),
+);
+export type ChatRunSettingsLivePreUltracode = z.infer<
+  typeof chatRunSettingsSchemaLivePreUltracode
+>;
+
 /** Released settings tuples before portable account provenance. */
 export const chatRunSettingsSchemaPreProfileBinding = lazySchema(() =>
   z.object({

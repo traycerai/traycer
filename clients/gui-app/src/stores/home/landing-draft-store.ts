@@ -1,6 +1,6 @@
 import {
-  chatRunSettingsSchemaPreUltracode,
-  type ChatRunSettingsPreUltracode,
+  chatRunSettingsSchemaLivePreUltracode,
+  type ChatRunSettingsLivePreUltracode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   pruneRecoveryDraft,
@@ -1148,7 +1148,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           settings:
             draft.settings === null
               ? null
-              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
+              : chatRunSettingsSchemaLivePreUltracode.parse(draft.settings),
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
@@ -1420,7 +1420,7 @@ export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
 }
 
 function copyChatRunSettings(
-  settings: ChatRunSettingsPreUltracode | null,
+  settings: ChatRunSettingsLivePreUltracode | null,
 ): ChatRunSettings | null {
   return settings === null ? null : { ...settings, ultracode: false };
 }

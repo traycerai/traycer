@@ -74,7 +74,7 @@ function providerState(
     providerId,
     enabled: true,
     selected: { kind: "path" },
-    candidates,
+    candidates: [...candidates],
     auth: {
       status: "unauthenticated",
       badgeText: null,
@@ -185,7 +185,9 @@ describe("Muse Code client registration", () => {
     const guide = screen.getByRole("link", {
       name: "Muse Code installation guide",
     });
-    expect(guide.getAttribute("href")).toBe("https://dev.meta.ai/docs/muse-code");
+    expect(guide.getAttribute("href")).toBe(
+      "https://dev.meta.ai/docs/muse-code",
+    );
     fireEvent.click(guide);
     expect(openLink).toHaveBeenCalledWith(
       "https://dev.meta.ai/docs/muse-code",

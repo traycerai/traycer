@@ -367,7 +367,9 @@ export const openUserMessageSchema = lazySchema(() =>
     }),
 );
 export const openUserMessageSchemaPreMuse = lazySchema(() =>
-  openUserMessageSchema.safeExtend({ sessionAnchor: chatSessionAnchorSchemaPreMuse.nullable() }),
+  openUserMessageSchema.safeExtend({
+    sessionAnchor: chatSessionAnchorSchemaPreMuse.nullable(),
+  }),
 );
 export type OpenUserMessage = z.infer<typeof openUserMessageSchema>;
 
@@ -449,7 +451,10 @@ export const openMessageSchema = lazySchema(() =>
   ]),
 );
 export const openMessageSchemaPreMuse = lazySchema(() =>
-  z.discriminatedUnion("role", [openUserMessageSchemaPreMuse, openAssistantMessageSchema]),
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreMuse,
+    openAssistantMessageSchema,
+  ]),
 );
 /** The open row `chat.subscribe@1.37` through `@1.41` ship. */
 export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>

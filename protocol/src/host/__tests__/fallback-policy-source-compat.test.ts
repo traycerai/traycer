@@ -51,12 +51,14 @@ describe("providers.fallbackPolicy.get: the 2.1 source field", () => {
   });
 
   it("the 2.1 -> 1.1 downgrade still answers what the 1.1 line expects", () => {
-    const v21Response = {
+    const v21Response = hostRpcRegistry[
+      "providers.fallbackPolicy.get"
+    ][2].versions[1].contract.responseSchema.parse({
       policy: POLICY,
       storedPolicyUnreadable: false,
       inFlightCount: 0,
       source: "team" as const,
-    };
+    });
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.fallbackPolicy.get"],

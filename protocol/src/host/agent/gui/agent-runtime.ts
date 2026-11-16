@@ -1018,7 +1018,9 @@ const steerSubmittedEventSchemaPreMuse = lazySchema(() =>
   }),
 );
 export const steerSubmittedEventSchema = lazySchema(() =>
-  steerSubmittedEventSchemaPreMuse.extend({ sender: userMessageSenderSchema.nullable().default(null) }),
+  steerSubmittedEventSchemaPreMuse.extend({
+    sender: userMessageSenderSchema.nullable().default(null),
+  }),
 );
 export type SteerSubmittedEvent = z.infer<typeof steerSubmittedEventSchema>;
 
@@ -1259,7 +1261,9 @@ const providerNoticeUpsertEventSchemaPreMuse = lazySchema(() =>
   }),
 );
 export const providerNoticeUpsertEventSchema = lazySchema(() =>
-  providerNoticeUpsertEventSchemaPreMuse.extend({ harnessId: guiHarnessIdSchema }),
+  providerNoticeUpsertEventSchemaPreMuse.extend({
+    harnessId: guiHarnessIdSchema,
+  }),
 );
 export type ProviderNoticeUpsertEvent = z.infer<
   typeof providerNoticeUpsertEventSchema
@@ -2123,11 +2127,25 @@ export type ImageResolutionUpdatedEvent = z.infer<
   typeof imageResolutionUpdatedEventSchema
 >;
 
-const planDeltaEventSchemaPreMuse = lazySchema(() => planDeltaEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }));
-const planUpdatedEventSchemaPreMuse = lazySchema(() => planUpdatedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }));
-const planCompletedEventSchemaPreMuse = lazySchema(() => planCompletedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }));
-const sessionCreatedEventSchemaPreMuse = lazySchema(() => sessionCreatedEventSchema.extend({ session: runtimeSessionInfoSchemaPreMuse }));
-const sessionResumedEventSchemaPreMuse = lazySchema(() => sessionResumedEventSchema.extend({ session: runtimeSessionInfoSchemaPreMuse }));
+const planDeltaEventSchemaPreMuse = lazySchema(() =>
+  planDeltaEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const planUpdatedEventSchemaPreMuse = lazySchema(() =>
+  planUpdatedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const planCompletedEventSchemaPreMuse = lazySchema(() =>
+  planCompletedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const sessionCreatedEventSchemaPreMuse = lazySchema(() =>
+  sessionCreatedEventSchema.extend({
+    session: runtimeSessionInfoSchemaPreMuse,
+  }),
+);
+const sessionResumedEventSchemaPreMuse = lazySchema(() =>
+  sessionResumedEventSchema.extend({
+    session: runtimeSessionInfoSchemaPreMuse,
+  }),
+);
 
 // ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.2`) ────
 //
@@ -2188,13 +2206,19 @@ export const runtimeEventSchema = lazySchema(() =>
     ...runtimeEventSchemaV12.def.options
       .filter((schema) => schema !== artifactOperationEventSchemaPreHtml)
       .map((schema) => {
-        if (schema === userMessageAnchorResolvedEventSchemaPreMuse) return userMessageAnchorResolvedEventSchema;
+        if (schema === userMessageAnchorResolvedEventSchemaPreMuse)
+          return userMessageAnchorResolvedEventSchema;
         if (schema === planDeltaEventSchemaPreMuse) return planDeltaEventSchema;
-        if (schema === planUpdatedEventSchemaPreMuse) return planUpdatedEventSchema;
-        if (schema === planCompletedEventSchemaPreMuse) return planCompletedEventSchema;
-        if (schema === sessionCreatedEventSchemaPreMuse) return sessionCreatedEventSchema;
-        if (schema === sessionResumedEventSchemaPreMuse) return sessionResumedEventSchema;
-        if (schema === steerSubmittedEventSchemaPreMuse) return steerSubmittedEventSchema;
+        if (schema === planUpdatedEventSchemaPreMuse)
+          return planUpdatedEventSchema;
+        if (schema === planCompletedEventSchemaPreMuse)
+          return planCompletedEventSchema;
+        if (schema === sessionCreatedEventSchemaPreMuse)
+          return sessionCreatedEventSchema;
+        if (schema === sessionResumedEventSchemaPreMuse)
+          return sessionResumedEventSchema;
+        if (schema === steerSubmittedEventSchemaPreMuse)
+          return steerSubmittedEventSchema;
         return schema;
       }),
     workflowStartedEventSchema,

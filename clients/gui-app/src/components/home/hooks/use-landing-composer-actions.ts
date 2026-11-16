@@ -4,7 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeedV14,
+  CreateEpicChatSeedV15,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   EpicCreateOwner,
@@ -488,7 +488,7 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeedV14 | null;
+      readonly chat: CreateEpicChatSeedV15 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
       readonly owner: LandingOwnerTeam | null;
       readonly ownerState: "resolve" | "settled";

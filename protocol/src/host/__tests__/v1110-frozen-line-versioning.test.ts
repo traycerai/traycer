@@ -26,6 +26,7 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
 import type { NativeListQuery } from "@traycer/protocol/host/provider-native-schemas";
@@ -248,7 +249,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   );
 
   it("response round-trip 7.0 -> 6.0 -> 7.0 still parses at both ends", () => {
-    const canonicalResponse = providersListResponseSchema.parse({
+    const canonicalResponse = providersListResponseSchemaV1010Preimage.parse({
       providers: [],
       native: null,
     });

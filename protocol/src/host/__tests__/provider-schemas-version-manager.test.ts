@@ -21,6 +21,7 @@ import {
   providersInstallPackVersionResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV60,
   providersRefreshPackDiscoveryRequestSchema,
   providersRefreshPackDiscoveryResponseSchema,
@@ -99,7 +100,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
     // The strip therefore happens on the v7 -> v6 hop, and v6.0 models no
     // managed-install slot at all - so what has to hold is that the whole key
     // set is absent, not merely that its values were blanked.
-    const response = providersListResponseSchema.parse({
+    const response = providersListResponseSchemaV1010Preimage.parse({
       providers: [versionManagerProviderState("claude-code")],
       native: null,
     });
@@ -140,7 +141,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
   it("downgrades to v6..v1, drops huggingface below v7, and strips native below v7", () => {
     // `huggingface` and `native` both ride v7.0; every frozen line below it has
     // an older provider-id enum and no native carrier on the response.
-    const response = providersListResponseSchema.parse({
+    const response = providersListResponseSchemaV1010Preimage.parse({
       providers: [
         versionManagerProviderState("claude-code"),
         versionManagerProviderState("huggingface"),
@@ -245,7 +246,7 @@ describe("providers.list@6.0 -> @7.0 upgrades", () => {
       { status: "downloading" as const, percent: 50, version: "1.2.3" },
       { status: "installed" as const, version: "1.2.3" },
     ]) {
-      const response = providersListResponseSchema.parse({
+      const response = providersListResponseSchemaV1010Preimage.parse({
         providers: [
           {
             ...versionManagerProviderState("codex"),

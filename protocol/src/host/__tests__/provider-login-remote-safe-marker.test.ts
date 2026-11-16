@@ -9,6 +9,7 @@ import {
   providerLoginCapabilitySchemaV70,
   providerMutationCliStateSchemaV21,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
   providersListResponseSchemaV91,
@@ -303,7 +304,7 @@ describe("remoteSafe never reaches a released providers.list line", () => {
         hostRpcRegistry["providers.list"],
         10,
         target,
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV1010Preimage.parse({
           providers: [
             {
               ...providerState("kimi"),

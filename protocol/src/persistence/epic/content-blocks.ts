@@ -65,7 +65,9 @@ const harnessIdSchema = getRecordSchema(
   "latest",
 );
 
-const harnessIdSchemaPreMuse = lazySchema(() => harnessIdSchema.exclude(["muse"]));
+const harnessIdSchemaPreMuse = lazySchema(() =>
+  harnessIdSchema.exclude(["muse"]),
+);
 
 // Frozen pre-Reasonix copy of the canonical harness enum, for the three block
 // members that carry a harness id onto a released `chat.subscribe` line (see
@@ -3225,8 +3227,29 @@ export const contentBlockSchemaV18 = lazySchema(() =>
   ]),
 );
 
-const planSourceSchemaPreMuse = lazySchema(() => planSourceSchema.extend({ harnessId: harnessIdSchemaPreMuse }));
-const planBlockSchemaPreMuse = lazySchema(() => planBlockSchema.extend({ harnessId: harnessIdSchemaPreMuse, source: planSourceSchemaPreMuse }));
-const steerBlockSchemaPreMuse = lazySchema(() => steerBlockSchema.extend({ sender: userMessageSenderSchemaPreMuse.nullable().default(null) }));
-const providerNoticeMetadataSchemaPreMuse = lazySchema(() => providerNoticeMetadataSchema.safeExtend({ harnessId: harnessIdSchemaPreMuse }));
-const textBlockSchemaPreMuse = lazySchema(() => textBlockSchema.extend({ providerNotice: providerNoticeMetadataSchemaPreMuse.nullable().default(null) }));
+const planSourceSchemaPreMuse = lazySchema(() =>
+  planSourceSchema.extend({ harnessId: harnessIdSchemaPreMuse }),
+);
+const planBlockSchemaPreMuse = lazySchema(() =>
+  planBlockSchema.extend({
+    harnessId: harnessIdSchemaPreMuse,
+    source: planSourceSchemaPreMuse,
+  }),
+);
+const steerBlockSchemaPreMuse = lazySchema(() =>
+  steerBlockSchema.extend({
+    sender: userMessageSenderSchemaPreMuse.nullable().default(null),
+  }),
+);
+const providerNoticeMetadataSchemaPreMuse = lazySchema(() =>
+  providerNoticeMetadataSchema.safeExtend({
+    harnessId: harnessIdSchemaPreMuse,
+  }),
+);
+const textBlockSchemaPreMuse = lazySchema(() =>
+  textBlockSchema.extend({
+    providerNotice: providerNoticeMetadataSchemaPreMuse
+      .nullable()
+      .default(null),
+  }),
+);

@@ -994,11 +994,9 @@ export const hostGetRateLimitUsageDowngradeV7ToV5 = defineDowngradePath<
   to: hostGetRateLimitUsageV50.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    const parsed = rateLimitUsageResponseSchemaV50.safeParse(
-      degradedToV151(response),
-    );
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
     return parsed.success
-      ? { ok: true, value: parsed.data }
+      ? hostGetRateLimitUsageDowngradeV6ToV5.downgradeResponse(parsed.data)
       : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
   },
 });
@@ -1010,8 +1008,12 @@ export const hostGetRateLimitUsageDowngradeV7ToV4 = defineDowngradePath<
   from: hostGetRateLimitUsageV70.schemaVersion,
   to: hostGetRateLimitUsageV40.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV40(degradedToV151(response)),
+  downgradeResponse: (response) => {
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
+    return parsed.success
+      ? hostGetRateLimitUsageDowngradeV6ToV4.downgradeResponse(parsed.data)
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
 });
 
 export const hostGetRateLimitUsageDowngradeV7ToV3 = defineDowngradePath<
@@ -1021,8 +1023,12 @@ export const hostGetRateLimitUsageDowngradeV7ToV3 = defineDowngradePath<
   from: hostGetRateLimitUsageV70.schemaVersion,
   to: hostGetRateLimitUsageV30.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
-  downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV30(degradedToV151(response)),
+  downgradeResponse: (response) => {
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
+    return parsed.success
+      ? hostGetRateLimitUsageDowngradeV6ToV3.downgradeResponse(parsed.data)
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
 });
 
 export const hostGetRateLimitUsageDowngradeV7ToV2 = defineDowngradePath<
@@ -1032,8 +1038,12 @@ export const hostGetRateLimitUsageDowngradeV7ToV2 = defineDowngradePath<
   from: hostGetRateLimitUsageV70.schemaVersion,
   to: hostGetRateLimitUsageV21.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
-  downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV21(degradedToV151(response)),
+  downgradeResponse: (response) => {
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
+    return parsed.success
+      ? hostGetRateLimitUsageDowngradeV6ToV2.downgradeResponse(parsed.data)
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
 });
 
 export const hostGetRateLimitUsageDowngradeV7ToV1 = defineDowngradePath<
@@ -1043,8 +1053,12 @@ export const hostGetRateLimitUsageDowngradeV7ToV1 = defineDowngradePath<
   from: hostGetRateLimitUsageV70.schemaVersion,
   to: hostGetRateLimitUsageV12.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
-  downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV12(degradedToV151(response)),
+  downgradeResponse: (response) => {
+    const parsed = rateLimitUsageResponseSchemaV60.safeParse(response);
+    return parsed.success
+      ? hostGetRateLimitUsageDowngradeV6ToV1.downgradeResponse(parsed.data)
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
 });
 
 // Every frozen 5.0 arm is a valid 6.0 arm (the live union is a strict superset
@@ -1070,12 +1084,12 @@ export const hostGetRateLimitUsageUpgradeV50ToV60 = defineUpgradePath<
 function degradedToV151(
   response: RateLimitUsageResponseV60,
 ): RateLimitUsageResponseV60 {
-  return {
+  return rateLimitUsageResponseSchemaV60.parse({
     ...response,
     providerRateLimits: degradeProviderRateLimitsToV151(
       response.providerRateLimits,
     ),
-  };
+  });
 }
 
 export const hostGetRateLimitUsageDowngradeV6ToV5 = defineDowngradePath<

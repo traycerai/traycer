@@ -1,4 +1,4 @@
-import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
+import { chatRunSettingsSchemaLivePreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DraftDocument } from "@traycer/protocol/host";
@@ -448,7 +448,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
                         settings:
                           patch.settings === null
                             ? null
-                            : chatRunSettingsSchemaPreUltracode.parse(
+                            : chatRunSettingsSchemaLivePreUltracode.parse(
                                 patch.settings,
                               ),
                         // Fourth seam of the same class: the caret travels with

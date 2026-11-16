@@ -114,7 +114,9 @@ export const chatSchemaV18 = lazySchema(() =>
     // Pre-`auto`: `chat.subscribe@1.7`/`@1.8` embed this record and both are
     // RELEASED, so an `auto` chat served on either would fail the whole frame.
     settings: chatRunSettingsSchemaPreAuto.nullable().default(null),
-    activeSessionChain: activeSessionChainSchemaPreMuse.nullable().default(null),
+    activeSessionChain: activeSessionChainSchemaPreMuse
+      .nullable()
+      .default(null),
     claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
     messages: z.array(messageSchemaV18),
     events: z.array(chatEventSchemaPreMuse).default([]),

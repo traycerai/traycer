@@ -15,7 +15,7 @@ import type {
   LastFailedAttempt,
   PendingFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatRunSettingsPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatRunSettingsLivePreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   ChatFallbackListTargetsResponse,
   FallbackActionOutcome,
@@ -1248,7 +1248,7 @@ function confirmTarget(
 function listedTarget(
   pick: RoutingPick,
   data: ChatFallbackListTargetsResponse | undefined,
-): ChatRunSettingsPreUltracode | null {
+): ChatRunSettingsLivePreUltracode | null {
   if (data === undefined) return null;
   const { selection } = pick;
   for (const row of data.modelTargets) {

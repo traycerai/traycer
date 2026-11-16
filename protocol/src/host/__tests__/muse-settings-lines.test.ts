@@ -167,10 +167,12 @@ describe("Muse settings lines", () => {
         downgraded.value.modelTargets.map((target) => target.harnessId),
     ).toEqual(["claude"]);
     expect(
-      chatFallbackListTargetsDowngradeV30ToV20.downgradeResponse({
-        ...response,
-        failedTuple: settings,
-      }).ok,
+      chatFallbackListTargetsDowngradeV30ToV20.downgradeResponse(
+        chatFallbackListTargetsV30.responseSchema.parse({
+          ...response,
+          failedTuple: settings,
+        }),
+      ).ok,
     ).toBe(false);
   });
 

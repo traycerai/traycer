@@ -122,7 +122,11 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
       hostRpcRegistry["agent.gui.listHarnesses"],
       10,
       2,
-      { harnesses: [harnessRow("claude", false)] },
+      hostRpcRegistry[
+        "agent.gui.listHarnesses"
+      ][10].versions[1].contract.responseSchema.parse({
+        harnesses: [harnessRow("claude", false)],
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -141,7 +145,11 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
       hostRpcRegistry["agent.gui.listHarnesses"],
       10,
       1,
-      { harnesses: [harnessRow("claude", false)] },
+      hostRpcRegistry[
+        "agent.gui.listHarnesses"
+      ][10].versions[1].contract.responseSchema.parse({
+        harnesses: [harnessRow("claude", false)],
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

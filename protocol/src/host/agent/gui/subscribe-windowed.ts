@@ -883,7 +883,9 @@ export const openChatTranscriptWindowSchema = lazySchema(() =>
 export const openChatTranscriptWindowSchemaPreMuse = lazySchema(() =>
   openChatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchemaPreMuse),
-    rowContext: z.record(z.string(), transcriptRowContextSchemaPreMuse).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .optional(),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -1331,7 +1333,9 @@ export const openChatRangeResponseSchema = lazySchema(() =>
 export const openChatRangeResponseSchemaPreMuse = lazySchema(() =>
   openChatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreMuse),
-    rowContext: z.record(z.string(), transcriptRowContextSchemaPreMuse).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .default({}),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;

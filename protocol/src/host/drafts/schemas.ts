@@ -917,6 +917,10 @@ export const draftsUpsertResponseSchemaV20 = lazySchema(() =>
   draftsUpsertResponseSchema.extend({ draft: draftDocumentSchemaV20 }),
 );
 
+export type DraftsSubscribeServerFrameV12 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV12
+>;
+
 export const draftsSubscribeServerFrameSchemaV12 = lazySchema(() =>
   z
     .discriminatedUnion("kind", [
