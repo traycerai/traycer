@@ -57,6 +57,8 @@ const state = vi.hoisted(() => ({
   refreshing: false,
   /** Hosts whose first census has not landed: no rows, no proven host yet. */
   loadingHostIds: [] as readonly string[],
+  /** Hosts showing cached rows while their first proof is still fetching. */
+  seededHostIds: [] as readonly string[],
   /** Rows the classifier could not prove landed — the route to Review. */
   unproven: false,
   /** The directory has said what the fleet is. */
@@ -129,7 +131,9 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     return {
       hostId,
       rows,
-      isPending: loading,
+      isPending:
+        loading ||
+        (clientHostId !== null && state.seededHostIds.includes(clientHostId)),
       isError: false,
       checkedAt: 1_700_000_000_000,
       canRefresh: true,
@@ -318,6 +322,7 @@ describe("Sweep host chip", () => {
     state.sweepingByHost = {};
     state.refreshing = false;
     state.loadingHostIds = [];
+    state.seededHostIds = [];
     state.unproven = false;
     state.fleetResolved = true;
     state.countByHost = {};
@@ -569,6 +574,16 @@ describe("Sweep host chip", () => {
     expect(screen.getByTestId("sweep-host-chip").textContent).toContain(
       "on Studio",
     );
+  });
+
+  it("lets a person leave cached rows whose first proof is still loading", () => {
+    state.seededHostIds = ["host-a"];
+    renderSweep();
+
+    const popover = openHostPopover();
+    fireEvent.click(within(popover).getByRole("button", { name: /Studio/ }));
+
+    expect(lastCensusHostId()).toBe("host-b");
   });
 
   it("puts the chip out of reach while the census is being re-proved", () => {

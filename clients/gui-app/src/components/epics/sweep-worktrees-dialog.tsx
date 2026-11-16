@@ -446,8 +446,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   // host; this is the other half - a review PARKED from a previous session
   // must not paint over a dialog that has since lost its host, which is a
   // destructive confirmation naming a machine it is no longer pointed at.
-  // A first load has no census to discard yet, so it never locks the chip.
-  const censusReproving = hostId === null ? false : refresh.refreshing;
+  const censusReproving = useCensusReproving({
+    selectionKey,
+    hostId,
+    isPending,
+    isError,
+    refreshing: refresh.refreshing,
+  });
   const reviewable =
     step === "review" && reviewSnapshot !== null && hostId !== null;
   const renderBody = (host: SweepHostChoiceView | null): ReactNode =>
@@ -568,6 +573,38 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Whether a refresh is RE-PROVING a census this session has already seen
+ * settle - the one state the host chip locks for.
+ *
+ * A first load has no proven census to discard, so it never locks the chip,
+ * including one seeded from cached rows: those carry a host id while their
+ * first proof is still fetching, so `hostId` alone cannot tell the two apart.
+ */
+function useCensusReproving(input: {
+  readonly selectionKey: string | null;
+  readonly hostId: string | null;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly refreshing: boolean;
+}): boolean {
+  const [settledSessionKey, setSettledSessionKey] = useState<string | null>(
+    null,
+  );
+  const settled =
+    input.selectionKey !== null && settledSessionKey === input.selectionKey;
+  if (
+    !settled &&
+    input.selectionKey !== null &&
+    input.hostId !== null &&
+    !input.isPending &&
+    !input.isError
+  ) {
+    setSettledSessionKey(input.selectionKey);
+  }
+  return settled && input.refreshing;
 }
 
 /**
