@@ -140,7 +140,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(44);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(45);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame; @1.8 added the `viewers` server frame.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(8);

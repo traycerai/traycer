@@ -85,15 +85,6 @@ export function useCanEditConfiguration(): boolean {
   );
 }
 
-export function useCanAdministerConfiguration(): boolean {
-  const source = useConfigurationSource();
-  return (
-    source.kind === "host" ||
-    (!source.transportReadOnly &&
-      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
-  );
-}
-
 /**
  * Personal answers `owner`; a team answers the role the list names, Admin,
  * Editor or Viewer, and `null` where it names none of them. Read it through

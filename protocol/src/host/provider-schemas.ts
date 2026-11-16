@@ -1092,12 +1092,8 @@ export const providerDisabledBySchema = lazySchema(() =>
 export type ProviderDisabledBy = z.infer<typeof providerDisabledBySchema>;
 
 /**
- * API-key state for a provider. Only providers authenticated by an API key
- * (Cursor, whose `@cursor/sdk` runtime needs `CURSOR_API_KEY`) set
- * `supported: true`; the CLI-login providers leave it false and the GUI hides
- * the key field. The raw key is NEVER returned over RPC - only whether one is
- * resolvable and where it came from (`stored` = saved in Settings, `env` =
- * the user's login-shell `CURSOR_API_KEY`).
+ * Local API-key availability and source. The raw key is never returned over
+ * RPC: `stored` is the saved slot and `env` is the computer's shell.
  */
 export const providerApiKeyStateSchema = lazySchema(() =>
   z.object({
@@ -1658,56 +1654,109 @@ export type ManagedProfileDeliveryRefusal = z.infer<
   typeof managedProfileDeliveryRefusalSchema
 >;
 
-/** Read projection: a future row is one disabled, explained row, never a lost inventory. */
+/**
+ * What a person is told about an account that cannot be used right now, first
+ * published by `providers.list@10.11`: `needs-sign-in` when only a sign-in can
+ * restore it, `waiting` when it can resolve by itself (a delayed renewal or an
+ * outage). A removed account is never a row; the list envelope's
+ * `removedProfiles` carries it.
+ */
+export const providerProfilePersonNoticeSchema = lazySchema(() =>
+  z.enum(["needs-sign-in", "waiting"]),
+);
+export type ProviderProfilePersonNotice = z.infer<
+  typeof providerProfilePersonNoticeSchema
+>;
+
+function unreadableProjectedProfile(input: unknown) {
+  const row = typeof input === "object" && input !== null ? input : {};
+  return buildUnreadableProviderProfile({
+    profileId:
+      "profileId" in row && typeof row.profileId === "string"
+        ? row.profileId
+        : "unreadable",
+    label:
+      "label" in row && typeof row.label === "string"
+        ? row.label
+        : "Unreadable profile",
+    kind: "managed",
+    reason: "Profile row uses an unsupported or invalid shape",
+  });
+}
+
+/**
+ * The profile row `providers.list@10.9` and `@10.10` published, before 10.11
+ * added aliases, the person notice, the Terminal flag and the other names.
+ * Frozen lines read it so none of the 10.11 keys reaches an older reader.
+ */
+const providerProfileProjectionObjectSchemaV1010 = lazySchema(() =>
+  providerProfileSchema.extend({
+    recordVersion: z.literal(1).optional(),
+    credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
+    credentialHome: credentialHomeSchema.optional().catch(undefined),
+    environmentProfileId: z.string().nullable().optional(),
+    deliveryRefusal: managedProfileDeliveryRefusalSchema
+      .nullable()
+      .catch(null)
+      .optional(),
+    presence: z
+      .discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("admitted"),
+          bindingVersion: credentialVersionSchema,
+        }),
+        z.object({
+          kind: z.literal("revoking"),
+          cause: environmentPresenceCauseSchema.nullable().catch(null),
+        }),
+        z.object({ kind: z.literal("no-home") }),
+        z.object({ kind: z.literal("placeholder-only") }),
+      ])
+      .optional()
+      .catch(undefined),
+    readability: z
+      .object({
+        kind: z.enum(["readable", "unreadable"]),
+        reason: z.string().nullable(),
+      })
+      .optional(),
+  }),
+);
+
+/** Frozen 10.10 read projection: a future row is one disabled, explained row. */
+const providerProfileProjectionSchemaV1010 = lazySchema(() =>
+  providerProfileProjectionObjectSchemaV1010.catch((context) =>
+    unreadableProjectedProfile(context.input),
+  ),
+);
+
+/**
+ * Read projection: a future row is one disabled, explained row, never a lost
+ * inventory.
+ *
+ * The four 10.11 keys live here and nowhere else: not on `providerProfileSchema`,
+ * which every provider-state response shares, so the mutation echoes and the
+ * released lines never carry them. Each falls back at its own field, so an
+ * unknown value costs that key, not the row.
+ */
 export const providerProfileProjectionSchema = lazySchema(() =>
-  providerProfileSchema
+  providerProfileProjectionObjectSchemaV1010
     .extend({
-      recordVersion: z.literal(1).optional(),
-      credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
-      credentialHome: credentialHomeSchema.optional().catch(undefined),
-      environmentProfileId: z.string().nullable().optional(),
-      deliveryRefusal: managedProfileDeliveryRefusalSchema
+      // Other ids that resolve to this row (the ids its folded duplicates
+      // had), so a chat, bot or interview pinned to one still finds it.
+      aliases: z.array(z.string().min(1)).optional().catch(undefined),
+      personNotice: providerProfilePersonNoticeSchema
         .nullable()
-        .catch(null)
-        .optional(),
-      presence: z
-        .discriminatedUnion("kind", [
-          z.object({
-            kind: z.literal("admitted"),
-            bindingVersion: credentialVersionSchema,
-          }),
-          z.object({
-            kind: z.literal("revoking"),
-            cause: environmentPresenceCauseSchema.nullable().catch(null),
-          }),
-          z.object({ kind: z.literal("no-home") }),
-          z.object({ kind: z.literal("placeholder-only") }),
-        ])
         .optional()
         .catch(undefined),
-      readability: z
-        .object({
-          kind: z.enum(["readable", "unreadable"]),
-          reason: z.string().nullable(),
-        })
-        .optional(),
+      // Whether this computer's Terminal login is the same account as this
+      // row.
+      terminalOnThisComputer: z.boolean().optional().catch(undefined),
+      // The other names this account had before it became one row; empty once
+      // a person has chosen one (`providers.answerProfileName`).
+      otherNames: z.array(z.string().min(1)).optional().catch(undefined),
     })
-    .catch((context) => {
-      const input = context.input;
-      const row = typeof input === "object" && input !== null ? input : {};
-      return buildUnreadableProviderProfile({
-        profileId:
-          "profileId" in row && typeof row.profileId === "string"
-            ? row.profileId
-            : "unreadable",
-        label:
-          "label" in row && typeof row.label === "string"
-            ? row.label
-            : "Unreadable profile",
-        kind: "managed",
-        reason: "Profile row uses an unsupported or invalid shape",
-      });
-    }),
+    .catch((context) => unreadableProjectedProfile(context.input)),
 );
 export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
 
@@ -1729,6 +1778,31 @@ export type ProvidersSignOutProfileRequest = z.infer<
 >;
 export type ProvidersSignOutProfileResponse = z.infer<
   typeof providersSignOutProfileResponseSchema
+>;
+
+/**
+ * Sets the account's name on every computer and clears its other names (the
+ * row's `otherNames`, `providers.list@10.11`). The name may be the one the
+ * account already uses, which keeps it and clears the others.
+ */
+export const providersAnswerProfileNameRequestSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    // The same bounds as a rename's label.
+    label: z.string().min(1).max(64),
+  }),
+);
+export type ProvidersAnswerProfileNameRequest = z.infer<
+  typeof providersAnswerProfileNameRequestSchema
+>;
+
+/** The name the account uses after the call, so a caller can show it without another read. */
+export const providersAnswerProfileNameResponseSchema = lazySchema(() =>
+  z.object({ label: z.string() }),
+);
+export type ProvidersAnswerProfileNameResponse = z.infer<
+  typeof providersAnswerProfileNameResponseSchema
 >;
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
@@ -2235,13 +2309,9 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.8). Mutation echoes use their
- * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
- * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
- * builds that omit the field when an old-host response is parsed on a new
- * client.
+ * Provider list row through 10.12. Mutation echoes use their own frozen shape.
  */
-export const providerCliStateSchema = lazySchema(() =>
+const providerCliStateSchemaV1012Preimage = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     ...providerCliStateBaseShape,
@@ -2249,6 +2319,14 @@ export const providerCliStateSchema = lazySchema(() =>
     nativeCapabilities: providerNativeCapabilitiesSchema.catch(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     ),
+  }),
+);
+/** List-only record routing; absent means the computer reports legacy key custody. */
+export const providerCliStateSchema = lazySchema(() =>
+  providerCliStateSchemaV1012Preimage.extend({
+    apiKey: providerApiKeyStateSchema.extend({
+      recordEnvironmentId: z.string().min(1).nullable().optional(),
+    }),
   }),
 );
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
@@ -2260,7 +2338,7 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * row derives from this one, so the key reaches no older reader.
  */
 const providerCliStateSchemaV109 = lazySchema(() =>
-  providerCliStateSchema.omit({ hiddenModelProviders: true }),
+  providerCliStateSchemaV1012Preimage.omit({ hiddenModelProviders: true }),
 );
 
 /**
@@ -2722,22 +2800,81 @@ export const providersListResponseSchemaV109Preimage = lazySchema(() =>
     providers: z.array(
       providerCliStateSchemaV109.extend({
         usageReporting: z.boolean().optional(),
-        profiles: z.array(providerProfileProjectionSchema).catch([]),
+        profiles: z.array(providerProfileProjectionSchemaV1010).catch([]),
       }),
     ),
   }),
 );
 
 /**
- * Canonical `providers.list` response. Classic callers receive `native: null`;
- * a native query carries its list/discover result or typed error there.
- * Home facts are additive keys; earlier lines retain their frozen decoders.
+ * Frozen `providers.list@10.10` response: the 10.10 envelope, row and profile
+ * projection, before 10.11 added four keys to the profile projection and
+ * `removedProfiles` to the envelope. The envelope is the hand-copied 10.8 one
+ * and the profile projection is the frozen 10.10 one, so neither 10.11 key
+ * set reaches this line.
  */
-export const providersListResponseSchema = lazySchema(() =>
+export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaV1012Preimage.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchemaV1010).catch([]),
+      }),
+    ),
+  }),
+);
+
+/**
+ * Frozen `providers.list@10.11` response, before 10.12 added `offersSignIns`
+ * to the envelope. It keeps the profile-sync projection and removed ids.
+ */
+export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchemaV1012Preimage.extend({
         // Older hosts omit the key; current hosts report adapter capability.
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
+    // The accounts a person removed, one entry each, first published by
+    // `providers.list@10.11`. A removed account is never a row, so this is the
+    // only place "Was removed" can come from: an id found here, as `profileId`
+    // or among `aliases`, was removed by a person; an id found in no row, no
+    // row's aliases and not here is unknown, not removed. Ids only. On the
+    // envelope for the reason `onHostOnly` is, and `.optional()` for the same
+    // construction-site reason.
+    removedProfiles: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+          aliases: z.array(z.string().min(1)),
+        }),
+      )
+      .optional(),
+  }),
+);
+
+/** Frozen 10.12 envelope and rows, before key-record routing. */
+export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
+  providersListResponseSchemaV1011Preimage.extend({
+    // True only when the computer that answered is in an environment whose
+    // profile-sync switch is on and it offers sign-ins by itself. A reader
+    // treats an absent key as false. First published by `providers.list@10.12`;
+    // optional, like `onHostOnly` and `removedProfiles`, so construction sites
+    // need not emit it and parsing does not insert a default.
+    offersSignIns: z.boolean().optional(),
+  }),
+);
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV1012Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
         usageReporting: z.boolean().optional(),
         profiles: z.array(providerProfileProjectionSchema).catch([]),
       }),
@@ -3776,6 +3913,77 @@ export type ProvidersSetApiKeyResponse = z.infer<
   typeof providersSetApiKeyResponseSchema
 >;
 
+/** Captures the computer's joining and local choice before the client changes the record. */
+export const providersBeginApiKeyChangeRequestSchema = lazySchema(() =>
+  z.strictObject({ providerId: providerIdSchema }),
+);
+export type ProvidersBeginApiKeyChangeRequest = z.infer<
+  typeof providersBeginApiKeyChangeRequestSchema
+>;
+
+/** The token is opaque and single-use; the legacy path has no record change to settle. */
+export const providersBeginApiKeyChangeResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("mode", [
+    z.strictObject({
+      mode: z.literal("legacy"),
+      changeToken: z.null(),
+      environmentId: z.null(),
+    }),
+    z.strictObject({
+      mode: z.literal("record"),
+      changeToken: z.string().min(1),
+      environmentId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProvidersBeginApiKeyChangeResponse = z.infer<
+  typeof providersBeginApiKeyChangeResponseSchema
+>;
+
+const providerApiKeyRecordChangeSchema = lazySchema(() =>
+  z.strictObject({
+    providerId: providerIdSchema,
+    changeToken: z.string().min(1),
+    recordId: z.string().min(1),
+    signInNumber: z.string().regex(/^(0|[1-9][0-9]{0,18})$/),
+    recordRevision: z.string().regex(/^(0|[1-9][0-9]{0,18})$/),
+  }),
+);
+
+/** The client sends the key to the broker itself; only the accepted record's numbers reach the computer. */
+export const providersSettleApiKeyChangeRequestSchema = lazySchema(() =>
+  z.union([
+    providerApiKeyRecordChangeSchema.extend({ action: z.literal("set") }),
+    providerApiKeyRecordChangeSchema.extend({ action: z.literal("clear") }),
+    // A key held only on this computer has no broker record to remove.
+    providerApiKeyRecordChangeSchema.extend({
+      action: z.literal("clear"),
+      recordId: z.null(),
+      signInNumber: z.null(),
+      recordRevision: z.null(),
+    }),
+  ]),
+);
+export type ProvidersSettleApiKeyChangeRequest = z.infer<
+  typeof providersSettleApiKeyChangeRequestSchema
+>;
+
+export const providersSettleApiKeyChangeResponseSchema = lazySchema(() =>
+  providersSetApiKeyResponseSchema.extend({
+    result: z.enum([
+      "installed",
+      "unchanged",
+      "kept-local",
+      "refused",
+      "dropped",
+      "unavailable",
+    ]),
+  }),
+);
+export type ProvidersSettleApiKeyChangeResponse = z.infer<
+  typeof providersSettleApiKeyChangeResponseSchema
+>;
+
 export const providersClearApiKeyRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
@@ -4078,6 +4286,32 @@ export type ProvidersStartLoginRequestV14 = z.infer<
   typeof providersStartLoginRequestSchemaV14
 >;
 
+/** A destination target is never inferred from an ordinary profile id. */
+export const providerLoginTargetSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("environment"),
+      environmentId: z.string().min(1),
+      profileId: z.string().min(1).nullable().default(null),
+    }),
+    z.object({
+      kind: z.literal("leave-to-local"),
+      profileId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProviderLoginTarget = z.infer<typeof providerLoginTargetSchema>;
+
+/** Null preserves ordinary login; invalid targets must never become null. */
+export const providersStartLoginRequestSchemaV15 = lazySchema(() =>
+  providersStartLoginRequestSchemaV14.extend({
+    target: providerLoginTargetSchema.nullable().default(null),
+  }),
+);
+export type ProvidersStartLoginRequestV15 = z.infer<
+  typeof providersStartLoginRequestSchemaV15
+>;
+
 /**
  * `providers.startLogin@1.1` response - echoes the profile this login
  * targeted, so a `createProfile` caller learns the host-minted id without a
@@ -4206,6 +4440,33 @@ export type ProvidersStartLoginResponseV13 = z.infer<
   typeof providersStartLoginResponseSchemaV13
 >;
 
+/** A targeted login refused before any provider child or staging home exists. */
+export const providerLoginTargetRefusalSchema = lazySchema(() =>
+  z.enum([
+    "unsupported-computer",
+    "not-authorized",
+    "target-unavailable",
+    "target-removed",
+    "invalid-leave-profile",
+    "not-available-yet",
+  ]),
+);
+export type ProviderLoginTargetRefusal = z.infer<
+  typeof providerLoginTargetRefusalSchema
+>;
+
+export const providersStartLoginResponseSchemaV15 = lazySchema(() =>
+  providersStartLoginResponseSchemaV13.extend({
+    targetRefusal: providerLoginTargetRefusalSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+export type ProvidersStartLoginResponseV15 = z.infer<
+  typeof providersStartLoginResponseSchemaV15
+>;
+
 /**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
@@ -4227,10 +4488,22 @@ export const providersAwaitLoginRequestSchemaV22 = lazySchema(() =>
     profileId: z.string().nullable().default(null),
   }),
 );
-export const providersAwaitLoginRequestSchema = lazySchema(() =>
+/** Frozen 2.3 and 2.4 request. */
+export const providersAwaitLoginRequestSchemaV23 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginRequestSchemaV22.shape,
     lastSeenReaderCount: z.number().int().nonnegative().nullable().optional(),
+  }),
+);
+/**
+ * 2.5 request. `recordedOperationId` is the `signInRequest.operationId` the
+ * caller has recorded at authn on the person's own session; absent reads as
+ * null. A computer ignores an id that is not this sign-in's own.
+ */
+export const providersAwaitLoginRequestSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginRequestSchemaV23.shape,
+    recordedOperationId: z.uuid().nullable().optional(),
   }),
 );
 export const providersAwaitLoginRequestSchemaV10 = lazySchema(() =>
@@ -4324,11 +4597,89 @@ export type ProviderLoginInstallation = z.infer<
   typeof providerLoginInstallationSchema
 >;
 
-/** A pending account change returns no authenticated state until its readers drain. */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+/** Frozen 2.3 response: installation means waiting for readers, not the list. */
+export const providersAwaitLoginResponseSchemaV23 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginResponseSchemaV22.shape,
     installation: providerLoginInstallationSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+
+/**
+ * Completed sign-in results, distinct from provider refusal and reader waits.
+ * Signed-in ids name destination list rows. A leave-staged id names the exact
+ * folder, which may be an alias in the computed list, not its admission handle.
+ */
+export const providerLoginProfileOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("waiting-for-profile") }),
+    z.object({ kind: z.literal("account-mismatch") }),
+    z.object({ kind: z.literal("account-unproven") }),
+    z.object({
+      kind: z.literal("target-refused"),
+      reason: z.enum([
+        "not-authorized",
+        "target-unavailable",
+        "target-removed",
+        "offer-refused",
+      ]),
+    }),
+    z.object({
+      kind: z.literal("staged-for-leave"),
+      profileId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("signed-in"),
+      profileId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("already-signed-in"),
+      profileId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProviderLoginProfileOutcome = z.infer<
+  typeof providerLoginProfileOutcomeSchema
+>;
+
+/** Frozen 2.4 response. */
+export const providersAwaitLoginResponseSchemaV24 = lazySchema(() =>
+  providersAwaitLoginResponseSchemaV23.extend({
+    profileOutcome: providerLoginProfileOutcomeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+
+/**
+ * What a caller records at authn before the computer uploads a completed
+ * sign-in: `operationId` is the offer's transfer id, minted by the computer.
+ * A computer sends it only on an unfinished answer, never with a final
+ * `profileOutcome`; the schema does not enforce that, and a reader that sees
+ * both takes the outcome as the answer. No email, account id, path or token.
+ */
+export const providerLoginSignInRequestSchema = lazySchema(() =>
+  z.object({
+    operationId: z.uuid(),
+    environmentId: z.string(),
+    sourceHostId: z.string(),
+    sourceSharingGeneration: z.number().int().nonnegative(),
+    harnessId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  }),
+);
+export type ProviderLoginSignInRequest = z.infer<
+  typeof providerLoginSignInRequestSchema
+>;
+
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  providersAwaitLoginResponseSchemaV24.extend({
+    // Absent stays absent and unreadable parses as null, as `profileOutcome`
+    // does; a reader takes either as null (`?? null`).
+    signInRequest: providerLoginSignInRequestSchema
       .nullable()
       .optional()
       .catch(null),
