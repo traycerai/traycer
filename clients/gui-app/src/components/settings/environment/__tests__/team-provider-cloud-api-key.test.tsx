@@ -824,23 +824,31 @@ describe("TeamProviders cloud API keys", () => {
     expect(harness.state.writes).toEqual([]);
   });
 
-  it("fails closed for both Viewer and unknown team roles", async () => {
+  it("keeps the provider key field absent for Viewer and unknown roles after reads settle", async () => {
     const harness = createHarness(teamSource("env-viewer", "viewer"));
     harness.state.keysByEnvironment.set("env-viewer", [
       keyWireRow("env-viewer", "cursor", "live", 1),
     ]);
     const view = await renderPage(harness);
 
+    const expectReadOnlySettlement = async (
+      environmentId: string,
+    ): Promise<void> => {
+      const rail = screen.getByRole("navigation", { name: "Providers" });
+      await waitFor(() => {
+        expect(profileReadsFor(harness, environmentId).length).toBeGreaterThan(
+          0,
+        );
+        expect(
+          within(rail).getByRole("button", { name: /Cursor/ }).textContent,
+        ).toContain("key");
+      });
+      expect(screen.queryByLabelText("API key")).toBeNull();
+      expect(harness.state.writes).toEqual([]);
+    };
+
     await selectProvider("Cursor");
-    let input = await screen.findByLabelText("API key");
-    expect(await screen.findByText("Key set")).toBeTruthy();
-    expect(input.getAttribute("disabled")).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Save" }).getAttribute("disabled"),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Clear" }).getAttribute("disabled"),
-    ).not.toBeNull();
+    await expectReadOnlySettlement("env-viewer");
 
     harness.source.current = teamSource("env-unknown-role", null);
     harness.state.keysByEnvironment.set("env-unknown-role", [
@@ -848,16 +856,7 @@ describe("TeamProviders cloud API keys", () => {
     ]);
     view.rerender(<TeamProviders />);
     await selectProvider("Cursor");
-    input = await screen.findByLabelText("API key");
-    expect(await screen.findByText("Key set")).toBeTruthy();
-    expect(input.getAttribute("disabled")).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Save" }).getAttribute("disabled"),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Clear" }).getAttribute("disabled"),
-    ).not.toBeNull();
-    expect(harness.state.writes).toEqual([]);
+    await expectReadOnlySettlement("env-unknown-role");
     view.unmount();
   });
 
