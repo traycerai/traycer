@@ -1,4 +1,5 @@
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 /**
  * A fork onto a staged sandbox refuses a Traycer model the sandbox's own list
  * leaves out, at Fork, with the sandbox's line. The stage never moves the
@@ -13,6 +14,8 @@ import {
   within,
 } from "@testing-library/react";
 import type { ModelOption } from "@/components/home/data/landing-options";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import type { ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -26,6 +29,15 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const TAB_HOST_ID = "tab-host-id";
+const runnerHost = createFakeRunnerHost({});
+
+function TestProviders(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <RunnerHostProvider runnerHost={runnerHost}>
+      <WithTestQueryClient>{props.children}</WithTestQueryClient>
+    </RunnerHostProvider>
+  );
+}
 
 interface BlockedInput {
   readonly hostId: string | null;
@@ -158,16 +170,25 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 // The attachment before a fork onto a team's host: passed straight through,
 // so every fork here goes on to `epic.createChat` as it did before.
-vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
-  isAttachEnvironmentUnsupported: () => false,
-  toastAttachEnvironmentNeedsOwnHost: () => undefined,
-  useEpicAttachEnvironment: () => ({
-    isPending: false,
-    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
-      options.onSuccess();
-    },
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    isAttachEnvironmentUnsupported: () => false,
+    toastAttachEnvironmentNeedsOwnHost: () => undefined,
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutate: (
+        _input: unknown,
+        options: { readonly onSuccess: () => void },
+      ) => {
+        options.onSuccess();
+      },
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method?: string }) => {
@@ -453,7 +474,7 @@ function renderDialog(initialHostId: string | null): void {
       onOpenChange={() => undefined}
     />
   );
-  const view = render(dialog(false), { wrapper: WithTestQueryClient });
+  const view = render(dialog(false), { wrapper: TestProviders });
   view.rerender(dialog(true));
 }
 

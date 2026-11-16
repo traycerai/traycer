@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { EpicAttachment } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -198,21 +199,33 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 // The attachment before a fork onto a team's host: passed straight through,
 // so every fork here goes on to `epic.createChat` as it did before.
-vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
-  isAttachEnvironmentUnsupported: () => false,
-  toastAttachEnvironmentNeedsOwnHost: dialogMocks.needsOwnHostToast,
-  useEpicAttachEnvironment: () => ({
-    isPending: false,
-    mutate: (
-      input: { readonly epicId: string; readonly teamId: string },
-      options: { readonly onSuccess: () => void },
-    ) => {
-      dialogMocks.attachCalls.push(input);
-      dialogMocks.attachRequests.push({ input, onSuccess: options.onSuccess });
-      if (dialogMocks.attachAnswers) options.onSuccess();
-    },
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    isAttachEnvironmentUnsupported: () => false,
+    toastAttachEnvironmentNeedsOwnHost: dialogMocks.needsOwnHostToast,
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutate: (
+        input: EpicAttachment,
+        options: { readonly onSuccess: () => void },
+      ) => {
+        dialogMocks.attachCalls.push({
+          epicId: input.epicId,
+          teamId: input.teamId,
+        });
+        dialogMocks.attachRequests.push({
+          input,
+          onSuccess: options.onSuccess,
+        });
+        if (dialogMocks.attachAnswers) options.onSuccess();
+      },
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method?: string }) => {
