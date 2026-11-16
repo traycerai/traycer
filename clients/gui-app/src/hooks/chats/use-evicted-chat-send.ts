@@ -182,12 +182,40 @@ export function useEvictedChatSend(input: {
     if (next.length === 0) setReady(false);
   }, []);
 
+  const retireEndedOrigins = useCallback(() => {
+    const waiting = parkedRef.current;
+    const retained = waiting.filter((send) => send.onOriginSignIn());
+    if (retained.length === waiting.length) return;
+    for (const send of waiting) {
+      if (send.onOriginSignIn()) continue;
+      takenRef.current.delete(send);
+      releaseComposerContentImageRoots(imageRootsHolder(send));
+    }
+    replaceParked(retained);
+    if (retained.length === 0) {
+      releaseHoldRef.current?.();
+      releaseHoldRef.current = null;
+      setAskFirst(false);
+    }
+  }, [replaceParked]);
+
+  const hasParked = parked.length > 0;
+  useEffect(() => {
+    if (!hasParked || auth === null) return;
+    const unsubscribe = auth
+      .getRequestContextProvider()
+      .onChange(retireEndedOrigins);
+    retireEndedOrigins();
+    return unsubscribe;
+  }, [auth, hasParked, retireEndedOrigins]);
+
   const refuse = useCallback(() => {
     setAskFirst(true);
   }, []);
 
   const park = useCallback(
     (message: ChatComposerSubmitInput, sender: UserMessageSender): boolean => {
+      retireEndedOrigins();
       if (auth === null || sender.type !== "user") return false;
       const origin = auth.environmentCloud();
       const onOriginSignIn = (): boolean =>
@@ -195,8 +223,6 @@ export function useEvictedChatSend(input: {
         auth.getRequestContextProvider().current()?.identity.userId ===
           sender.userId;
       if (!onOriginSignIn()) return false;
-      if (parkedRef.current.some((heldSend) => !heldSend.onOriginSignIn()))
-        return false;
       const send = parkedSend(message, sender, onOriginSignIn);
       holdComposerContentImageRoots(imageRootsHolder(send), message.content);
       const waiting = parkedRef.current;
@@ -220,6 +246,8 @@ export function useEvictedChatSend(input: {
             setReady(true);
           },
           onError: (error) => {
+            retireEndedOrigins();
+            if (!send.onOriginSignIn()) return;
             const sends = parkedRef.current;
             replaceParked([]);
             // The mutation's own toast says the send failed.
@@ -230,10 +258,20 @@ export function useEvictedChatSend(input: {
       );
       return true;
     },
-    [auth, chatId, epicId, hostId, hydrate, refuse, replaceParked],
+    [
+      auth,
+      chatId,
+      epicId,
+      hostId,
+      hydrate,
+      refuse,
+      replaceParked,
+      retireEndedOrigins,
+    ],
   );
 
   const take = useCallback((): readonly ParkedEvictedSend[] => {
+    retireEndedOrigins();
     // The live session can arm only one folder-consent submit. Keep later
     // messages parked until that send has dispatched or been handed back.
     if (takenRef.current.size > 0) return [];
@@ -241,10 +279,11 @@ export function useEvictedChatSend(input: {
     if (send === undefined || !send.onOriginSignIn()) return [];
     takenRef.current.add(send);
     return [send];
-  }, []);
+  }, [retireEndedOrigins]);
 
   const settle = useCallback(
     (send: ParkedEvictedSend, accepted: boolean): void => {
+      retireEndedOrigins();
       if (!send.onOriginSignIn()) return;
       // Cleanup may have restored it before a consent promise resolved.
       if (!takenRef.current.delete(send)) return;
@@ -252,7 +291,7 @@ export function useEvictedChatSend(input: {
       if (accepted) releaseComposerContentImageRoots(imageRootsHolder(send));
       else failSend(chatId, send);
     },
-    [chatId, replaceParked],
+    [chatId, replaceParked, retireEndedOrigins],
   );
 
   // The hold ends once the witness alone no longer reads the chat at rest.

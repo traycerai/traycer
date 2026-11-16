@@ -21,6 +21,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { isValidElement, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import type {
+  AuthEra,
+  RequestContextListener,
+} from "@traycer-clients/shared/auth/request-context-provider";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
@@ -30,6 +34,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
@@ -84,6 +89,8 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { teamSubscription } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
@@ -119,11 +126,33 @@ const environmentListTestState = vi.hoisted(() => ({
 const originSignInTestState = vi.hoisted(() => ({
   userId: "owner-1",
   generation: 0,
+  listeners: new Set<RequestContextListener>(),
 }));
 
 const hostDirectoryTestState = vi.hoisted(() => ({
   teamSandboxForCurrentChat: false,
 }));
+
+function requestContextFor(userId: string | null) {
+  return userId === null
+    ? null
+    : createRequestContextFixture({
+        identity: { userId, username: userId, providerHandle: null },
+        origin: "renderer",
+        bearerToken: `test-bearer-${userId}`,
+      });
+}
+
+function emitOriginSignInChange(): void {
+  const context = requestContextFor(originSignInTestState.userId);
+  const era: AuthEra = {
+    identity: originSignInTestState.userId,
+    credentialGeneration: originSignInTestState.generation,
+  };
+  for (const listener of [...originSignInTestState.listeners]) {
+    listener(context, era);
+  }
+}
 
 const hydrateBoundary = vi.hoisted(
   (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
@@ -178,8 +207,15 @@ const MOCK_HOST_BINDING = {
     resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
   },
   auth: {
+    revalidateCurrentContext: async () => ({ kind: "valid" as const }),
     getRequestContextProvider: () => ({
-      current: () => ({ identity: { userId: originSignInTestState.userId } }),
+      current: () => requestContextFor(originSignInTestState.userId),
+      onChange: (listener: RequestContextListener) => {
+        originSignInTestState.listeners.add(listener);
+        return () => {
+          originSignInTestState.listeners.delete(listener);
+        };
+      },
     }),
     environmentCloud: () => {
       const generation = originSignInTestState.generation;
@@ -187,15 +223,61 @@ const MOCK_HOST_BINDING = {
         onOriginSignIn: () => generation === originSignInTestState.generation,
       };
     },
+    fetchAuthenticatedUser: async () => {
+      if (!hostDirectoryTestState.teamSandboxForCurrentChat) {
+        throw new Error("No TeamSandbox fixture is active");
+      }
+      const user = createAuthenticatedUserFixture(undefined);
+      return {
+        ...user,
+        user: { ...user.user, id: SAVED_CREATOR_USER_ID },
+        teamSubscriptions: hostDirectoryTestState.teamSandboxForCurrentChat
+          ? [
+              {
+                ...teamSubscription(0),
+                userID: SAVED_CREATOR_USER_ID,
+              },
+            ]
+          : [],
+      };
+    },
+    getTeamEnvironment: async () =>
+      hostDirectoryTestState.teamSandboxForCurrentChat
+        ? { kind: "ok", environmentId: TEAM_ENVIRONMENT_OWNER_ID }
+        : { kind: "not-a-member" },
+    listSandboxes: async () => ({
+      ...(hostDirectoryTestState.teamSandboxForCurrentChat
+        ? {
+            kind: "ok" as const,
+            response: {
+              sandboxes: [
+                sandboxSummaryFixture({
+                  hostId: HOST_ID,
+                  displayName: "Team sandbox",
+                  environmentId: TEAM_ENVIRONMENT_OWNER_ID,
+                  state: "suspended",
+                }),
+              ],
+            },
+          }
+        : {
+            kind: "unavailable" as const,
+            reason: "No TeamSandbox fixture is active",
+          }),
+    }),
   },
 };
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => MOCK_HOST_BINDING,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
+  useAuthService: () =>
+    hostDirectoryTestState.teamSandboxForCurrentChat
+      ? MOCK_HOST_BINDING.auth
+      : {
+          revalidateCurrentContext: () =>
+            Promise.resolve({ kind: "valid" as const }),
+        },
   useHostClient: () => MOCK_HOST_CLIENT,
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
@@ -320,6 +402,16 @@ const PERSONAL_ENVIRONMENT_LIST_RESPONSE = {
   ],
 } satisfies EnvironmentListResponseV11;
 
+const PERSONAL_AND_TEAM_VIEWER_ENVIRONMENT_LIST_RESPONSE = {
+  environments: [
+    ...PERSONAL_ENVIRONMENT_LIST_RESPONSE.environments,
+    {
+      ...TEAM_ENVIRONMENT_LIST_RESPONSE.environments[0],
+      effectiveRole: "viewer",
+    },
+  ],
+} satisfies EnvironmentListResponseV11;
+
 type ChatAccessFixture =
   | {
       readonly role: "owner";
@@ -387,6 +479,13 @@ function draftOf(text: string): JsonContent {
         ],
       },
     ],
+  };
+}
+
+function textOnlyDraftOf(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
   };
 }
 
@@ -855,6 +954,7 @@ beforeEach(() => {
   environmentListTestState.data = TEAM_ENVIRONMENT_LIST_RESPONSE;
   originSignInTestState.userId = SAVED_CREATOR_USER_ID;
   originSignInTestState.generation = 0;
+  originSignInTestState.listeners.clear();
   hostDirectoryTestState.teamSandboxForCurrentChat = false;
   useComposerDraftStore.setState({ drafts: {} });
   useComposerRunSettingsStore.getState().resetForTests();
@@ -974,14 +1074,16 @@ describe("a message sent to a chat the pool serves because its host dropped the 
   );
 
   it("does not use a person-owned V15 fallback row to park on a team host", async () => {
-    environmentListTestState.data = PERSONAL_ENVIRONMENT_LIST_RESPONSE;
+    environmentListTestState.data =
+      PERSONAL_AND_TEAM_VIEWER_ENVIRONMENT_LIST_RESPONSE;
     hostDirectoryTestState.teamSandboxForCurrentChat = true;
     await mountOnThePool(POOL_VIEWER_ACCESS, {
       ownerUserId: SAVED_CREATOR_USER_ID,
       starterUserId: SAVED_CREATOR_USER_ID,
     });
 
-    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByText(/Team sandbox is suspended/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     putInComposer(FIRST_TEXT);
@@ -1025,11 +1127,17 @@ describe("a message sent to a chat the pool serves because its host dropped the 
 
   it("does not take, send, or restore a parked message after its sign-in ends", async () => {
     await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+    const listenersBeforePending = originSignInTestState.listeners.size;
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => {
       expect(pendingRows()).toHaveLength(1);
       expect(hydrates).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(originSignInTestState.listeners.size).toBe(
+        listenersBeforePending + 1,
+      );
     });
 
     originSignInTestState.generation += 1;
@@ -1043,26 +1151,31 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       },
       contextMetadata: { userId: "viewer-2", username: "Viewer" },
     });
-    putInComposer("another account's draft");
+    emitOriginSignInChange();
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(
+          CHAT_ARTIFACT.id,
+          textOnlyDraftOf("another account's draft"),
+          null,
+        );
+    });
 
     await answerHydrate(0);
     await waitFor(() => {
-      expect(streams).toHaveLength(2);
+      expect(pendingRows()).toHaveLength(0);
+      expect(originSignInTestState.listeners.size).toBe(listenersBeforePending);
     });
-    const newAccountPoolStream = streams[1];
-    openStream(
-      newAccountPoolStream,
-      POOL_VIEWER_ACCESS,
-      undefined,
-      TEAM_ENVIRONMENT_OWNER_ID,
-    );
 
-    expect(pendingRows()).toHaveLength(1);
+    expect(rowsWithText(FIRST_TEXT)).toHaveLength(0);
     expect(
       useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
-    ).toEqual(draftOf("another account's draft"));
+    ).toEqual(textOnlyDraftOf("another account's draft"));
+    expect(imageRootHeld()).toBe(false);
     expect(streams.flatMap(sendFramesOf)).toEqual([]);
     expect(hydrates).toHaveLength(1);
+    expect(toast.getToasts()).toHaveLength(0);
   });
 
   it("is drawn as pending, sent once by the host after it answers, and read back as sent", async () => {

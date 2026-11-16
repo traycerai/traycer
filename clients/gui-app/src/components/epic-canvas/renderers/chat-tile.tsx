@@ -2636,9 +2636,16 @@ function useChatTileSessionViewModel(
         ? state.pendingUserMessages
         : [
             ...state.pendingUserMessages,
-            ...parkedEvictedSends.map((send) => send.row),
+            ...parkedEvictedSends
+              .filter(
+                (send) =>
+                  send.onOriginSignIn() &&
+                  send.row.sender.type === "user" &&
+                  send.row.sender.userId === profile?.userId,
+              )
+              .map((send) => send.row),
           ],
-    [parkedEvictedSends, state.pendingUserMessages],
+    [parkedEvictedSends, profile?.userId, state.pendingUserMessages],
   );
   const renderedMessages = useRenderedMessages(
     {
@@ -3612,8 +3619,6 @@ function useChatTileSessionViewModel(
       handle.userId !== profile?.userId
     )
       return;
-    const first = evictedSend.parked.at(0);
-    if (first === undefined || !first.onOriginSignIn()) return;
     if (!canAct) {
       if (state.access?.role !== "viewer") return;
       for (;;) {
