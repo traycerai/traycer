@@ -491,11 +491,11 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
       messenger.calls.map((call) => call.authority.endpoint.hostId),
     ).toEqual([HOST_A.hostId, HOST_B.hostId]);
 
-    await act(async () => resolveA({ profileId: "work", enabled: true }));
+    act(() => resolveA({ profileId: "work", enabled: true }));
     await waitFor(() => expect(pendingA.result.current("work")).toBe(false));
     expect(pendingB.result.current("work")).toBe(true);
 
-    await act(async () => resolveB({ profileId: "work", enabled: true }));
+    act(() => resolveB({ profileId: "work", enabled: true }));
     await waitFor(() => expect(pendingB.result.current("work")).toBe(false));
   });
 });

@@ -8,7 +8,14 @@
  * list are stand-ins.
  */
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   defaultScheduler,
   notifyManager,

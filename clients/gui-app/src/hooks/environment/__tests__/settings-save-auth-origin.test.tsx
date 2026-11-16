@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
@@ -25,7 +26,8 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
-import { HostRuntimeContext, type HostRuntimeBinding } from "@/lib/host";
+import { HostRuntimeContext } from "@/lib/host";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
@@ -106,7 +108,7 @@ const SLACK_APP: SlackAppView = {
 interface AuthSaveHarness {
   readonly auth: AuthService;
   readonly runnerHost: MockRunnerHost;
-  readonly client: ReturnType<typeof buildEnvironmentClient>["client"];
+  readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly authnRequests: EnvironmentTransportRequest[];
   readonly hostWrites: ProvidersSetPackPolicyRequestV11[];
@@ -117,9 +119,7 @@ interface AuthSaveHarness {
 
 const activeHarnesses: AuthSaveHarness[] = [];
 
-function makeHarness(
-  mutationGate: Promise<void> | null = null,
-): AuthSaveHarness {
+function makeHarness(mutationGate: Promise<void> | null): AuthSaveHarness {
   window.localStorage.clear();
   useSettingsSaveMemoryStore.persist.setOptions({
     name: settingsSaveMemoryKey(null),
@@ -154,12 +154,12 @@ function makeHarness(
   Object.defineProperty(runnerHost, "environmentTransport", {
     configurable: true,
     writable: true,
-    value: async (
+    value: (
       request: EnvironmentTransportRequest,
     ): Promise<EnvironmentTransportAnswer> => {
       authnRequests.push(request);
       if (request.url.includes("/hosts?include=binding")) {
-        return {
+        return Promise.resolve({
           status: 200,
           text: JSON.stringify({
             hosts: [
@@ -170,21 +170,21 @@ function makeHarness(
               },
             ],
           }),
-        };
+        });
       }
       if (request.url.includes("/items?kind=")) {
-        return {
+        return Promise.resolve({
           status: 200,
           text: JSON.stringify({ items: [PACK_POLICY_ROW] }),
-        };
+        });
       }
       if (request.url.includes("/review?include=operation")) {
-        return {
+        return Promise.resolve({
           status: 200,
           text: JSON.stringify({ review: { hosts: [], needsYou: [] } }),
-        };
+        });
       }
-      return { status: 200, text: "{}" };
+      return Promise.resolve({ status: 200, text: "{}" });
     },
   });
   const auth = new AuthService({ runnerHost });
@@ -321,7 +321,7 @@ afterEach(() => {
 
 describe("settings save origin through the real AuthService", () => {
   it("sends a signed-out host write on a team-enrolled host without an account follow", async () => {
-    const harness = makeHarness();
+    const harness = makeHarness(null);
     await startAuth(harness);
     const binding = await harness.client.request("environment.host.read", {});
     expect(binding.environment.ownerKind).toBe("organization");
@@ -339,7 +339,7 @@ describe("settings save origin through the real AuthService", () => {
   });
 
   it("keeps a named configuration-row write behind sign-in", async () => {
-    const harness = makeHarness();
+    const harness = makeHarness(null);
     await startAuth(harness);
     const mutations = renderHook(() => useConfigurationItemMutations(), {
       wrapper: harness.wrapper,
@@ -363,7 +363,7 @@ describe("settings save origin through the real AuthService", () => {
   });
 
   it("runs a void Slack disconnect and ends its real install wait", async () => {
-    const harness = makeHarness();
+    const harness = makeHarness(null);
     await startAuth(harness);
     await signIn(harness, "account-token-a");
     const disconnect = vi
@@ -449,7 +449,9 @@ describe("settings save origin through the real AuthService", () => {
       pendingSave = mutation.result.current.mutateAsync(PACK_POLICY);
     });
 
-    await act(async () => harness.auth.signOut());
+    await act(async () => {
+      await harness.auth.signOut();
+    });
     await signIn(harness, "account-token-b");
     expect(harness.auth.getCurrentSessionSnapshot().profile?.userId).toBe(
       signedInUserId,
