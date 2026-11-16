@@ -1772,7 +1772,6 @@ describe("<ProviderReauthBanner />", () => {
         providerId: "claude-code",
         key: "ANTHROPIC_API_KEY",
         value: "sk-ant-123",
-        executableWriteGrant: null,
       },
       expect.anything(),
     );

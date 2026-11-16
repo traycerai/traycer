@@ -6465,11 +6465,7 @@ export const providersSetEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-/**
- * `providers.setEnvOverride@2.2`: the executable-write grant. 2.1
- * is released, so the field opens a minor; a 2.2 request to a 2.x host below
- * it is re-parsed onto that line's non-strict request, which strips the key.
- */
+/** `providers.setEnvOverride@2.2` retains its installed request line. */
 export const providersSetEnvOverrideV22 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 2, minor: 2 } as const,
@@ -6483,22 +6479,18 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 2, minor: 2 },
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
-/**
- * The cross-major downgrade from the head to the strict 1.0 line. The grant
- * is dropped before the parse: a 1.0 host checks none, and its
- * `z.strictObject` request would otherwise refuse the key.
- */
+/** Projects the current provider variable request onto the strict 1.0 line. */
 export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnvOverrideV22,
   typeof providersSetEnvOverrideV10
 >({
   from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: ({ executableWriteGrant: _grant, ...request }) =>
+  downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
       providersSetEnvOverrideRequestSchemaV10,
       request,

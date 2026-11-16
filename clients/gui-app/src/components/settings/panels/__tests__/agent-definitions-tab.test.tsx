@@ -358,7 +358,6 @@ describe("<AgentDefinitionsTab />", () => {
       name: "reviewer.md",
       text: "Review the change, then approve.",
       expectedRevision: 3,
-      executableWriteGrant: null,
     });
 
     // The re-read remounts the editor on what the host now has: the new
@@ -420,7 +419,6 @@ describe("<AgentDefinitionsTab />", () => {
       name: "triage.md",
       text: "Triage the report.",
       expectedRevision: null,
-      executableWriteGrant: null,
     });
     // It lists once the host has it, and the form is empty again.
     await screen.findByRole("heading", { name: "triage.md" });

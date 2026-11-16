@@ -34,11 +34,11 @@ import {
   environmentReviewV12,
 } from "@traycer/protocol/host/environment-contracts";
 import * as env from "@traycer/protocol/host/environment-schemas";
-import { EXECUTABLE_WRITE_GRANT_MAX_LENGTH } from "@traycer/protocol/host/executable-write-grant";
 import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveUpgradeV1ToV2,
   hostNotificationHooksSaveV20,
+  hostNotificationHooksSaveV30,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { providersListResponseSchema } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -65,7 +65,7 @@ import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wi
 
 /**
  * The wire of the environment family: the 28 environment methods, the
- * executable-write grant on every method that reaches an execution sink, the
+ * released request bridges, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
  *
@@ -578,112 +578,7 @@ const releasedSinkCases: readonly ReleasedSinkCase[] = [
   },
 ];
 
-interface NewSinkCase {
-  readonly label: string;
-  readonly requestSchema: z.ZodType;
-  readonly request: Record<string, unknown>;
-}
-
-const newSinkCases: readonly NewSinkCase[] = [
-  {
-    label: "config.env.localOverride.set@1.0",
-    requestSchema:
-      ENVIRONMENT_RPC_METHODS["config.env.localOverride.set"][1].versions[0]
-        .contract.requestSchema,
-    request: {
-      target: { kind: "variable", key: "NODE_OPTIONS" },
-      value: "--inspect",
-    },
-  },
-  {
-    label: "environment.agentDefinitions.put@1.0",
-    requestSchema:
-      ENVIRONMENT_RPC_METHODS["environment.agentDefinitions.put"][1].versions[0]
-        .contract.requestSchema,
-    request: {
-      name: "reviewer.md",
-      text: "# Reviewer",
-      expectedRevision: null,
-    },
-  },
-  {
-    label: "environment.setup.put@1.0",
-    requestSchema:
-      ENVIRONMENT_RPC_METHODS["environment.setup.put"][1].versions[0].contract
-        .requestSchema,
-    request: { os: "linux", text: "echo setup", expectedRevision: 3 },
-  },
-  {
-    label: "environment.undo@1.0",
-    requestSchema:
-      ENVIRONMENT_RPC_METHODS["environment.undo"][1].versions[0].contract
-        .requestSchema,
-    request: { noticeId: "notice-1" },
-  },
-];
-
-const allSinkCases: readonly NewSinkCase[] = [
-  ...releasedSinkCases.map((entry) => ({
-    label: entry.label,
-    requestSchema: entry.latestRequestSchema,
-    request: entry.legacyRequest,
-  })),
-  ...newSinkCases,
-];
-
-describe("every sink-reaching method parses with and without executableWriteGrant", () => {
-  it("covers 13 methods: nine released lines that grew a grant, four new ones", () => {
-    expect(releasedSinkCases).toHaveLength(9);
-    expect(newSinkCases).toHaveLength(4);
-    expect(allSinkCases).toHaveLength(13);
-  });
-
-  describe.each(allSinkCases)("$label latest request", (entry) => {
-    it("accepts a jwt-shaped grant and null, and keeps the grant on the parsed value", () => {
-      const withGrant = entry.requestSchema.safeParse({
-        ...entry.request,
-        executableWriteGrant: JWT_SHAPED_GRANT,
-      });
-      expect(withGrant.success).toBe(true);
-      expect(withGrant.data).toHaveProperty(
-        "executableWriteGrant",
-        JWT_SHAPED_GRANT,
-      );
-      const withNull = entry.requestSchema.safeParse({
-        ...entry.request,
-        executableWriteGrant: null,
-      });
-      expect(withNull.success).toBe(true);
-      expect(withNull.data).toHaveProperty("executableWriteGrant", null);
-    });
-
-    it("rejects a grant longer than 8192 characters, but accepts one of exactly 8192", () => {
-      expect(EXECUTABLE_WRITE_GRANT_MAX_LENGTH).toBe(8192);
-      expect(
-        accepts(entry.requestSchema, {
-          ...entry.request,
-          executableWriteGrant: "a".repeat(8192),
-        }),
-      ).toBe(true);
-      expect(
-        accepts(entry.requestSchema, {
-          ...entry.request,
-          executableWriteGrant: "a".repeat(8193),
-        }),
-      ).toBe(false);
-    });
-
-    it("requires the key: no grant is `null`, never an omitted field", () => {
-      expect(accepts(entry.requestSchema, entry.request)).toBe(false);
-      expect(
-        accepts(entry.requestSchema, {
-          ...entry.request,
-          executableWriteGrant: "",
-        }),
-      ).toBe(false);
-    });
-  });
-
+describe("released request bridges", () => {
   describe.each(releasedSinkCases)(
     "$label against the released line",
     (entry) => {
@@ -696,21 +591,24 @@ describe("every sink-reaching method parses with and without executableWriteGran
         }
       });
 
-      it("registers the upgrade path, which fills executableWriteGrant: null", () => {
+      it("registers the upgrade path and parses the previous request on the destination", () => {
         expect(entry.registeredUpgrade).toBe(entry.upgradePath);
         const upgraded = entry.upgrade(entry.legacyRequest);
-        expect(upgraded).toEqual({
-          ...entry.legacyRequest,
-          executableWriteGrant: null,
-        });
+        const expected =
+          entry.method === "providers.nativeMutate" ||
+          entry.method === "host.notificationHooks.save"
+            ? { ...entry.legacyRequest, executableWriteGrant: null }
+            : entry.legacyRequest;
+        expect(upgraded).toEqual(expected);
         expect(accepts(entry.latestRequestSchema, upgraded)).toBe(true);
       });
 
       it("sends a newer client's request to every older host line WITHOUT the grant, in a shape that line accepts", () => {
-        const params = {
-          ...entry.legacyRequest,
-          executableWriteGrant: JWT_SHAPED_GRANT,
-        };
+        const params =
+          entry.method === "providers.nativeMutate" ||
+          entry.method === "host.notificationHooks.save"
+            ? { ...entry.legacyRequest, executableWriteGrant: JWT_SHAPED_GRANT }
+            : entry.legacyRequest;
         for (const line of entry.hostLines) {
           const prepared = prepareRequestPayload(
             entry.registry,
@@ -731,22 +629,6 @@ describe("every sink-reaching method parses with and without executableWriteGran
             label,
           ).toBe(true);
         }
-      });
-
-      it("leaves the grant intact between peers on the same line", () => {
-        const params = {
-          ...entry.legacyRequest,
-          executableWriteGrant: JWT_SHAPED_GRANT,
-        };
-        const prepared = prepareRequestPayload(
-          entry.registry,
-          entry.clientVersion,
-          entry.clientVersion,
-          params,
-          "r2",
-          entry.method,
-        );
-        expect(prepared.onWirePayload).toEqual(params);
       });
     },
   );
@@ -781,14 +663,14 @@ describe("every sink-reaching method parses with and without executableWriteGran
     ).toBeDefined();
   });
 
-  it("RED PROOF ON A COPY: a hypothetical host.notificationHooks.save@1.1 carrying the 2.0 request throws DOWNGRADE_UNSUPPORTED toward 1.0", () => {
-    // The copy: the 2.0 request schema installed as a 1.1 MINOR inside a
+  it("RED PROOF ON A COPY: a hypothetical host.notificationHooks.save@1.1 carrying the revision-bearing request throws DOWNGRADE_UNSUPPORTED toward 1.0", () => {
+    // The copy: the revision-bearing request installed as a 1.1 MINOR inside a
     // copied method registry. A same-major newer client is re-parsed with the
     // host minor's own schema, and 1.0's request is `.strict()`.
     const hypotheticalV11 = defineRpcContract({
       method: "host.notificationHooks.save",
       schemaVersion: { major: 1, minor: 1 },
-      requestSchema: hostNotificationHooksSaveV20.requestSchema,
+      requestSchema: hostNotificationHooksSaveV30.requestSchema,
       responseSchema: hostNotificationHooksSaveV20.responseSchema,
     });
     const upgradeV10ToV11 = defineUpgradePath<
@@ -797,7 +679,7 @@ describe("every sink-reaching method parses with and without executableWriteGran
     >({
       from: { major: 1, minor: 0 },
       to: { major: 1, minor: 1 },
-      upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+      upgradeRequest: (request) => ({ ...request, configurationRevision: null }),
       upgradeResponse: (response) => response,
     });
     const copiedRegistry = defineVersionedRpcRegistry({
@@ -827,26 +709,26 @@ describe("every sink-reaching method parses with and without executableWriteGran
         action: { type: "command", command: "/bin/echo", args: [] },
       },
     ];
-    for (const executableWriteGrant of [JWT_SHAPED_GRANT, null]) {
+    for (const configurationRevision of ["rev-copy", null]) {
       expectDowngradeUnsupported(
         captureThrown(() =>
           prepareRequestPayload(
             copiedRegistry["host.notificationHooks.save"],
             { major: 1, minor: 1 },
             { major: 1, minor: 0 },
-            { hooks, executableWriteGrant },
+            { hooks, configurationRevision },
             "r-copy",
             "host.notificationHooks.save",
           ),
         ),
       );
     }
-    // The real registry, where the grant rides a MAJOR, saves the same list.
+    // The real registry projects the revision-bearing major onto the strict old line.
     const prepared = prepareRequestPayload(
       hostRpcRegistry["host.notificationHooks.save"],
-      { major: 2, minor: 0 },
+      { major: 3, minor: 0 },
       { major: 1, minor: 0 },
-      { hooks, executableWriteGrant: JWT_SHAPED_GRANT },
+      { hooks, configurationRevision: "rev-copy" },
       "r-real",
       "host.notificationHooks.save",
     );

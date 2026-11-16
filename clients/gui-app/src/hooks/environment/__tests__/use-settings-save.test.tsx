@@ -746,7 +746,6 @@ function setRequest(value: string) {
     providerId: PROVIDER_ID,
     key: "CODEX_API_KEY",
     value,
-    executableWriteGrant: null,
   } as const;
 }
 

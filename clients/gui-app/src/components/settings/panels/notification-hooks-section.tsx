@@ -308,7 +308,6 @@ function HooksEditor(props: {
     props.saveHooks.mutate(
       {
         hooks: [...hooks],
-        executableWriteGrant: null,
         configurationRevision: revision,
       },
       {

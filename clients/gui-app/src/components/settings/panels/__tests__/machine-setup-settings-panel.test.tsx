@@ -297,7 +297,6 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "macos",
       text: "brew bundle --no-lock",
       expectedRevision: 4,
-      executableWriteGrant: null,
     });
     // The re-read remounts the editor on the revision it now has.
     await waitFor(() => {
@@ -342,7 +341,6 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "windows",
       text: "winget install jq",
       expectedRevision: null,
-      executableWriteGrant: null,
     });
   });
 

@@ -186,7 +186,6 @@ function KeepLocalButton(props: {
           .mutateAsync({
             target: props.target,
             value: current,
-            executableWriteGrant: null,
           })
           .then(async (answer) => {
             if (answer.outcome === "needs_grant") {

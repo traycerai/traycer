@@ -53,7 +53,6 @@ function requireDowngradeValue<T>(
 
 const saveRequest = {
   hooks: [HTTP_HOOK],
-  executableWriteGrant: null,
   configurationRevision: "rev-7",
 };
 
@@ -65,7 +64,6 @@ describe("notification hook save account part @4.0", () => {
 
     const requestWithoutRevision = {
       hooks: [HTTP_HOOK],
-      executableWriteGrant: null,
     };
     expect(
       hostNotificationHooksSaveV40.requestSchema.safeParse(

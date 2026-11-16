@@ -496,6 +496,102 @@
       "payload": "response",
       "path": "**.deprecationNotice",
       "reason": "Model-row sunset copy, nullable/.optional() with an in-schema note that absent and null are treated identically downstream (#176). Delivered by cast at same-version; verified safe: consumers normalize `?? null` and render no deprecation badge - exactly 'not deprecated', the pre-feature state."
+    },
+    {
+      "family": "unary",
+      "method": "config.shell.set",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.shell.reset",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.shell.add",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.shell.remove",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.shell.revertArgs",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.env.set",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "config.env.localOverride.set",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "environment.agentDefinitions.put",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "environment.setup.put",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "environment.undo",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "providers.setEnvOverride",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "host.notificationHooks.save",
+      "version": "*",
+      "payload": "request",
+      "path": "**.properties.executableWriteGrant",
+      "reason": "The unused grant field is retired only from current @3/@4 requests; the frozen strict @2 parser and its inert null downgrade carrier remain unchanged in shape. Release packaging stamps minimum client compatibility epoch 3, and admission refuses peers below epoch 3 before any method runs. The host no longer reads the grant and apps no longer mint it; the global support floor is unchanged."
     }
   ]
 }

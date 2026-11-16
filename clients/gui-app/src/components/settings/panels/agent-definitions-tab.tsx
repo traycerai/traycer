@@ -226,7 +226,6 @@ function AgentDefinitionEditor(props: {
         name: definition.name,
         text,
         expectedRevision: definition.revision,
-        executableWriteGrant: null,
       });
     }
   };
@@ -359,7 +358,6 @@ function NewAgentDefinition(props: {
           name: trimmed,
           text,
           expectedRevision: null,
-          executableWriteGrant: null,
         },
         { onSuccess: clear },
       );
