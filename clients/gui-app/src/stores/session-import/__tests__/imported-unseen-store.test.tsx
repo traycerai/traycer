@@ -91,6 +91,41 @@ describe("imported unseen store", () => {
     expect(savedUnseen["epic-0"]).toBe("claude");
   });
 
+  it("retries a failed write on replay and skips writes after it succeeds", async () => {
+    const { useImportedUnseenStore } = await reloadStore({});
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    setItem.mockImplementationOnce((key, value) => {
+      if (key === PERSIST_KEY) {
+        throw new DOMException("Storage is full", "QuotaExceededError");
+      }
+      localStorage.setItem(key, value);
+    });
+
+    expect(() =>
+      useImportedUnseenStore.getState().markImported("epic-x", "claude"),
+    ).toThrow();
+
+    setItem.mockClear();
+    useImportedUnseenStore.getState().markImported("epic-x", "claude");
+
+    expect(
+      setItem.mock.calls.filter(([key]) => key === PERSIST_KEY),
+    ).toHaveLength(1);
+    const persisted = JSON.parse(
+      localStorage.getItem(PERSIST_KEY) ?? "null",
+    ) as {
+      state: { unseen: Record<string, string | null> };
+    };
+    expect(persisted.state.unseen["epic-x"]).toBe("claude");
+
+    setItem.mockClear();
+    useImportedUnseenStore.getState().markImported("epic-x", "claude");
+
+    expect(
+      setItem.mock.calls.filter(([key]) => key === PERSIST_KEY),
+    ).toHaveLength(0);
+  });
+
   it("updates each real dot in the action's act without rerendering the other epic", async () => {
     const { useImportedUnseenStore, ImportedUnseenDot } = await reloadStore({});
     const unseenReference = useImportedUnseenStore.getState().unseen;

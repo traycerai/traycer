@@ -59,30 +59,41 @@ const IMPORTED_UNSEEN_PERSIST_KEY = persistKey(STORE_KEYS.sessionImportUnseen);
 
 export const useImportedUnseenStore = create<ImportedUnseenState>()(
   persist(
-    (set, get) => ({
-      unseen: {},
-      revision: 0,
-      markImported: (epicId, harness) => {
-        const unseen = get().unseen;
-        const known = Object.hasOwn(unseen, epicId);
-        const existing = unseen[epicId];
-        // Already neutral stays neutral, and a second provider landing on a
-        // task the first one marked goes neutral: the dot names a provider only
-        // while that is the whole truth about the task.
-        const next = !known || existing === harness ? harness : null;
-        // A re-subscribe replays every progress frame of the run, and a frame
-        // that changes nothing must not rewrite the whole record.
-        if (known && existing === next) return;
-        unseen[epicId] = next;
+    (set, get) => {
+      // True from a change until its write lands. A write that throws (storage
+      // full) leaves the change in memory but not on disk, so the next mark
+      // writes even if it changes nothing.
+      let storedBehind = false;
+      const commit = (): void => {
+        storedBehind = true;
         set((state) => ({ revision: state.revision + 1 }));
-      },
-      markSeen: (epicId) => {
-        const unseen = get().unseen;
-        if (!Object.hasOwn(unseen, epicId)) return;
-        delete unseen[epicId];
-        set((state) => ({ revision: state.revision + 1 }));
-      },
-    }),
+        storedBehind = false;
+      };
+      return {
+        unseen: {},
+        revision: 0,
+        markImported: (epicId, harness) => {
+          const unseen = get().unseen;
+          const known = Object.hasOwn(unseen, epicId);
+          const existing = unseen[epicId];
+          // Already neutral stays neutral, and a second provider landing on a
+          // task the first one marked goes neutral: the dot names a provider
+          // only while that is the whole truth about the task.
+          const next = !known || existing === harness ? harness : null;
+          // A re-subscribe replays every progress frame of the run, and a
+          // frame that changes nothing must not rewrite the whole record.
+          if (known && existing === next && !storedBehind) return;
+          unseen[epicId] = next;
+          commit();
+        },
+        markSeen: (epicId) => {
+          const unseen = get().unseen;
+          if (!Object.hasOwn(unseen, epicId)) return;
+          delete unseen[epicId];
+          commit();
+        },
+      };
+    },
     {
       ...basePersistOptions(IMPORTED_UNSEEN_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
