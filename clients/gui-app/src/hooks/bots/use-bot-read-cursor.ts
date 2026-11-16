@@ -1,8 +1,10 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
   useQueryClient,
   type QueryKey,
   type UseQueryResult,
+  type UseMutationResult,
+  type MutateOptions,
 } from "@tanstack/react-query";
 import type {
   BotReadCursorAdvanceRequest,
@@ -74,47 +76,55 @@ export type BotReadCursorAdvanceVariables =
   | (BotReadCursorAdvanceRequest & { readonly signal: AbortSignal | null });
 interface CapturedAdvance {
   readonly request: BotReadCursorAdvanceRequest;
-  readonly signal: AbortSignal | null;
+  readonly signal: AbortSignal;
+  readonly publicVariables: BotReadCursorAdvanceVariables;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly clientIsCurrent: () => boolean;
+  readonly dispose: () => void;
   readonly viewer: string;
   readonly lifetime: number;
 }
 function advanceIsCurrent(variables: CapturedAdvance): boolean {
   return (
     variables.lifetime === currentBotLifetime() &&
-    variables.signal?.aborted !== true
+    !variables.signal.aborted &&
+    variables.clientIsCurrent()
   );
 }
 
 /** Cursor writes and cache updates belong to the viewer who initiated them. */
 export function useBotReadCursorAdvanceMutation(
   client: HostClient<HostRpcRegistry> | null,
-): {
-  readonly mutate: (variables: BotReadCursorAdvanceVariables) => void;
-  readonly mutateAsync: (
-    variables: BotReadCursorAdvanceVariables,
-  ) => Promise<BotReadCursorAdvanceResponse>;
-  readonly isPending: boolean;
-  readonly isSuccess: boolean;
-} {
+): UseMutationResult<
+  BotReadCursorAdvanceResponse,
+  HostRpcError,
+  BotReadCursorAdvanceVariables
+> {
   const queryClient = useQueryClient();
   const viewer = useCloudChatViewerId();
   const lifetime = useBotLifetime();
+  const currentClient = useRef({ client });
+  useLayoutEffect(() => {
+    if (currentClient.current.client !== client)
+      currentClient.current = { client };
+  }, [client]);
   const mutation = useHostMutation<
     HostRpcRegistry,
     "bot.readCursor.advance",
     unknown,
     CapturedAdvance
   >({
-    client,
+    client: (variables) => variables.client,
     method: "bot.readCursor.advance",
     mapVariables: (variables) => variables.request,
     signalFor: (variables) => {
       if (!advanceIsCurrent(variables))
         throw new DOMException("Read action retired", "AbortError");
-      return variables.signal ?? undefined;
+      return variables.signal;
     },
     options: {
       mutationKey: botMutationKeys.advanceReadCursor(),
+      onSettled: (_data, _error, variables) => variables.dispose(),
       onSuccess: async ({ cursor }, variables) => {
         if (!advanceIsCurrent(variables)) return;
         const { request } = variables;
@@ -143,32 +153,89 @@ export function useBotReadCursorAdvanceMutation(
     },
   });
   const capture = useCallback(
-    (variables: BotReadCursorAdvanceVariables): CapturedAdvance => ({
-      request: {
-        botId: variables.botId,
-        conversationId: variables.conversationId,
-        messageId: variables.messageId,
-        seq: variables.seq,
-      },
-      signal: "signal" in variables ? variables.signal : null,
-      viewer,
-      lifetime,
-    }),
-    [viewer, lifetime],
+    (variables: BotReadCursorAdvanceVariables): CapturedAdvance => {
+      // Keep earned reads alive after navigation, but retire them immediately
+      // when this requester changes authority, before the auth store updates.
+      const scope = currentClient.current;
+      const authority = new AbortController();
+      const unsubscribe = client?.onChange((event) => {
+        if (event.reason === "auth-changed") authority.abort();
+      });
+      const supplied = "signal" in variables ? variables.signal : null;
+      return {
+        request: {
+          botId: variables.botId,
+          conversationId: variables.conversationId,
+          messageId: variables.messageId,
+          seq: variables.seq,
+        },
+        publicVariables: variables,
+        client,
+        clientIsCurrent: () =>
+          currentClient.current === scope && scope.client === client,
+        dispose: () => unsubscribe?.(),
+        signal:
+          supplied === null
+            ? authority.signal
+            : AbortSignal.any([authority.signal, supplied]),
+        viewer,
+        lifetime,
+      };
+    },
+    [client, viewer, lifetime],
   );
   const { mutate, mutateAsync } = mutation;
+  const publicMutate = useCallback(
+    (
+      variables: BotReadCursorAdvanceVariables,
+      options: AdvanceOptions | undefined,
+    ) => mutate(capture(variables), capturedOptions(options)),
+    [capture, mutate],
+  );
+  const publicMutateAsync = useCallback(
+    (
+      variables: BotReadCursorAdvanceVariables,
+      options: AdvanceOptions | undefined,
+    ) => mutateAsync(capture(variables), capturedOptions(options)),
+    [capture, mutateAsync],
+  );
+  const methods = { mutate: publicMutate, mutateAsync: publicMutateAsync };
+  if (mutation.isIdle) return { ...mutation, ...methods, variables: undefined };
   return {
-    mutate: useCallback(
-      (variables: BotReadCursorAdvanceVariables) => mutate(capture(variables)),
-      [capture, mutate],
-    ),
-    mutateAsync: useCallback(
-      (variables: BotReadCursorAdvanceVariables) =>
-        mutateAsync(capture(variables)),
-      [capture, mutateAsync],
-    ),
-    isPending: mutation.isPending,
-    isSuccess: mutation.isSuccess,
+    ...mutation,
+    ...methods,
+    variables: mutation.variables.publicVariables,
+  };
+}
+
+type AdvanceOptions = MutateOptions<
+  BotReadCursorAdvanceResponse,
+  HostRpcError,
+  BotReadCursorAdvanceVariables
+>;
+
+/** Per-call callbacks see the caller's variables, never the private authority capture. */
+function capturedOptions(
+  options: AdvanceOptions | undefined,
+):
+  | MutateOptions<BotReadCursorAdvanceResponse, HostRpcError, CapturedAdvance>
+  | undefined {
+  if (options === undefined) return undefined;
+  return {
+    onSuccess: (data, variables, result, context) =>
+      options.onSuccess?.(data, variables.publicVariables, result, context),
+    onError: (error, variables, result, context) =>
+      options.onError?.(error, variables.publicVariables, result, context),
+    onSettled: (...args) => {
+      const [data, error, variables, result, context] = args;
+      options.onSettled?.(
+        data,
+        error,
+        variables.publicVariables,
+        result,
+        context,
+      );
+    },
   };
 }
 
