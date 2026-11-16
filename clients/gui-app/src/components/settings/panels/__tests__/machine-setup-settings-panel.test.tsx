@@ -57,6 +57,11 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import {
+  mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
@@ -78,6 +83,7 @@ afterEach(() => {
   vi.useRealTimers();
   toastInfo.mockClear();
   resetNegotiatedManifests();
+  resetTeamPageHarness();
   hostMock.client = null;
   hostMock.binding = null;
   hostIdMock.id = "host-a";
@@ -99,6 +105,8 @@ interface RigOptions {
   readonly failAttempts: boolean;
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: SetupScript | null;
+  /** The host completes a write on a computer bound to no configuration. */
+  readonly localOnly: boolean;
 }
 
 const DEFAULT_RIG: RigOptions = {
@@ -108,6 +116,7 @@ const DEFAULT_RIG: RigOptions = {
   failScripts: false,
   failAttempts: false,
   dashboardWins: null,
+  localOnly: false,
 };
 
 function attempt(
@@ -157,6 +166,9 @@ function renderPage(options: RigOptions): Rig {
       const next = { os: request.os, text: request.text, revision };
       if (index === -1) scripts.push(next);
       else scripts[index] = next;
+      if (options.localOnly) {
+        return Promise.resolve({ outcome: "local_only" as const });
+      }
       return Promise.resolve({ outcome: "saved" as const, revision });
     },
     "environment.setup.attempts": () => {
@@ -188,9 +200,13 @@ function renderPage(options: RigOptions): Rig {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
+  mountTeamPage({ kind: "host" }, handlers);
+  const authnBinding = requireTeamEnvironmentAuthnBinding();
   hostMock.client = client;
   hostMock.binding = {
+    ...authnBinding,
     auth: {
+      ...authnBinding.auth,
       mintExecutableWriteGrant: () =>
         Promise.resolve({
           kind: "ok" as const,
@@ -295,7 +311,7 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "macos",
       text: "brew bundle --no-lock",
       expectedRevision: 4,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
     // The re-read remounts the editor on the revision it now has.
     await waitFor(() => {
@@ -340,8 +356,24 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       os: "windows",
       text: "winget install jq",
       expectedRevision: null,
-      executableWriteGrant: "grant-1",
+      executableWriteGrant: null,
     });
+  });
+
+  it("completes a save the host answers local_only without drawing a notice", async () => {
+    const rig = renderPage({ ...DEFAULT_RIG, scripts: [MAC], localOnly: true });
+    await screen.findByRole("tab", { name: "macOS" });
+
+    fireEvent.change(scriptField("macOS"), { target: { value: "mine" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => {
+      expect(rig.puts).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(saveButton().hasAttribute("disabled")).toBe(true);
+    });
+    expect(scriptField("macOS").value).toBe("mine");
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it("a save that lost to a dashboard change shows the stale notice and the latest script", async () => {

@@ -21,6 +21,8 @@ const plan: ConfigurationPlan = {
 function renderPlans(overrides: {
   canAdminister: boolean;
   plans?: readonly ConfigurationPlan[];
+  adminNames?: readonly string[];
+  onLink?: () => void;
   onPreviewUnlink?: (plan: ConfigurationPlan) => void;
 }): void {
   render(
@@ -28,7 +30,10 @@ function renderPlans(overrides: {
       teamName="Acme"
       plans={overrides.plans ?? [plan]}
       canAdminister={overrides.canAdminister}
+      linkReachable
+      adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
       isPending={false}
+      onLink={overrides.onLink ?? vi.fn()}
       onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
     />,
   );
@@ -37,32 +42,41 @@ function renderPlans(overrides: {
 afterEach(cleanup);
 
 describe("PlansCard", () => {
-  it.each([
-    { mode: "record mode", onPreviewUnlink: null },
-    { mode: "legacy mode", onPreviewUnlink: vi.fn() },
-  ])(
-    "gives a viewer no Link, Unlink or admin hint in $mode",
-    ({ onPreviewUnlink }) => {
-      render(
-        <PlansCard
-          teamName="Acme"
-          plans={[plan]}
-          canAdminister={false}
-          isPending={false}
-          onPreviewUnlink={onPreviewUnlink}
-        />,
-      );
+  it("gives a viewer no Link or Unlink verbs", () => {
+    renderPlans({ canAdminister: false });
 
-      expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
-      expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
-      expect(screen.queryByText(/Only an admin can link a plan/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
+  });
+
+  it.each([
+    { admins: [], line: "Only an admin can link a plan." },
+    { admins: ["Ada"], line: "Only an admin can link a plan: ask Ada." },
+    {
+      admins: ["Ada", "Grace"],
+      line: "Only an admin can link a plan: ask Ada or Grace.",
     },
-  );
+    {
+      admins: ["Ada", "Grace", "Linus"],
+      line: "Only an admin can link a plan: ask Ada, Grace or 1 other.",
+    },
+    {
+      admins: ["Ada", "Grace", "Linus", "Barbara", "Alan"],
+      line: "Only an admin can link a plan: ask Ada, Grace or 3 others.",
+    },
+  ])("tells a reader who to ask: $line", ({ admins, line }) => {
+    renderPlans({ canAdminister: false, adminNames: admins });
+
+    expect(screen.getByText(line)).toBeTruthy();
+  });
 
   it("says no plan is linked when the team has none", () => {
     renderPlans({ canAdminister: true, plans: [] });
 
     expect(screen.getByText("No plans linked.")).toBeTruthy();
+    const link = screen.getByRole("button", { name: "Link a plan" });
+    expect(link.getAttribute("data-size")).toBe("xs");
+    expect(link.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
@@ -86,7 +100,10 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
+        linkReachable
+        adminNames={["Ada"]}
         isPending={false}
+        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
@@ -119,13 +136,19 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister={false}
+        linkReachable
+        adminNames={["Ada"]}
         isPending={false}
+        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
     expect(screen.getByText("Claude Code plan")).toBeTruthy();
     expect(screen.getByText("Sign-in is pending.")).toBeTruthy();
     expect(screen.queryByText(/Shared Claude Code quota/)).toBeNull();
+    expect(
+      screen.getByText("Only an admin can link a plan: ask Ada."),
+    ).toBeTruthy();
     cleanup();
 
     render(
@@ -140,7 +163,10 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
+        linkReachable
+        adminNames={["Ada"]}
         isPending={false}
+        onLink={() => undefined}
         onPreviewUnlink={() => undefined}
       />,
     );
@@ -151,10 +177,15 @@ describe("PlansCard", () => {
 
   it("hands the plan to the preview callback when an admin clicks Unlink", () => {
     const onPreviewUnlink = vi.fn();
-    renderPlans({ canAdminister: true, onPreviewUnlink });
+    const onLink = vi.fn();
+    renderPlans({ canAdminister: true, onPreviewUnlink, onLink });
 
     fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
     expect(onPreviewUnlink).toHaveBeenCalledExactlyOnceWith(plan);
+    expect(onLink).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /link a plan/i }));
+    expect(onLink).toHaveBeenCalledOnce();
   });
 
   it("never offers to add a profile", () => {

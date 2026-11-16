@@ -5,10 +5,12 @@ import {
   useConfigurationPlanUnlinkPreview,
 } from "@/hooks/environment/team/use-plans-query";
 import { useConfigurationPlanUnlinkMutation } from "@/hooks/environment/team/use-plan-unlink-mutation";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   providerIdToGuiHarnessId,
   providerDisplayName,
 } from "@/lib/provider-ordering";
+import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
@@ -19,25 +21,31 @@ import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
-import { useTeamProviderRecords } from "./team-provider-records";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
+  readonly adminNames: readonly string[];
 }): ReactNode {
-  const records = useTeamProviderRecords();
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const canAdminister = useCanAdministerConfiguration();
+  // Linking goes through this window's host, and a team's computer cannot
+  // check the caller's seat for it, so it is not offered through one, nor
+  // until the registry has said whose computer this is.
+  const linkReachable = useWindowHostOwnership() === "not-team";
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
     readonly plan: ConfigurationPlan;
     readonly previewId: string;
   } | null>(null);
+  const open = useProviderLinkDialogStore((state) => state.open);
   const plans =
     query.data?.plans.flatMap((plan) => {
       if (
@@ -73,11 +81,19 @@ export function TeamPlans(props: {
         teamName={name}
         plans={plans}
         canAdminister={canAdminister}
+        linkReachable={linkReachable}
+        adminNames={props.adminNames}
         isPending={target !== null}
-        onPreviewUnlink={
-          records === null
-            ? (plan) => setTarget({ plan, previewId: crypto.randomUUID() })
-            : null
+        onLink={() => {
+          if (source.kind === "pool")
+            open({
+              providerId: props.providerId,
+              profileId: null,
+              environmentId: source.environmentId,
+            });
+        }}
+        onPreviewUnlink={(plan) =>
+          setTarget({ plan, previewId: crypto.randomUUID() })
         }
       />
       {target !== null && canAdminister ? (
@@ -89,6 +105,7 @@ export function TeamPlans(props: {
           onClose={() => setTarget(null)}
         />
       ) : null}
+      <ProviderLinkDialog />
     </>
   );
 }
@@ -150,7 +167,7 @@ function TeamPlanUnlink(props: {
         activeHostName={
           preview.data.localHostId === null
             ? null
-            : (scope.hosts.data?.hosts.find(
+            : (environmentReadData(scope.hosts)?.hosts.find(
                 (host) => host.hostId === preview.data.localHostId,
               )?.hostLabel ?? "the serving host")
         }

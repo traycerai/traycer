@@ -1,33 +1,18 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
-  act,
   cleanup,
   render,
-  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
-import {
-  initialMcpServerForm,
-  mcpServerPutRequest,
-} from "@/components/settings/environment/mcp-server-form";
-import { useConfigurationMcpServerMutations } from "@/hooks/environment/team/use-mcp-servers";
-import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
-import { createAppQueryClient } from "@/lib/query-client";
-import { isRecord } from "@/lib/editor/prosemirror-json";
-import { environmentMutationKeys } from "@/lib/query-keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -37,13 +22,19 @@ import {
   teamEnvironments,
 } from "./mcp-skills-test-support";
 import {
-  mountTeamPage,
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "./environment-authn-test-support";
+import {
+  mountTeamPage as mountTeamHarness,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
-  type TeamPageHarness,
+  setTeamEnvironmentCloudOverride,
   windowHostScopeMock,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -57,10 +48,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => ({
-    hostId: "host-local",
-    hostClient: requireTeamHostClient(),
-  }),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -83,63 +71,47 @@ vi.mock(
   }),
 );
 
-const appQueryClients: QueryClient[] = [];
-const mutationCacheUnsubscribers: Array<() => void> = [];
-const consoleSpyRestorers: Array<() => void> = [];
-
-interface MutationObserverReference {
-  readonly options: unknown;
-}
-
-function captureMutationObservers(
-  queryClient: QueryClient,
-): MutationObserverReference[] {
-  const observers: MutationObserverReference[] = [];
-  const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
-    if (event.type === "observerAdded") observers.push(event.observer);
-  });
-  mutationCacheUnsubscribers.push(unsubscribe);
-  return observers;
-}
-
-function captureConsoleOutput(): unknown[][] {
-  const output: unknown[][] = [];
-  const debug = vi.spyOn(console, "debug").mockImplementation((...values) => {
-    output.push(values);
-  });
-  const info = vi.spyOn(console, "info").mockImplementation((...values) => {
-    output.push(values);
-  });
-  const log = vi.spyOn(console, "log").mockImplementation((...values) => {
-    output.push(values);
-  });
-  const warn = vi.spyOn(console, "warn").mockImplementation((...values) => {
-    output.push(values);
-  });
-  const error = vi.spyOn(console, "error").mockImplementation((...values) => {
-    output.push(values);
-  });
-  consoleSpyRestorers.push(
-    () => debug.mockRestore(),
-    () => info.mockRestore(),
-    () => log.mockRestore(),
-    () => warn.mockRestore(),
-    () => error.mockRestore(),
-  );
-  return output;
-}
+let fakeAuthn: FakeEnvironmentAuthn | null = null;
 
 afterEach(() => {
   cleanup();
+  fakeAuthn?.restore();
+  fakeAuthn = null;
   resetTeamPageHarness();
   resetNegotiatedManifests();
-  for (const unsubscribe of mutationCacheUnsubscribers.splice(0)) unsubscribe();
-  for (const restore of consoleSpyRestorers.splice(0)) restore();
-  for (const client of appQueryClients.splice(0)) client.clear();
 });
 
+const MCP_WRITE_PATHS = /\/(mcp-servers(\/|$)|items\/mcp_server$)/u;
+
+/**
+ * The team page, with an MCP server's writes (its row and its item) answered by
+ * the fake authn, which records the put the dialog built.
+ */
+function mountTeamPage(
+  source: Parameters<typeof mountTeamHarness>[0],
+  served: MockHandlerMap<HostRpcRegistry>,
+): TeamPageHarness {
+  const harness = mountTeamHarness(source, served);
+  const authn = createFakeEnvironmentAuthn(served);
+  fakeAuthn = authn;
+  const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: (request) =>
+      request.method !== "GET" && MCP_WRITE_PATHS.test(request.url)
+        ? authn.cloud.transport(request)
+        : cloud.transport(request),
+  });
+  return {
+    ...harness,
+    paramsOf: (method) => [
+      ...harness.paramsOf(method),
+      ...authn.paramsOf(method),
+    ],
+  };
+}
+
 const PUT_1_1 = { major: 1, minor: 1 };
-const PUT_1_0 = { major: 1, minor: 0 };
 
 function negotiate(put: { major: number; minor: number }): void {
   negotiateMethods({
@@ -186,8 +158,9 @@ function handlers(options: {
       ...options.answer,
       serverId: null,
     }),
+    // Authn lists live secrets only: a revoked one never reaches the dialog.
     "environment.secrets.list": () => ({
-      secrets: [...options.secrets],
+      secrets: options.secrets.filter((row) => !row.revoked),
       removed: [],
     }),
     "environment.host.list": () => ({ hosts: [reachableHost] }),
@@ -220,100 +193,6 @@ async function choose(
 ): Promise<void> {
   await userEvent.click(within(dialog).getByRole("combobox", { name: field }));
   await userEvent.click(await screen.findByRole("option", { name: option }));
-}
-
-async function fillPersonalPatTarget(dialog: HTMLElement): Promise<void> {
-  await userEvent.type(within(dialog).getByLabelText("Name"), "github");
-  await userEvent.type(
-    within(dialog).getByLabelText("Web address"),
-    "https://api.acme.test/mcp",
-  );
-  await choose(dialog, "Credential", "Secret");
-}
-
-async function submitPersonalPat(
-  dialog: HTMLElement,
-  secret: string,
-): Promise<void> {
-  await userEvent.type(within(dialog).getByLabelText("Secret value"), secret);
-  await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
-}
-
-function withAppQueryClient(
-  harness: TeamPageHarness,
-  queryClient: QueryClient,
-) {
-  const TeamPageWrapper = harness.Wrapper;
-  return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
-    return (
-      <TeamPageWrapper>
-        <QueryClientProvider client={queryClient}>
-          {props.children}
-        </QueryClientProvider>
-      </TeamPageWrapper>
-    );
-  };
-}
-
-const FAKE_TEAM_MCP_PAT = "synthetic-team-mcp-pat";
-
-function containsTeamPat(value: unknown): boolean {
-  const seen = new WeakSet<object>();
-  function contains(current: unknown): boolean {
-    if (typeof current === "string") return current.includes(FAKE_TEAM_MCP_PAT);
-    if (
-      (typeof current !== "object" && typeof current !== "function") ||
-      current === null
-    ) {
-      return false;
-    }
-    if (seen.has(current)) return false;
-    seen.add(current);
-    if (
-      current instanceof Error &&
-      (current.message.includes(FAKE_TEAM_MCP_PAT) || contains(current.cause))
-    ) {
-      return true;
-    }
-    return Object.values(current).some(contains);
-  }
-  return contains(value);
-}
-
-function mutationCacheContainsTeamPat(
-  queryClient: QueryClient,
-  observers: readonly MutationObserverReference[],
-): boolean {
-  return (
-    queryClient
-      .getMutationCache()
-      .getAll()
-      .some((mutation) =>
-        containsTeamPat({
-          variables: mutation.state.variables,
-          context: mutation.state.context,
-          data: mutation.state.data,
-          error: mutation.state.error,
-          meta: mutation.options.meta,
-        }),
-      ) || observers.some((observer) => containsTeamPat(observer.options))
-  );
-}
-
-function requestContainsTeamPat(request: unknown): boolean {
-  if (!isRecord(request) || !isRecord(request.credential)) return false;
-  return (
-    request.credential.kind === "pat" &&
-    request.credential.pat === FAKE_TEAM_MCP_PAT
-  );
-}
-
-function personalPatRequestMatches(request: unknown): boolean {
-  return (
-    isRecord(request) &&
-    request.serverId === null &&
-    requestContainsTeamPat(request)
-  );
 }
 
 describe("The MCP server dialog", () => {
@@ -455,7 +334,9 @@ describe("The MCP server dialog", () => {
 
   it("says the secrets could not be read to pick from, and Retry brings them into the select", async () => {
     negotiate(PUT_1_1);
-    let failing = true;
+    // The page's own list joins the same secrets read, so the read fails only
+    // once the page has loaded and before the dialog opens.
+    let failing = false;
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers({ servers: [], secrets: [], answer: SAVED }),
       "environment.secrets.list": () => {
@@ -464,6 +345,8 @@ describe("The MCP server dialog", () => {
       },
     });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+    await screen.findByRole("button", { name: "Add a server" });
+    failing = true;
     const dialog = await openAdd();
 
     await userEvent.type(
@@ -491,8 +374,8 @@ describe("The MCP server dialog", () => {
     ).toEqual(["acme-key", "Add a secret"]);
   });
 
-  it("takes only a typed value on a host at put 1.0, and sends it as the PAT", async () => {
-    negotiate(PUT_1_0);
+  it("takes a typed value from the picker's Add a secret, and sends it as the PAT", async () => {
+    negotiate(PUT_1_1);
     const harness = mountTeamPage(
       personalPoolSource(),
       handlers({ servers: [], secrets: [], answer: SAVED }),
@@ -500,196 +383,37 @@ describe("The MCP server dialog", () => {
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
     const dialog = await openAdd();
 
-    await fillPersonalPatTarget(dialog);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "github");
+    await userEvent.type(
+      within(dialog).getByLabelText("Web address"),
+      "https://api.acme.test/mcp",
+    );
+    await choose(dialog, "Credential", "Secret");
+    await choose(dialog, "Secret", "Add a secret");
 
-    expect(
-      within(dialog).getByText(
-        "Add a secret. It is sent only to this server's address.",
-      ),
-    ).toBeTruthy();
     expect(
       within(dialog).getByText(
         "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
       ),
     ).toBeTruthy();
-    expect(
-      within(dialog).queryByRole("combobox", { name: "Secret" }),
-    ).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Add" })).toHaveProperty(
       "disabled",
       true,
     );
-    await submitPersonalPat(dialog, FAKE_TEAM_MCP_PAT);
+    await userEvent.type(
+      within(dialog).getByLabelText("Secret value"),
+      "tok-1",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
     await waitFor(() => {
-      const requests = harness.paramsOf(
-        "environment.configuration.mcpServers.put",
-      );
       expect(
-        requests.length === 1 && personalPatRequestMatches(requests[0]),
-      ).toBe(true);
+        harness.paramsOf("environment.configuration.mcpServers.put"),
+      ).toMatchObject([
+        { serverId: null, credential: { kind: "pat", pat: "tok-1" } },
+      ]);
     });
   });
-
-  it("keeps the typed PAT in the form after a failed put", async () => {
-    negotiate(PUT_1_0);
-    const routes = handlers({ servers: [], secrets: [], answer: SAVED });
-    const harness = mountTeamPage(personalPoolSource(), {
-      ...routes,
-      "environment.configuration.mcpServers.put": () => {
-        throw new Error("Safe MCP write failure");
-      },
-    });
-    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
-    const dialog = await openAdd();
-    await fillPersonalPatTarget(dialog);
-    await submitPersonalPat(dialog, FAKE_TEAM_MCP_PAT);
-
-    await waitFor(() =>
-      expect(
-        harness.queryClient
-          .getMutationCache()
-          .findAll({
-            mutationKey: environmentMutationKeys.configurationMcpServersPut(),
-          })
-          .at(-1)?.state.status,
-      ).toBe("error"),
-    );
-    const requests = harness.paramsOf(
-      "environment.configuration.mcpServers.put",
-    );
-    const secretInput =
-      within(dialog).getByLabelText<HTMLInputElement>("Secret value");
-    expect({
-      requestMatches:
-        requests.length === 1 && personalPatRequestMatches(requests[0]),
-      draftUnchanged: secretInput.value === FAKE_TEAM_MCP_PAT,
-    }).toEqual({ requestMatches: true, draftUnchanged: true });
-  });
-
-  it.each([
-    { settles: "successfully" as const, fail: false },
-    { settles: "with an error" as const, fail: true },
-  ])(
-    "sends a typed PAT from the real mutation hook and retains none after it settles $settles",
-    async ({ fail }) => {
-      const consoleOutput = captureConsoleOutput();
-      negotiate(PUT_1_0);
-      const queryClient = createAppQueryClient();
-      appQueryClients.push(queryClient);
-      const observers = captureMutationObservers(queryClient);
-      const routes = handlers({ servers: [], secrets: [], answer: SAVED });
-      const harness = mountTeamPage(
-        personalPoolSource(),
-        fail
-          ? {
-              ...routes,
-              "environment.configuration.mcpServers.put": () => {
-                throw new Error("Safe MCP write failure");
-              },
-            }
-          : routes,
-      );
-      await waitFor(() =>
-        expect(useAuthStore.getState().status).toBe("signed-in"),
-      );
-      const { result, unmount } = renderHook(
-        () => {
-          const submitted =
-            useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
-              "MCP server input is unavailable.",
-            );
-          return {
-            input: submitted,
-            mutation: useConfigurationMcpServerMutations(
-              submitted.read,
-              submitted.clear,
-            ).put,
-          };
-        },
-        { wrapper: withAppQueryClient(harness, queryClient) },
-      );
-      const request = mcpServerPutRequest(
-        {
-          ...initialMcpServerForm(null),
-          name: "github",
-          url: "https://api.acme.test/mcp",
-        },
-        null,
-        "env-personal",
-        { kind: "pat", pat: FAKE_TEAM_MCP_PAT },
-      );
-      const observations = { rejectionContainsPat: false };
-      await act(async () => {
-        result.current.input.set(request);
-        try {
-          await result.current.mutation.mutateAsync({
-            environmentId: "env-personal",
-            serverId: null,
-          });
-        } catch (error) {
-          observations.rejectionContainsPat = containsTeamPat(error);
-        }
-      });
-      await waitFor(() =>
-        expect(result.current.mutation.status).toBe(fail ? "error" : "success"),
-      );
-      const retainedMutation = queryClient.getMutationCache().getAll().at(-1);
-      if (retainedMutation === undefined)
-        throw new Error("Team MCP mutation was not retained");
-      const mutationFn = retainedMutation.options.mutationFn;
-      if (mutationFn === undefined)
-        throw new Error("Team MCP mutation has no mutation function");
-      const putCallCount = harness.paramsOf(
-        "environment.configuration.mcpServers.put",
-      ).length;
-      let replayRefused = false;
-      let replayErrorContainsPat = false;
-      try {
-        await mutationFn(
-          { environmentId: "env-personal", serverId: null },
-          {
-            client: queryClient,
-            meta: retainedMutation.options.meta,
-            mutationKey: retainedMutation.options.mutationKey ?? [],
-          },
-        );
-      } catch (error) {
-        replayRefused =
-          error instanceof Error &&
-          error.message === "MCP server input is unavailable.";
-        replayErrorContainsPat = containsTeamPat(error);
-      }
-      const outgoingRequest = harness.paramsOf(
-        "environment.configuration.mcpServers.put",
-      )[0];
-      expect(
-        requestContainsTeamPat(outgoingRequest) &&
-          retainedMutation.state.status === (fail ? "error" : "success") &&
-          !mutationCacheContainsTeamPat(queryClient, observers) &&
-          !containsTeamPat(consoleOutput) &&
-          !containsTeamPat(result.current) &&
-          !observations.rejectionContainsPat &&
-          replayRefused &&
-          !replayErrorContainsPat &&
-          harness.paramsOf("environment.configuration.mcpServers.put")
-            .length === putCallCount,
-      ).toBe(true);
-      unmount();
-      expect({
-        mutationCacheSecretFree: !mutationCacheContainsTeamPat(
-          queryClient,
-          observers,
-        ),
-        hookResultSecretFree: !containsTeamPat(result.current),
-        logsSecretFree: !containsTeamPat(consoleOutput),
-      }).toEqual({
-        mutationCacheSecretFree: true,
-        hookResultSecretFree: true,
-        logsSecretFree: true,
-      });
-    },
-  );
 
   it.each([
     { variable: "GITHUB_TOKEN", phrase: "a secret for GITHUB_TOKEN" },

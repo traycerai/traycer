@@ -1298,7 +1298,7 @@ planes read, and the retrospective sheet lists what is still on it without
 `N commands from {host} are on hold until you choose · Review them` line
 (`1 command … is on hold until you choose · Review it`) opens the same sheet
 for that host's held rows, where Approve and Discard answer one row through
-`environment.review.heldApply`. Stop using Personal opens the preview
+the app's own call to authn on the person's sign-in. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
 Resolve.

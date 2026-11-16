@@ -27,7 +27,15 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
+  (): {
+    current: {
+      readonly hostClient: unknown;
+      readonly auth: {
+        readonly environmentCloud: () => EnvironmentCloud;
+        readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+      } | null;
+    } | null;
+  } => ({
     current: null,
   }),
 );
@@ -97,6 +105,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -112,6 +125,14 @@ import type {
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "@/components/settings/environment/__tests__/environment-authn-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -158,15 +179,12 @@ vi.mock(
         useMutation<void, Error, SetOverrideVariables>({
           mutationFn: async (variables) => {
             mocks.setOverrideVariables(variables);
-            try {
-              return await mocks.setOverrideMutate({
-                ...variables,
-                value: readValue(),
-              });
-            } finally {
-              clearValueInput();
-            }
+            await mocks.setOverrideMutate({
+              ...variables,
+              value: readValue(),
+            });
           },
+          onSettled: () => clearValueInput(),
         }),
     };
   },
@@ -196,6 +214,8 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   sandboxCredentialRefusal.current = null;
+  fakeAuthn?.restore();
+  fakeAuthn = null;
   vi.clearAllMocks();
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -240,6 +260,9 @@ function outgoingSetOverrideMatches(
     actual.executableWriteGrant === expected.executableWriteGrant
   );
 }
+
+/** Personal's secrets are read from authn; the fake serves them. */
+let fakeAuthn: FakeEnvironmentAuthn | null = null;
 
 /** The bare section reads and writes through the query client the app provides. */
 function withQueryClient(children: ReactNode): ReactNode {
@@ -445,49 +468,50 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     section: ReactNode,
     suppliedQueryClient: QueryClient | undefined,
   ): RenderResult {
-    const { client } = buildEnvironmentClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.status": () => environmentStatusFixture({}),
-        "environment.localOverrides": () => ({
-          overrides: [...facts.localOverrides],
-        }),
-        "config.env.localOverride.clear": clearOverride,
-        "environment.list": () => ({
-          environments: [
-            {
-              environmentId: "env-personal",
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        }),
-        "environment.secrets.list": () => ({
-          secrets: [...facts.secrets],
-          removed: [],
-        }),
-        "environment.review": () => ({
-          // The `@1.2` facts each row carries, none of them known here.
-          entries: review.map((entry) => ({
-            command: null,
-            event: null,
-            description: null,
-            harness: null,
-            value: null,
-            ...entry,
-          })),
-          shownAt: null,
-          acknowledgedAt: null,
-          evidence: { version: null, at: null },
-        }),
-      },
-    });
+    const environmentList = {
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    };
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      "environment.status": () => environmentStatusFixture({}),
+      "environment.localOverrides": () => ({
+        overrides: [...facts.localOverrides],
+      }),
+      "config.env.localOverride.clear": clearOverride,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({
+        secrets: [...facts.secrets],
+        removed: [],
+      }),
+      "environment.review": () => ({
+        // The `@1.2` facts each row carries, none of them known here.
+        entries: review.map((entry) => ({
+          command: null,
+          event: null,
+          description: null,
+          harness: null,
+          value: null,
+          ...entry,
+        })),
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+    };
+    const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+    const authn = createFakeEnvironmentAuthn(handlers);
+    fakeAuthn = authn;
     // On the Personal pick the page keeps this host's pages once it knows the
     // host's environment.status version and that the host runs Personal.
     recordNegotiatedHostManifest(HOST_ID, {
@@ -504,7 +528,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       status: "ready",
       client,
     };
-    hostBindingMock.current = { hostClient: client };
+    hostBindingMock.current = {
+      hostClient: client,
+      auth: {
+        environmentCloud: () => authn.cloud,
+        listEnvironments: () =>
+          Promise.resolve({ kind: "ok" as const, list: environmentList }),
+      },
+    };
     const queryClient =
       suppliedQueryClient ??
       new QueryClient({
@@ -835,6 +866,29 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(clearOverride).not.toHaveBeenCalled();
   });
 
+  it("hides an abandoned provider-variable save but reports a transport failure", async () => {
+    mocks.setOverrideMutate.mockRejectedValueOnce(
+      abandonedSaveError("providers.setEnvOverride"),
+    );
+    renderProviderEnvTab("cursor", []);
+    await typeVariable("NODE_ENV", "production");
+
+    await waitFor(() => {
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Apply variable",
+        }).disabled,
+      ).toBe(false);
+    });
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("providers.setEnvOverride");
+    mocks.setOverrideMutate.mockRejectedValueOnce(transportFailure);
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    expect(await screen.findByText(transportFailure.message)).toBeTruthy();
+  });
+
   it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {
     let resolveSave: (() => void) | undefined;
     mocks.setOverrideMutate.mockImplementationOnce(
@@ -922,7 +976,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         secretId: "sec-shadow",
         name: "R2 access",
         kind: "api_key",
-        protocol: null,
+        // authn's secret row always names its protocol.
+        protocol: "https",
         destinations: [],
         currentVersionId: "ver-shadow",
         revoked: false,

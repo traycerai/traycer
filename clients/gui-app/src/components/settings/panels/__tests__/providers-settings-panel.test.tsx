@@ -73,6 +73,11 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
 
 function render(ui: ReactNode): RenderResult {
   const queryClient = new QueryClient({
@@ -322,6 +327,7 @@ const providerMocks = vi.hoisted(() => {
     renameProfilePending: false,
     renameProfileError: null as Error | null,
     recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
+    recolorProfileError: null as Error | null,
     removeProfileMutate: vi.fn<RemoveProfileMutate>(),
     refreshProviders: vi.fn(() => Promise.resolve()),
     /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
@@ -838,7 +844,7 @@ vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => {
   const useRecolorProviderProfile = () => ({
     mutate: providerMocks.recolorProfileMutate,
     isPending: false,
-    error: null,
+    error: providerMocks.recolorProfileError,
   });
   return {
     useRecolorProviderProfile,
@@ -2942,6 +2948,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.renameProfileMutate.mockReset();
     providerMocks.renameProfilePending = false;
     providerMocks.renameProfileError = null;
+    providerMocks.recolorProfileError = null;
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
@@ -6724,6 +6731,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       label: "Default",
+      enabled: true,
+      environmentProfileId: null,
     });
     act(() => renameOptions.onSuccess());
 
@@ -6732,6 +6741,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       accentColor,
+      enabled: true,
+      environmentProfileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
@@ -9864,6 +9875,315 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  /** A new profile linked through the dialog, up to its naming step. */
+  async function renderLinkedProfileAtNaming(): Promise<RenderResult> {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    await act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+      return Promise.resolve();
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+    return view;
+  }
+
+  it("hides an abandoned naming save, reports a transport failure, and allows retry", async () => {
+    const view = await renderLinkedProfileAtNaming();
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+
+    // Simulate a failed rename mutation: no onSuccess, surface the error
+    // the dialog reads from the rename hook, then re-render.
+    act(() => {
+      providerMocks.renameProfileError = abandonedSaveError(
+        "providers.renameProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+    expect(screen.queryByText("Couldn't save the name. Try again.")).toBeNull();
+
+    act(() => {
+      providerMocks.renameProfileError = saveTransportFailure(
+        "providers.renameProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(
+      screen.getByText("Couldn't save the name. Try again."),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+
+    // Retry: clear the prior error and let the second Save succeed.
+    act(() => {
+      providerMocks.renameProfileError = null;
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(2);
+    const [, retryRenameOptions] =
+      providerMocks.renameProfileMutate.mock.calls.at(1) ?? [];
+    if (retryRenameOptions === undefined) {
+      throw new Error("Expected a second rename call.");
+    }
+    act(() => retryRenameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  function setManagedCodexProfileForSaveErrorTest(): void {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+  }
+
+  it("hides an abandoned profile rename but keeps reporting transport failure", () => {
+    setManagedCodexProfileForSaveErrorTest();
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      providerMocks.renameProfileError = abandonedSaveError(
+        "providers.renameProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("providers.renameProfile");
+    act(() => {
+      providerMocks.renameProfileError = transportFailure;
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText(transportFailure.message)).toBeDefined();
+  });
+
+  it("hides an abandoned profile recolor but keeps reporting transport failure", () => {
+    setManagedCodexProfileForSaveErrorTest();
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    const accentColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Use color " + accentColor,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      providerMocks.recolorProfileError = abandonedSaveError(
+        "providers.recolorProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("providers.recolorProfile");
+    act(() => {
+      providerMocks.recolorProfileError = transportFailure;
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText(transportFailure.message)).toBeDefined();
+  });
+
+  it("keeps the finalize step's failure line for a recolor abandoned before it was sent, and retries it", async () => {
+    const view = await renderLinkedProfileAtNaming();
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    const [, renameOptions] =
+      providerMocks.renameProfileMutate.mock.calls.at(0) ?? [];
+    if (renameOptions === undefined) throw new Error("Expected a rename call.");
+    act(() => renameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      providerMocks.recolorProfileError = abandonedSaveError(
+        "providers.recolorProfile",
+      );
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "The account was linked, but the profile color could not be saved.",
+      ),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
+  });
+
   it("warns when the selected accent color is already used by the ambient terminal account", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const ambient = profileWithAccent(
@@ -10037,6 +10357,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       label: "Personal",
+      enabled: true,
+      environmentProfileId: null,
     });
     expect(typeof renameOptions.onSuccess).toBe("function");
     act(() => renameOptions.onSuccess());
@@ -10165,6 +10487,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       accentColor: selectedColor,
+      enabled: true,
+      environmentProfileId: null,
     });
 
     // Identity is a real committed render before the finalize effect settles.

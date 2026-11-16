@@ -4,6 +4,8 @@ const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// a team page names none.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({
@@ -18,6 +20,7 @@ vi.mock(
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -40,14 +43,13 @@ import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsReplaceValueResponse,
-  EnvironmentSecretsRotationResponse,
   SecretVerifyResult,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   mountTeamPage,
-  mountTeamPageNegotiating,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -56,10 +58,7 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
-import {
-  SECRETS_EMPTY_TEXT,
-  SECRETS_NEED_UPDATED_HOST,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -67,16 +66,15 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * A team's Add a secret (Verify and Save) and Replace value go through the
- * host mutation hooks: each request carries the team's environment and the
- * @1.1 floor, the mutation's variables never carry the typed value, the
- * button stays disabled while the request is in flight, a host below the
- * floor reads as needing an update, and a save re-reads the team's secrets.
+ * A team's Add a secret (Verify and Save) and Replace value are the app's own
+ * calls to authn on the person's sign-in: each request names the team's
+ * environment, the mutation's variables never carry the typed value, the
+ * button stays disabled while the request is in flight, and a save re-reads
+ * the team's secrets.
  */
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const TYPED_VALUE = 'team"s\\ecret-UNIQUE-4410';
-const FLOOR = { major: 1, minor: 1 } as const;
 
 function secretFixture(): EnvironmentSecretV12 {
   return {
@@ -126,16 +124,10 @@ interface TeamSecretsHost {
   readonly create: Held<EnvironmentSecretsCreateResponse>;
   readonly verify: Held<SecretVerifyResult>;
   readonly replace: Held<EnvironmentSecretsReplaceValueResponse>;
-  rotation: EnvironmentSecretsRotationResponse["rotation"];
 }
 
 function teamSecretsHost(): TeamSecretsHost {
-  return {
-    create: held(),
-    verify: held(),
-    replace: held(),
-    rotation: null,
-  };
+  return { create: held(), verify: held(), replace: held() };
 }
 
 function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
@@ -150,7 +142,7 @@ function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
       removal: null,
     }),
     "environment.secrets.rotation": () => ({
-      rotation: host.rotation,
+      rotation: null,
       lastVerify: null,
     }),
     "environment.secrets.create": () => host.create.promise,
@@ -177,20 +169,6 @@ function mountTeam(host: TeamSecretsHost): TeamPageHarness {
     pick: { kind: "team", environmentId: "env-a" },
   });
   const harness = mountTeamPage(poolSource("editor"), handlersFor(host));
-  renderPage(harness);
-  return harness;
-}
-
-/** The team's host negotiated `method` at @1.0, below the floor. */
-function mountTeamBelowFloor(method: string): TeamPageHarness {
-  useSettingsEnvironmentPickStore.setState({
-    pick: { kind: "team", environmentId: "env-a" },
-  });
-  const harness = mountTeamPageNegotiating(
-    poolSource("editor"),
-    handlersFor(teamSecretsHost()),
-    { [method]: { major: 1, minor: 0 } },
-  );
   renderPage(harness);
   return harness;
 }
@@ -224,8 +202,19 @@ async function openReplaceWithValue(): Promise<void> {
   });
 }
 
-function callsOf(harness: TeamPageHarness, method: string) {
-  return harness.messenger.calls.filter((call) => call.method === method);
+/** The authn requests the page sent for one write, by method and path suffix. */
+function authnWrites(
+  harness: TeamPageHarness,
+  verb: string,
+  pathSuffix: string,
+): string[] {
+  return harness.cloudRequests
+    .filter(
+      (request) =>
+        request.method === verb &&
+        new URL(request.url).pathname.endsWith(pathSuffix),
+    )
+    .map((request) => new URL(request.url).pathname);
 }
 
 /** The one mutation under `mutationKey`, with nothing of the typed value. */
@@ -260,55 +249,7 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-describe("a team secret's writes go through the host mutations", () => {
-  it("shows a team's rotation from its selected environment read", async () => {
-    const host = teamSecretsHost();
-    host.rotation = {
-      rotationId: "rot-team",
-      fromVersionId: "ver-1",
-      toVersionId: "ver-2",
-      state: "enforcing",
-      issuedAt: 1,
-      producers: [
-        {
-          producer: "worker",
-          workerClass: "https",
-          incarnation: "worker-1",
-          status: "missing",
-          evidence: null,
-        },
-      ],
-    };
-    const harness = mountTeam(host);
-    await openReplaceWithValue();
-    fireEvent.click(buttonOf("replace-secret-confirm"));
-    await waitFor(() => {
-      expect(callsOf(harness, "environment.secrets.replaceValue")).toHaveLength(
-        1,
-      );
-    });
-    host.replace.release({
-      outcome: "accepted",
-      rotationId: "rot-team",
-      versionId: "ver-3",
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
-    });
-
-    expect(
-      (await screen.findByTestId("secret-rotation-headline")).textContent,
-    ).toBe("New value accepted, closing old sessions.");
-    expect(
-      screen
-        .getAllByTestId("secret-rotation-producer")
-        .map((line) => line.textContent),
-    ).toEqual(["https: not confirmed yet"]);
-    expect(harness.paramsOf("environment.secrets.rotation")).toEqual([
-      { secretId: "sec-1", environmentId: "env-a" },
-    ]);
-  });
-
+describe("a team secret's writes go to authn on the person's sign-in", () => {
   it("saves through the create mutation, disabled while in flight, then re-reads the team's secrets", async () => {
     const host = teamSecretsHost();
     const harness = mountTeam(host);
@@ -317,18 +258,17 @@ describe("a team secret's writes go through the host mutations", () => {
     fireEvent.click(await screen.findByTestId("secret-save"));
 
     await waitFor(() => {
-      expect(callsOf(harness, "environment.secrets.create")).toHaveLength(1);
+      expect(harness.paramsOf("environment.secrets.create")).toHaveLength(1);
     });
-    const [call] = callsOf(harness, "environment.secrets.create");
-    expect(call.params).toMatchObject({
+    const [params] = harness.paramsOf("environment.secrets.create");
+    expect(params).toMatchObject({
       environmentId: "env-a",
       name: "STRIPE_KEY",
       value: TYPED_VALUE,
     });
-    expect(call.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.create",
-      version: FLOOR,
-    });
+    expect(authnWrites(harness, "POST", "/environments/env-a/secrets")).toEqual(
+      ["/api/v3/environments/env-a/secrets"],
+    );
     const mutation = onlyMutation(
       harness.queryClient,
       settingsDetailsMutationKeys.secretCreate(),
@@ -360,18 +300,17 @@ describe("a team secret's writes go through the host mutations", () => {
     fireEvent.click(buttonOf("secret-form-verify"));
 
     await waitFor(() => {
-      expect(callsOf(harness, "environment.secrets.verify")).toHaveLength(1);
+      expect(harness.paramsOf("environment.secrets.verify")).toHaveLength(1);
     });
-    const [call] = callsOf(harness, "environment.secrets.verify");
-    expect(call.params).toMatchObject({
+    const [params] = harness.paramsOf("environment.secrets.verify");
+    expect(params).toMatchObject({
       target: "candidate",
       environmentId: "env-a",
       value: TYPED_VALUE,
     });
-    expect(call.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.verify",
-      version: FLOOR,
-    });
+    expect(
+      authnWrites(harness, "POST", "/environments/env-a/secrets/verify"),
+    ).toEqual(["/api/v3/environments/env-a/secrets/verify"]);
     const mutation = onlyMutation(
       harness.queryClient,
       settingsDetailsMutationKeys.secretVerifyCandidate(),
@@ -397,21 +336,20 @@ describe("a team secret's writes go through the host mutations", () => {
     fireEvent.click(buttonOf("replace-secret-confirm"));
 
     await waitFor(() => {
-      expect(callsOf(harness, "environment.secrets.replaceValue")).toHaveLength(
+      expect(harness.paramsOf("environment.secrets.replaceValue")).toHaveLength(
         1,
       );
     });
-    const [call] = callsOf(harness, "environment.secrets.replaceValue");
-    expect(call.params).toEqual({
+    const [params] = harness.paramsOf("environment.secrets.replaceValue");
+    expect(params).toEqual({
       secretId: "sec-1",
       value: TYPED_VALUE,
       expectedVersionId: "ver-2",
       environmentId: "env-a",
     });
-    expect(call.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.replaceValue",
-      version: FLOOR,
-    });
+    expect(
+      authnWrites(harness, "PATCH", "/environments/env-a/secrets/sec-1"),
+    ).toEqual(["/api/v3/environments/env-a/secrets/sec-1"]);
     const mutation = onlyMutation(
       harness.queryClient,
       settingsDetailsMutationKeys.secretReplaceValue(),
@@ -436,41 +374,5 @@ describe("a team secret's writes go through the host mutations", () => {
     await waitFor(() => {
       expect(listReads(harness)).toBe(readsBefore + 1);
     });
-  });
-});
-
-describe("a team's host below a secret write's floor", () => {
-  it("says the secrets need an updated host when Save is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.create");
-    await openFilledApiKeyForm();
-    fireEvent.click(buttonOf("secret-form-continue"));
-    fireEvent.click(await screen.findByTestId("secret-save"));
-
-    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
-      SECRETS_NEED_UPDATED_HOST,
-    );
-    expect(harness.paramsOf("environment.secrets.create")).toEqual([]);
-  });
-
-  it("says the secrets need an updated host when Verify is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.verify");
-    await openFilledApiKeyForm();
-    fireEvent.click(buttonOf("secret-form-verify"));
-
-    expect(
-      (await screen.findByTestId("secret-form-verify-line")).textContent,
-    ).toBe(SECRETS_NEED_UPDATED_HOST);
-    expect(harness.paramsOf("environment.secrets.verify")).toEqual([]);
-  });
-
-  it("says the secrets need an updated host when Replace is refused, and sends nothing", async () => {
-    const harness = mountTeamBelowFloor("environment.secrets.replaceValue");
-    await openReplaceWithValue();
-    fireEvent.click(buttonOf("replace-secret-confirm"));
-
-    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
-      SECRETS_NEED_UPDATED_HOST,
-    );
-    expect(harness.paramsOf("environment.secrets.replaceValue")).toEqual([]);
   });
 });

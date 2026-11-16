@@ -1,11 +1,12 @@
 import { createContext, use } from "react";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import type { HostRpcRegistry } from "@/lib/host";
 
 /**
  * The reader may change the bot's environment: its Personal, or a team where
@@ -23,18 +24,20 @@ export function readerMayChangeBot(
   const environment = environments.environments.find(
     (entry) => entry.environmentId === environmentId,
   );
-  return environment !== undefined && configurationRoleOf(environment) !== null;
+  return (
+    environment !== undefined &&
+    mayChangeConfiguration(configurationRoleOf(environment))
+  );
 }
 
 /**
- * {@link readerMayChangeBot} for the bot a tab has open, from `client`'s
+ * {@link readerMayChangeBot} for the bot a tab has open, from the account's
  * environment list, the one the tab reads; `true` until a bot is open.
  */
 export function useReaderMayChangeBot(
-  client: HostClient<HostRpcRegistry> | null,
   snapshot: { readonly bot: BotRecord } | null,
 ): boolean {
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   return (
     snapshot === null ||
     readerMayChangeBot(environments.data, snapshot.bot.environmentId)

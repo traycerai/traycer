@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -19,27 +20,23 @@ export function useConfigurationPlansQuery(): UseQueryResult<
   HostRpcError
 > {
   const source = useConfigurationSource();
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const client = usePoolTierHostClient(useHostClient());
-  return useHostQuery({
-    cacheKeyIdentity: [viewerId],
-    client,
+  return useEnvironmentCloudQuery({
     method: "environment.plans.list",
     params: {
       environmentId: source.kind === "pool" ? source.environmentId : "",
     },
-    preflight: cloudVerdictPreflight("environment.plans.list"),
-    options: {
-      poll: true,
-      enabled: source.kind === "pool" && authorized && viewerId.length > 0,
-    },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: source.kind === "pool",
+    poll: true,
   });
 }
 
-/** Opening Unlink fetches current consequences before confirmation can mount. */
+/**
+ * Opening Unlink fetches current consequences before confirmation can mount.
+ * Still a host read: its answer joins this computer's own facts (its running
+ * turns), which the app has no read for yet.
+ */
 export function useConfigurationPlanUnlinkPreview(
   profileId: string | null,
   previewId: string | null,

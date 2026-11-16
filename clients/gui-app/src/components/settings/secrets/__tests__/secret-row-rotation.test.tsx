@@ -1,8 +1,9 @@
-// The page names its environment through the surface's client and the viewer.
-const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+// The page names its environment through the surface's client and the viewer;
+// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => hostBoundary.client,
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -18,7 +19,21 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// here Remove's preview is read with none.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
+
+import type { QueryClient } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -35,19 +50,26 @@ import type {
   EnvironmentSecretsDestroyResponse,
   EnvironmentSecretsReplaceValueRequest,
   EnvironmentSecretsReplaceValueResponse,
-  EnvironmentSecretsRotationRequestV11,
   EnvironmentSecretsRotationResponse,
   EnvironmentSecretsUndoRequest,
   EnvironmentSecretsUndoResponse,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import {
-  SECRET_CUSTODY_SENTENCE,
+  SECRET_RESTART_LINE,
   SECRET_SAVED_OFFLINE,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
@@ -86,12 +108,8 @@ interface RotationHostState {
 interface RotationHost {
   readonly state: RotationHostState;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly reads: {
-    list: number;
-    rotation: number;
-    versions: number;
-    rotationRequests: EnvironmentSecretsRotationRequestV11[];
-  };
+  readonly harness: TeamPageHarness;
+  readonly reads: { list: number; rotation: number; versions: number };
   readonly replaceRequests: EnvironmentSecretsReplaceValueRequest[];
   readonly undoRequests: EnvironmentSecretsUndoRequest[];
   readonly destroyRequests: EnvironmentSecretsDestroyRequest[];
@@ -189,35 +207,20 @@ function enforcedRotation(): LiveRotation {
         status: "acknowledged",
         evidence: [{ kind: "session_closed", count: 3 }],
       },
-    ],
-  };
-}
-
-function failedRotation(): LiveRotation {
-  return {
-    ...enforcingRotation(),
-    state: "failed",
-  };
-}
-
-function enforcedRotationWithOldHostProducer(): LiveRotation {
-  return {
-    ...enforcedRotation(),
-    producers: [
-      ...enforcedRotation().producers,
       {
         producer: "host",
-        hostId: "host-old-answer",
+        hostId: "host-2",
         incarnation: "proc-1",
-        status: "missing",
-        evidence: null,
+        status: "acknowledged",
+        evidence: [{ kind: "cache_cleared", count: 1 }],
       },
     ],
   };
 }
 
-function buildRotationHost(
+function mountRotationHost(
   overrides: Partial<RotationHostState>,
+  source: ConfigurationSource,
 ): RotationHost {
   const state: RotationHostState = {
     secrets: [secretFixture({})],
@@ -236,76 +239,68 @@ function buildRotationHost(
     destroyAnswer: { outcome: "destroyed", destroyedAt: 1_791_000_000_000 },
     ...overrides,
   };
-  const reads: RotationHost["reads"] = {
-    list: 0,
-    rotation: 0,
-    versions: 0,
-    rotationRequests: [],
-  };
+  const reads = { list: 0, rotation: 0, versions: 0 };
   const replaceRequests: EnvironmentSecretsReplaceValueRequest[] = [];
   const undoRequests: EnvironmentSecretsUndoRequest[] = [];
   const destroyRequests: EnvironmentSecretsDestroyRequest[] = [];
-  const { client } = buildEnvironmentClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENV,
-            ownerKind: "user" as const,
-            ownerId: "user-me",
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner" as const,
-            kind: "personal" as const,
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
-      "environment.history": () => ({
-        readerScope: "full" as const,
-        entries: [],
-        hostStates: [],
-      }),
-      "environment.secrets.list": () => {
-        reads.list += 1;
-        return { removed: [], secrets: [...state.secrets] };
-      },
-      "environment.secrets.rotation": (request) => {
-        reads.rotation += 1;
-        reads.rotationRequests.push(request);
-        return { rotation: state.rotation, lastVerify: null };
-      },
-      "environment.secrets.versions": () => {
-        reads.versions += 1;
-        return { versions: [...state.versions], removal: null };
-      },
-      "environment.secrets.replaceValue": (request) => {
-        replaceRequests.push(request);
-        if (state.replaceAnswer.outcome === "accepted") {
-          const { versionId } = state.replaceAnswer;
-          state.secrets = state.secrets.map((secret) =>
-            secret.secretId === request.secretId
-              ? { ...secret, currentVersionId: versionId }
-              : secret,
-          );
-        }
-        return state.replaceAnswer;
-      },
-      "environment.secrets.undo": (request) => {
-        undoRequests.push(request);
-        return state.undoAnswer;
-      },
-      "environment.secrets.destroy": (request) => {
-        destroyRequests.push(request);
-        return state.destroyAnswer;
-      },
+  const harness = mountTeamPage(source, {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: PERSONAL_ENV,
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "environment.history": () => ({
+      readerScope: "full" as const,
+      entries: [],
+      hostStates: [],
+    }),
+    "environment.secrets.list": () => {
+      reads.list += 1;
+      return { removed: [], secrets: [...state.secrets] };
+    },
+    "environment.secrets.rotation": () => {
+      reads.rotation += 1;
+      return { rotation: state.rotation, lastVerify: null };
+    },
+    "environment.secrets.versions": () => {
+      reads.versions += 1;
+      return { versions: [...state.versions], removal: null };
+    },
+    "environment.secrets.replaceValue": (request) => {
+      replaceRequests.push(request);
+      if (state.replaceAnswer.outcome === "accepted") {
+        const { versionId } = state.replaceAnswer;
+        state.secrets = state.secrets.map((secret) =>
+          secret.secretId === request.secretId
+            ? { ...secret, currentVersionId: versionId }
+            : secret,
+        );
+      }
+      return state.replaceAnswer;
+    },
+    "environment.secrets.undo": (request) => {
+      undoRequests.push(request);
+      return state.undoAnswer;
+    },
+    "environment.secrets.destroy": (request) => {
+      destroyRequests.push(request);
+      return state.destroyAnswer;
     },
   });
   return {
     state,
-    client,
+    client: requireTeamHostClient(),
+    harness,
     reads,
     replaceRequests,
     undoRequests,
@@ -313,24 +308,40 @@ function buildRotationHost(
   };
 }
 
-function renderPage(host: RotationHost): QueryClient {
-  hostBoundary.client = host.client;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+function buildRotationHost(
+  overrides: Partial<RotationHostState>,
+): RotationHost {
+  return mountRotationHost(overrides, personalPoolSource());
+}
+
+/**
+ * A Local pick on a computer's own settings (`source.kind === "host"`) names no
+ * environment (`useAddressedEnvironment`), so its secrets calls stay the
+ * host's own: the only list that carries a revoked row, and the only replace
+ * that answers pending. A named environment's are authn's: live rows only.
+ */
+function buildLocalRotationHost(
+  overrides: Partial<RotationHostState>,
+): RotationHost {
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
+  return mountRotationHost(overrides, { kind: "host" });
+}
+
+function renderPage(host: RotationHost): QueryClient {
   render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        <SecretsPage
-          client={host.client}
-          hostId={HOST_ID}
-          emptyText={SECRETS_EMPTY_TEXT}
-          hostName={(hostId) => (hostId === "host-2" ? "dev-box" : hostId)}
-        />
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+      <SecretsPage
+        client={host.client}
+        hostId={HOST_ID}
+        emptyText={SECRETS_EMPTY_TEXT}
+        hostName={(hostId) => (hostId === "host-2" ? "dev-box" : hostId)}
+      />
+    </RunnerHostContext.Provider>,
+    { wrapper: host.harness.Wrapper },
   );
-  return queryClient;
+  return host.harness.queryClient;
 }
 
 beforeEach(() => {
@@ -347,7 +358,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  hostBoundary.client = null;
+  resetTeamPageHarness();
   useAuthStore.setState({ status: "signed-out" });
   openLinkMock.mockReset();
 });
@@ -380,14 +391,16 @@ async function openVersions(): Promise<HTMLElement[]> {
 }
 
 describe("the Replace dialog's copy", () => {
-  it("says where a secret's value is used", async () => {
+  it("says who holds the value and that running tools keep the old one", async () => {
     renderPage(buildRotationHost({ rotation: enforcingRotation() }));
     await openReplaceDialog();
 
     expect(screen.getByTestId("secret-replace-custody").textContent).toBe(
-      SECRET_CUSTODY_SENTENCE,
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
     );
-    expect(screen.queryByTestId("secret-replace-restart")).toBeNull();
+    expect(screen.getByTestId("secret-replace-restart").textContent).toBe(
+      SECRET_RESTART_LINE,
+    );
   });
 });
 
@@ -401,7 +414,7 @@ describe("Remove", () => {
     const first = dayMonth(Date.UTC(2026, 9, 1, 12));
     await waitFor(() => {
       expect(dialog.textContent).toContain(
-        `Added by you on ${first}. Version 3.`,
+        `Added by you on ${first}. Version 3. Tools already running keep it until they restart.`,
       );
     });
     expect(dialog.textContent).not.toMatch(/unknown|Came from|Held on/);
@@ -443,7 +456,7 @@ describe("Replace", () => {
     );
   });
 
-  it("sends the typed value against the listed version, then shows worker rotation status", async () => {
+  it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     renderPage(host);
 
@@ -464,19 +477,17 @@ describe("Replace", () => {
     expect(headline.textContent).toBe(
       "New value accepted, closing old sessions.",
     );
-    expect(screen.queryByTestId("secret-restart-line")).toBeNull();
+    expect(screen.getByTestId("secret-restart-line").textContent).toBe(
+      SECRET_RESTART_LINE,
+    );
     expect(
       screen
         .getAllByTestId("secret-rotation-producer")
         .map((line) => line.textContent),
     ).toEqual(["https: not confirmed yet"]);
-    expect(host.reads.rotationRequests).toContainEqual({
-      secretId: "sec-1",
-      environmentId: PERSONAL_ENV,
-    });
   });
 
-  it("shows no rotation status before a value has been replaced", async () => {
+  it("says nothing of a restart before a value has been replaced", async () => {
     renderPage(buildRotationHost({}));
 
     await screen.findByTestId("secret-row");
@@ -485,7 +496,7 @@ describe("Replace", () => {
     expect(screen.queryByTestId("secret-rotation-status")).toBeNull();
   });
 
-  it("reads enforced once each worker class has proved the old value out of use", async () => {
+  it("reads enforced with each producer's proof once the host says every one has proved it", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     const queryClient = renderPage(host);
     await typeAndReplace();
@@ -505,52 +516,7 @@ describe("Replace", () => {
       screen
         .getAllByTestId("secret-rotation-producer")
         .map((line) => line.textContent),
-    ).toEqual(["https: 3 sessions closed"]);
-  });
-
-  it("shows a failed replacement with its worker line after the real rotation read", async () => {
-    const host = buildRotationHost({ rotation: failedRotation() });
-    renderPage(host);
-    await typeAndReplace();
-    await waitFor(() => {
-      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
-    });
-
-    expect(
-      (await screen.findByTestId("secret-rotation-headline")).textContent,
-    ).toBe("Replacing the value failed. The old value may still be in use.");
-    expect(
-      screen
-        .getAllByTestId("secret-rotation-producer")
-        .map((line) => line.textContent),
-    ).toEqual(["https: not confirmed yet"]);
-  });
-
-  it("shows an old host producer on neither the Personal row nor its polling state", async () => {
-    const host = buildRotationHost({
-      rotation: enforcedRotationWithOldHostProducer(),
-    });
-    const queryClient = renderPage(host);
-    await typeAndReplace();
-    await waitFor(() => {
-      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
-    });
-
-    expect(
-      (await screen.findByTestId("secret-rotation-headline")).textContent,
-    ).toBe("New value enforced.");
-    expect(
-      screen
-        .getAllByTestId("secret-rotation-producer")
-        .map((line) => line.textContent),
-    ).toEqual(["https: 3 sessions closed"]);
-    const rotationQuery = queryClient
-      .getQueryCache()
-      .getAll()
-      .find((query) => query.queryKey.includes("environment.secrets.rotation"));
-    expect(Reflect.get(rotationQuery?.options ?? {}, "refetchInterval")).toBe(
-      false,
-    );
+    ).toEqual(["https: 3 sessions closed", "cached keys dropped on dev-box"]);
   });
 
   it("keeps saying accepted when the host reports enforced but a producer proved nothing", async () => {
@@ -610,7 +576,7 @@ describe("Replace", () => {
   });
 
   it("keeps the dialog and says the save is waiting when the host queued it", async () => {
-    const host = buildRotationHost({
+    const host = buildLocalRotationHost({
       replaceAnswer: { outcome: "pending", uploadId: "u1" },
     });
     renderPage(host);
@@ -625,7 +591,7 @@ describe("Replace", () => {
 
   it("offers no Replace on a revoked secret", async () => {
     renderPage(
-      buildRotationHost({ secrets: [secretFixture({ revoked: true })] }),
+      buildLocalRotationHost({ secrets: [secretFixture({ revoked: true })] }),
     );
 
     await screen.findByTestId("secret-row");
@@ -700,7 +666,7 @@ describe("a secret's versions", () => {
     expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
     const steps = within(recovery).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
-      "Remove it first: every sandbox stops using the old value.",
+      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
       "Rotate the credential at the service it belongs to.",
       "Replace the value here.",
       "Grant it again.",
@@ -737,7 +703,7 @@ describe("a secret's versions", () => {
   });
 
   it("restores a revoked secret's version with the re-grant, under the label Restore", async () => {
-    const host = buildRotationHost({
+    const host = buildLocalRotationHost({
       secrets: [secretFixture({ revoked: true })],
     });
     renderPage(host);
@@ -753,7 +719,7 @@ describe("a secret's versions", () => {
           secretId: "sec-1",
           versionId: "ver-2",
           regrant: true,
-          environmentId: PERSONAL_ENV,
+          environmentId: null,
         },
       ]);
     });

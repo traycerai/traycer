@@ -6,7 +6,6 @@ const reads = vi.hoisted(
     scope: HostScope | null;
     readonly statuses: Map<string, unknown>;
     readonly versions: Map<string, unknown>;
-    client: unknown;
     servers: EnvironmentMcpServerDeclaration[];
     readonly listed: unknown[];
     hostList: EnvironmentHostRecordV12[];
@@ -14,7 +13,6 @@ const reads = vi.hoisted(
     scope: null,
     statuses: new Map<string, unknown>(),
     versions: new Map<string, unknown>(),
-    client: null,
     servers: [],
     listed: [],
     hostList: [],
@@ -40,7 +38,8 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => reads.client,
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -49,7 +48,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
@@ -61,12 +59,14 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
-import { SecretRow } from "@/components/settings/secrets/secret-row";
 import {
-  buildEnvironmentClient,
-  environmentStatusFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
+  mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { SecretRow } from "@/components/settings/secrets/secret-row";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -148,9 +148,18 @@ function mountRow(
   pick: EnvironmentPick | null,
 ): void {
   useSettingsEnvironmentPickStore.setState({ pick });
-  const { client } = buildEnvironmentClient({
-    hostId: "host-secrets",
-    handlers: {
+  const harness = mountTeamPage(
+    source === "host"
+      ? { kind: "host" }
+      : {
+          kind: "pool",
+          configuration: source === "pool" ? "team" : "personal",
+          environmentId: source === "pool" ? "env-team" : "env-personal",
+          roomId: "room-team",
+          providerHandle: "handle",
+          effectiveRole: "owner",
+        },
+    {
       "environment.list": () => ({
         environments: [
           {
@@ -167,6 +176,8 @@ function mountRow(
         ],
       }),
       "environment.host.list": () => ({ hosts: reads.hostList }),
+      // The servers' list joins each server's item, which none here has.
+      "environment.configuration.items": () => ({ items: [] }),
       "environment.configuration.mcpServers.list": (request: unknown) => {
         reads.listed.push(request);
         return { servers: reads.servers };
@@ -190,33 +201,16 @@ function mountRow(
         lastVerify: null,
       }),
     },
-  });
-  reads.client = client;
+  );
   render(
-    <QueryClientProvider client={new QueryClient()}>
-      <ConfigurationSourceContext.Provider
-        value={
-          source === "host"
-            ? { kind: "host" }
-            : {
-                kind: "pool",
-                configuration: source === "pool" ? "team" : "personal",
-                environmentId: source === "pool" ? "env-team" : "env-personal",
-                roomId: "room-team",
-                providerHandle: "handle",
-                effectiveRole: "owner",
-              }
-        }
-      >
-        <SecretRow
-          secret={secret}
-          client={client}
-          hostId="host-secrets"
-          hostName={(hostId) => hostId}
-          onChanged={() => undefined}
-        />
-      </ConfigurationSourceContext.Provider>
-    </QueryClientProvider>,
+    <SecretRow
+      secret={secret}
+      client={requireTeamHostClient()}
+      hostId="host-secrets"
+      hostName={(hostId) => hostId}
+      onChanged={() => undefined}
+    />,
+    { wrapper: harness.Wrapper },
   );
 }
 
@@ -248,7 +242,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  reads.client = null;
+  resetTeamPageHarness();
   reads.scope = null;
   useAuthStore.setState({ status: "signed-out" });
 });

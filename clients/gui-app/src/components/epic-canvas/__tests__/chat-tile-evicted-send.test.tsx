@@ -119,8 +119,9 @@ const MOCK_HOST_ENTRY = {
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
-  getLocalEntry: () => null,
-  getLocalHostId: () => null,
+  // The one row is this machine's: the app's directory answers it as such.
+  getLocalEntry: () => MOCK_HOST_ENTRY,
+  getLocalHostId: () => MOCK_HOST_ENTRY.hostId,
   findById: (hostId: string) => {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return hostId === poolEntry.hostId ? poolEntry : null;
@@ -165,6 +166,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importActual) => ({
     typeof import("@/hooks/host/use-host-client-for-host-id")
   >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null ? null : MOCK_HOST_DIRECTORY.findById(hostId),
 }));
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
   ...(await importActual<
