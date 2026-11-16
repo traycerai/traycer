@@ -72,6 +72,7 @@ import {
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 import {
   recordNegotiatedHostManifest,
@@ -508,22 +509,30 @@ describe("a send waiting for the requested agent on its sandbox", () => {
   it("keeps the selected provider's folded account on a pending sandbox send", async () => {
     const foldedProfileId = "folded-profile";
     const canonicalProfileId = "codex-canonical";
+    const otherProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "claude-canonical",
+        kind: "managed",
+        label: "Other provider",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
+    const selectedProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: canonicalProfileId,
+        kind: "managed",
+        label: "Selected account",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
     const profilesForHost = (ready: boolean): HostAnswers => ({
       harnesses: [harnessRow("codex", { available: ready })],
       providers: [
         {
           ...providerRow("claude-code", { status: "installed" }),
-          profiles: [
-            {
-              ...providerProfile({
-                profileId: "claude-canonical",
-                kind: "managed",
-                label: "Other provider",
-                authenticated: true,
-              }),
-              aliases: [foldedProfileId],
-            },
-          ],
+          profiles: [otherProfile],
         },
         {
           ...providerRow(
@@ -532,17 +541,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
               ? { status: "installed" }
               : { status: "downloading", percent: 40 },
           ),
-          profiles: [
-            {
-              ...providerProfile({
-                profileId: canonicalProfileId,
-                kind: "managed",
-                label: "Selected account",
-                authenticated: true,
-              }),
-              aliases: [foldedProfileId],
-            },
-          ],
+          profiles: [selectedProfile],
         },
       ],
     });
