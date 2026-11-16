@@ -299,11 +299,16 @@ function TeamProvidersView(props: {
                     onOutcome={onOutcome}
                   />
                 )}
-                <CloudProviderApiKeySection
-                  scope={props.keyScope}
-                  providerId={providerId}
-                  query={props.keyQuery}
-                />
+                {/* A team's Viewer, or a role the app does not know, sees no key field. */}
+                {source.kind === "pool" &&
+                source.configuration === "team" &&
+                !props.keyScope.canEdit ? null : (
+                  <CloudProviderApiKeySection
+                    scope={props.keyScope}
+                    providerId={providerId}
+                    query={props.keyQuery}
+                  />
+                )}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">

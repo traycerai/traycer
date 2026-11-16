@@ -370,6 +370,12 @@ async function renderPage(
   return render(<TeamProviders />, { wrapper: harness.wrapper });
 }
 
+function cursorRailText(): string {
+  return within(
+    screen.getByRole("navigation", { name: "Providers" }),
+  ).getByRole("button", { name: /Cursor/ }).textContent;
+}
+
 async function selectProvider(name: "Cursor" | "OpenRouter"): Promise<void> {
   const rail = await screen.findByRole("navigation", { name: "Providers" });
   await userEvent.click(
@@ -790,7 +796,7 @@ describe("TeamProviders cloud API keys", () => {
     expect(harness.state.writes).toEqual([]);
   });
 
-  it("fails closed for both Viewer and unknown team roles", async () => {
+  it("shows a team Viewer and an unknown role no key field", async () => {
     const harness = createHarness(teamSource("env-viewer", "viewer"));
     harness.state.keysByEnvironment.set("env-viewer", [
       keyWireRow("env-viewer", "cursor", "live", 1),
@@ -798,15 +804,10 @@ describe("TeamProviders cloud API keys", () => {
     const view = await renderPage(harness);
 
     await selectProvider("Cursor");
-    let input = await screen.findByLabelText("API key");
-    expect(await screen.findByText("Key set")).toBeTruthy();
-    expect(input.getAttribute("disabled")).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Save" }).getAttribute("disabled"),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Clear" }).getAttribute("disabled"),
-    ).not.toBeNull();
+    await waitFor(() => {
+      expect(cursorRailText()).toContain("key");
+    });
+    expect(screen.queryByLabelText("API key")).toBeNull();
 
     harness.source.current = teamSource("env-unknown-role", null);
     harness.state.keysByEnvironment.set("env-unknown-role", [
@@ -814,15 +815,13 @@ describe("TeamProviders cloud API keys", () => {
     ]);
     view.rerender(<TeamProviders />);
     await selectProvider("Cursor");
-    input = await screen.findByLabelText("API key");
-    expect(await screen.findByText("Key set")).toBeTruthy();
-    expect(input.getAttribute("disabled")).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Save" }).getAttribute("disabled"),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Clear" }).getAttribute("disabled"),
-    ).not.toBeNull();
+    await waitFor(() => {
+      expect(
+        profileReadsFor(harness, "env-unknown-role").length,
+      ).toBeGreaterThan(0);
+      expect(cursorRailText()).toContain("key");
+    });
+    expect(screen.queryByLabelText("API key")).toBeNull();
     expect(harness.state.writes).toEqual([]);
     view.unmount();
   });

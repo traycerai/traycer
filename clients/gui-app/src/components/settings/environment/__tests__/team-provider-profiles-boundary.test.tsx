@@ -378,10 +378,8 @@ describe("Team Providers boundary and sign-in", () => {
     ).toBeTruthy();
     expect(screen.getByText("Needs a sign-in")).toBeTruthy();
     await userEvent.click(railButton("Cursor"));
-    expect(await screen.findByLabelText("API key")).toHaveProperty(
-      "disabled",
-      true,
-    );
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
