@@ -14,3 +14,5 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 31a1c4933f80367f97da990662190a7964ea801b:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor-phone.test.tsx:generic-api-key:27
 bab52d1636e044b0f11cdbe3f46779aa5f0c7032:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:125
 bab52d1636e044b0f11cdbe3f46779aa5f0c7032:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:139
+b07f76ad2f448057054f6da186c1ba74ecbf0f92:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:125
+b07f76ad2f448057054f6da186c1ba74ecbf0f92:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:139

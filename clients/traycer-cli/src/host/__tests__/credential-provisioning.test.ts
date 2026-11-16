@@ -72,6 +72,9 @@ const mocks = vi.hoisted(() => {
       this.statusHandler = handler;
     }
 
+    hasSentOpenRequest(): boolean {
+      return false;
+    }
     requestReconnect(): void {}
 
     getNegotiatedSchemaVersion(): SchemaVersion | null {

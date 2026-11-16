@@ -411,6 +411,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
   close(): void {
     this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
