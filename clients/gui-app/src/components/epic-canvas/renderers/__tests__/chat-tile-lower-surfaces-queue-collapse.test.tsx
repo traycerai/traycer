@@ -277,6 +277,7 @@ function surfacesProps(
         />
       ),
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },

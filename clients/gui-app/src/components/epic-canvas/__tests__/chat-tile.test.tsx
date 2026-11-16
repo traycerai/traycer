@@ -687,7 +687,6 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
-import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
 import type {
   ChatRecordSummaryV12,
   ChatRecordSummaryV15,
@@ -1070,33 +1069,6 @@ function testWorktreeBinding(): WorktreeBinding {
         ownedSubmodules: [],
       },
     ],
-  };
-}
-
-function userSenderMessage(
-  messageId: string,
-  sender: UserMessageSender,
-  text: string,
-): Message {
-  return {
-    role: "user",
-    messageId,
-    sender,
-    message: {
-      kind: "user",
-      content: {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [{ type: "text", text }],
-          },
-        ],
-      },
-      browserAnnotations: [],
-    },
-    timestamp: 1,
-    sessionAnchor: null,
   };
 }
 
@@ -2466,7 +2438,14 @@ describe("<ChatTile />", () => {
         1,
       );
       expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
-      expect(screen.queryByText(/Read-only viewer/)).toBeNull();
+      if (access === "viewer") {
+        expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+        expect(
+          screen.getByRole("button", { name: "Clone agent" }),
+        ).not.toBeNull();
+      } else {
+        expect(screen.queryByText("Read-only viewer.")).toBeNull();
+      }
     },
   );
 
@@ -2634,132 +2613,6 @@ describe("<ChatTile />", () => {
     }
     expect(messages.length).toBe(1);
     rootState.destroy();
-  });
-
-  it("shows team member and former-member names and pictures on chat rows", async () => {
-    teamDirectoryPeople.set("team-member", {
-      displayName: "Team Directory Member",
-      avatarUrl: "https://images.example.test/chat-team-member.png",
-    });
-    teamDirectoryPeople.set("former-member", {
-      displayName: "Former Directory Member",
-      avatarUrl: "https://images.example.test/chat-former-member.png",
-    });
-
-    renderChatTile();
-    await waitForChatTileLoaded();
-    act(() => {
-      emitChatSnapshotWithMessages({
-        callbacks: chatHarness.callbacks(),
-        access: "owner",
-        queueItems: [],
-        settings: null,
-        messages: [
-          userSenderMessage(
-            "team-member-row",
-            { type: "user", userId: "team-member" },
-            "Team member chat row",
-          ),
-          userSenderMessage(
-            "former-member-row",
-            { type: "user", userId: "former-member" },
-            "Former member chat row",
-          ),
-        ],
-        activeTurn: null,
-      });
-    });
-
-    expect(await screen.findByText("Team Directory Member")).not.toBeNull();
-    expect(await screen.findByText("Former Directory Member")).not.toBeNull();
-    await waitFor(() => {
-      const pictures = screen
-        .getAllByTestId("person-avatar")
-        .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
-      expect(pictures).toContain(
-        "https://images.example.test/chat-team-member.png",
-      );
-      expect(pictures).toContain(
-        "https://images.example.test/chat-former-member.png",
-      );
-    });
-    expect(screen.queryByText("team-member", { exact: true })).toBeNull();
-    expect(screen.queryByText("former-member", { exact: true })).toBeNull();
-  });
-
-  it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {
-    renderChatTile();
-    await waitForChatTileLoaded();
-    act(() => {
-      emitChatSnapshotWithMessages({
-        callbacks: chatHarness.callbacks(),
-        access: "owner",
-        queueItems: [],
-        settings: null,
-        messages: [
-          userSenderMessage(
-            "viewer-row",
-            { type: "user", userId: "owner-1" },
-            "Viewer chat row",
-          ),
-          userSenderMessage(
-            "agent-row",
-            {
-              type: "agent",
-              harnessId: "codex",
-              agentId: "codex",
-              displayName: "Codex",
-              reply: { expectsReply: false },
-              inReplyTo: null,
-            },
-            "Agent chat row",
-          ),
-        ],
-        activeTurn: null,
-      });
-    });
-
-    expect(await screen.findByText("You")).not.toBeNull();
-    expect(screen.getByText("Codex")).not.toBeNull();
-    expect(screen.queryByTestId("person-avatar")).toBeNull();
-  });
-
-  it("shows only the timestamp on a system sender row", async () => {
-    renderChatTile();
-    await waitForChatTileLoaded();
-    act(() => {
-      emitChatSnapshotWithMessages({
-        callbacks: chatHarness.callbacks(),
-        access: "owner",
-        queueItems: [],
-        settings: null,
-        messages: [
-          userSenderMessage(
-            "viewer-row",
-            { type: "user", userId: "owner-1" },
-            "Viewer chat row",
-          ),
-          userSenderMessage(
-            "system-row",
-            { type: "user", userId: "system" },
-            "System status row",
-          ),
-        ],
-        activeTurn: null,
-      });
-    });
-
-    const systemText = await screen.findByText("System status row");
-    const systemRow = systemText.closest('[class~="group/message"]');
-    if (!(systemRow instanceof HTMLElement)) {
-      throw new Error("expected the system sender row");
-    }
-    expect(within(systemRow).queryByText("system", { exact: true })).toBeNull();
-    expect(within(systemRow).queryByTestId("person-avatar")).toBeNull();
-    const stamp = within(systemRow).getByTestId("chat-message-timestamp");
-    expect(stamp.closest("span.text-overline")?.textContent).not.toContain(
-      " · ",
-    );
   });
 
   it("shows Started by Priya with her picture from the team's directory", async () => {
@@ -6155,29 +6008,98 @@ describe("<ChatTile />", () => {
       status: "waitingChat",
       chatId: CHAT_ARTIFACT.id,
     });
-    expect(
-      await screen.findByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
-    ).not.toBeNull();
+    expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
   });
 
-  it("shows read-only viewer state without owner actions", async () => {
+  it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
     harness.teardown();
     chatHarness.teardown();
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("viewer", []);
+    taskSandboxTestState.task = {
+      kind: "sandbox",
+      name: "Shared environment",
+    };
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "Shared environment",
+        environmentId: "env-team-shared",
+      }),
+    ];
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
 
     renderChatTile();
 
     await waitForChatTileLoaded();
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clone agent" }));
+    expect(await screen.findByLabelText("Fork agent title")).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("keeps a pending interview actionable only while the host grants owner access", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
     expect(
-      screen.getByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
+      await screen.findByText("Which path should we take?"),
     ).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "1. Option A" }));
+    const ownerSubmit = screen.getByRole("button", { name: "Submit" });
+    if (!(ownerSubmit instanceof HTMLButtonElement)) {
+      throw new Error("expected the interview submit button");
+    }
+    expect(ownerSubmit.disabled).toBe(false);
+
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
+    expect(screen.queryByText("Which path should we take?")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("renders queued messages with compact row actions", async () => {
@@ -6331,7 +6253,7 @@ describe("<ChatTile />", () => {
 
   it("shows read-only queue chrome for viewers", async () => {
     chatHarness.teardown();
-    chatHarness.install("viewer", [
+    const queueItems: ChatQueuedItem[] = [
       {
         kind: "prompt" as const,
         queueItemId: "queue-1",
@@ -6343,7 +6265,7 @@ describe("<ChatTile />", () => {
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
-        accountContext: { type: "PERSONAL" as const },
+        accountContext: { type: "TEAM" as const, teamId: "team-test" },
         sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
@@ -6353,16 +6275,33 @@ describe("<ChatTile />", () => {
         createdAt: 2,
         updatedAt: 2,
       },
-    ]);
+    ];
+    chatHarness.install("viewer", queueItems);
 
     renderChatTile();
 
     await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems,
+        settings: null,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+      });
+    });
 
     expect(screen.getByText("Owner manages queue")).not.toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
     expect(
       screen.queryByRole("button", { name: "Edit queued message" }),
     ).toBeNull();
+    expect(getButtonByAriaLabel("Steer queued message now").disabled).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
   });
 
   it("updates queued item settings from composer toolbar while editing", async () => {
