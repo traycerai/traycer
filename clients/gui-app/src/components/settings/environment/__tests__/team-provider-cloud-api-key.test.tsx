@@ -13,6 +13,12 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
+import { manualRedirectFetch } from "../../../../../../mobile/src/manual-redirect-fetch";
+import type {
+  NativeAnswer,
+  NativeRequest,
+  NativeRequester,
+} from "../../../../../../mobile/src/native-environment-transport";
 import {
   isProviderKeyProviderId,
   type ProviderKeyProviderId,
@@ -171,7 +177,25 @@ function routeRequest(
   request: OwnEnvironmentTransportRequest,
   state: TransportFixtureState,
 ): Response | Promise<Response> | undefined {
-  return authValidationRequest(request) ?? environmentRequest(request, state);
+  return (
+    authValidationRequest(request) ??
+    registeredHostsRequest(request) ??
+    environmentRequest(request, state)
+  );
+}
+
+function registeredHostsRequest(
+  request: OwnEnvironmentTransportRequest,
+): Response | undefined {
+  if (
+    request.url.origin !== AUTHN_BASE ||
+    request.url.pathname !== "/api/v3/hosts" ||
+    request.url.search !== "?include=sandboxState%2Cowner" ||
+    request.method !== "GET"
+  ) {
+    return undefined;
+  }
+  return jsonResponse(200, { hosts: [] });
 }
 
 function authValidationRequest(
@@ -370,10 +394,14 @@ async function renderPage(
   return render(<TeamProviders />, { wrapper: harness.wrapper });
 }
 
-function cursorRailText(): string {
-  return within(
-    screen.getByRole("navigation", { name: "Providers" }),
-  ).getByRole("button", { name: /Cursor/ }).textContent;
+async function renderPageWithNativeRequester(
+  harness: ProviderPageHarness,
+  requester: NativeRequester,
+): Promise<RenderResult<Queries, HTMLElement, HTMLElement>> {
+  await signInOwnEnvironment(harness.runtime);
+  const nativeFetch = manualRedirectFetch(globalThis.fetch, requester);
+  globalThis.fetch = (input, init) => nativeFetch(input, init);
+  return render(<TeamProviders />, { wrapper: harness.wrapper });
 }
 
 async function selectProvider(name: "Cursor" | "OpenRouter"): Promise<void> {
@@ -796,18 +824,31 @@ describe("TeamProviders cloud API keys", () => {
     expect(harness.state.writes).toEqual([]);
   });
 
-  it("shows a team Viewer and an unknown role no key field", async () => {
+  it("keeps the provider key field absent for Viewer and unknown roles after reads settle", async () => {
     const harness = createHarness(teamSource("env-viewer", "viewer"));
     harness.state.keysByEnvironment.set("env-viewer", [
       keyWireRow("env-viewer", "cursor", "live", 1),
     ]);
     const view = await renderPage(harness);
 
+    const expectReadOnlySettlement = async (
+      environmentId: string,
+    ): Promise<void> => {
+      const rail = screen.getByRole("navigation", { name: "Providers" });
+      await waitFor(() => {
+        expect(profileReadsFor(harness, environmentId).length).toBeGreaterThan(
+          0,
+        );
+        expect(
+          within(rail).getByRole("button", { name: /Cursor/ }).textContent,
+        ).toContain("key");
+      });
+      expect(screen.queryByLabelText("API key")).toBeNull();
+      expect(harness.state.writes).toEqual([]);
+    };
+
     await selectProvider("Cursor");
-    await waitFor(() => {
-      expect(cursorRailText()).toContain("key");
-    });
-    expect(screen.queryByLabelText("API key")).toBeNull();
+    await expectReadOnlySettlement("env-viewer");
 
     harness.source.current = teamSource("env-unknown-role", null);
     harness.state.keysByEnvironment.set("env-unknown-role", [
@@ -815,14 +856,7 @@ describe("TeamProviders cloud API keys", () => {
     ]);
     view.rerender(<TeamProviders />);
     await selectProvider("Cursor");
-    await waitFor(() => {
-      expect(
-        profileReadsFor(harness, "env-unknown-role").length,
-      ).toBeGreaterThan(0);
-      expect(cursorRailText()).toContain("key");
-    });
-    expect(screen.queryByLabelText("API key")).toBeNull();
-    expect(harness.state.writes).toEqual([]);
+    await expectReadOnlySettlement("env-unknown-role");
     view.unmount();
   });
 
@@ -884,6 +918,183 @@ describe("TeamProviders cloud API keys", () => {
       expect(await screen.findByText("Not set")).toBeTruthy();
       expect(profileReadsFor(harness, environmentId).length).toBeGreaterThan(0);
       expect(harness.state.writes).toEqual([]);
+    },
+  );
+
+  it.each([307, 308, 0])(
+    "refuses native provider-key requests without following status %i",
+    async (nativeStatus) => {
+      const harness = createHarness(noHostSource(PERSONAL_ENVIRONMENT));
+      harness.state.keysByEnvironment.set(PERSONAL_ENVIRONMENT, [
+        keyWireRow(PERSONAL_ENVIRONMENT, "cursor", "live", 1),
+      ]);
+      const nativeCalls: NativeRequest[] = [];
+      const unexpectedNativeCalls: NativeRequest[] = [];
+      let failProfileRead = false;
+      let redirectBodyReads = 0;
+      const profilePath =
+        "/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/profile-records";
+      const keyPath =
+        "/api/v3/environments/" +
+        PERSONAL_ENVIRONMENT +
+        "/provider-keys/cursor";
+      const redirectedAnswer: NativeAnswer = {
+        status: nativeStatus,
+        headers: { location: "https://redirect-target.invalid/key" },
+        get text() {
+          redirectBodyReads += 1;
+          return "redirect body";
+        },
+      };
+      const requester: NativeRequester = async (request) => {
+        nativeCalls.push(request);
+        const url = new URL(request.url);
+        const profileRead =
+          url.pathname === profilePath && request.method === "GET";
+        const providerKeyWrite =
+          url.pathname === keyPath &&
+          (request.method === "PUT" || request.method === "DELETE");
+        if (
+          url.origin === AUTHN_BASE &&
+          ((profileRead && failProfileRead) || providerKeyWrite)
+        ) {
+          return redirectedAnswer;
+        }
+        const response = await routeRequest(
+          {
+            url,
+            method: request.method,
+            headers: new Headers(request.headers),
+            body: typeof request.data === "string" ? request.data : null,
+            signal: undefined,
+          },
+          harness.state,
+        );
+        if (response === undefined) {
+          unexpectedNativeCalls.push(request);
+          return { status: 404, headers: {}, text: "" };
+        }
+        return {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          text: await response.text(),
+        };
+      };
+      const view = await renderPageWithNativeRequester(harness, requester);
+      await selectProvider("Cursor");
+
+      const input = await screen.findByLabelText("API key");
+      expect(await screen.findByText("Key set")).toBeTruthy();
+      await userEvent.type(input, TEST_KEY);
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        const mutations = harness.queryClient.getMutationCache().getAll();
+        expect(mutations.map((mutation) => mutation.state.variables)).toEqual([
+          { action: "set" },
+        ]);
+        expect(mutations.map((mutation) => mutation.state.status)).toEqual([
+          "error",
+        ]);
+      });
+      expect(await screen.findByText("Key set")).toBeTruthy();
+
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await waitFor(() => {
+        const mutations = harness.queryClient.getMutationCache().getAll();
+        expect(mutations.map((mutation) => mutation.state.variables)).toEqual([
+          { action: "set" },
+          { action: "clear" },
+        ]);
+        expect(mutations.map((mutation) => mutation.state.status)).toEqual([
+          "error",
+          "error",
+        ]);
+      });
+      expect(await screen.findByText("Key set")).toBeTruthy();
+
+      failProfileRead = true;
+      const recordsKey = cloudProviderKeyKeys.records(
+        "user-1",
+        harness.runtime.auth.getIdentityGeneration(),
+        PERSONAL_ENVIRONMENT,
+      );
+      await act(async () => {
+        await harness.queryClient.invalidateQueries({
+          queryKey: recordsKey,
+          exact: true,
+        });
+      });
+      await waitFor(() => {
+        expect(harness.queryClient.getQueryState(recordsKey)?.status).toBe(
+          "error",
+        );
+      });
+      expect(await screen.findByText(/Couldn't read .* keys\./u)).toBeTruthy();
+      expect(screen.queryByText("Key set")).toBeNull();
+      expect(screen.queryByText("Not set")).toBeNull();
+      const rail = screen.getByRole("navigation", { name: "Providers" });
+      expect(
+        within(rail).getByRole("button", { name: /Cursor/ }).textContent,
+      ).not.toContain("key");
+
+      const providerApiCalls = nativeCalls.filter((request) => {
+        const url = new URL(request.url);
+        return (
+          url.origin === AUTHN_BASE &&
+          (url.pathname === profilePath || url.pathname === keyPath)
+        );
+      });
+      expect(
+        providerApiCalls.some(
+          (request) =>
+            request.method === "GET" && request.url.endsWith(profilePath),
+        ),
+      ).toBe(true);
+      expect(
+        providerApiCalls.some(
+          (request) =>
+            request.method === "PUT" && request.url.endsWith(keyPath),
+        ),
+      ).toBe(true);
+      expect(
+        providerApiCalls.some(
+          (request) =>
+            request.method === "DELETE" && request.url.endsWith(keyPath),
+        ),
+      ).toBe(true);
+      for (const request of providerApiCalls) {
+        expect(request.headers.authorization).toBe("Bearer user-1-token");
+      }
+      expect(
+        providerApiCalls.find((request) => request.method === "PUT")?.data,
+      ).toBe(JSON.stringify({ key: TEST_KEY, onlyIfAbsent: false }));
+      expect(
+        providerApiCalls.find((request) => request.method === "DELETE")?.data,
+      ).toBeNull();
+      expect(unexpectedNativeCalls).toEqual([]);
+      expect(
+        nativeCalls.some((request) =>
+          request.url.includes("redirect-target.invalid"),
+        ),
+      ).toBe(false);
+      expect(
+        harness.transport.requests.some(
+          (request) =>
+            request.url.pathname === profilePath ||
+            request.url.pathname === keyPath ||
+            request.url.hostname === "redirect-target.invalid",
+        ),
+      ).toBe(false);
+      expect(redirectBodyReads).toBe(0);
+      expect(
+        JSON.stringify(
+          harness.queryClient
+            .getMutationCache()
+            .getAll()
+            .map((mutation) => mutation.state.variables),
+        ),
+      ).not.toContain(TEST_KEY);
+      view.unmount();
     },
   );
 });
