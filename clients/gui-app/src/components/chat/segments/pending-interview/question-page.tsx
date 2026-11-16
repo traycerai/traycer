@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { use, useCallback, type ReactNode } from "react";
 import { Pencil } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -13,6 +13,7 @@ import {
 } from "@/components/chat/segments/interview-visuals";
 import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
+import { ChatLoadAutofocusContext } from "@/components/chat/chat-load-focus-hold";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
@@ -95,23 +96,30 @@ export function QuestionPage(props: QuestionPageProps) {
   // a field seated by a chat's first transcript leaves alone the menu or
   // rename the reader opened while it loaded.
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  const loadAutofocus = use(ChatLoadAutofocusContext);
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
       if (!focusActive || disabled || node === null || isMobileApp()) return;
       // Decided at scheduling as well as before the focus: a key pressed in
       // between releases the hold, and must not let this load's focus land.
       if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+      // A chat's load keeps its focus hold arming until this frame settles.
+      const settle = loadAutofocus.begin();
       const frame = window.requestAnimationFrame(() => {
+        settle();
         if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
         node.focus({ preventScroll: true });
       });
-      return () => window.cancelAnimationFrame(frame);
+      return () => {
+        window.cancelAnimationFrame(frame);
+        settle();
+      };
     },
     // `disabled` is a dependency (not just a guard) so the ref re-runs and
     // restores focus when a rejected action clears the busy gate: a disabled
     // field cannot take focus, and a callback ref only re-fires when its
     // identity changes, not merely when the prop it reads changes.
-    [disabled, focusActive, paneActivationFocusIntent],
+    [disabled, focusActive, loadAutofocus, paneActivationFocusIntent],
   );
 
   // A question with no options is pure free-text: a single textarea that

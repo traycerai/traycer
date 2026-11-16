@@ -30,7 +30,7 @@ function Harness(props: HarnessProps): React.ReactElement {
     surface,
   });
   return (
-    <PaneActivationFocusIntentContext value={hookResult}>
+    <PaneActivationFocusIntentContext value={hookResult.intent}>
       <div ref={surface}>
         {props.loaded ? <Composer key={props.composerKey} /> : null}
       </div>

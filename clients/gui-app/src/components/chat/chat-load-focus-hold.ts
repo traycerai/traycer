@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  createContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import {
   usePaneActivationFocusIntent,
   type PaneActivationFocusIntent,
@@ -51,28 +57,56 @@ function focusIsHeldOutside(surface: Element | null): boolean {
  * The composer mounts with the transcript and focuses itself, which is right
  * when the reader is still waiting on the chat and wrong once they have moved
  * on: taking focus closes the menu they opened and ends the rename they were
- * typing. A press or key in the active tile's window while it loads arms the
- * hold; the next one after the load releases it, so a later pane switch
+ * typing. A press or key in the active tile's window while it loads, or
+ * before an autofocus the load scheduled has run, arms the hold; the next one
+ * after that releases it, so a later pane switch
  * focuses the composer as before. The gesture that opened the chat lands
  * before the tile is active and never arms it.
  */
+/**
+ * Load-time autofocus that is scheduled for later than its commit (the
+ * interview field's frame-deferred focus) registers here, so the hold keeps
+ * arming until it has run or been cancelled. `begin` returns the settle call,
+ * which is idempotent; outside a loading chat it is a no-op.
+ */
+export interface ChatLoadAutofocusTracker {
+  readonly begin: () => () => void;
+}
+
+const NOOP_SETTLE = (): void => undefined;
+
+export const ChatLoadAutofocusContext = createContext<ChatLoadAutofocusTracker>(
+  { begin: () => NOOP_SETTLE },
+);
+
+type LoadPhase = "loading" | "settling" | "done";
+
 export function useChatLoadFocusHold(input: {
   readonly loaded: boolean;
   readonly active: boolean;
   readonly surface: { readonly current: Element | null };
-}): PaneActivationFocusIntent {
+}): {
+  readonly intent: PaneActivationFocusIntent;
+  readonly loadAutofocus: ChatLoadAutofocusTracker;
+} {
   const { loaded, active, surface } = input;
   const parent = usePaneActivationFocusIntent();
-  const armsHoldRef = useRef(active && !loaded);
+  const activeRef = useRef(active);
+  // "settling": loaded, with autofocus the load scheduled still outstanding.
+  const phaseRef = useRef<LoadPhase>(loaded ? "done" : "loading");
+  const outstandingRef = useRef(0);
   const heldRef = useRef(false);
 
   useLayoutEffect(() => {
-    armsHoldRef.current = active && !loaded;
+    activeRef.current = active;
+    if (loaded && phaseRef.current === "loading") {
+      phaseRef.current = outstandingRef.current > 0 ? "settling" : "done";
+    }
   }, [active, loaded]);
 
   useEffect(() => {
     const onInteraction = (): void => {
-      heldRef.current = armsHoldRef.current;
+      heldRef.current = activeRef.current && phaseRef.current !== "done";
     };
     document.addEventListener("pointerdown", onInteraction, true);
     document.addEventListener("keydown", onInteraction, true);
@@ -82,7 +116,26 @@ export function useChatLoadFocusHold(input: {
     };
   }, []);
 
-  return useMemo(
+  const loadAutofocus = useMemo<ChatLoadAutofocusTracker>(
+    () => ({
+      begin: () => {
+        if (phaseRef.current === "done") return NOOP_SETTLE;
+        outstandingRef.current += 1;
+        let settled = false;
+        return () => {
+          if (settled) return;
+          settled = true;
+          outstandingRef.current -= 1;
+          if (phaseRef.current === "settling" && outstandingRef.current === 0) {
+            phaseRef.current = "done";
+          }
+        };
+      },
+    }),
+    [],
+  );
+
+  const intent = useMemo(
     () => ({
       mark: parent.mark,
       shouldYieldAutoFocus: () =>
@@ -91,4 +144,5 @@ export function useChatLoadFocusHold(input: {
     }),
     [parent, surface],
   );
+  return useMemo(() => ({ intent, loadAutofocus }), [intent, loadAutofocus]);
 }

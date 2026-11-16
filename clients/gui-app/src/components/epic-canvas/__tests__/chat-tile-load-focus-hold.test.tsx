@@ -600,6 +600,47 @@ describe("<ChatTile /> first-snapshot focus hold", () => {
     expect(document.activeElement).toBe(tile.renameInput());
   });
 
+  it("leaves the field a reader moved to after the snapshot committed but before the free-text field's frame", async () => {
+    const tile = renderLoadingTile(true);
+    await waitForStream();
+
+    deliver(
+      [userMessage(), freeTextInterviewMessage()],
+      [{ blockId: "question-1", requestedAt: 3 }],
+    );
+    expect(
+      screen.getByTestId("interview-card").querySelector("textarea"),
+    ).not.toBeNull();
+    fireEvent.pointerDown(document.body);
+    tile.renameInput().focus();
+    await flushFrames();
+
+    expect(document.activeElement).toBe(tile.renameInput());
+  });
+
+  it("does not arm the hold for a gesture made after the free-text field's frame has run", async () => {
+    const tile = renderLoadingTile(true);
+    await waitForStream();
+
+    await deliverAndFlush(
+      [userMessage(), freeTextInterviewMessage()],
+      [{ blockId: "question-1", requestedAt: 3 }],
+    );
+    const field = screen
+      .getByTestId("interview-card")
+      .querySelector("textarea");
+    expect(document.activeElement).toBe(field);
+
+    fireEvent.pointerDown(document.body);
+    tile.renameInput().focus();
+    tile.setActive(false);
+    tile.setActive(true);
+    await advanceLegendListFrames(4);
+
+    // An armed hold would yield and leave the rename input focused.
+    expect(document.activeElement).toBe(field);
+  });
+
   it("does not hold focus on a plain row inside an expanded tree item", async () => {
     const tile = renderLoadingTile(true);
     await waitForStream();

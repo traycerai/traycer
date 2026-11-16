@@ -83,7 +83,10 @@ import {
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
 import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
-import { useChatLoadFocusHold } from "@/components/chat/chat-load-focus-hold";
+import {
+  ChatLoadAutofocusContext,
+  useChatLoadFocusHold,
+} from "@/components/chat/chat-load-focus-hold";
 import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
 import {
   ChatPlanActionsContext,
@@ -852,20 +855,22 @@ function ChatTileForChat(props: ChatTileProps) {
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
           <ChatStateLineContext value={stateLine}>
-            <PaneActivationFocusIntentContext value={loadFocusHold}>
-              <ChatTileSessionView
-                handle={handle}
-                node={node}
-                viewTabId={viewTabId}
-                tileId={props.tileId}
-                isActive={isActive}
-                currentEpicId={epicId}
-                restingSandbox={wakeOf(sandbox)}
-                evictedSend={evictedSend}
-                readOnlyNotice={sandboxAvailability.readOnlyNotice}
-                isLiveSession
-                preContent={preContentFrame}
-              />
+            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                <ChatTileSessionView
+                  handle={handle}
+                  node={node}
+                  viewTabId={viewTabId}
+                  tileId={props.tileId}
+                  isActive={isActive}
+                  currentEpicId={epicId}
+                  restingSandbox={wakeOf(sandbox)}
+                  evictedSend={evictedSend}
+                  readOnlyNotice={sandboxAvailability.readOnlyNotice}
+                  isLiveSession
+                  preContent={preContentFrame}
+                />
+              </ChatLoadAutofocusContext>
             </PaneActivationFocusIntentContext>
           </ChatStateLineContext>
         </ChatSandboxLineContext>
