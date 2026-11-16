@@ -338,11 +338,9 @@ import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
-  otherPersonSenderId,
-  resolvePersonSenderLabel,
+  resolveSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
-import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
@@ -2606,19 +2604,12 @@ function useChatTileSessionViewModel(
     tabHostCatalogClient,
     surfaceVisible,
   );
-  const identifyPerson = usePersonIdentityResolver();
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
-        resolvePersonSenderLabel(sender, displayContext, identifyPerson),
-      resolveUserSenderAvatarUrl: (sender) => {
-        const userId = otherPersonSenderId(sender, profile);
-        return userId === null
-          ? null
-          : (identifyPerson(userId)?.avatarUrl ?? null);
-      },
-      resolveUserSenderId: (sender) => otherPersonSenderId(sender, profile),
+        resolveSenderLabel(sender, displayContext),
+      resolveUserSenderAvatarUrl: () => null,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2627,7 +2618,7 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext, identifyPerson, profile, resolveRunProfileLabel],
+    [displayContext, resolveRunProfileLabel],
   );
   // Read from the full store: its effective activity includes the handoff
   // carry, even before the next host turn is named.
@@ -3281,6 +3272,10 @@ function useChatTileSessionViewModel(
       getDraftBlobBridgeSupported,
     });
 
+  const cloneChat = useCallback(() => {
+    forkAtAssistantMessage(null, "plain", null, FORK_ON_SOURCE_HOST);
+  }, [forkAtAssistantMessage]);
+
   // Switching hosts clones the chat from the latest checkpoint available to
   // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
@@ -3535,6 +3530,7 @@ function useChatTileSessionViewModel(
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
+      if (handle.store.getState().access?.role !== "owner") return false;
       if (activeEditingQueueItemId !== null) {
         if (!canAct) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
@@ -3585,6 +3581,7 @@ function useChatTileSessionViewModel(
       dispatchUi,
       node.instanceId,
       profile,
+      handle.store,
     ],
   );
   // The parked messages go once the host holds the chat again and this
@@ -4366,6 +4363,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSideChat: startSideChatFromComposer,
+      onClone: cloneChat,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4387,6 +4385,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       submitMessage,
       startSideChatFromComposer,
+      cloneChat,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
