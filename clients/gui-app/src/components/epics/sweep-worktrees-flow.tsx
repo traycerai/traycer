@@ -67,6 +67,11 @@ interface SweepHostChoicePhase {
    * confirmation another machine's worktrees.
    */
   readonly settled: boolean;
+  /**
+   * The current switch came from the caller's preferred host, not a person.
+   * Undoing it says nothing: nobody asked for that machine.
+   */
+  readonly hinted: boolean;
 }
 
 type SweepFlowPhase =
@@ -107,6 +112,12 @@ interface SweepWorktreesFlowProps {
   readonly surfaceHostClient: HostClient<HostRpcRegistry> | null;
   /** The host id behind `surfaceHostClient` — the host the chip opens on. */
   readonly surfaceHostId: string | null;
+  /**
+   * A host the caller has reason to open on instead of the surface's - see
+   * `sweepOpeningHostId`. Read once, at open, and only on a fleet with a
+   * choice in it; a host that cannot be dialled is ignored.
+   */
+  readonly preferredHostId: string | null;
   readonly taskTitle: string | null;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -159,6 +170,7 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
       phaseKind: phase.kind,
       fleet,
       surfaceHostId: props.surfaceHostId,
+      preferredHostId: props.preferredHostId,
       setDecidedKey,
       setPhase,
       setUnavailableHostId,
@@ -222,6 +234,7 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
                         switchedHostId: hostId,
                         previousSwitchedHostId: current.switchedHostId,
                         settled: false,
+                        hinted: false,
                       }
                     : current,
                 );
@@ -345,6 +358,7 @@ function applySelectionChange(input: {
     readonly resolved: boolean;
   };
   readonly surfaceHostId: string | null;
+  readonly preferredHostId: string | null;
   readonly setDecidedKey: (key: string | null) => void;
   readonly setPhase: (phase: SweepFlowPhase) => void;
   readonly setUnavailableHostId: (hostId: string | null) => void;
@@ -369,6 +383,10 @@ function applySelectionChange(input: {
   }
   input.setDecidedKey(input.selectionKey);
   input.setUnavailableHostId(null);
+  const hinted =
+    input.preferredHostId !== null &&
+    input.preferredHostId !== input.surfaceHostId &&
+    input.fleet.hostIds.includes(input.preferredHostId);
   if (!sweepNeedsHostPicker(input.fleet.hostIds)) {
     input.setPhase(SURFACE);
     return;
@@ -377,11 +395,13 @@ function applySelectionChange(input: {
     kind: "choice",
     // `null` when the surface cannot name its host — the unchosen state.
     openedOnHostId: input.surfaceHostId,
-    switchedHostId: null,
+    // The caller's preferred host is applied as an UNSETTLED switch from the
+    // surface's, so a client that cannot be built is undone back to the
+    // surface the same render - never latched as an unreachable target.
+    switchedHostId: hinted ? input.preferredHostId : null,
     previousSwitchedHostId: null,
-    // The opened host is settled by definition: it is where the surface was
-    // already pointed, not something a person just reached for.
-    settled: true,
+    settled: !hinted,
+    hinted,
   });
 }
 
@@ -412,7 +432,7 @@ function resolveSwitchTarget(input: {
   const { choice } = input;
   if (input.resolved) {
     if (choice.settled) return;
-    input.setPhase({ ...choice, settled: true });
+    input.setPhase({ ...choice, settled: true, hinted: false });
     return;
   }
   // A target that has ALREADY resolved once and has since stopped is not a
@@ -426,6 +446,7 @@ function resolveSwitchTarget(input: {
     // What we fall back to was settled before the gesture, so the undo lands
     // on a settled phase and this never walks a chain.
     settled: true,
+    hinted: false,
   });
-  input.setUnavailableHostId(choice.switchedHostId);
+  if (!choice.hinted) input.setUnavailableHostId(choice.switchedHostId);
 }

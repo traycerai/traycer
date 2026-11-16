@@ -4,7 +4,10 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
-import { namesHostOutsideSurface } from "@/components/epics/sweep-host-model";
+import {
+  namesHostOutsideSurface,
+  sweepOpeningHostId,
+} from "@/components/epics/sweep-host-model";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicNodeHostIds } from "@/hooks/epic/use-epic-node-host-ids";
@@ -128,6 +131,18 @@ function EpicSweepActionBody(props: {
         epicIds={sweepOpen ? epicIds : null}
         surfaceHostClient={sessionHostClient}
         surfaceHostId={sessionHostId}
+        preferredHostId={sweepOpeningHostId({
+          hostIds: nodeHostIds,
+          surfaceHostId: sessionHostId,
+          // Only a completed listing proves "owns nothing": one in flight,
+          // failed, or never started (a disabled read) proves nothing.
+          surfaceWorktreeCount:
+            metadata.isSuccess &&
+            !metadata.isFetching &&
+            metadata.error === null
+              ? entries.length
+              : null,
+        })}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);

@@ -24,6 +24,7 @@ function SweepReviewDialog(props: {
       epicIds={target.epicIds}
       surfaceHostClient={hostClient}
       surfaceHostId={target.hostId}
+      preferredHostId={null}
       taskTitle={target.taskTitle}
       onOpenChange={(open) => {
         if (!open) useSweepSessionStore.getState().closeReview();
