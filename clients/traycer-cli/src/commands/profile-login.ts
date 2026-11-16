@@ -366,6 +366,7 @@ async function runLogin(
         providerId,
         holderId,
         profileId: target.profileId,
+        target: null,
         createProfile:
           target.create === null
             ? null
