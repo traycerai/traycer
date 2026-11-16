@@ -347,6 +347,7 @@ describe("ProfileEditDialog rename", () => {
       type: "rename",
       profileId: "work-row",
       label: "Desk",
+      environmentProfileId: null,
     });
     await waitFor(() => {
       expect(
@@ -391,6 +392,7 @@ describe("ProfileEditDialog rename", () => {
       type: "rename",
       profileId: "work-row",
       label: "Desk",
+      environmentProfileId: null,
     });
     expect(auth.requests).toEqual([]);
   });

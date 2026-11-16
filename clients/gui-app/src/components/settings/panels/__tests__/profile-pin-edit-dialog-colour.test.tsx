@@ -297,6 +297,7 @@ describe("ProfileEditDialog colour", () => {
       type: "recolor",
       profileId: "work-row",
       accentColor: NEW_COLOR,
+      environmentProfileId: null,
     });
     await waitFor(() => expect(host.listCalls.length).toBeGreaterThan(1));
     await waitFor(() =>
