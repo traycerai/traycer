@@ -20,6 +20,7 @@ import {
   TEST_USER_ID,
   boxDoc,
   failFirstReadOf,
+  hydrated,
   hashedImage,
   restart,
   startFresh,
@@ -347,8 +348,9 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
     );
     expect(storedBox(started, "a")).toEqual(typed);
 
+    // The read ends once every waiting box's images have reached the store.
     releaseImages();
-    await vi.advanceTimersByTimeAsync(1000);
+    await hydrated(started);
     expect(boxOf(started, "a")).toEqual(typed);
   });
 
@@ -439,9 +441,6 @@ describe("a reply chosen for a box that waits for its draft's images", () => {
 /** The held image reads end after the box was discarded: nothing comes back for it. */
 async function readBackWithNothingLeft(started: App): Promise<void> {
   releaseImages();
-  await vi.advanceTimersByTimeAsync(1000);
-  await vi.waitFor(() =>
-    expect(started.drafts.persist.hasHydrated()).toBe(true),
-  );
+  await hydrated(started);
   await pastAWrite(started);
 }

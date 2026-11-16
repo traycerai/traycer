@@ -708,11 +708,6 @@ function failuresStillOnCards(
 }
 
 /**
- * What a box keeps once the person typed `text` and `content` in it: that,
- * under the message its draft replies to; nothing for an empty box that
- * replies to none.
- */
-/**
  * The draft a box holds; for a box still waiting for its draft's images,
  * which holds none of it, the reply its waiting mark holds alone (T166), so
  * what is typed there goes under that reply.
@@ -730,6 +725,11 @@ function heldDraft(
     : { text: "", content: null, seedId: 0, replyTo: waiting.replyTo };
 }
 
+/**
+ * What a box keeps once the person typed `text` and `content` in it: that,
+ * under the message its draft replies to; nothing for an empty box that
+ * replies to none.
+ */
 function typedDraft(
   current: BotThreadBoxDraft | undefined,
   text: string,
