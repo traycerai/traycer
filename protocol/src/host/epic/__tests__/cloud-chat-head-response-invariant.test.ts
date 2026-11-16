@@ -137,7 +137,8 @@ describe("cloud chat creator attribution on the 1.1 read surfaces", () => {
       isOwnedByViewer: false,
     });
 
-    const released = line.versions[0].contract.serverFrameSchema.parse(snapshot);
+    const released =
+      line.versions[0].contract.serverFrameSchema.parse(snapshot);
     expect(released.kind).toBe("snapshot");
     if (released.kind !== "snapshot") {
       throw new Error("Expected a released environment chats snapshot");
