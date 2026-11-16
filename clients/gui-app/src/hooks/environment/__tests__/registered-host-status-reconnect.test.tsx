@@ -11,7 +11,10 @@ import {
   resetNegotiatedManifests,
   recordNegotiatedHostManifest,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import {
@@ -183,10 +186,10 @@ describe("status polling while a computer's move runs", () => {
   }
 
   function rowOf(
-    rig: ReturnType<typeof mountStatuses>,
+    statuses: ReadonlyMap<string, EnvironmentStatusResponseV12 | null>,
     hostId: string,
   ): "local" | "none" | "unread" {
-    const status = rig.hook.result.current.get(hostId) ?? null;
+    const status = statuses.get(hostId) ?? null;
     return status === null ? "unread" : localRowCohort(status).kind;
   }
 
@@ -201,7 +204,7 @@ describe("status polling while a computer's move runs", () => {
       return answer("moved", "done");
     });
     await advance(0);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
     expect(rig.reads()).toBe(1);
 
     await act(async () => {
@@ -210,19 +213,19 @@ describe("status polling while a computer's move runs", () => {
       });
     });
     expect(rig.reads()).toBe(2);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
 
     // The running lane's first delay is 500 ms.
     await advance(500);
     await deliverSettledRead();
     expect(rig.reads()).toBe(3);
-    expect(rowOf(rig, MOVED_HOST)).toBe("none");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("none");
 
     // Its longest delay is 2 s, so `done` lands inside this window.
     await advance(2_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(4);
-    expect(rowOf(rig, MOVED_HOST)).toBe("none");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("none");
 
     // `done` with the planes moved asks for no poll: nothing reads after it.
     await advance(5_000);
@@ -241,7 +244,7 @@ describe("status polling while a computer's move runs", () => {
       return answer("moved", "done");
     });
     await advance(0);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
     expect(rig.reads()).toBe(1);
 
     await act(async () => {
@@ -255,13 +258,13 @@ describe("status polling while a computer's move runs", () => {
     await advance(2_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(3);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
 
     // `done` is on the steady 5 s lane, and its Local row still stands.
     await advance(5_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(4);
-    expect(rowOf(rig, MOVED_HOST)).toBe("none");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("none");
 
     await advance(5_000);
     await advance(10 * 60_000);
@@ -274,17 +277,17 @@ describe("status polling while a computer's move runs", () => {
     );
     await advance(0);
     expect(rig.reads()).toBe(1);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
 
     await advance(5_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(2);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
 
     await advance(5_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(3);
-    expect(rowOf(rig, MOVED_HOST)).toBe("none");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("none");
 
     await advance(5_000);
     await advance(10 * 60_000);
@@ -301,12 +304,12 @@ describe("status polling while a computer's move runs", () => {
     }));
     await advance(0);
     expect(rig.reads()).toBe(1);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
 
     await advance(5_000);
     await deliverSettledRead();
     expect(rig.reads()).toBe(1);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
   });
 
   it("no move: reads computers at rest once each and never polls them", async () => {
@@ -316,8 +319,8 @@ describe("status polling while a computer's move runs", () => {
       read === 1 ? answer("local", null) : answer("moved", null),
     );
     await advance(0);
-    expect(rowOf(rig, MOVED_HOST)).toBe("local");
-    expect(rowOf(rig, RESTING_HOST)).toBe("none");
+    expect(rowOf(rig.hook.result.current, MOVED_HOST)).toBe("local");
+    expect(rowOf(rig.hook.result.current, RESTING_HOST)).toBe("none");
     expect(rig.readsOf(MOVED_HOST)).toBe(1);
     expect(rig.readsOf(RESTING_HOST)).toBe(1);
 
