@@ -243,12 +243,17 @@ vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/organization/organization-context")
     >();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganizationTasks: () => ({
-      view: testState.organizationView,
       refresh: testState.organizationRefresh,
     }),
+    ...organizationViewHookOverrides(
+      () => testState.organizationView,
+      actual.taskOrganization,
+    ),
   };
 });
 
