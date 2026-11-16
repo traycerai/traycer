@@ -8,7 +8,7 @@ import type {
 } from "@traycer/protocol/host/organization/schemas";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import {
-  useOrganization,
+  useOrganizationView,
   useOrganizationTasks,
 } from "@/hooks/organization/organization-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -194,10 +194,10 @@ function openTask(taskId: string): void {
 const rendered: string[] = [];
 
 function CatalogProbe() {
-  const names =
-    useOrganization()
-      ?.view?.catalog.map((entry) => entry.name)
-      .join(",") ?? "";
+  const names = useOrganizationView(
+    (view) => view?.catalog.map((entry) => entry.name).join(",") ?? "",
+    Object.is,
+  );
   rendered.push(names);
   return <output data-testid="catalog">{names}</output>;
 }

@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   organization: {
     supported: true,
     userId: "user-1",
-    view: undefined,
+    readView: () => undefined,
+    subscribeView: () => () => undefined,
     register: () => () => undefined,
     openDialog: () => undefined,
     command: () => Promise.resolve(),

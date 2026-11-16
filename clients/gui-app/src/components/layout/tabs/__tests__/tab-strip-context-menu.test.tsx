@@ -24,6 +24,9 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { setMobileApp } from "@/lib/mobile-app";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
@@ -558,7 +561,9 @@ describe("the Close Tab item", () => {
     const onClose = vi.fn<(tab: HeaderTab) => void>();
     renderCloseMenu(true, onClose);
 
-    const close = await screen.findByRole("menuitem", { name: /^Close Tab/ });
+    const close = await screen.findByRole("menuitem", {
+      name: /^Close Tab(?!s)/,
+    });
     const closeOthers = screen.getByRole("menuitem", {
       name: "Close Other Tabs",
     });
@@ -577,10 +582,97 @@ describe("the Close Tab item", () => {
     const onClose = vi.fn<(tab: HeaderTab) => void>();
     renderCloseMenu(false, onClose);
 
-    const close = await screen.findByRole("menuitem", { name: /^Close Tab/ });
+    const close = await screen.findByRole("menuitem", {
+      name: /^Close Tab(?!s)/,
+    });
     expect(close.getAttribute("data-disabled")).not.toBeNull();
     fireEvent.click(close);
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Close Tabs After item", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  // Two open task tabs; the menu is opened on the first or the last.
+  function renderMenuOnStripTab(which: "first" | "last"): void {
+    const first = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    const last = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
+    const refs = [first, last].map((id) => ({ kind: "epic" as const, id }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[0]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    const id = which === "first" ? first : last;
+    renderWithQueryClient(
+      <ContextMenu open>
+        <ContextMenuTrigger>Open menu</ContextMenuTrigger>
+        <TabContextMenuContent
+          tab={{ ...EPIC_TAB, id }}
+          canClose
+          canCloseOtherTabs
+          canOpenInNewWindow={false}
+          canEditTitle={false}
+          taskPinnedState={CLOUD_UNPINNED_KNOWN}
+          isTaskPinPending={false}
+          onClose={() => undefined}
+          onCloseOtherTabs={() => undefined}
+          onDuplicateTab={() => undefined}
+          onOpenInNewWindow={() => undefined}
+          onSplitCommand={() => undefined}
+          onEditTitle={() => undefined}
+          onSetTaskPinned={() => undefined}
+        />
+      </ContextMenu>,
+    );
+  }
+
+  function placeStripAt(tabStripPlacement: TabStripPlacement): void {
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: {
+        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+        tabStripPlacement,
+      },
+    });
+  }
+
+  it("reads Close Tabs to the Right on a top strip and Close Tabs Below on a side strip", async () => {
+    placeStripAt("top");
+    renderMenuOnStripTab("first");
+    expect(
+      await screen.findByRole("menuitem", { name: "Close Tabs to the Right" }),
+    ).not.toBeNull();
+    cleanup();
+
+    placeStripAt("left");
+    renderMenuOnStripTab("first");
+    expect(
+      await screen.findByRole("menuitem", { name: "Close Tabs Below" }),
+    ).not.toBeNull();
+  });
+
+  it("is enabled when a tab is drawn after the menu's tab and disabled on the last one", async () => {
+    renderMenuOnStripTab("first");
+    const onFirst = await screen.findByRole("menuitem", {
+      name: /^Close Tabs/,
+    });
+    expect(onFirst.getAttribute("data-disabled")).toBeNull();
+    cleanup();
+
+    renderMenuOnStripTab("last");
+    const onLast = await screen.findByRole("menuitem", {
+      name: /^Close Tabs/,
+    });
+    expect(onLast.getAttribute("data-disabled")).not.toBeNull();
   });
 });
 
