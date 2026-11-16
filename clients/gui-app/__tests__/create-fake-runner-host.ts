@@ -337,8 +337,6 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     decideSecretRequest: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
-    mintExecutableWriteGrant: () =>
-      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),

@@ -10,9 +10,7 @@ import { writeConfigViaRunningHost } from "../internal/config-host-write";
 export const configShellResetCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
-  const response = await writeConfigViaRunningHost("config.shell.reset", {
-    executableWriteGrant: null,
-  });
+  const response = await writeConfigViaRunningHost("config.shell.reset", {});
   if (response === null) await resetShell();
   return {
     data: { reset: true },
