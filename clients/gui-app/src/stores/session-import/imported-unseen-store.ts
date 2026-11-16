@@ -88,7 +88,9 @@ export const useImportedUnseenStore = create<ImportedUnseenState>()(
         },
         markSeen: (epicId) => {
           const unseen = get().unseen;
-          if (!Object.hasOwn(unseen, epicId)) return;
+          // An open after a failed write writes again even when the entry is
+          // already gone from memory: the stored record may still hold it.
+          if (!Object.hasOwn(unseen, epicId) && !storedBehind) return;
           delete unseen[epicId];
           commit();
         },

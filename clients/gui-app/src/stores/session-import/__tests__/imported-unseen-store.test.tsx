@@ -126,6 +126,47 @@ describe("imported unseen store", () => {
     ).toHaveLength(0);
   });
 
+  it("retries marking a persisted unseen epic as seen after a failed write", async () => {
+    const unseen = persistedUnseen(3);
+    unseen["epic-x"] = "claude";
+    const { useImportedUnseenStore } = await reloadStore(unseen);
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    setItem.mockImplementationOnce((key, value) => {
+      if (key === PERSIST_KEY) {
+        throw new DOMException("Storage is full", "QuotaExceededError");
+      }
+      localStorage.setItem(key, value);
+    });
+
+    expect(() => useImportedUnseenStore.getState().markSeen("epic-x")).toThrow(
+      new DOMException("Storage is full", "QuotaExceededError"),
+    );
+
+    setItem.mockClear();
+    useImportedUnseenStore.getState().markSeen("epic-x");
+
+    expect(
+      setItem.mock.calls.filter(([key]) => key === PERSIST_KEY),
+    ).toHaveLength(1);
+    const persisted = JSON.parse(
+      localStorage.getItem(PERSIST_KEY) ?? "null",
+    ) as {
+      state: { unseen: Record<string, string | null> };
+    };
+    expect(persisted.state.unseen).toEqual({
+      "epic-0": "claude",
+      "epic-1": "claude",
+      "epic-2": "claude",
+    });
+
+    setItem.mockClear();
+    useImportedUnseenStore.getState().markSeen("epic-x");
+
+    expect(
+      setItem.mock.calls.filter(([key]) => key === PERSIST_KEY),
+    ).toHaveLength(0);
+  });
+
   it("updates each real dot in the action's act without rerendering the other epic", async () => {
     const { useImportedUnseenStore, ImportedUnseenDot } = await reloadStore({});
     const unseenReference = useImportedUnseenStore.getState().unseen;
