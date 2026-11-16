@@ -1,5 +1,9 @@
 import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useState, type ReactNode } from "react";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
 import { toast } from "sonner";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
@@ -32,9 +36,9 @@ import {
   sandboxHeaderNeedsRepair,
   sandboxHeaderFailureLine,
   sandboxSuspendKeepsLine,
-  sandboxWakePayerName,
   sandboxWithdrawalLine,
   type SandboxCardAction,
+  type SandboxHeaderOwnership,
   type SandboxSecretsReadiness,
 } from "@/components/hosts/sandbox-card-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
@@ -53,7 +57,10 @@ import {
   useSandboxOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
-import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  sandboxRegionLabel,
+  type SandboxPageConfiguration,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import {
   formatRunway,
   sandboxBalanceMc,
@@ -127,7 +134,6 @@ export function SandboxInstallationGroup(props: {
             summary={summary}
             teamOwned={teamOwned}
             state={state}
-            frozen={frozen}
             viewerUserId={viewerUserId}
           />
           {summary.os === "windows" ? (
@@ -276,22 +282,45 @@ function SandboxPersonalHeaderCost(props: {
   );
 }
 
+/**
+ * Whose the page's sandbox is: a team's by its host owner, the directory's
+ * owner or its environment; the person's by the owner or its environment;
+ * else not known (a row known only from the sandbox list carries no owner).
+ */
+function headerOwnership(
+  teamOwned: boolean,
+  ownerKind: HostScopeSandbox["ownerKind"],
+  listed: SandboxPageConfiguration | null,
+): SandboxHeaderOwnership {
+  if (teamOwned || ownerKind === "team" || listed?.kind === "team") {
+    return "team";
+  }
+  if (ownerKind === "user" || listed?.kind === "personal") return "personal";
+  return "unknown";
+}
+
 export function SandboxHeaderNotices(props: {
   readonly sandbox: HostScopeSandbox;
   readonly teamName: string | null;
 }): ReactNode {
-  const { summary, state, frozen, teamOwned } = props.sandbox;
-  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const { summary, state, frozen, teamOwned, ownerKind } = props.sandbox;
+  const configurations = useSandboxConfigurations();
+  // A row known only from the sandbox list has no host owner to name its
+  // team; its environment names it once the person's teams have answered.
+  const listed =
+    summary === null ? null : sandboxConfigurationOf(summary, configurations);
+  const teamName =
+    props.teamName ?? (listed?.kind === "team" ? listed.teamName : null);
   const credits = sandboxHeaderCreditsLine(
     summary,
-    teamOwned,
-    props.teamName,
-    viewerUserId,
+    headerOwnership(teamOwned, ownerKind, listed),
+    teamName,
+    configurations.complete,
   );
   const failure = sandboxHeaderFailureLine(props.sandbox);
   return (
     <div className="flex shrink-0 flex-col gap-2 px-5 text-ui-xs">
-      {frozen ? (
+      {frozen && credits !== null ? (
         <p
           className="pb-3 text-warning-foreground"
           data-testid="sandbox-card-state-line"
@@ -404,7 +433,6 @@ function SandboxFacts(props: {
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
-  readonly frozen: boolean;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
@@ -455,8 +483,6 @@ function SandboxFacts(props: {
       <SandboxProvenance
         summary={summary}
         teamOwned={props.teamOwned}
-        state={props.state}
-        frozen={props.frozen}
         viewerUserId={props.viewerUserId}
       />
     </dl>
@@ -499,22 +525,12 @@ function SandboxOtherRate(props: {
 function SandboxProvenance(props: {
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
-  readonly state: HostSandboxState | null;
-  readonly frozen: boolean;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
-  // A team row's creator and wake payer; a personal row is the viewer's own.
+  // A team row's creator; a personal row is the viewer's own.
   const creator = props.teamOwned
     ? sandboxCreatorName(summary, props.viewerUserId)
-    : null;
-  const payer = props.teamOwned
-    ? sandboxWakePayerName(
-        props.state,
-        props.frozen,
-        summary,
-        props.viewerUserId,
-      )
     : null;
   return (
     <>
@@ -528,12 +544,6 @@ function SandboxProvenance(props: {
         <>
           <dt className="text-muted-foreground">Created by</dt>
           <dd data-testid="sandbox-card-creator">{creator}</dd>
-        </>
-      )}
-      {payer === null ? null : (
-        <>
-          <dt className="text-muted-foreground">Wake payer</dt>
-          <dd data-testid="sandbox-card-wake-payer">{payer}</dd>
         </>
       )}
     </>

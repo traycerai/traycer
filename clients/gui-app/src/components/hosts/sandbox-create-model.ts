@@ -1,6 +1,5 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentProviderCounts } from "@traycer-clients/shared/host-client/sandbox-secrets";
-import { creditBreakdown } from "@/lib/auth/traycer-subscription-content";
 
 const MC_PER_CREDIT = 1000;
 
@@ -63,31 +62,18 @@ export function defaultBelongsTo(
 export function sandboxTeamCreateLines(teamName: string): readonly string[] {
   return [
     `Belongs to: ${teamName}`,
-    `Charged to your bundle under ${teamName}.`,
+    `Charged to ${teamName}.`,
     `Chats on it are visible to the people of the task you use it in, which can include people outside ${teamName}.`,
     `Agents on it work with ${teamName}'s hosts only; they cannot work with agents on your own computer. The task still shares its files and chats.`,
   ];
 }
 
 /**
- * The person's balance under a team, in millicredits: what the control
- * plane's gate reads for a team sandbox (the member's own assignment under
- * the team), computed as `sandboxBalanceMc` computes the personal one.
- * `null` when the user, or their entry for that team, has not loaded.
+ * A team's balance in millicredits, from its remaining bundle credits: the
+ * pot every wake of the team's sandboxes draws, whoever starts it.
  */
-export function teamSandboxBalanceMc(
-  user: AuthenticatedUser | null,
-  teamId: string,
-): number | null {
-  const subscription =
-    user?.teamSubscriptions.find((entry) => entry.team.id === teamId) ?? null;
-  if (subscription === null) return null;
-  const breakdown = creditBreakdown(subscription);
-  const remaining = Math.max(
-    0,
-    breakdown.totalAvailable - breakdown.totalConsumed,
-  );
-  return Math.floor(remaining * MC_PER_CREDIT);
+export function teamBundleBalanceMc(bundleRemaining: number): number {
+  return Math.floor(Math.max(0, bundleRemaining) * MC_PER_CREDIT);
 }
 
 /**

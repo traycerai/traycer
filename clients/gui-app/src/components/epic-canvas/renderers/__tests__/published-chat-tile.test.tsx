@@ -2251,7 +2251,6 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     kind: "resting",
     sandbox: ROW,
     configuration: { kind: "personal" },
-    wakeChangesPayer: false,
   };
 
   function signInAsOwner(): void {
