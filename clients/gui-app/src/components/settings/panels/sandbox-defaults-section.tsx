@@ -15,6 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
+import {
+  canChangeNames,
+  canChangeSentence,
+} from "@/hooks/environment/team/can-change-names";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -234,28 +238,14 @@ export function SandboxDefaultsSection(props: {
   );
 }
 
-/** Names are shown only after the complete membership read succeeds. */
 function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
   const members = useEnvironmentMembersList(props.environmentId, true);
-  const names =
-    members.isPending || members.isError
-      ? []
-      : members.members.flatMap((member) =>
-          mayChangeConfiguration(member.effectiveRole) &&
-          member.inviteState !== "pending" &&
-          member.displayName !== null
-            ? [member.displayName]
-            : [],
-        );
+  const names = canChangeNames(members);
   let description: string;
   if (members.isPending) description = "Loading editors and admins…";
   else if (members.isError)
     description = "Couldn't read who can change defaults.";
-  else
-    description =
-      names.length === 0
-        ? "Editors and admins can change defaults."
-        : `${names.join(", ")} can change defaults.`;
+  else description = canChangeSentence(names, "defaults");
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       <p

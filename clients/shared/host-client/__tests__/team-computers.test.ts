@@ -14,6 +14,16 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function opaqueRedirectResponse(): Response {
+  const response = new Response(null);
+  Object.defineProperties(response, {
+    type: { value: "opaqueredirect" },
+    status: { value: 0 },
+    ok: { value: false },
+  });
+  return response;
+}
+
 function stubFetch(
   respond: (url: string, init: RequestInit) => Promise<Response>,
 ): Mock<typeof fetch> {
@@ -63,6 +73,7 @@ describe("listTeamComputersViaHttp", () => {
       hostName: "Studio",
       hostKind: "personal",
       sharingGeneration: SHARING_GENERATION,
+      holdsBotSlot: true,
       purgePending: false,
       futureProjectionField: "ignored",
     };
@@ -113,6 +124,30 @@ describe("listTeamComputersViaHttp", () => {
       await expect(
         listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
       ).resolves.toEqual(result);
+    },
+  );
+
+  it.each([
+    [
+      "a 3xx response",
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: `${BASE}/redirect-target` },
+        }),
+    ],
+    ["an opaque redirect", opaqueRedirectResponse],
+  ] as const)(
+    "treats %s as a non-success without following it",
+    async (_label, response) => {
+      const fetchMock = stubFetch(async () => response());
+
+      await expect(
+        listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
+      ).resolves.toEqual({ kind: "network-error" });
+
+      const { init } = onlyCall(fetchMock);
+      expect(init.redirect).toBe("manual");
     },
   );
 
