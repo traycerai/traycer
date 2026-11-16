@@ -5,6 +5,7 @@ import {
 import { toast } from "sonner";
 import {
   ensureSandboxAwake,
+  SANDBOX_OUT_OF_CREDITS,
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxWakeBudget,
@@ -23,6 +24,7 @@ import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
   sandboxCreditShortLine,
+  teamPossessive,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -223,41 +225,39 @@ async function runSharedWake(
   return { outcome: await attempt.outcome, joined: false };
 }
 
+/**
+ * `configuration` is `null` where the directory cannot say whose sandbox it
+ * is: nothing is then said as the person's own credits.
+ */
 function toastWakeOutcome(
   outcome: SandboxWakeOutcome,
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
 ): void {
   switch (outcome.kind) {
     case "awake":
       return;
     case "refused":
-      // A team sandbox's wake is on its payer's bundle, not the viewer's
+      // A team sandbox's wake is on the team's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
-      toast.warning("This sandbox is out of credits.", {
+      // Whose sandbox it is not known, the title says it alone.
+      if (configuration === null) {
+        toast.warning(SANDBOX_OUT_OF_CREDITS);
+        return;
+      }
+      toast.warning(SANDBOX_OUT_OF_CREDITS, {
         description:
           configuration.kind === "team"
-            ? "Its payer's bundle is out."
+            ? `${teamPossessive(configuration.teamName)} bundle is out.`
             : outcome.message,
       });
       return;
     case "credit-gate": {
-      // A refusal that named a team pot says which, as a row does; the
-      // person's own balance, or an older server's silence, keeps the
-      // add-credits line.
-      const { creditSource } = outcome;
-      toast.warning("Not enough credits to wake this sandbox", {
-        description:
-          creditSource === undefined ||
-          creditSource === null ||
-          creditSource === "personal"
-            ? addCreditsLine(outcome.shortfallMc)
-            : sandboxCreditShortLine(
-                configuration,
-                creditSource,
-                outcome.shortfallMc,
-                { waking: true, context: "sentence" },
-              ),
-      });
+      const description = creditGateDescription(outcome, configuration);
+      if (description === null) {
+        toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE);
+        return;
+      }
+      toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE, { description });
       return;
     }
     case "wake-not-available":
@@ -275,6 +275,35 @@ function toastWakeOutcome(
       toastWakeFailed();
       return;
   }
+}
+
+const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
+
+/**
+ * The credit gate's description, or `null` for the title alone. A refusal
+ * that named a team pot says which, as a row does. The person's own balance,
+ * or an older server's silence, keeps the add-credits line. While whose
+ * sandbox it is is not known, nothing is told as the person's own.
+ */
+function creditGateDescription(
+  outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  if (configuration === null) return null;
+  const { creditSource } = outcome;
+  if (
+    creditSource === undefined ||
+    creditSource === null ||
+    creditSource === "personal"
+  ) {
+    return addCreditsLine(outcome.shortfallMc);
+  }
+  return sandboxCreditShortLine(
+    configuration,
+    creditSource,
+    outcome.shortfallMc,
+    { waking: true, context: "sentence" },
+  );
 }
 
 function addCreditsLine(shortfallMc: number | null): string {
@@ -332,12 +361,19 @@ export function startSandboxWake(
     return Promise.resolve(null);
   }
   const entry = directory.findById(hostId);
-  const facts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const configuration: SandboxConfigurationCopy =
-    facts !== null && facts.ownerTeamName !== null
-      ? { kind: "team", teamName: facts.ownerTeamName }
-      : { kind: "personal" };
+  const remote =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry : null;
+  // Whose sandbox it is, from the directory: a team's by its owner, the
+  // person's only when the row names them as owner. A row with no owner (an
+  // authn before `owner`) or no row at all says nothing about whose it is.
+  let configuration: SandboxConfigurationCopy | null = null;
+  if (remote !== null && remote.sandbox !== null) {
+    if (remote.sandbox.ownerTeamName !== null) {
+      configuration = { kind: "team", teamName: remote.sandbox.ownerTeamName };
+    } else if (remote.owner?.kind === "user") {
+      configuration = { kind: "personal" };
+    }
+  }
   return runSandboxWake({ client, binding, hostId, configuration, gesture });
 }
 
@@ -345,7 +381,7 @@ function runSandboxWake(input: {
   readonly client: QueryClient;
   readonly binding: SandboxWakeBinding;
   readonly hostId: string;
-  readonly configuration: SandboxConfigurationCopy;
+  readonly configuration: SandboxConfigurationCopy | null;
   readonly gesture: SandboxVerbGesture | null;
 }): Promise<SandboxWakeOutcome | null> {
   const { client, binding, hostId, configuration, gesture } = input;

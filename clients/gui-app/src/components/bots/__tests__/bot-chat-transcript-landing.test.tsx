@@ -298,6 +298,7 @@ function mountTranscript(
             botId={BOT_ID}
             chatId={CHAT_ID}
             hostId="host-1"
+            boundHostId={null}
             title="Release Bot"
             instanceId="bot-thread:test"
             surface={surface}

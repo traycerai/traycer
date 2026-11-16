@@ -185,12 +185,6 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   if (input.wakeString !== null) {
     rows.push({ label: "Suspend", value: input.wakeString });
   }
-  if (summary.wakePayer !== null) {
-    rows.push({
-      label: "Paid by",
-      value: sandboxMemberName(summary.wakePayer, viewerUserId),
-    });
-  }
   const startedBy = starter(input);
   if (startedBy !== null) rows.push({ label: "Started by", value: startedBy });
   if (summary.keptBy !== null) {
