@@ -48,11 +48,37 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
     );
     expect(url).not.toContain("/bots/");
     expect(init?.method).toBe("POST");
+    expect(init?.redirect).toBe("manual");
     expect(new Headers(init?.headers).get("authorization")).toBe(
       `Bearer ${BEARER}`,
     );
     expect(new Headers(init?.headers).get("accept")).toBe("application/json");
     expect(init?.body).toBe(JSON.stringify({ environmentId: ENVIRONMENT_ID }));
+  });
+
+  it("treats a redirect as a non-success without exposing its token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(302, {
+          token: INSTALL_TOKEN,
+          environmentId: ENVIRONMENT_ID,
+          expiresAt: 1_800_000_000,
+        }),
+      ),
+    );
+
+    const result = await mintTeamComputerInstallTokenViaHttp(
+      AUTHN,
+      BEARER,
+      ENVIRONMENT_ID,
+    );
+
+    expect(result).toEqual({
+      kind: "network-error",
+      detail: "the install-token request answered HTTP 302",
+    });
+    expect(JSON.stringify(result)).not.toContain(INSTALL_TOKEN);
   });
 
   it("rejects malformed or mismatched success bodies without exposing body secrets", async () => {
@@ -128,6 +154,24 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
       detail: "the install-token request answered HTTP 403",
     });
     expect(JSON.stringify(result)).not.toContain(reflectedSecret);
+  });
+
+  it("preserves an unrecognized HTTP 429 as a refusal without its body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(429, { message: "rate limited by an unknown policy" }),
+      ),
+    );
+
+    const result = await mintTeamComputerInstallTokenViaHttp(
+      AUTHN,
+      BEARER,
+      ENVIRONMENT_ID,
+    );
+
+    expect(result).toEqual({ kind: "refused", status: 429, code: null });
+    expect(JSON.stringify(result)).not.toContain("unknown policy");
   });
 
   it("returns a fixed diagnostic when fetch throws an error containing credentials", async () => {
