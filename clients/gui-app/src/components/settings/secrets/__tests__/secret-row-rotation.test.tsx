@@ -597,9 +597,7 @@ describe("Replace", () => {
   });
 
   it("offers no Replace on a revoked secret", async () => {
-    renderPage(
-      buildLocalRotationHost({ removal: revokedRemovalFixture() }),
-    );
+    renderPage(buildLocalRotationHost({ removal: revokedRemovalFixture() }));
 
     await screen.findByTestId("secret-row");
     await waitFor(() => {

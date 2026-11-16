@@ -312,14 +312,15 @@ function mountRerenderableDialog(
   });
   const client = requireTeamHostClient();
   hostBoundary.client = client;
-  const dialogFor = (shown: EnvironmentSecretV12): ReactNode =>
+  const dialogFor = (shown: EnvironmentSecretV12): ReactNode => (
     <ReplaceSecretValueDialog
       open
       secret={shown}
       client={client}
       onOpenChange={() => undefined}
       onReplaced={() => undefined}
-    />;
+    />
+  );
   const mounted = render(dialogFor(secret), { wrapper: harness.Wrapper });
   return {
     requests,

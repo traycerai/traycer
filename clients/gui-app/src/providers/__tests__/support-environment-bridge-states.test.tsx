@@ -614,15 +614,24 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
     return { client, reads: () => reads };
   }
 
+  async function waitForInitialRotationRead(
+    reads: () => number,
+  ): Promise<void> {
+    for (let turn = 0; turn < 20 && reads() === 0; turn += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    expect(reads()).toBe(1);
+  }
+
   it("re-reads a rotation that is still moving", async () => {
     supportAll();
     const host = rotationHost(false);
     vi.useFakeTimers();
 
     mountBridge(host.client);
-    await waitFor(() => {
-      expect(host.reads()).toBe(1);
-    });
+    await waitForInitialRotationRead(host.reads);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(8_000);
     });
@@ -636,9 +645,7 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
     vi.useFakeTimers();
 
     mountBridge(host.client);
-    await waitFor(() => {
-      expect(host.reads()).toBe(1);
-    });
+    await waitForInitialRotationRead(host.reads);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
