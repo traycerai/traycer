@@ -48,6 +48,7 @@ function geometryOf(
   }));
   return {
     slots,
+    otherLaneSlots: [],
     groups,
     runGap: RUN_GAP,
     sourceIndex: rows.findIndex((row) => row.id === sourceId),

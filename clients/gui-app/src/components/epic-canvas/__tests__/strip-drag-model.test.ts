@@ -120,6 +120,7 @@ function gappedGeometryFor(
   const source = built[sourceIndex];
   return {
     slots: built,
+    otherLaneSlots: [],
     groups: [],
     runGap: gap,
     sourceIndex,
@@ -491,6 +492,7 @@ describe("header strip drag model", () => {
       return {
         ...plain,
         slots: built,
+        otherLaneSlots: [],
         groups: [{ ...extentOf("g", 54, 182), rowGap: 2 }],
         sourceInitialStart: ORIGIN + source.contentStart,
       };
@@ -791,6 +793,7 @@ describe("header strip drag model", () => {
       const built = slots([120, 120, 120], null, 20);
       const geometry: StripDragGeometry = {
         slots: built,
+        otherLaneSlots: [],
         groups: [],
         runGap: 20,
         sourceIndex: 0,
@@ -1135,6 +1138,7 @@ describe("header strip drag model", () => {
       );
       return {
         slots: laneSlots,
+        otherLaneSlots: [],
         groups: [],
         runGap: GAP,
         sourceIndex,
@@ -1217,6 +1221,56 @@ describe("header strip drag model", () => {
         "i1",
         "i2",
       ]);
+    });
+
+    it("splits with a task of another lane the dragged centre is on, and places it in none", () => {
+      const began = geometryOver(laneSlotsOf(sectioned(), "i1"), "i1");
+      const geometry = remapGeometryToSlots(
+        began,
+        sectioned().map((slot) =>
+          slot.itemId === "w0" ? { ...slot, isMergeTarget: false } : slot,
+        ),
+        [],
+      );
+      if (geometry === null)
+        throw new Error("the dragged item is in the strip");
+
+      // Dragged up out of Idle onto w1: the pair's lower side is the one
+      // nearer Idle, and Idle is drawn with the tab at its top edge.
+      expect(
+        resolveCentre(geometry, ORIGIN + ROW + GAP + ROW / 2, null),
+      ).toEqual({
+        kind: "merge",
+        targetIndex: 0,
+        groupId: null,
+        targetItemId: "w1",
+        targetSide: "right",
+      });
+      // w0 cannot be split with, and Idle's header is no task.
+      expect(resolveCentre(geometry, ORIGIN + ROW / 2, null).kind).toBe(
+        "reorder",
+      );
+      expect(
+        resolveCentre(geometry, ORIGIN + 2 * (ROW + GAP) + HEADER / 2, null)
+          .kind,
+      ).toBe("reorder");
+    });
+
+    it("splits with no other lane's task in a drag that never splits", () => {
+      const geometry = {
+        ...geometryOver(laneSlotsOf(sectioned(), "i1"), "i1"),
+        otherLaneSlots: sectioned().filter((slot) => slot.lane === "working"),
+      };
+
+      expect(
+        resolveStripDragState({
+          geometry,
+          contentOrigin: ORIGIN,
+          pointer: pointerForCentre(geometry, ORIGIN + ROW + GAP + ROW / 2),
+          canSplit: false,
+          previous: null,
+        }).kind,
+      ).toBe("reorder");
     });
 
     it("bounds the lane by its first and last slot", () => {
