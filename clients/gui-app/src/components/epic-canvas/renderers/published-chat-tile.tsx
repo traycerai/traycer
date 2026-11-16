@@ -397,16 +397,19 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     enabled: true,
     recordHeadSha256: recordHead?.headSha256 ?? null,
   });
-  const resolvedCloudChat =
-    state.kind === "ready" || state.kind === "refused" ? state.read.chat : null;
-  const matchingCloudChat =
-    resolvedCloudChat !== null &&
-    resolvedCloudChat.identity.taskId === node.taskId &&
-    resolvedCloudChat.identity.ownerUserId === node.ownerUserId &&
-    resolvedCloudChat.identity.chatId === node.chatId &&
-    resolvedCloudChat.ownerHostId === node.ownerHostId
+  const matchingCloudChat = useMemo(() => {
+    const resolvedCloudChat =
+      state.kind === "ready" || state.kind === "refused"
+        ? state.read.chat
+        : null;
+    return resolvedCloudChat !== null &&
+      resolvedCloudChat.identity.taskId === node.taskId &&
+      resolvedCloudChat.identity.ownerUserId === node.ownerUserId &&
+      resolvedCloudChat.identity.chatId === node.chatId &&
+      resolvedCloudChat.ownerHostId === node.ownerHostId
       ? resolvedCloudChat
       : null;
+  }, [node.chatId, node.ownerHostId, node.ownerUserId, node.taskId, state]);
   const owner = usePublishedChatOwner(node, props.epicId, matchingCloudChat);
   const publishedSource = useMemo(
     () => ({ identity, client }),

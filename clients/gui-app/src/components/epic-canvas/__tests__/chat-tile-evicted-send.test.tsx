@@ -173,7 +173,8 @@ const hydrateBoundary = vi.hoisted(
 );
 
 const MOCK_HOST_CLIENT = {
-  request: (method: string) => {
+  request: () => new Promise(() => {}),
+  requestWithSignal: (method: string) => {
     if (method === "epic.listCloudChats") {
       cloudChatListTestState.requestCount += 1;
     }
@@ -859,7 +860,7 @@ function mountEvictedTile(source: ChatSourceFixture): Mounted {
   if (cloudChatListTestState.data !== undefined) {
     queryClient.setQueryData(
       cloudChatListQueryKey({
-        hostId: HOST_ID,
+        hostId: poolEntry.hostId,
         viewerUserId: SAVED_CREATOR_USER_ID,
         taskId: EPIC_ID,
       }),
@@ -1132,7 +1133,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(
       mounted.queryClient.getQueryData(
         cloudChatListQueryKey({
-          hostId: HOST_ID,
+          hostId: poolEntry.hostId,
           viewerUserId: SAVED_CREATOR_USER_ID,
           taskId: EPIC_ID,
         }),
@@ -1152,7 +1153,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     };
     const mounted = await mountOnThePool(POOL_VIEWER_ACCESS, source);
     const listKey = cloudChatListQueryKey({
-      hostId: HOST_ID,
+      hostId: poolEntry.hostId,
       viewerUserId: SAVED_CREATOR_USER_ID,
       taskId: EPIC_ID,
     });
@@ -1284,7 +1285,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(
       mounted.queryClient.getQueryData(
         cloudChatListQueryKey({
-          hostId: HOST_ID,
+          hostId: poolEntry.hostId,
           viewerUserId: SAVED_CREATOR_USER_ID,
           taskId: EPIC_ID,
         }),
