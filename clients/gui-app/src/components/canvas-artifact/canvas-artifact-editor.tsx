@@ -99,6 +99,10 @@ function wheelUnit(mode: number, height: number): number {
   if (mode === 2) return height;
   return 1;
 }
+/** Whether fingers on the screen made this React Flow move, not a mouse or a sync. */
+function fingersMoved(event: MouseEvent | TouchEvent | null): boolean {
+  return event !== null && "touches" in event;
+}
 function canvasPanButtons(
   fullscreen: boolean,
   pan: boolean,
@@ -603,6 +607,7 @@ function CanvasEditorSurface({
   );
   const {
     push: pushWheelStep,
+    follow: followPinch,
     cancel: cancelWheelSettlement,
     settling: wheelSettling,
     onShown: onShownViewport,
@@ -1316,11 +1321,16 @@ function CanvasEditorSurface({
                       // when controlled state catches up. Only input owns this.
                       if (event instanceof Event) cancelWheelSettlement();
                     }}
-                    onMove={(_event, value) => {
-                      if (activeFullscreen === null) setViewport(value);
-                    }}
-                    onMoveEnd={(_event, value) => {
+                    onMove={(event, value) => {
                       if (activeFullscreen !== null) return;
+                      if (fingersMoved(event) && followPinch(value)) return;
+                      setViewport(value);
+                    }}
+                    onMoveEnd={(event, value) => {
+                      if (activeFullscreen !== null) return;
+                      // Lifting the fingers is the pinch's last move: the
+                      // zoom is drawn once it has been quiet, not here.
+                      if (fingersMoved(event) && followPinch(value)) return;
                       setViewport(value);
                       // Programmatic wheel moves fire end on every frame.
                       // Animated moves still settle here when their glide ends.
