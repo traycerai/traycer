@@ -9,12 +9,10 @@ import {
 } from "@tanstack/react-query";
 import { readConfigurationMembers } from "@traycer-clients/shared/environment/configuration-members";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  grantedEnvironmentRole,
-  grantedTeamMemberRole,
-  type EnvironmentDescriptorV11,
-  type EnvironmentListResponseV11,
-  type EnvironmentMembersResponseV12,
+import type {
+  EnvironmentDescriptorV11,
+  EnvironmentListResponseV11,
+  EnvironmentMembersResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import type { TeamRole } from "@/components/settings/members/types";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -42,9 +40,7 @@ export interface EnvironmentMembersListMember {
   readonly userId: string;
   readonly displayName: string | null;
   readonly email: string | null;
-  /** `null` for a member holding no seat authority: an older page's unknown
-   *  role, or the retired view-only one. */
-  readonly effectiveRole: TeamRole | null;
+  readonly effectiveRole: TeamRole;
   readonly linkedPlan: boolean;
   readonly inviteState: "accepted" | "pending" | null;
   readonly invitedAddress: string | null;
@@ -328,7 +324,7 @@ export function useEnvironmentMembersList(
           userId: member.userId,
           displayName: member.displayName,
           email: member.email,
-          effectiveRole: grantedTeamMemberRole(member.effectiveRole),
+          effectiveRole: member.effectiveRole,
           linkedPlan: member.linkedPlan,
           inviteState: member.inviteState,
           invitedAddress: member.invitedAddress,
@@ -386,7 +382,7 @@ export function useTeamEnvironmentDescriptor(
 function descriptorFromListRow(
   row: EnvironmentDescriptorV11,
 ): TeamEnvironmentDescriptor {
-  const role = grantedEnvironmentRole(row.effectiveRole);
+  const role = row.effectiveRole;
   return {
     teamName: row.label.length === 0 ? null : row.label,
     teamHandle: row.providerHandle ?? "",
