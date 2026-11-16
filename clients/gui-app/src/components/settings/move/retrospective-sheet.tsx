@@ -183,6 +183,7 @@ export function RetrospectiveSheet(props: {
                   pendingId={props.heldPendingId}
                   approveRefused={props.heldApproveRefused}
                   onHeldApply={props.onHeldApply}
+                  renderDetails={null}
                 />
               </InventoryRow>
             ) : null}
@@ -311,12 +312,13 @@ function SharedInUseLink(props: {
   );
 }
 
-function HeldList(props: {
+export function HeldList(props: {
   readonly rows: readonly HeldRow[];
   readonly actions: readonly HeldChoiceAction[];
   readonly pendingId: string | null;
   readonly approveRefused: ReadonlySet<string>;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
+  readonly renderDetails: ((heldId: string) => ReactNode) | null;
 }): ReactNode {
   return (
     <ul className="flex flex-col gap-3">
@@ -339,6 +341,9 @@ function HeldList(props: {
                 />
               ) : null}
             </p>
+            {props.renderDetails === null
+              ? null
+              : props.renderDetails(row.heldId)}
             <div className="flex flex-wrap gap-1.5">
               {props.actions.map((action) => (
                 <Button

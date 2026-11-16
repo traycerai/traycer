@@ -49,6 +49,8 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
+import { useTeamEnvironmentReviewRead } from "@/hooks/environment/use-team-environment-review";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { cn } from "@/lib/utils";
 
 interface WindowHostEnvironment {
@@ -354,6 +356,14 @@ function TeamPageFrame(props: {
   const scope = useTeamViewingHost();
   const source = useConfigurationSource();
   const environmentId = source.kind === "pool" ? source.environmentId : null;
+  const kinds = personalPageItemKinds(props.section);
+  const reviewsTeam = source.kind === "pool" && source.configuration === "team";
+  const review = useTeamEnvironmentReviewRead(
+    reviewsTeam ? environmentId : null,
+    props.section === "secrets" ||
+      (kinds !== null && props.section !== "skills"),
+  );
+  const entries = environmentReadData(review) ?? [];
   useRereadOnStaleWrite(null, environmentId);
   useRereadConfigurationOnFocus(environmentId);
   return (
@@ -368,7 +378,11 @@ function TeamPageFrame(props: {
         client: scope.client,
         localOverrides: NO_OVERRIDES,
         notices: NO_NOTICES,
-        review: NO_REVIEW,
+        review: entries.flatMap((row) =>
+          props.section === "secrets" || kinds?.has(row.entry.kind) === true
+            ? [row.entry]
+            : [],
+        ),
       }}
     >
       {props.children}
@@ -456,7 +470,12 @@ export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
   if (value === null) return null;
   if (value.pick.kind === "team")
-    return <PageChipRow section={value.section} pick={value.pick} />;
+    return (
+      <>
+        <PageChipRow section={value.section} pick={value.pick} />
+        <PersonalPageNotices />
+      </>
+    );
   if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {
     return null;
   }
