@@ -472,7 +472,7 @@ describe("readProfileRecordsViaHttp", () => {
       ),
     ).resolves.toEqual({
       kind: "ok",
-      list: { profileSyncEnabled: false, providers: [] },
+      list: { profileSyncEnabled: false, providers: [], providerKeys: [] },
     });
     expectRequests(requests, expectedGet(), 1);
   });
@@ -500,6 +500,7 @@ describe("readProfileRecordsViaHttp", () => {
       kind: "ok",
       list: {
         profileSyncEnabled: true,
+        providerKeys: [],
         providers: [
           {
             providerId: PROVIDER_ID,

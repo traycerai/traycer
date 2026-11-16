@@ -7,7 +7,8 @@ import type {
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAuthService } from "@/lib/host";
-import { authQueryKeys, environmentMutationKeys } from "@/lib/query-keys";
+import { environmentMutationKeys } from "@/lib/query-keys";
+import { cloudProviderKeyKeys } from "@/lib/query-keys/cloud-provider-key-keys";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
 export function useTeamProfileColor(
@@ -33,9 +34,10 @@ export function useTeamProfileColor(
       ),
     onSettled: (_data, _error, request) =>
       queries.invalidateQueries({
-        queryKey: authQueryKeys.environmentProfileRecords(
-          request.environmentId,
+        queryKey: cloudProviderKeyKeys.records(
           viewerId,
+          auth.getIdentityGeneration(),
+          request.environmentId,
         ),
       }),
   });

@@ -307,7 +307,7 @@ describe("TeamProviders profiles", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps Personal Providers on its existing rows without a profile-record request", async () => {
+  it("keeps Personal Providers on its existing rows, reading records only for its key field", async () => {
     const harness = mountPersonalProvidersThroughBoundary({
       ...handlers(() => [profile(true, 4)]),
     });
@@ -318,11 +318,13 @@ describe("TeamProviders profiles", () => {
         name: profileTriggerName("Work", false),
       }),
     ).toBeTruthy();
-    expect(
-      teamProfileRecordHttpBoundary.calls.filter((call) =>
-        call.url.includes("/profile-records"),
-      ),
-    ).toEqual([]);
+    await waitFor(() => {
+      expect(
+        teamProfileRecordHttpBoundary.calls.filter((call) =>
+          call.url.includes("/profile-records"),
+        ),
+      ).toHaveLength(1);
+    });
   });
 
   it("keeps the plan label, standing and quota while synced team admins lose Link and Unlink", async () => {

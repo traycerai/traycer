@@ -1,4 +1,14 @@
 import { useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
+import { isProviderKeyProviderId } from "@traycer-clients/shared/host-client/provider-api-key-change";
+import {
+  useCloudProviderApiKeyQuery,
+  useCloudProviderKeyScope,
+  type CloudProviderKeyScope,
+} from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { CloudProviderApiKeySection } from "./cloud-provider-api-key-section";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   EnvironmentOs,
@@ -58,12 +68,7 @@ import {
 } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
-import {
-  canManageTeamProviderAccounts,
-  useConfigurationSource,
-} from "./configuration-source";
-import { usePickedTeamLabel } from "./team-pick-label";
-import { TeamProviderApiKeySection } from "./team-provider-api-key-section";
+import { useConfigurationSource } from "./configuration-source";
 
 type RailClass = "configured" | "unconfigured" | "unknown";
 
@@ -75,6 +80,8 @@ interface ProviderRailRow {
 }
 
 export function TeamProviders(): ReactNode {
+  const keyScope = useCloudProviderKeyScope();
+  const keyQuery = useCloudProviderApiKeyQuery(keyScope);
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
   const scope = useTeamViewingHost();
@@ -98,6 +105,7 @@ export function TeamProviders(): ReactNode {
     items: query.data,
     plans: plansQuery.data?.plans ?? null,
     secrets: secretsQuery.data?.secrets ?? null,
+    keyRecords: keyQuery.isError ? null : (keyQuery.data ?? null),
   });
   const railKey = rows
     .map((row) => `${row.providerId}:${row.railClass}`)
@@ -147,6 +155,8 @@ export function TeamProviders(): ReactNode {
     <TeamProviderRecordsContext.Provider value={records}>
       <TeamProvidersView
         providerId={providerId}
+        keyScope={keyScope}
+        keyQuery={keyQuery}
         os={os}
         onOsChange={setOs}
         issue={issue}
@@ -169,6 +179,8 @@ export function TeamProviders(): ReactNode {
 }
 
 function TeamProvidersView(props: {
+  readonly keyScope: CloudProviderKeyScope;
+  readonly keyQuery: UseQueryResult<EnvironmentProfileRecords, HostRpcError>;
   readonly providerId: ProviderId;
   readonly os: EnvironmentOs;
   readonly onOsChange: (os: EnvironmentOs) => void;
@@ -287,12 +299,11 @@ function TeamProvidersView(props: {
                     onOutcome={onOutcome}
                   />
                 )}
-                {source.kind === "pool" && source.configuration === "team" ? (
-                  <TeamProviderKey
-                    providerId={providerId}
-                    environmentId={source.environmentId}
-                  />
-                ) : null}
+                <CloudProviderApiKeySection
+                  scope={props.keyScope}
+                  providerId={providerId}
+                  query={props.keyQuery}
+                />
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
@@ -339,23 +350,6 @@ function TeamProvidersView(props: {
         </>
       ) : null}
     </SettingsPanelShell>
-  );
-}
-
-function TeamProviderKey(props: {
-  readonly providerId: ProviderId;
-  readonly environmentId: string;
-}): ReactNode {
-  const environmentName = usePickedTeamLabel(props.environmentId);
-  const source = useConfigurationSource();
-  const canManage = canManageTeamProviderAccounts(source);
-  return (
-    <TeamProviderApiKeySection
-      providerId={props.providerId}
-      environmentId={props.environmentId}
-      environmentName={environmentName}
-      canManage={canManage}
-    />
   );
 }
 
@@ -421,6 +415,7 @@ function providerRailAdjustment(input: {
 }
 
 function providerRailRows(input: {
+  readonly keyRecords: EnvironmentProfileRecords | null;
   readonly items: readonly ConfigurationItem[] | undefined;
   readonly plans: readonly EnvironmentPlan[] | null;
   readonly secrets: readonly EnvironmentSecret[] | null;
@@ -430,27 +425,74 @@ function providerRailRows(input: {
       input.items === undefined
         ? null
         : managedProfileCount(input.items, provider.harnessId);
-    const word = teamProviderStateWord({
-      providerId: provider.providerId,
-      harnessId: provider.harnessId,
-      plans: input.plans,
-      secrets: input.secrets,
-    });
+    const usesKeyRecords =
+      isProviderKeyProviderId(provider.providerId) &&
+      input.keyRecords?.profileSyncEnabled !== false;
+    const linkedPlan =
+      input.plans?.some(
+        (plan) =>
+          plan.harness === provider.harnessId && plan.status === "linked",
+      ) === true;
+    const recordKey =
+      input.keyRecords?.providerKeys.some(
+        (record) =>
+          record.providerId === provider.providerId && record.state === "live",
+      ) === true;
+    let standing: CloudProviderStanding;
+    let word: string | null;
+    if (usesKeyRecords) {
+      // Enabled record mode owns absence too: a removed key cannot be revived by a stale legacy secret.
+      standing = recordProviderStanding({
+        profileCount: count,
+        linkedPlan,
+        recordKey,
+        plansKnown: input.plans !== null,
+        recordsKnown: input.keyRecords !== null,
+      });
+      if (linkedPlan) word = "plan";
+      else if (recordKey) word = "key";
+      else word = null;
+    } else {
+      word = teamProviderStateWord({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+      standing = cloudProviderStanding({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        profileCount: count,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+    }
     return {
       providerId: provider.providerId,
       harnessId: provider.harnessId,
-      railClass: providerRailClass(
-        cloudProviderStanding({
-          providerId: provider.providerId,
-          harnessId: provider.harnessId,
-          profileCount: count,
-          plans: input.plans,
-          secrets: input.secrets,
-        }),
-      ),
+      railClass: providerRailClass(standing),
       subtitle: word === "key" ? "key" : null,
     };
   });
+}
+
+/** A broker key read owns both presence and absence, after known profiles/plans. */
+function recordProviderStanding(input: {
+  readonly profileCount: number | null;
+  readonly linkedPlan: boolean;
+  readonly recordKey: boolean;
+  readonly plansKnown: boolean;
+  readonly recordsKnown: boolean;
+}): CloudProviderStanding {
+  if (
+    (input.profileCount !== null && input.profileCount > 0) ||
+    input.linkedPlan ||
+    input.recordKey
+  )
+    return "configured";
+  if (input.profileCount === null || !input.plansKnown || !input.recordsKnown)
+    return "unknown";
+  return "absent";
 }
 
 function providerRailClass(standing: CloudProviderStanding): RailClass {

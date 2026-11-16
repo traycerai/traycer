@@ -10,12 +10,16 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { cloudProviderKeyKeys } from "@/lib/query-keys/cloud-provider-key-keys";
 import {
   registerDetailsProvider,
   type DetailsProvider,
 } from "@/lib/settings-details-entry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -28,6 +32,7 @@ import {
   requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import {
   profile,
@@ -76,6 +81,27 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => Promise.resolve(),
 }));
 
+function seedLegacyProviderRecords(
+  harness: TeamPageHarness,
+  source: ConfigurationSource,
+): void {
+  if (source.kind !== "pool") {
+    throw new Error("Legacy provider records require a pool source.");
+  }
+  const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  const queryKey = cloudProviderKeyKeys.records(
+    viewerId,
+    harness.auth.getIdentityGeneration(),
+    source.environmentId,
+  );
+  harness.queryClient.setQueryDefaults(queryKey, { staleTime: Infinity });
+  harness.queryClient.setQueryData<EnvironmentProfileRecords>(queryKey, {
+    profileSyncEnabled: false,
+    providers: [],
+    providerKeys: [],
+  });
+}
+
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
@@ -100,7 +126,8 @@ describe("TeamProviders items", () => {
   it("shows every provider and follows the first configured row until a click", async () => {
     const setSection = vi.fn<(section: SettingsSectionId) => void>();
     publishSettingsApi(setSection);
-    const harness = mountTeamPage(poolSource("editor"), {
+    const source = poolSource("editor");
+    const harness = mountTeamPage(source, {
       ...handlers(() => []),
       "environment.plans.list": () => ({
         plans: [
@@ -117,6 +144,7 @@ describe("TeamProviders items", () => {
         removed: [],
       }),
     });
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
@@ -228,13 +256,15 @@ describe("TeamProviders items", () => {
   });
 
   it("puts a Personal provider with a live key and no profiles in the configured group", async () => {
-    const harness = mountTeamPage(personalPoolSource(), {
+    const source = personalPoolSource();
+    const harness = mountTeamPage(source, {
       ...handlers(() => []),
       "environment.secrets.list": () => ({
         secrets: [cursorKey],
         removed: [],
       }),
     });
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {

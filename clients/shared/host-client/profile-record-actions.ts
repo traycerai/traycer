@@ -84,12 +84,18 @@ export function profileRecordActionFailure(
   };
 }
 
+/** Public record metadata only; the broker never returns the provider key. */
+export type EnvironmentProviderKeyRecord = z.infer<
+  typeof providerKeyListRowSchema
+>;
+
 export interface EnvironmentProfileRecords {
   readonly profileSyncEnabled: boolean;
   readonly providers: readonly {
     readonly providerId: string;
     readonly profiles: readonly ProviderProfile[];
   }[];
+  readonly providerKeys: readonly EnvironmentProviderKeyRecord[];
 }
 
 export type ProfileRecordListResult =
@@ -336,7 +342,10 @@ export async function readProfileRecordsViaHttp(
   const parsed = listSchema.safeParse(answer.body);
   if (!parsed.success) return { kind: "failed" };
   if (!parsed.data.enabled)
-    return { kind: "ok", list: { profileSyncEnabled: false, providers: [] } };
+    return {
+      kind: "ok",
+      list: { profileSyncEnabled: false, providers: [], providerKeys: [] },
+    };
   const groups = new Map<string, ProviderProfile[]>();
   for (const record of parsed.data.records) {
     const providerId =
@@ -379,6 +388,7 @@ export async function readProfileRecordsViaHttp(
     kind: "ok",
     list: {
       profileSyncEnabled: true,
+      providerKeys: parsed.data.providerKeys,
       providers: [...groups].map(([providerId, profiles]) => ({
         providerId,
         profiles,

@@ -6,26 +6,23 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
-import {
-  queryOptions,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  cloudProviderRecordsQuery,
+  useCloudProviderKeyScope,
+} from "@/hooks/providers/use-cloud-provider-api-key-query";
 import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
 import { useAuthService } from "@/lib/host";
-import { authQueryKeys } from "@/lib/query-keys";
 import {
   isDocumentVisible,
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
-import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { cloudProviderKeyKeys } from "@/lib/query-keys/cloud-provider-key-keys";
 import { useConfigurationSource } from "./configuration-source";
 
 export interface TeamProviderRecords {
@@ -49,10 +46,11 @@ export function useTeamProviderSignInRead(
 ) {
   const records = useTeamProviderRecords();
   const queries = useQueryClient();
-  const viewerId = useCloudChatViewerId();
-  const queryKey = authQueryKeys.environmentProfileRecords(
+  const scope = useCloudProviderKeyScope();
+  const queryKey = cloudProviderKeyKeys.records(
+    scope.viewerId,
+    scope.identityGeneration,
     environmentId,
-    viewerId,
   );
   const read = useMutation({
     mutationKey: queryKey,
@@ -87,7 +85,7 @@ export function useTeamProviderRecordsRead(): TeamProviderRecords | null {
       ? source.environmentId
       : null;
   const auth = useAuthService();
-  const viewerId = useCloudChatViewerId();
+  const scope = useCloudProviderKeyScope();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
@@ -97,27 +95,14 @@ export function useTeamProviderRecordsRead(): TeamProviderRecords | null {
     windowAttended,
   );
   useRereadConfigurationOnFocus(environmentId);
-  const list = useQuery(
-    queryOptions({
-      queryKey: authQueryKeys.environmentProfileRecords(
-        environmentId,
-        viewerId,
-      ),
-      enabled: environmentId !== null && viewerId.length > 0 && authorized,
-      queryFn: async ({ signal }): Promise<EnvironmentProfileRecords> => {
-        if (environmentId === null)
-          throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
-        const result = await auth.readProfileRecords(environmentId, signal);
-        if (result.kind !== "ok")
-          throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
-        return result.list;
-      },
-      retry: false,
-      refetchInterval: attended ? 5_000 : false,
-      refetchIntervalInBackground: false,
-      refetchOnWindowFocus: false,
-    }),
-  );
+  const shared = cloudProviderRecordsQuery(auth, scope, authorized);
+  const list = useQuery({
+    ...shared,
+    enabled: environmentId !== null && shared.enabled === true,
+    refetchInterval: attended ? 5_000 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+  });
   const refetch = list.refetch;
   const reread = useCallback(async () => {
     const answer = await refetch();

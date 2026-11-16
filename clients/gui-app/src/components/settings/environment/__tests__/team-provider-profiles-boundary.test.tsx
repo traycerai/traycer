@@ -287,7 +287,7 @@ describe("Team Providers boundary and sign-in", () => {
     expect(observableOutput.includes(TEAM_PROFILE_KEY_CANARY)).toBe(false);
   });
 
-  it("lets a team admin use account controls and the record key field through the real boundary", async () => {
+  it("lets a team admin use account controls through the real boundary", async () => {
     teamProfileRecordHttpBoundary.list = {
       status: 200,
       body: teamProfileRecordsBody([
@@ -300,32 +300,14 @@ describe("Team Providers boundary and sign-in", () => {
         }),
       ]),
     };
-    const cursorState = cursorProviderWithTeamRecordKey();
     const harness = mountTeamPageThroughBoundary(
       "admin",
       {
         ...handlers(() => []),
         "environment.host.list": () => ({ hosts: [reachableHost] }),
-        "environment.status": () => teamProviderEnvironmentStatus(),
-        "providers.list": () => ({ providers: [cursorState], native: null }),
-        "providers.beginApiKeyChange": () => ({
-          mode: "record",
-          changeToken: "test-change-token",
-          environmentId: "env-a",
-        }),
-        "providers.clearApiKey": () => ({ state: cursorState }),
-        "providers.settleApiKeyChange": () => ({
-          state: cursorState,
-          result: "installed",
-        }),
       },
       "providers",
     );
-    negotiateMethods({
-      "environment.status": { major: 1, minor: 2 },
-      "providers.beginApiKeyChange": { major: 1, minor: 0 },
-      "providers.list": { major: 10, minor: 13 },
-    });
     await waitFor(() => {
       expect(useAuthStore.getState().contextMetadata?.userId).toBe(
         "team-test-user",
@@ -347,35 +329,6 @@ describe("Team Providers boundary and sign-in", () => {
       await screen.findByRole("dialog", { name: "Add a profile" }),
     ).toBeTruthy();
     await userEvent.keyboard("{Escape}");
-    await userEvent.click(railButton("Cursor"));
-
-    const clear = await screen.findByRole("button", { name: "Clear" });
-    expect(screen.getByLabelText("API key")).toBeTruthy();
-    await userEvent.click(clear);
-    await waitFor(() => {
-      expect(
-        teamProfileRecordHttpBoundary.calls.some(
-          (call) =>
-            call.url.endsWith(
-              "/api/v3/environments/env-a/provider-keys/cursor",
-            ) && call.method === "DELETE",
-        ),
-      ).toBe(true);
-    });
-    expect(harness.paramsOf("providers.clearApiKey")).toEqual([]);
-    expect(harness.paramsOf("providers.beginApiKeyChange")).toEqual([
-      { providerId: "cursor" },
-    ]);
-    expect(harness.paramsOf("providers.settleApiKeyChange")).toEqual([
-      {
-        providerId: "cursor",
-        changeToken: "test-change-token",
-        action: "clear",
-        recordId: "team-key-profile",
-        signInNumber: "1",
-        recordRevision: "2",
-      },
-    ]);
   });
 
   it("keeps the read-only line and hides account controls for a viewer through the real boundary", async () => {
@@ -399,16 +352,10 @@ describe("Team Providers boundary and sign-in", () => {
         "environment.host.list": () => ({ hosts: [reachableHost] }),
         "environment.status": () => teamProviderEnvironmentStatus(),
         "providers.list": () => ({ providers: [cursorState], native: null }),
-        "providers.beginApiKeyChange": () => ({
-          mode: "record",
-          changeToken: "test-change-token",
-          environmentId: "env-a",
-        }),
       },
       "providers",
     );
     negotiateMethods({
-      "providers.beginApiKeyChange": { major: 1, minor: 0 },
       "providers.list": { major: 10, minor: 13 },
     });
     await waitFor(() => {
@@ -431,8 +378,10 @@ describe("Team Providers boundary and sign-in", () => {
     ).toBeTruthy();
     expect(screen.getByText("Needs a sign-in")).toBeTruthy();
     await userEvent.click(railButton("Cursor"));
-    expect(screen.queryByLabelText("API key")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(await screen.findByLabelText("API key")).toHaveProperty(
+      "disabled",
+      true,
+    );
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();

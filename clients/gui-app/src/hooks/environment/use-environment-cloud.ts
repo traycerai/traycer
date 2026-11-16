@@ -195,6 +195,8 @@ export function useEnvironmentCloudOwnRead<
   readonly params: Params;
   readonly read: (cloud: EnvironmentCloud) => Promise<TData>;
   readonly enabled: boolean;
+  /** A mounted review must see proposals that do not move the live revision. */
+  readonly staleTime?: number;
 }): UseQueryResult<TData, HostRpcError> {
   const { method, params, read } = args;
   const cloud = useEnvironmentCloud();
@@ -207,6 +209,7 @@ export function useEnvironmentCloudOwnRead<
     // would refetch on its identity alone.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
     queryOptions<TData, HostRpcError, TData>({
+      ...(args.staleTime === undefined ? {} : { staleTime: args.staleTime }),
       queryKey: [
         ...hostQueryKeys.scope(ENVIRONMENT_CLOUD_QUERY_SCOPE),
         method,
