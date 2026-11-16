@@ -1019,6 +1019,11 @@ describe("<HostOverviewSettingsCard />", () => {
         },
       });
 
+      expect(
+        screen
+          .getByRole("button", { name: "Retry" })
+          .getAttribute("data-variant"),
+      ).toBe("ghost");
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
       await waitFor(() => expect(retries).toEqual([{}]));

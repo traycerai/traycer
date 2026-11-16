@@ -39,9 +39,29 @@ export type HostSettingsCardState =
   | { readonly kind: "moved"; readonly acceptedAt: number }
   | { readonly kind: "other" };
 
+/**
+ * The running move's line: no count until the move has registered an item,
+ * never `0 of 0`.
+ */
+export function moveProgressText(applied: number, total: number): string {
+  return total === 0
+    ? "Moving this computer's settings to Personal"
+    : `Moving this computer's settings to Personal · ${String(applied)} of ${String(total)} items applied`;
+}
+
 /** `Moving stopped: it timed out. 3 items left.` */
 export function moveStoppedText(reason: string, left: number): string {
   return `Moving stopped: ${reason}. ${left === 1 ? "1 item" : `${String(left)} items`} left.`;
+}
+
+/** The environment's reported items and pending uploads: applied, of all. */
+export function moveItemCounts(status: EnvironmentStatusResponseV11): {
+  readonly applied: number;
+  readonly total: number;
+} {
+  const items = status.items.filter((item) => isReportedItemKind(item.kind));
+  const applied = items.filter((item) => item.status === "applied").length;
+  return { applied, total: items.length + status.pendingUploads.length };
 }
 
 export function hostSettingsCardState(
@@ -49,9 +69,7 @@ export function hostSettingsCardState(
 ): HostSettingsCardState {
   const setup = status.setup;
   if (setup !== null && moveIsPastTheAccept(status)) {
-    const items = status.items.filter((item) => isReportedItemKind(item.kind));
-    const applied = items.filter((item) => item.status === "applied").length;
-    const total = items.length + status.pendingUploads.length;
+    const { applied, total } = moveItemCounts(status);
     const reason = MOVE_STOPPED_REASONS[setup.state];
     if (reason !== undefined) {
       return { kind: "move_stopped", reason, left: total - applied };

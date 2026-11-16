@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import { MoveProgressDialog } from "@/components/settings/move/move-progress-dialog";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { statusPlanesSupported } from "@/components/settings/move/status-planes-supported";
 import { planesHaveSharedUnrecorded } from "@/components/settings/move/status-planes";
@@ -27,6 +28,7 @@ export function EnvironmentSheetsHost(): ReactNode {
       <RetrospectiveShowOnce />
       <RetrospectiveSheetFromStore />
       <MoveSheet />
+      <MoveProgressDialog />
     </>
   );
 }

@@ -1,13 +1,18 @@
 import { useState, type ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import { useHostSettingsDetailsSubject } from "@/components/settings/details/use-host-settings-details-subject";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
 import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
-import { moveStoppedText } from "@/components/settings/panels/host-overview-settings-card-model";
+import {
+  moveProgressText,
+  moveStoppedText,
+} from "@/components/settings/panels/host-overview-settings-card-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 
 /** The move as the settings card's state says it: running, or stopped. */
@@ -39,11 +44,8 @@ export function MoveProgressLine(
   if (progress.kind === "moving") {
     return (
       <div className="flex flex-wrap items-center gap-1">
-        {/* No count until the move has registered an item: never `0 of 0`. */}
         <p data-testid="host-settings-card-progress">
-          {progress.total === 0
-            ? "Moving this computer's settings to Personal"
-            : `Moving this computer's settings to Personal · ${String(progress.applied)} of ${String(progress.total)} items applied`}
+          {moveProgressText(progress.applied, progress.total)}
         </p>
         <OverviewCardDetailsLine {...lineProps} />
       </div>
@@ -61,16 +63,6 @@ function MoveStoppedLine(
   props: OverviewCardLineProps & { readonly text: string },
 ): ReactNode {
   const { text, ...lineProps } = props;
-  const retryable =
-    useHostMethodSupport(props.hostId, "environment.setup.retry") === true;
-  const retry = useHostScopedMutationForClient(props.client, {
-    method: "environment.setup.retry",
-    mutationKey: environmentMutationKeys.setupRetry(),
-    errorMessage: "Couldn't retry the move.",
-    invalidateMethods: ["environment.status", "environment.setup.attempts"],
-  });
-  const subject = useHostSettingsDetailsSubject(lineProps);
-  const [exportOpen, setExportOpen] = useState(false);
   return (
     <div className="flex flex-wrap items-center gap-1">
       <p
@@ -79,45 +71,83 @@ function MoveStoppedLine(
       >
         {text}
       </p>
-      {retryable ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={retry.isPending}
-          onClick={() => retry.mutate({})}
-        >
-          Retry
-          {retry.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : null}
-        </Button>
-      ) : null}
-      {subject === null ? null : (
-        <>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setExportOpen(true)}
-          >
-            Export diagnostics
-          </Button>
-          <SettingsDetailsDialog
-            subject={subject}
-            title="Settings"
-            controls={null}
-            open={exportOpen}
-            onOpenChange={setExportOpen}
-            initialTab="export"
-          />
-        </>
-      )}
+      <MoveRetryButton
+        client={props.client}
+        hostId={props.hostId}
+        variant="ghost"
+      />
+      <MoveExportDiagnosticsButton {...lineProps} />
     </div>
+  );
+}
+
+/**
+ * `Retry` on a stopped move: starts it again (`environment.setup.retry`),
+ * which applies nothing twice; nothing on a host without that method.
+ */
+export function MoveRetryButton(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly variant: "default" | "ghost";
+}): ReactNode {
+  const retryable =
+    useHostMethodSupport(props.hostId, "environment.setup.retry") === true;
+  const retry = useHostScopedMutationForClient(props.client, {
+    method: "environment.setup.retry",
+    mutationKey: environmentMutationKeys.setupRetry(),
+    errorMessage: "Couldn't retry the move.",
+    invalidateMethods: ["environment.status", "environment.setup.attempts"],
+  });
+  if (!retryable) return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={props.variant}
+      disabled={retry.isPending}
+      onClick={() => retry.mutate({})}
+    >
+      Retry
+      {retry.isPending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </Button>
+  );
+}
+
+/**
+ * `Export diagnostics` on a stopped move: the host's settings Details at its
+ * export tab; nothing while that host's binding is unread.
+ */
+export function MoveExportDiagnosticsButton(
+  props: OverviewCardLineProps,
+): ReactNode {
+  const subject = useHostSettingsDetailsSubject(props);
+  const [exportOpen, setExportOpen] = useState(false);
+  if (subject === null) return null;
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        onClick={() => setExportOpen(true)}
+      >
+        Export diagnostics
+      </Button>
+      <SettingsDetailsDialog
+        subject={subject}
+        title="Settings"
+        controls={null}
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        initialTab="export"
+      />
+    </>
   );
 }

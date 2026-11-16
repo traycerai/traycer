@@ -56,6 +56,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { useMoveProgressDialogStore } from "@/stores/settings/move-progress-dialog-store";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -141,6 +142,7 @@ function MoveSheetBody(props: {
     client,
     "Couldn't start the move.",
   );
+  const openProgress = useMoveProgressDialogStore((state) => state.openDialog);
   // `null` takes a Moves row's choice back: it moves as planned.
   const choose = (key: string, choice: MoveKeyChoice | null): void => {
     setChoices((current) => {
@@ -175,6 +177,7 @@ function MoveSheetBody(props: {
             return;
           }
           props.onClose();
+          openProgress(target);
         },
       },
     );

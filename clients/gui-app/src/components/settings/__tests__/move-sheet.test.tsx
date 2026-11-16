@@ -36,9 +36,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import { MoveProgressDialog } from "@/components/settings/move/move-progress-dialog";
 import { MOVE_DISCLOSURE_VERSION } from "@/components/settings/move-sheet-model";
 import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import { useMoveProgressDialogStore } from "@/stores/settings/move-progress-dialog-store";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 const HOST_ID = "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60";
@@ -298,6 +300,7 @@ function mountWithRunning(
       }
     >
       <MoveSheet />
+      <MoveProgressDialog />
     </QueryClientProvider>,
   );
   act(() => {
@@ -315,6 +318,7 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   installLegendListTestClock();
   useMoveSheetStore.setState({ target: null });
+  useMoveProgressDialogStore.setState({ target: null });
 });
 
 afterEach(() => {
@@ -738,6 +742,23 @@ describe("<MoveSheet />", () => {
     );
   });
 
+  it("closes on accept and opens the move's progress for that computer", async () => {
+    mount({ plans: [FIRST_PLAN] });
+    await settle();
+
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    const dialog = await screen.findByTestId("move-progress-dialog");
+
+    expect(useMoveSheetStore.getState().target).toBeNull();
+    expect(screen.queryByTestId("move-sheet-accept")).toBeNull();
+    expect(
+      within(dialog).getByText("Moving Old laptop to Personal"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByTestId("move-progress-dialog-progress").textContent,
+    ).toBe("Moving this computer's settings to Personal");
+  });
+
   it("stages and starts the displayed plan when no row choice changed", async () => {
     const harness = mount({
       plans: [FIRST_PLAN],
@@ -905,6 +926,7 @@ describe("<MoveSheet />", () => {
       ).toBe(false);
     });
     expect(useMoveSheetStore.getState().target).not.toBeNull();
+    expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
     expect(harness.starts).toEqual([]);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByTestId("move-sheet-plan-changed")).toBeNull();
@@ -1041,6 +1063,7 @@ describe("<MoveSheet />", () => {
       "Old laptop has no move waiting to start, so nothing moved.",
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
+    expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
   });
   it("lists a provider override as <NAME> (<Provider>)", async () => {
     mount({
