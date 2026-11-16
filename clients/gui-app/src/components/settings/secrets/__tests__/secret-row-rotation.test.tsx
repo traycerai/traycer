@@ -339,8 +339,13 @@ function buildLocalRotationHost(
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
   });
-  recordNegotiatedHostMethods(HOST_ID, ["environment.status"]);
-  return mountRotationHost(overrides, { kind: "host" });
+  const host = mountRotationHost(overrides, { kind: "host" });
+  const hostId = host.client.getActiveHostId();
+  if (hostId === null) {
+    throw new Error("the Local Secrets fixture has no selected host");
+  }
+  recordNegotiatedHostMethods(hostId, ["environment.status"]);
+  return host;
 }
 
 function renderPage(host: RotationHost): QueryClient {

@@ -295,16 +295,16 @@ describe("SecretsPage on a team", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
     });
-    const hostId = requireTeamHostClient().getActiveHostId();
-    if (hostId === null) {
-      throw new Error("the host Secrets page has no selected host");
-    }
-    recordNegotiatedHostMethods(hostId, ["environment.status"]);
     const harness = mountTeamPage({ kind: "host" }, {
       ...teamHandlers(),
       "environment.status": () =>
         environmentStatusFixture({ principal: { kind: "personal" } }),
     });
+    const hostId = requireTeamHostClient().getActiveHostId();
+    if (hostId === null) {
+      throw new Error("the host Secrets page has no selected host");
+    }
+    recordNegotiatedHostMethods(hostId, ["environment.status"]);
     renderSecrets(harness);
 
     expect(await screen.findByTestId("secrets-list")).toBeTruthy();

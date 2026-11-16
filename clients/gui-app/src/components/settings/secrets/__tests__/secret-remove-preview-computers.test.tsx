@@ -161,9 +161,6 @@ function mountRow(
   pick: EnvironmentPick | null,
 ): void {
   useSettingsEnvironmentPickStore.setState({ pick });
-  if (pick?.kind === "local") {
-    recordNegotiatedHostMethods("host-secrets", ["environment.status"]);
-  }
   const harness = mountTeamPage(
     source === "host"
       ? { kind: "host" }
@@ -219,6 +216,13 @@ function mountRow(
       }),
     },
   );
+  if (pick?.kind === "local") {
+    const hostId = requireTeamHostClient().getActiveHostId();
+    if (hostId === null) {
+      throw new Error("the Local Secrets fixture has no selected host");
+    }
+    recordNegotiatedHostMethods(hostId, ["environment.status"]);
+  }
   render(
     <SecretRow
       secret={secret}
