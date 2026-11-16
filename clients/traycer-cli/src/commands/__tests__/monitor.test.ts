@@ -11,7 +11,10 @@ import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
-import { callHostRpc, callHostRpcWithDispatch } from "../../internal/host-rpc";
+import {
+  callAgentHostRpcWithDispatch,
+  callHostRpcWithAgentCredential,
+} from "../../internal/host-rpc";
 import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import { resolveRuntimeContext } from "../../runner/runtime";
@@ -26,7 +29,9 @@ import {
 // onStatusChange/onServerFrame handlers the test invokes to simulate host
 // frames. Protocol/transport coverage lives in the shared ws-stream-client tests.
 type FakeSession = {
-  statusChange: ((status: string, reason: unknown) => void) | null;
+  statusChange:
+    | ((status: string, reason: unknown, retryCause: unknown) => void)
+    | null;
   serverFrame: ((envelope: unknown) => void) | null;
   closed: boolean;
 };
@@ -46,6 +51,7 @@ const {
   testHome,
   sessions,
   streamClientOptions,
+  agentEnvironment,
 } = vi.hoisted(() => {
   const sessions: FakeSession[] = [];
   const streamClientOptions: CapturedStreamClientOptions[] = [];
@@ -56,7 +62,9 @@ const {
       closed: false,
     };
     const handle = {
-      onStatusChange(h: (status: string, reason: unknown) => void) {
+      onStatusChange(
+        h: (status: string, reason: unknown, retryCause: unknown) => void,
+      ) {
         session.statusChange = h;
       },
       onServerFrame(h: (envelope: unknown) => void) {
@@ -83,12 +91,33 @@ const {
     testHome: { path: null as string | null },
     sessions,
     streamClientOptions,
+    agentEnvironment: {
+      capability: undefined as string | undefined,
+      agentId: undefined as string | undefined,
+      names: [] as string[],
+    },
   };
 });
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => testHome.path ?? actual.homedir() };
+});
+
+vi.mock("../../internal/agent-session-capability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../internal/agent-session-capability")
+    >();
+  return {
+    ...actual,
+    PROCESS_AGENT_ENVIRONMENT: (name: string) => {
+      agentEnvironment.names.push(name);
+      if (name === "TRAYCER_AGENT_SESSION_CAPABILITY")
+        return agentEnvironment.capability;
+      return name === "TRAYCER_AGENT_ID" ? agentEnvironment.agentId : undefined;
+    },
+  };
 });
 
 const loggerMock = vi.hoisted(() => ({
@@ -144,8 +173,8 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
-    callHostRpc: vi.fn(),
-    callHostRpcWithDispatch: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
+    callHostRpcWithAgentCredential: vi.fn(),
   };
 });
 
@@ -160,8 +189,12 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
 
 const resolveAuthMock = vi.mocked(resolveHostAuth);
 const pidMock = vi.mocked(readHostPidMetadata);
-const callHostRpcMock = vi.mocked(callHostRpc);
-const callHostRpcWithDispatchMock = vi.mocked(callHostRpcWithDispatch);
+const callAgentHostRpcWithDispatchMock = vi.mocked(
+  callAgentHostRpcWithDispatch,
+);
+const callHostRpcWithAgentCredentialMock = vi.mocked(
+  callHostRpcWithAgentCredential,
+);
 const activeMonitorRuns = new Set<Promise<void>>();
 let firstHostTokenFetchAt: number | null = null;
 
@@ -229,11 +262,29 @@ async function advanceFakeTime(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
+function expectAckCall(params: unknown): void {
+  const calls = callHostRpcWithAgentCredentialMock.mock.calls.map(
+    ([method, callParams]) => [method, callParams] as const,
+  );
+  expect(calls).toContainEqual(["agent.inbox.ack", params]);
+}
+
+function expectNoAckCall(): void {
+  expect(
+    callHostRpcWithAgentCredentialMock.mock.calls.some(
+      ([method]) => method === "agent.inbox.ack",
+    ),
+  ).toBe(false);
+}
+
 beforeEach(async () => {
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-monitor-"));
   vi.useFakeTimers();
   sessions.length = 0;
   streamClientOptions.length = 0;
+  agentEnvironment.capability = undefined;
+  agentEnvironment.agentId = undefined;
+  agentEnvironment.names.length = 0;
   subscribeMock.mockClear();
   revalidateMock.mockReset();
   disposeMock.mockClear();
@@ -251,16 +302,17 @@ beforeEach(async () => {
     );
   });
   vi.stubGlobal("fetch", fetchMock);
-  callHostRpcMock.mockReset();
-  callHostRpcMock.mockResolvedValue({});
-  callHostRpcWithDispatchMock.mockReset();
-  callHostRpcWithDispatchMock.mockResolvedValue({});
+  callAgentHostRpcWithDispatchMock.mockReset();
+  callAgentHostRpcWithDispatchMock.mockResolvedValue({});
+  callHostRpcWithAgentCredentialMock.mockReset();
+  callHostRpcWithAgentCredentialMock.mockResolvedValue({});
   resolveAuthMock.mockResolvedValue({
     token: "tok-1",
     authnBaseUrl: "https://authn.test",
     userId: "u1",
   });
   resolveAuthMock.mockClear();
+  pidMock.mockReset();
   pidMock.mockResolvedValue({
     pid: 1,
     hostId: "d1",
@@ -287,7 +339,7 @@ afterEach(async () => {
       { timeout: 10_000 },
     );
     for (const session of sessions) {
-      session.statusChange?.("closed", incompatibleFatal());
+      session.statusChange?.("closed", incompatibleFatal(), null);
     }
     await Promise.all([...activeMonitorRuns]);
   }
@@ -332,11 +384,178 @@ describe("runMonitor recovery", () => {
     console.info(
       `[timing] monitor token-ready-at=${performance.now().toFixed(1)} fetch-at=${fetchAt.toFixed(1)} elapsed-from-start=${(performance.now() - startedAt).toFixed(1)}ms`,
     );
-    sessions[0]?.statusChange?.("closed", incompatibleFatal());
+    sessions[0]?.statusChange?.("closed", incompatibleFatal(), null);
     expect(await result).toMatchObject({
       message: "traycer monitor: host closed the stream: version mismatch",
     });
   }, 15_000);
+
+  it("refuses an agent session without a capability before auth or stream creation", async () => {
+    agentEnvironment.agentId = "agent-from-fake-environment";
+
+    const error = await runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toMatchObject({
+      message:
+        "traycer monitor: not signed in — run `traycer login` to authenticate.",
+    });
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+      "TRAYCER_AGENT_ID",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pidMock).not.toHaveBeenCalled();
+    expect(streamClientOptions).toHaveLength(0);
+    expect(subscribeMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accepted acknowledgement on the capability captured at monitor open", async () => {
+    const openedCapability = "00000000-0000-4000-8000-000000000001";
+    agentEnvironment.capability = openedCapability;
+    const writeCallbacks: Array<(error: Error | undefined) => void> = [];
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((...args: unknown[]) => {
+        const writeCallback = args.find(
+          (arg): arg is (error: Error | undefined) => void =>
+            typeof arg === "function",
+        );
+        if (writeCallback !== undefined) writeCallbacks.push(writeCallback);
+        return true;
+      });
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+
+    try {
+      await waitForSessions(1);
+      const options = streamClientOptions[0];
+      if (options === undefined)
+        throw new Error("stream options were not captured");
+      expect(options.bearer()?.getBearerToken()).toBe(openedCapability);
+      expect(options.hostCredentialMint).toBeNull();
+      expect(resolveAuthMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      sessions[0]?.serverFrame?.({
+        kind: "message",
+        hasBinaryPayload: false,
+        item: {
+          reply: { expectsReply: false },
+          fromAgentId: "peer-1",
+          senderTitle: null,
+          senderHarnessId: null,
+          epicId: "e1",
+          prompt: "accepted before the next generation",
+          enqueuedAt: 123,
+          eventId: "evt-captured-generation",
+        },
+      });
+      await vi.waitFor(() => expect(writeCallbacks).toHaveLength(1));
+
+      agentEnvironment.capability = "00000000-0000-4000-8000-000000000002";
+      writeCallbacks[0]?.(undefined);
+      await vi.waitFor(() =>
+        expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(1),
+      );
+
+      expectAckCall({
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-captured-generation"],
+      });
+      const credential = callHostRpcWithAgentCredentialMock.mock.calls[0]?.[2];
+      if (credential?.kind !== "capability")
+        throw new Error("acknowledgement did not use the captured capability");
+      expect(credential.capability.bearer.getBearerToken()).toBe(
+        openedCapability,
+      );
+      expect(agentEnvironment.names).toEqual([
+        "TRAYCER_AGENT_SESSION_CAPABILITY",
+      ]);
+      expect(resolveAuthMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(revalidateMock).not.toHaveBeenCalled();
+
+      sessions[0]?.statusChange?.("closed", incompatibleFatal(), null);
+      expect(await result).toMatchObject({
+        message: "traycer monitor: host closed the stream: version mismatch",
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+  });
+
+  it("ends a capability refusal without sign-in recovery or a fresh subscription", async () => {
+    agentEnvironment.capability = "00000000-0000-4000-8000-000000000004";
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+    await waitForSessions(1);
+
+    sessions[0]?.statusChange?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "agent session not admitted",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: "not_admitted",
+        },
+      },
+      null,
+    );
+
+    expect(await result).toMatchObject({
+      message:
+        "traycer monitor: host closed the stream: agent session not admitted",
+    });
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(revalidateMock).not.toHaveBeenCalled();
+    expect(callHostRpcWithAgentCredentialMock).not.toHaveBeenCalled();
+  });
+
+  it("ends on a reconnecting retry cause without renewing or rebinding its capability", async () => {
+    agentEnvironment.capability = "00000000-0000-4000-8000-000000000003";
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+    await waitForSessions(1);
+
+    sessions[0]?.statusChange?.("reconnecting", null, {
+      code: "STREAM_SUBSCRIBE_TIMEOUT",
+      reason: "stream subscribe timed out",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    });
+
+    expect(await result).toMatchObject({
+      message:
+        "traycer monitor: host closed the stream: stream subscribe timed out",
+    });
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(streamClientOptions).toHaveLength(1);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(revalidateMock).not.toHaveBeenCalled();
+    expect(callHostRpcWithAgentCredentialMock).not.toHaveBeenCalled();
+  });
 
   it("ends with the team-membership line when authn refuses its first host-token mint", async () => {
     fetchMock.mockResolvedValueOnce(
@@ -376,7 +595,7 @@ describe("runMonitor recovery", () => {
       throw new Error("stream options were not captured");
     options.bearer();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    sessions[0]?.statusChange?.("closed", incompatibleFatal());
+    sessions[0]?.statusChange?.("closed", incompatibleFatal(), null);
 
     const error = await result;
     expect(error).toMatchObject({
@@ -391,7 +610,7 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
 
-    sessions[0].statusChange?.("closed", unauthorizedFatal());
+    sessions[0].statusChange?.("closed", unauthorizedFatal(), null);
 
     expect((await result).message).toBe(
       "The stored credential was rejected. Run `traycer login` to re-authenticate.",
@@ -406,16 +625,20 @@ describe("runMonitor recovery", () => {
         (e) => e,
       );
       await waitForSessions(1);
-      sessions[0].statusChange?.("closed", {
-        kind: "fatalError",
-        details: {
-          code,
-          reason: "legacy host refusal",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-          retryable: false,
+      sessions[0].statusChange?.(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code,
+            reason: "legacy host refusal",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: false,
+          },
         },
-      });
+        null,
+      );
       expect((await result).message).toBe(
         "The host is out of date. Reinstall the latest host with 'traycer host update'.",
       );
@@ -426,7 +649,7 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
 
-    sessions[0].statusChange?.("closed", incompatibleFatal());
+    sessions[0].statusChange?.("closed", incompatibleFatal(), null);
 
     expect((await result).message).toMatch(/host closed the stream/);
     expect(revalidateMock).not.toHaveBeenCalled();
@@ -464,7 +687,7 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
 
-    sessions[0].statusChange?.("closed", unauthorizedFatal());
+    sessions[0].statusChange?.("closed", unauthorizedFatal(), null);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     // No immediate re-subscribe and not terminated - a retry is scheduled.
     expect(subscribeMock).toHaveBeenCalledTimes(1);
@@ -487,11 +710,11 @@ describe("runMonitor recovery", () => {
       expect(options.bearer()?.getBearerToken()).toBe("monitor-host-token-1"),
     );
 
-    sessions[0]?.statusChange?.("closed", unauthorizedFatal());
+    sessions[0]?.statusChange?.("closed", unauthorizedFatal(), null);
     await waitForSessions(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sessions[0]?.closed).toBe(true);
-    sessions[1]?.statusChange?.("closed", unauthorizedFatal());
+    sessions[1]?.statusChange?.("closed", unauthorizedFatal(), null);
 
     expect((await result).message).toBe(
       "traycer monitor: host closed the stream: invalid or expired token",
@@ -815,7 +1038,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
           throw new Error("parsed agent send options had unexpected types");
         }
         const returnedResponseId = "response-follow-up";
-        callHostRpcWithDispatchMock.mockResolvedValue({
+        callAgentHostRpcWithDispatchMock.mockResolvedValue({
           responseId: returnedResponseId,
         });
         const command = buildAgentSendCommand({
@@ -840,7 +1063,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
         // answers, and the transport's 15s default expires mid-open on a
         // loaded machine. A send that lost its own response deadline would
         // report a failure for a message the host went on to deliver.
-        expect(callHostRpcWithDispatchMock).toHaveBeenCalledWith(
+        expect(callAgentHostRpcWithDispatchMock).toHaveBeenCalledWith(
           "agent.sendMessage",
           expect.objectContaining({
             senderAgentId: "a1",
@@ -959,10 +1182,7 @@ describe("mixed-version inbox message frames", () => {
     expect(lines.some((line) => line.includes("hello from an old host"))).toBe(
       true,
     );
-    expect(callHostRpcMock).not.toHaveBeenCalledWith(
-      "agent.inbox.ack",
-      expect.anything(),
-    );
+    expectNoAckCall();
 
     stdoutSpy.mockRestore();
     void result;
@@ -1000,7 +1220,7 @@ describe("mixed-version inbox message frames", () => {
       },
     });
     await vi.waitFor(() =>
-      expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+      expectAckCall({
         epicId: "e1",
         agentId: "a1",
         eventIds: ["evt-1"],
@@ -1011,7 +1231,7 @@ describe("mixed-version inbox message frames", () => {
     expect(lines.some((line) => line.includes("hello from a new host"))).toBe(
       true,
     );
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+    expectAckCall({
       epicId: "e1",
       agentId: "a1",
       eventIds: ["evt-1"],
@@ -1051,15 +1271,15 @@ describe("mixed-version inbox message frames", () => {
       });
     }
     await vi.waitFor(() =>
-      expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+      expectAckCall({
         epicId: "e1",
         agentId: "a1",
         eventIds: ["evt-4", "evt-5"],
       }),
     );
 
-    expect(callHostRpcMock).toHaveBeenCalledTimes(1);
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+    expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(1);
+    expectAckCall({
       epicId: "e1",
       agentId: "a1",
       eventIds: ["evt-4", "evt-5"],
@@ -1079,7 +1299,7 @@ describe("mixed-version inbox message frames", () => {
         cb?.();
         return true;
       });
-    callHostRpcMock
+    callHostRpcWithAgentCredentialMock
       .mockRejectedValueOnce(new Error("temporary host outage"))
       .mockRejectedValueOnce(new Error("temporary host outage"))
       .mockResolvedValueOnce({});
@@ -1100,23 +1320,29 @@ describe("mixed-version inbox message frames", () => {
         eventId: "evt-retry",
       },
     });
-    await vi.waitFor(() => expect(callHostRpcMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(1),
+    );
 
-    expect(callHostRpcMock).toHaveBeenCalledTimes(1);
-    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
+    expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(1);
+    expectAckCall({
       epicId: "e1",
       agentId: "a1",
       eventIds: ["evt-retry"],
     });
 
     await advanceFakeTime(1_000);
-    await vi.waitFor(() => expect(callHostRpcMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(2),
+    );
 
     await advanceFakeTime(1_999);
 
     await advanceFakeTime(1);
-    await vi.waitFor(() => expect(callHostRpcMock).toHaveBeenCalledTimes(3));
-    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
+    await vi.waitFor(() =>
+      expect(callHostRpcWithAgentCredentialMock).toHaveBeenCalledTimes(3),
+    );
+    expectAckCall({
       epicId: "e1",
       agentId: "a1",
       eventIds: ["evt-retry"],
@@ -1158,16 +1384,10 @@ describe("mixed-version inbox message frames", () => {
     });
     await vi.waitFor(() => {
       expect(stdoutSpy).toHaveBeenCalledTimes(1);
-      expect(callHostRpcMock).not.toHaveBeenCalledWith(
-        "agent.inbox.ack",
-        expect.anything(),
-      );
+      expectNoAckCall();
     });
 
-    expect(callHostRpcMock).not.toHaveBeenCalledWith(
-      "agent.inbox.ack",
-      expect.anything(),
-    );
+    expectNoAckCall();
 
     stdoutSpy.mockRestore();
     void result;
@@ -1198,16 +1418,13 @@ describe("mixed-version inbox message frames", () => {
       },
     });
     await vi.waitFor(() => expect(stdoutSpy).toHaveBeenCalledTimes(1));
-    expect(callHostRpcMock).not.toHaveBeenCalled();
+    expect(callHostRpcWithAgentCredentialMock).not.toHaveBeenCalled();
 
     // Advance past `writeStdoutForAck`'s bounded fallback - it must resolve
     // `false` (not ack), never treat the still-incomplete write as success.
     await advanceFakeTime(10_000);
 
-    expect(callHostRpcMock).not.toHaveBeenCalledWith(
-      "agent.inbox.ack",
-      expect.anything(),
-    );
+    expectNoAckCall();
 
     stdoutSpy.mockRestore();
     void result;
@@ -1244,11 +1461,11 @@ describe("mixed-version inbox message frames", () => {
     });
     await vi.waitFor(() => expect(writeCallbacks).toHaveLength(1));
     await advanceFakeTime(10_000);
-    expect(callHostRpcMock).not.toHaveBeenCalled();
+    expect(callHostRpcWithAgentCredentialMock).not.toHaveBeenCalled();
 
     writeCallbacks[0]?.(undefined);
     await vi.waitFor(() =>
-      expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
+      expectAckCall({
         epicId: "e1",
         agentId: "a1",
         eventIds: ["evt-late-write"],

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentListCommand } from "../agent-list";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callAgentHostRpc } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -23,10 +23,10 @@ vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/host-rpc")
   >("../../internal/host-rpc");
-  return { ...actual, callHostRpc: vi.fn() };
+  return { ...actual, callAgentHostRpc: vi.fn() };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callAgentHostRpc);
 
 /**
  * The row WITHOUT `agent.list@9.1`'s session facet, split out so the expected
@@ -56,7 +56,7 @@ const LEGACY_LIST_RESPONSE = {
       ...LEGACY_ROW_BEFORE_SESSION_FACET,
       // `agent.list@9.1`'s session facet. Required on the canonical row and
       // supplied by the upgrade path for an older host, so a mock that stands
-      // in for the TRANSPORT - which is what `callHostRpc` is here - has to
+      // in for the TRANSPORT - which is what `callAgentHostRpc` is here - has to
       // carry it. A GUI chat has no PTY session, so `null` is its answer.
       sessionState: null,
       lastExit: null,
