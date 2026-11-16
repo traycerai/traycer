@@ -32,7 +32,7 @@ import {
 } from "./bot-tab-surface-mocks";
 import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,6 +40,7 @@ import {
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
 import { botSubscribeServerFrameSchema } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotSubscribeServerFrame } from "@traycer/protocol/host/bot/schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -280,6 +281,13 @@ async function openActivity(): Promise<{ rerender: () => void }> {
 const pageText = (): string =>
   screen.getByTestId("bot-activity-page").textContent;
 
+/** The fixture thread's anchor, which names a thread by its excerpt. */
+function postThreadAnchor(): NonNullable<BotThreadSummary["anchor"]> {
+  const { anchor } = postThread();
+  if (anchor === null) throw new Error("thread fixture has no anchor");
+  return anchor;
+}
+
 /** The cached subscription stays listed, but as the last answer, not as current. */
 function expectLastKnownSubscriptions(): void {
   const region = screen.getByRole("region", {
@@ -507,7 +515,12 @@ describe("<BotTabSurface /> opening a notification subscription's transcript fro
 
   function seedSubscriptions(): void {
     mocks.state.threads = [
-      { ...postThread(), threadId: "thread-1", sessionChatId: "chat-thread-1" },
+      {
+        ...postThread(),
+        threadId: "thread-1",
+        sessionChatId: "chat-thread-1",
+        anchor: { ...postThreadAnchor(), excerpt: "Release plan" },
+      },
     ];
     mocks.state.snapshot = {
       ...snapshot(),
@@ -515,16 +528,9 @@ describe("<BotTabSurface /> opening a notification subscription's transcript fro
     };
   }
 
-  /** Each subscription row's transcript action, trunk first. */
-  function transcriptActions(): ReadonlyArray<HTMLElement> {
-    const region = screen.getByRole("region", {
-      name: "Notification subscriptions",
-    });
-    return within(region)
-      .getAllByRole("listitem")
-      .map((item) =>
-        within(item).getByRole("button", { name: "Open transcript" }),
-      );
+  /** The transcript action of the subscription whose visible label is `label`. */
+  function transcriptAction(label: string): HTMLElement {
+    return screen.getByRole("button", { name: `Open transcript: ${label}` });
   }
 
   it("a trunk subscription's action swaps the whole Tabs view for the bot's trunk session, not a thread", async () => {
@@ -532,9 +538,7 @@ describe("<BotTabSurface /> opening a notification subscription's transcript fro
     seedSubscriptions();
     await openActivity();
 
-    const trunk = transcriptActions().at(0);
-    if (trunk === undefined) throw new Error("no trunk transcript action");
-    await user.click(trunk);
+    await user.click(transcriptAction("Channel"));
 
     const session = screen.getByTestId("stub-session");
     expect(session.getAttribute("data-chat-id")).toBe(
@@ -550,9 +554,7 @@ describe("<BotTabSurface /> opening a notification subscription's transcript fro
     seedSubscriptions();
     await openActivity();
 
-    const thread = transcriptActions().at(1);
-    if (thread === undefined) throw new Error("no thread transcript action");
-    await user.click(thread);
+    await user.click(transcriptAction("Release plan"));
 
     const session = screen.getByTestId("stub-session");
     expect(session.getAttribute("data-chat-id")).toBe("chat-thread-1");
@@ -567,10 +569,10 @@ describe("<BotTabSurface /> opening a notification subscription's transcript fro
     await openActivity();
 
     expectLastKnownSubscriptions();
-    expect(transcriptActions()).toHaveLength(2);
-    const trunk = transcriptActions().at(0);
-    if (trunk === undefined) throw new Error("no trunk transcript action");
-    await user.click(trunk);
+    expect(
+      screen.getAllByRole("button", { name: /^Open transcript: / }),
+    ).toHaveLength(2);
+    await user.click(transcriptAction("Channel"));
 
     expect(
       screen.getByTestId("stub-session").getAttribute("data-chat-id"),

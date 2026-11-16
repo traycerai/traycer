@@ -9,14 +9,7 @@
  * reachability, the member actions' writes and navigation.
  */
 import { type ReactNode } from "react";
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -54,6 +47,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type NotificationIndicatorState,
@@ -105,7 +99,7 @@ const mocks = vi.hoisted(() => {
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
     /** Each session the page was asked to open. */
-    openSession: vi.fn(),
+    openSession: vi.fn<BotSessionOpen>(),
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
     /**
@@ -701,7 +695,7 @@ describe("<BotActivityPage /> subscriptions", () => {
 });
 
 describe("<BotActivityPage /> thread subscriptions", () => {
-  it("shows a thread subscription as watching notifications, without its excerpt or thread ID and without a shell section", () => {
+  it("names a thread subscription by its excerpt, or by its position when it has none, never by its thread ID, and shows no shell section", () => {
     const first = postThread();
     if (first.anchor === null) throw new Error("thread fixture has no anchor");
     const named = {
@@ -748,9 +742,9 @@ describe("<BotActivityPage /> thread subscriptions", () => {
       within(subscriptions).getByText("Needs attention only"),
     ).toBeTruthy();
     expect(within(subscriptions).getByText("All notifications")).toBeTruthy();
-    expect(subscriptions.textContent).not.toMatch(
-      /Thread:|Release discussion|thread-fallback/,
-    );
+    expect(within(subscriptions).getByText("Release discussion")).toBeTruthy();
+    expect(within(subscriptions).getByText("Thread 2")).toBeTruthy();
+    expect(subscriptions.textContent).not.toMatch(/Thread:|thread-fallback/);
     expect(
       screen.queryByRole("region", { name: "Shells and monitors" }),
     ).toBeNull();
@@ -2918,6 +2912,16 @@ describe("<BotActivityPage /> watched-task reporting controls", () => {
 });
 
 /**
+ * Resolves when `element` next takes focus. The dialog hands focus back from
+ * its own close handler, so a case registers this before closing and awaits
+ * the event itself: no clock is read and nothing is polled.
+ */
+const focusReturns = (element: HTMLElement): Promise<void> =>
+  new Promise((resolve) => {
+    element.addEventListener("focus", () => resolve(), { once: true });
+  });
+
+/**
  * Opens the End reporting confirmation of `t-every` with the keyboard alone:
  * the trigger takes focus, Enter opens the menu, arrows reach End reporting…
  * and Enter picks it. Returns the trigger the focus has to come back to.
@@ -2930,13 +2934,13 @@ async function openEndReportingByKeyboard(
   });
   trigger.focus();
   await user.keyboard("{Enter}");
-  const end = await screen.findByRole("menuitem", { name: "End reporting…" });
+  const end = screen.getByRole("menuitem", { name: "End reporting…" });
   for (let step = 0; step < 6 && document.activeElement !== end; step += 1)
     await user.keyboard("{ArrowDown}");
   if (document.activeElement !== end)
     throw new Error("arrow keys never reached End reporting…");
   await user.keyboard("{Enter}");
-  await screen.findByText("End reporting?");
+  expect(screen.getByText("End reporting?")).toBeTruthy();
   return trigger;
 }
 
@@ -2954,12 +2958,12 @@ describe("<BotActivityPage /> ending reporting from the keyboard", () => {
       const trigger = await openEndReportingByKeyboard(user);
       if (way === "Cancel")
         screen.getByRole("button", { name: "Cancel" }).focus();
+      const returned = focusReturns(trigger);
       await user.keyboard(key);
+      await returned;
 
-      await waitFor(() =>
-        expect(screen.queryByText("End reporting?")).toBeNull(),
-      );
-      await waitFor(() => expect(document.activeElement).toBe(trigger));
+      expect(screen.queryByText("End reporting?")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
       expect(trigger.isConnected).toBe(true);
       expect(trigger.getAttribute("aria-label")).toBe("Reporting actions");
       expect(mocks.actions).toEqual([]);
@@ -2990,12 +2994,12 @@ describe("<BotActivityPage /> ending reporting from the keyboard", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
 
+    const returned = focusReturns(trigger);
     act(() => mocks.stop.settle?.("success"));
+    await returned;
 
-    await waitFor(() =>
-      expect(screen.queryByText("End reporting?")).toBeNull(),
-    );
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByText("End reporting?")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
     expect(mocks.actions).toHaveLength(1);
   });
 
@@ -3022,9 +3026,206 @@ describe("<BotActivityPage /> ending reporting from the keyboard", () => {
 });
 
 describe("<BotActivityPage /> watching notifications", () => {
+  it("keeps every transcript action distinguishable when a thread has no name or two threads share one", async () => {
+    const user = userEvent.setup();
+    const base = postThread();
+    if (base.anchor === null) throw new Error("thread fixture has no anchor");
+    const anchor = base.anchor;
+    const thread = (id: string, excerpt: string | null) => ({
+      ...base,
+      threadId: `thread-${id}`,
+      sessionChatId: `chat-${id}`,
+      anchor: { ...anchor, excerpt },
+    });
+    const threads = [
+      thread("unnamed", null),
+      thread("first", "Release plan"),
+      thread("second", "Release plan"),
+    ];
+    const subscribed = (target: BotNotificationSubscription["target"]) => ({
+      target,
+      attentionOnly: false,
+      everySeconds: null,
+      since: null,
+      digests: null,
+    });
+    render(
+      <Harness
+        tasks={[]}
+        threads={threads}
+        boundHere
+        notificationSubscriptions={[
+          subscribed({ kind: "trunk" }),
+          ...threads.map((item) =>
+            subscribed({ kind: "thread", threadId: item.threadId }),
+          ),
+        ]}
+      />,
+    );
+
+    const actions = screen.getAllByRole("button", { name: /^Open transcript/ });
+    const names = actions.map((action) => action.getAttribute("aria-label"));
+    expect(new Set(names).size).toBe(4);
+    expect(names).toContain("Open transcript: Channel");
+    expect(
+      names.filter((name) => name?.startsWith("Open transcript: Thread ")),
+    ).toHaveLength(1);
+    expect(
+      names.filter((name) => name?.startsWith("Open transcript: Release plan")),
+    ).toHaveLength(2);
+
+    for (const action of actions) await user.click(action);
+
+    expect(
+      mocks.openSession.mock.calls.map(([session]) => session.chatId).sort(),
+    ).toEqual(["bot-trunk", "chat-first", "chat-second", "chat-unnamed"]);
+  });
+
+  it("keeps names unique when a third thread is titled exactly like the suffix generated for two duplicates", async () => {
+    const user = userEvent.setup();
+    const base = postThread();
+    if (base.anchor === null) throw new Error("thread fixture has no anchor");
+    const anchor = base.anchor;
+    const thread = (id: string, excerpt: string) => ({
+      ...base,
+      threadId: `thread-${id}`,
+      sessionChatId: `chat-${id}`,
+      anchor: { ...anchor, excerpt },
+    });
+    const threads = [
+      thread("first", "Release plan"),
+      thread("second", "Release plan"),
+      thread("lookalike", "Release plan (2)"),
+    ];
+    const subscribed = (target: BotNotificationSubscription["target"]) => ({
+      target,
+      attentionOnly: false,
+      everySeconds: null,
+      since: null,
+      digests: null,
+    });
+    render(
+      <Harness
+        tasks={[]}
+        threads={threads}
+        boundHere
+        notificationSubscriptions={[
+          subscribed({ kind: "trunk" }),
+          ...threads.map((item) =>
+            subscribed({ kind: "thread", threadId: item.threadId }),
+          ),
+        ]}
+      />,
+    );
+
+    const actions = screen.getAllByRole("button", { name: /^Open transcript/ });
+    const names = actions.map((action) => action.getAttribute("aria-label"));
+    expect(names).toHaveLength(4);
+    expect(new Set(names).size).toBe(4);
+
+    for (const action of actions) await user.click(action);
+
+    expect(
+      mocks.openSession.mock.calls.map(([session]) => session.chatId).sort(),
+    ).toEqual(["bot-trunk", "chat-first", "chat-lookalike", "chat-second"]);
+  });
+
+  it("tells an equal-filter trunk and two named threads apart: each action is named for its destination and opens it, picked by name and never by position", async () => {
+    const user = userEvent.setup();
+    const base = postThread();
+    if (base.anchor === null) throw new Error("thread fixture has no anchor");
+    const anchor = base.anchor;
+    const release = {
+      ...base,
+      threadId: "thread-release",
+      sessionChatId: "chat-release",
+      anchor: { ...anchor, excerpt: "Release plan" },
+    };
+    const billing = {
+      ...base,
+      threadId: "thread-billing",
+      sessionChatId: "chat-billing",
+      anchor: { ...anchor, excerpt: "Billing question" },
+    };
+    const subscribed = (target: BotNotificationSubscription["target"]) => ({
+      target,
+      attentionOnly: false,
+      everySeconds: null,
+      since: null,
+      digests: null,
+    });
+    render(
+      <Harness
+        tasks={[]}
+        threads={[release, billing]}
+        boundHere
+        notificationSubscriptions={[
+          subscribed({ kind: "thread", threadId: billing.threadId }),
+          subscribed({ kind: "trunk" }),
+          subscribed({ kind: "thread", threadId: release.threadId }),
+        ]}
+      />,
+    );
+
+    const region = screen.getByRole("region", {
+      name: "Notification subscriptions",
+    });
+    expect(region.textContent).toContain("Channel");
+    expect(region.textContent).toContain("Release plan");
+    expect(region.textContent).toContain("Billing question");
+    expect(
+      screen.getAllByRole("button", { name: /^Open transcript/ }),
+    ).toHaveLength(3);
+    expect(
+      screen.queryByRole("button", { name: "Open transcript" }),
+    ).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: "Open transcript: Release plan" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open transcript: Channel" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open transcript: Billing question" }),
+    );
+
+    expect(mocks.openSession.mock.calls).toEqual([
+      [
+        {
+          chatId: "chat-release",
+          threadId: "thread-release",
+          messageId: null,
+          sendPostId: null,
+        },
+      ],
+      [
+        {
+          chatId: "bot-trunk",
+          threadId: null,
+          messageId: null,
+          sendPostId: null,
+        },
+      ],
+      [
+        {
+          chatId: "chat-billing",
+          threadId: "thread-billing",
+          messageId: null,
+          sendPostId: null,
+        },
+      ],
+    ]);
+  });
+
   it("opens the trunk's session, and a thread's own, from each subscription's Open transcript action", async () => {
     const user = userEvent.setup();
-    const thread = postThread();
+    const base = postThread();
+    if (base.anchor === null) throw new Error("thread fixture has no anchor");
+    const thread = {
+      ...base,
+      anchor: { ...base.anchor, excerpt: "Release plan" },
+    };
     render(
       <Harness
         tasks={[]}
@@ -3049,10 +3250,16 @@ describe("<BotActivityPage /> watching notifications", () => {
       />,
     );
 
-    const actions = screen.getAllByRole("button", { name: "Open transcript" });
-    expect(actions).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /^Open transcript: / }),
+    ).toHaveLength(2);
     expect(mocks.openSession).not.toHaveBeenCalled();
-    for (const action of actions) await user.click(action);
+    await user.click(
+      screen.getByRole("button", { name: "Open transcript: Channel" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open transcript: Release plan" }),
+    );
 
     expect(mocks.openSession.mock.calls).toEqual([
       [
