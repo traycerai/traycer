@@ -28,7 +28,10 @@ import { describe, expect, it } from "vitest";
 import { BotSearchPanel } from "@/components/bots/bot-search-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SEARCH_BOT_A } from "@/lib/bots/__tests__/bot-search-test-support";
-import { openBotSearch } from "@/stores/bots/bot-search-store";
+import {
+  openBotSearch,
+  useBotSearchStore,
+} from "@/stores/bots/bot-search-store";
 
 installSearchSurfaceLifecycle();
 
@@ -77,11 +80,8 @@ describe("a search of one bot opened before the lists that place it have loaded"
     "asks nothing while %s, and then asks the bot's own host first, not the tab's",
     async (_unloaded, hold, release) => {
       hold();
-      openBotSearch(
-        SEARCH_BOT_A,
-        { kind: "bot", botId: SEARCH_BOT_A },
-        "release",
-      );
+      openBotSearch(SEARCH_BOT_A, { kind: "bot", botId: SEARCH_BOT_A });
+      useBotSearchStore.getState().setQuery("release");
       render(<PanelOnly />);
       await settle();
       await settle();
@@ -99,11 +99,8 @@ describe("a search of one bot opened before the lists that place it have loaded"
 
   it("searches on the tab's host when the bot list fails to load, rather than waiting on it", async () => {
     mocks.state.botListState = "error";
-    openBotSearch(
-      SEARCH_BOT_A,
-      { kind: "bot", botId: SEARCH_BOT_A },
-      "release",
-    );
+    openBotSearch(SEARCH_BOT_A, { kind: "bot", botId: SEARCH_BOT_A });
+    useBotSearchStore.getState().setQuery("release");
     render(<PanelOnly />);
     await settle();
 
