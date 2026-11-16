@@ -356,6 +356,10 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  readonly loggerDebugs: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
   readonly loggerWarns: Array<{
     message: string;
     fields: Record<string, unknown>;
@@ -436,6 +440,7 @@ function makeRunStubs(
     stderrTees: [],
     loggerErrors: [],
     loggerInfos: [],
+    loggerDebugs: [],
     loggerWarns: [],
     lifecycleRecordWrites: [],
     lifecycleRecordRemovals: [],
@@ -447,7 +452,9 @@ function makeRunStubs(
   const childAsUnknown: unknown = child;
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const spyLogger: ILogger = {
-    debug: () => undefined,
+    debug: (message, fields) => {
+      recorded.loggerDebugs.push({ message, fields: { ...fields } });
+    },
     info: (message, fields) => {
       recorded.loggerInfos.push({ message, fields: { ...fields } });
     },
@@ -8041,21 +8048,26 @@ describe("runHostStart - supervisor.json lifecycle across outcomes", () => {
     const published = new Set<number>();
     const writeCalls: SupervisorRecords[] = [];
     const removeCalls: number[] = [];
-    const tracking = withPidTrackingLifecycle(
-      withLifecyclePolicy(
-        deps,
-        "linked",
-        async () => ({ kind: "absent" }),
-        async () => ({ kind: "absent" }),
-        async () => "indeterminate",
+    const onHostStarted = vi.fn(() => Promise.resolve());
+    const tracking = {
+      ...withPidTrackingLifecycle(
+        withLifecyclePolicy(
+          deps,
+          "linked",
+          async () => ({ kind: "absent" }),
+          async () => ({ kind: "absent" }),
+          async () => "indeterminate",
+        ),
+        published,
+        writeCalls,
+        removeCalls,
       ),
-      published,
-      writeCalls,
-      removeCalls,
-    );
+      onHostStarted,
+    };
 
     await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
 
+    expect(onHostStarted).not.toHaveBeenCalled();
     expect(recorded.exited).toBe(0);
     expect(writeCalls).toHaveLength(0);
     expect(removeCalls).toHaveLength(0);
@@ -9833,5 +9845,72 @@ describe("runHostStart - previous-exit record", () => {
     expect(attempts).toEqual(["write"]);
     expect(recorded.exited).toBe(7);
     expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(true);
+  });
+});
+
+describe("runHostStart - advisory work after an admitted manual start", () => {
+  it("starts the advisory once after spawn and does not wait for it before supervision exits", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    let releaseProbe: (() => void) | null = null;
+    let probeSettled = false;
+    let probeRun: Promise<void> | null = null;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const onHostStarted = vi.fn(() => {
+      recorded.sequence.push("credential-probe");
+      probeRun = probeGate.then(() => {
+        probeSettled = true;
+      });
+      return probeRun;
+    });
+    const tracking = withChildExit({ ...deps, onHostStarted }, child, 0, null);
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+
+    expect(onHostStarted).toHaveBeenCalledTimes(1);
+    expect(recorded.sequence.indexOf("spawn")).toBeLessThan(
+      recorded.sequence.indexOf("credential-probe"),
+    );
+    expect(probeSettled).toBe(false);
+    const finishProbe = releaseProbe;
+    const startedProbe = probeRun;
+    if (finishProbe === null || startedProbe === null) {
+      throw new Error("advisory probe did not start");
+    }
+    finishProbe();
+    await startedProbe;
+    expect(probeSettled).toBe(true);
+  });
+
+  it("logs a rejected advisory diagnostic only at debug level and still supervises the child", async () => {
+    const diagnostic =
+      "manual-start-probe-marker path=/private/test/credentials body=distinctive";
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const onHostStarted = vi.fn(async () => {
+      throw new Error(diagnostic);
+    });
+    const tracking = withChildExit({ ...deps, onHostStarted }, child, 0, null);
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+    await vi.waitFor(() => expect(recorded.loggerWarns).toHaveLength(1));
+
+    expect(onHostStarted).toHaveBeenCalledTimes(1);
+    expect(recorded.exited).toBe(0);
+    expect(recorded.loggerWarns[0]).toEqual({
+      message:
+        "Host credential provisioning threw; the command itself was unaffected",
+      fields: { kind: "error" },
+    });
+    expect(JSON.stringify(recorded.loggerWarns)).not.toContain(diagnostic);
+    expect(JSON.stringify(recorded.loggerDebugs)).toContain(diagnostic);
   });
 });

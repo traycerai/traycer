@@ -1554,24 +1554,53 @@ describe("install auth helpers", () => {
     expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
   });
 
-  it("maps a throw from the probe to an error outcome instead of propagating it", async () => {
+  it("treats an unreadable stored sign-in as signed out and keeps its diagnostic at debug level", async () => {
+    const diagnostic =
+      "stored-credentials-marker path=/private/test/credentials body=distinctive";
+    const ctx = fakeCtx();
+    const warn = vi.fn();
+    const debug = vi.fn();
+    ctx.runtime.logger = { ...ctx.runtime.logger, warn, debug };
+    mocks.resolveHostAuthMock.mockRejectedValue(new Error(diagnostic));
+
+    const result = await maybeProvisionCredential(ctx, "start", null);
+
+    expect(result).toBeNull();
+    expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "Host install could not read the stored credentials; treating as signed out",
+      { environment: "production", stage: "provision", kind: "error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
+  });
+
+  it("maps a thrown probe to an error outcome and keeps its diagnostic at debug level", async () => {
     // The probe runs AFTER the bytes are swapped and the service started, so
     // an escape would report a completed command as a failed one.
+    const diagnostic =
+      "credential-probe-marker path=/private/test/credentials body=distinctive";
+    const ctx = fakeCtx();
+    const warn = vi.fn();
+    const debug = vi.fn();
+    ctx.runtime.logger = { ...ctx.runtime.logger, warn, debug };
     mocks.resolveHostAuthMock.mockResolvedValue(storedAuth());
     mocks.provisionInstalledHostCredentialMock.mockRejectedValue(
-      new Error("simulated probe explosion"),
+      new Error(diagnostic),
     );
 
-    const result = await maybeProvisionCredential(
-      fakeCtx(),
-      "start",
-      signedIn(),
-    );
+    const result = await maybeProvisionCredential(ctx, "start", signedIn());
 
     expect(result).toEqual<HostCredentialProvisionOutcome>({
       kind: "error",
-      message: "simulated probe explosion",
+      message: diagnostic,
     });
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential provisioning threw; the command itself was unaffected",
+      { kind: "error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
   });
 
   it("routes login's running-host follow-up through the provisioning probe", async () => {

@@ -29,7 +29,22 @@ const mocks = vi.hoisted(() => ({
   // command-level wiring and never publishes.
   crossSpawnEdge: false,
   publishedOrigins: [] as string[],
+  credentialProvisionMock: vi.fn(),
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: (
+      ...args: Parameters<typeof actual.maybeProvisionCredential>
+    ) => {
+      mocks.callOrder.push("credential-provision");
+      return mocks.credentialProvisionMock(...args);
+    },
+  };
+});
 
 vi.mock("../cli-upgrade", () => ({
   finalizePendingCliUpgrade: async () => {
@@ -177,6 +192,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.callOrder = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
+    mocks.credentialProvisionMock.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -198,6 +214,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   }
 
   it("on a finalised swap, starts the service and writes a 'swapped' marker", async () => {
+    mocks.credentialProvisionMock.mockResolvedValue({
+      kind: "active",
+      minted: true,
+    });
     mocks.finalizeResult = {
       status: "finalised",
       previousVersion: "1.4.0",
@@ -212,11 +232,20 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(mocks.lockCalls).toEqual([{ reason: "cli-finalize-upgrade" }]);
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
+      credentialProvision: { kind: "active" },
       status: "swapped",
       previousVersion: "1.4.0",
       version: "1.5.0",
       serviceStartError: null,
     });
+    expect(result.human).toBe(
+      "finalized cli upgrade 1.4.0 -> 1.5.0; host authorized",
+    );
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
+    );
     expect(existsSync(markerPath())).toBe(true);
     const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
     expect(marker).toMatchObject({
@@ -300,6 +329,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       "finalize-call",
       "service-start",
       "lock-exit",
+      "credential-provision",
     ]);
   });
 
@@ -338,6 +368,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
+      credentialProvision: null,
       status: "swap-failed",
       errorMessage: "binary still held by another process",
     });
@@ -374,6 +405,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
+      credentialProvision: null,
       status: "swap-failed",
       errorMessage: "cross-device copy hash mismatch",
     });
@@ -428,6 +460,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
 
       expect(mocks.controllerCalls).toEqual(["start"]);
       expect(result.data).toEqual({
+        credentialProvision: null,
         status: "no-pending",
         serviceStartError: null,
       });
@@ -449,6 +482,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
+      credentialProvision: null,
       status: "staged-binary-missing",
       stagedVersion: "1.5.0",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
@@ -545,7 +579,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       await import("../cli-finalize-upgrade");
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.data).toEqual({
+      credentialProvision: null,
+      status: "lock-timeout",
+    });
     expect(mocks.controllerCalls).toEqual([]);
     expect(existsSync(markerPath())).toBe(false);
   });
@@ -573,7 +610,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       await import("../cli-finalize-upgrade");
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.data).toEqual({
+      credentialProvision: null,
+      status: "lock-timeout",
+    });
     expect(result.exitCode).toBe(0);
     expect(mocks.controllerCalls).toEqual([]);
     expect(existsSync(markerPath())).toBe(false);

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CommandContext } from "../../runner/runner";
+import { runCommand, type CommandContext } from "../../runner/runner";
 import type {
   HostUpdateRunOutcome,
   LegacyHostUpdateResult,
@@ -18,9 +18,24 @@ import type {
 // the dispatch-ACK stamper, or any real host-home I/O - those are covered by
 // the other `host-update-*.test.ts` files.
 
+vi.mock("../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger")>();
+  return { ...actual, createCliLogger: () => actual.noopLogger };
+});
+
 const mocks = vi.hoisted(() => ({
   runHostUpdateMock: vi.fn(),
+  credentialProvisionMock: vi.fn(),
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: mocks.credentialProvisionMock,
+  };
+});
 
 vi.mock("../../host/update-run", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../host/update-run")>();
@@ -103,6 +118,10 @@ function outcome(
 
 beforeEach(() => {
   mocks.runHostUpdateMock.mockReset();
+  mocks.credentialProvisionMock.mockReset().mockResolvedValue({
+    kind: "active",
+    minted: true,
+  });
 });
 
 const RESTART: LegacyHostUpdateServiceLifecycle = {
@@ -120,7 +139,18 @@ describe("buildHostUpdateCommand — humanSummary", () => {
     const result = await command(fakeCtx());
 
     expect(result.human).toBe(
-      "started host 2.0.0; it was installed but not running",
+      "started host 2.0.0; it was installed but not running; host authorized",
+    );
+    expect(result.data).toMatchObject({
+      credentialProvision: { kind: "active" },
+    });
+    expect(result.data).toHaveProperty("credentialProvision", {
+      kind: "active",
+    });
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
     );
   });
 
@@ -135,6 +165,7 @@ describe("buildHostUpdateCommand — humanSummary", () => {
     expect(result.human).toBe(
       "attempted to start host 2.0.0 (it was installed but not running); service did not converge: boom",
     );
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
   });
 
   // The discriminator is the run's own fact, not `previousVersion === version`:
@@ -172,6 +203,7 @@ describe("buildHostUpdateCommand — humanSummary", () => {
     const result = await command(fakeCtx());
 
     expect(result.human).toBe("host already at 2.0.0 (no-op)");
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
   });
 
   it("a restart with a genuine version change reports the ordinary update sentence", async () => {
@@ -197,5 +229,55 @@ describe("buildHostUpdateCommand — humanSummary", () => {
         startedStoppedHost: true,
       }),
     );
+  });
+});
+
+describe("buildHostUpdateCommand — JSON runner boundary", () => {
+  it("serializes only the safe credential outcome kind", async () => {
+    const diagnostic =
+      "credential-probe-marker path=/private/test/credentials body=distinctive";
+    mocks.runHostUpdateMock.mockResolvedValue(outcome("2.0.0", RESTART, true));
+    mocks.credentialProvisionMock.mockResolvedValue({
+      kind: "error",
+      message: diagnostic,
+    });
+
+    const chunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+      callback: (() => void) | undefined,
+    ) => {
+      chunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      if (typeof callback === "function") callback();
+      return true;
+    }) as never);
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runCommand(buildHostUpdateCommand(baseArgs()), {
+        json: true,
+        quiet: null,
+        noProgress: null,
+        noBootstrap: null,
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+      process.exitCode = priorExitCode;
+    }
+
+    const stdout = chunks.join("");
+    expect(stdout).not.toContain(diagnostic);
+    const terminalLine = stdout
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .at(-1);
+    if (terminalLine === undefined) {
+      throw new Error("runner emitted no terminal result");
+    }
+    const terminal: unknown = JSON.parse(terminalLine);
+    expect(terminal).toMatchObject({ type: "result", status: "ok" });
+    expect(terminal).toHaveProperty("data.credentialProvision", {
+      kind: "error",
+    });
   });
 });
