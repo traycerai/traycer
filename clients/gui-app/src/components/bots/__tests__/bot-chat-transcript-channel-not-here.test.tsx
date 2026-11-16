@@ -15,6 +15,10 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -27,12 +31,16 @@ import {
 } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 
 type TranscriptState = Pick<
   ChatSessionState,
@@ -221,6 +229,57 @@ async function sendSucceeded(
   return { evict: () => queryClient.getMutationCache().remove(mutation) };
 }
 
+function mountRealSend(): { readonly send: () => Promise<void> } {
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-real-conversation-send",
+      handlers: {
+        "bot.conversation.send": () => ({
+          messageId: "message-real-send",
+          requestId: "request-real-send",
+          delivery: "written",
+          threadId: "thread-real-send",
+        }),
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-real-conversation-send",
+    }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const mutation = renderHook(() => useBotConversationSendMutation(client), {
+    wrapper,
+  });
+  const variables: BotConversationSendRequest = {
+    botId: BOT_ID,
+    conversationId: CHAT_ID,
+    text: "hi",
+    threadId: null,
+    announcementId: null,
+    redeliver: null,
+    supersedes: null,
+    answer: null,
+  };
+  return {
+    send: async () => {
+      await mutation.result.current.mutateAsync(variables);
+    },
+  };
+}
+
 beforeEach(() => {
   // The mutation cache tells its observers on a timer by default; synchronous
   // here, so a send has reached the transcript when its `act` returns.
@@ -348,6 +407,18 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     const sent = await sendSucceeded(CHAT_ID);
     act(() => sent.evict());
 
+    act(() => view.remount());
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-subscribes on return for a real send that succeeded while the transcript was away", async () => {
+    const view = mountTranscript(CHANNEL_SURFACE);
+    const sending = mountRealSend();
+    act(() => view.unmount());
+
+    await act(async () => sending.send());
+
+    expect(retry).not.toHaveBeenCalled();
     act(() => view.remount());
     expect(retry).toHaveBeenCalledTimes(1);
   });

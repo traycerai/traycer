@@ -58,6 +58,7 @@ import {
   useSettingsSave,
   useSettingsItemExists,
 } from "@/hooks/environment/use-settings-save";
+import { captureSettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
 import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
 import { HostRuntimeContext, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -1175,7 +1176,7 @@ describe("settings-save callers", () => {
         request: setRequest("new-value"),
       },
       OTHER_HOST_ID,
-      harness.environmentCloud(),
+      captureSettingsSaveOrigin(() => harness.environmentCloud()),
     );
     const answer = await sendFollowedSave(pending, sent, everyAnswerProposes);
 
