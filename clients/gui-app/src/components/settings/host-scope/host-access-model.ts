@@ -218,16 +218,17 @@ export function sameOverrideTarget(
 
 // ── Notices ──────────────────────────────────────────────────────────────────
 
-/** Where a change came from, as a person names it. */
-function changedFromText(notice: EnvironmentNotice): string {
-  const { from } = notice;
-  if (from.kind === "dashboard") return "the dashboard";
-  return from.hostLabel ?? "another host";
-}
-
-/** "DATABASE_URL from dev-box now applies everywhere." */
+/**
+ * "DATABASE_URL from dev-box now applies everywhere." A change no computer
+ * made came from a person's session, in the app or on the dashboard, so it
+ * names no place.
+ */
 export function noticeText(notice: EnvironmentNotice): string {
-  return `${itemLabel(notice)} from ${changedFromText(notice)} now applies everywhere.`;
+  const { from } = notice;
+  if (from.kind === "dashboard") {
+    return `${itemLabel(notice)} now applies everywhere.`;
+  }
+  return `${itemLabel(notice)} from ${from.hostLabel ?? "another host"} now applies everywhere.`;
 }
 
 /**

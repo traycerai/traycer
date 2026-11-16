@@ -424,7 +424,7 @@ describe("noticeText", () => {
   it("names the dashboard", () => {
     expect(
       noticeText(notice({ key: "DATABASE_URL", from: { kind: "dashboard" } })),
-    ).toBe("DATABASE_URL from the dashboard now applies everywhere.");
+    ).toBe("DATABASE_URL now applies everywhere.");
   });
 
   it("names the host that made the change by its label", () => {
