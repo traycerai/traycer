@@ -365,6 +365,7 @@ describe("host apply - activation", () => {
     );
 
     expect(result.data).toMatchObject({ outcome: "no-op", activation: null });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(result.exitCode).toBe(0);
   });
 
@@ -383,6 +384,7 @@ describe("host apply - activation", () => {
       outcome: "stage-fingerprint-mismatch",
       activation: null,
     });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
   });
 });
 
@@ -413,6 +415,7 @@ describe("host apply - respectHold", () => {
       installedVersion: "1.2.0",
     });
     expect(mocks.applyHostCalls).toBe(0);
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
   });
 

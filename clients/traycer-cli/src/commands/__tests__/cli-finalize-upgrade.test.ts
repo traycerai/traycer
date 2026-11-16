@@ -350,6 +350,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       status: "swapped",
       serviceStartError: "schtasks /Run failed",
     });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
     expect(marker.serviceStartError).toBe("schtasks /Run failed");
   });
@@ -536,6 +537,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
       expect(mocks.controllerCalls).toEqual(["start"]);
+      expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
       expect(result.data).toMatchObject({ status: expectedOutcomeStatus });
 
       if (finalizeStatus === "no-pending") {
