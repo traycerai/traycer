@@ -34,10 +34,6 @@ import {
   SandboxArtifacts,
 } from "./sandbox-artifacts-plugin";
 import { App } from "@capacitor/app";
-import {
-  mintExecutableWriteGrantViaHttp,
-  type ExecutableWriteGrantFetchResult,
-} from "@traycer-clients/shared/host-client/executable-write-grant";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";
 import { Network, type ConnectionStatus } from "@capacitor/network";
@@ -1217,17 +1213,6 @@ export class MobileRunnerHost implements IRunnerHost {
       this.authnBaseUrl,
       bearerToken,
       environmentId,
-    );
-  }
-
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    return mintExecutableWriteGrantViaHttp(
-      this.authnBaseUrl,
-      bearerToken,
-      hostId,
     );
   }
 

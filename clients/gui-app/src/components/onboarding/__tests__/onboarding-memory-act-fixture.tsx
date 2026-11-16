@@ -15,7 +15,11 @@ import {
 } from "@testing-library/react";
 
 import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -52,8 +56,10 @@ import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-mem
 import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
+import { OnboardingMemoryActAuthServiceProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-auth-service-probe";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AuthService } from "@/lib/auth/auth-service";
 import {
   HostRuntimeProvider,
   hostRpcRegistry,
@@ -81,6 +87,17 @@ interface Receipt {
 interface Deferred {
   readonly promise: Promise<void>;
   readonly resolve: () => void;
+}
+
+interface MutationCapture {
+  readonly mutationKey: ReadonlyArray<unknown> | undefined;
+  readonly variables: unknown;
+}
+
+interface HeldAgentMemoriesMutation {
+  readonly gate: Deferred;
+  readonly started: Deferred;
+  capture: MutationCapture | null;
 }
 
 /** What the faked host holds and answers. Reset for every test. */
@@ -131,12 +148,6 @@ interface World {
   sessionImport: boolean;
   /** Hosts besides the tour's own that the host picker offers. */
   otherHosts: RemoteHostDirectoryEntry[];
-  /**
-   * The window holds a signed-in session when the tour mounts, as it does in
-   * the app, where the tour is shown only to a signed-in person. Off, no
-   * profile is present at the press and a followed save is abandoned unsent.
-   */
-  signedIn: boolean;
 }
 
 export function defaultProviders(): ProviderSpec[] {
@@ -175,12 +186,13 @@ function freshWorld(): World {
     nativeGate: null,
     sessionImport: true,
     otherHosts: [],
-    signedIn: true,
   };
 }
 
 export const world = freshWorld();
 const messengers: MockHostMessenger<HostRpcRegistry>[] = [];
+let authService: AuthService | null = null;
+let heldAgentMemoriesMutation: HeldAgentMemoriesMutation | null = null;
 
 export function deferred(): Deferred {
   let resolve: () => void = () => undefined;
@@ -188,6 +200,39 @@ export function deferred(): Deferred {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/** Holds the real agent-memory mutation at MutationCache.onMutate. */
+export function holdAgentMemoriesSetMutation(): {
+  readonly started: Promise<void>;
+  readonly capture: () => MutationCapture | null;
+  readonly release: () => void;
+} {
+  if (heldAgentMemoriesMutation !== null) {
+    throw new Error("an agent-memory mutation is already held");
+  }
+  const held: HeldAgentMemoriesMutation = {
+    gate: deferred(),
+    started: deferred(),
+    capture: null,
+  };
+  heldAgentMemoriesMutation = held;
+  return {
+    started: held.started.promise,
+    capture: () => held.capture,
+    release: () => {
+      held.gate.resolve();
+      if (heldAgentMemoriesMutation === held) heldAgentMemoriesMutation = null;
+    },
+  };
+}
+
+/** The AuthService owned by the rendered HostRuntimeProvider. */
+export function fixtureAuthService(): AuthService {
+  if (authService === null) {
+    throw new Error("the Memory act host runtime has not mounted");
+  }
+  return authService;
 }
 
 function hostFailure(method: string): HostRpcError {
@@ -604,6 +649,23 @@ function signInWindow(runnerHost: MockRunnerHost): void {
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
+    mutationCache: new MutationCache({
+      onMutate: async (variables, mutation) => {
+        const held = heldAgentMemoriesMutation;
+        if (
+          held === null ||
+          mutation.options.mutationKey?.[0] !== "config.agentMemories.set"
+        ) {
+          return;
+        }
+        held.capture = {
+          mutationKey: mutation.options.mutationKey,
+          variables,
+        };
+        held.started.resolve();
+        await held.gate.promise;
+      },
+    }),
     // The app's minute of freshness: a reader that reuses a fresh entry is seen.
     defaultOptions: {
       queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
@@ -619,7 +681,7 @@ export function renderInHost(ui: ReactNode): void {
     hasLocalHost: undefined,
     traycerCli: new MockTraycerCli(),
   });
-  if (world.signedIn) signInWindow(runnerHost);
+  signInWindow(runnerHost);
   for (const other of world.otherHosts)
     recordNegotiatedHostManifest(other.hostId, FULL_MANIFEST);
   const streams = streamBinding();
@@ -637,6 +699,11 @@ export function renderInHost(ui: ReactNode): void {
             }
             fallback={<div data-testid="memory-act-fallback" />}
           >
+            <OnboardingMemoryActAuthServiceProbe
+              onAuthService={(service) => {
+                authService = service;
+              }}
+            />
             <WindowsBridgeContext.Provider
               value={{ bridge: null, hasHydrated: true }}
             >
@@ -789,6 +856,9 @@ export function negotiateManifest(
 
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
+  heldAgentMemoriesMutation?.gate.resolve();
+  heldAgentMemoriesMutation = null;
+  authService = null;
   mountSettings = null;
   tourSlot.leave = null;
   // Motion keeps its frame loop at module level for the whole worker; a file
@@ -810,6 +880,9 @@ export function resetMemoryActFixture(): void {
 
 /** Every test file's afterEach. */
 export function cleanupMemoryActFixture(): void {
+  heldAgentMemoriesMutation?.gate.resolve();
+  heldAgentMemoriesMutation = null;
+  authService = null;
   MotionGlobalConfig.skipAnimations = skipAnimationsBefore;
   cleanup();
   if (scrollToDescriptor === undefined)

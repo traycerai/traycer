@@ -127,7 +127,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: (shellPath) => ({
       path: shellPath,
       args: ["--requested"],
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     }),
     response: (shellPath) => ({ path: shellPath, args: ["--host"] }),
@@ -145,7 +144,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
   {
     name: "shell reset",
     method: "config.shell.reset",
-    params: () => ({ executableWriteGrant: null }),
+    params: () => ({}),
     response: () => ({ reset: true }),
     seed: async () => {
       await setShell("/bin/previous-shell", ["--file"]);
@@ -160,7 +159,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     method: "config.shell.add",
     params: (shellPath) => ({
       path: shellPath,
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     }),
     response: (shellPath) => ({
@@ -184,7 +182,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     method: "config.shell.remove",
     params: (shellPath) => ({
       path: shellPath,
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     }),
     response: () => ({ removed: false, path: null }),
@@ -203,7 +200,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     method: "config.shell.revertArgs",
     params: (shellPath) => ({
       path: shellPath,
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     }),
     response: (shellPath) => ({ path: shellPath, reverted: false }),
@@ -222,7 +218,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: () => ({
       key: "CONFIG_TEST",
       value: "written-by-host",
-      executableWriteGrant: null,
     }),
     response: () => ({ key: "CONFIG_TEST", value: "host-value" }),
     seed: async () => {
@@ -242,7 +237,6 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: () => ({
       key: "CONFIG_TEST",
       value: null,
-      executableWriteGrant: null,
     }),
     response: () => ({ key: "CONFIG_TEST", value: null }),
     seed: async () => {

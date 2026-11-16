@@ -358,15 +358,7 @@ export const configCatalogSetUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, overrides: {} }),
 });
 
-// ── v1.1: the executable-write grant ────────────────────────────────────────
-//
-// Each of these writes can change what a host starts (the shell path and
-// args, a launch-sensitive host-process variable), so it reaches an execution
-// sink and carries `executableWriteGrant`. Every v1.0 line is released
-// (`host-v1.5.1`), so the field opens a minor: a v1.0 caller's request is
-// upgraded with `null`, and a v1.1 request to a v1.0 host is re-parsed onto
-// the v1.0 request, whose non-strict object strips the key. The response is
-// unchanged.
+// The installed v1.1 lines remain after their unused grant field is retired.
 
 export const configShellSetV11 = defineRpcContract({
   method: "config.shell.set",
@@ -381,7 +373,7 @@ export const configShellSetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellSetV10.schemaVersion,
   to: configShellSetV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -398,7 +390,7 @@ export const configShellResetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellResetV10.schemaVersion,
   to: configShellResetV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -415,7 +407,7 @@ export const configShellAddUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellAddV10.schemaVersion,
   to: configShellAddV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -432,7 +424,7 @@ export const configShellRemoveUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellRemoveV10.schemaVersion,
   to: configShellRemoveV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -449,7 +441,7 @@ export const configShellRevertArgsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configShellRevertArgsV10.schemaVersion,
   to: configShellRevertArgsV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -466,7 +458,7 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configEnvSetV10.schemaVersion,
   to: configEnvSetV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
