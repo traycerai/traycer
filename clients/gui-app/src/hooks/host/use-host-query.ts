@@ -629,12 +629,14 @@ export function useHostMutation<
       // (pre-flight validation) surfaces as the declared `HostRpcError`.
       mutationFn: (variables, pressed) =>
         withHostMutationErrorBoundary(args.method, async () => {
-          const client =
-            pressed !== null
-              ? pressed.client
-              : typeof args.client === "function"
-                ? args.client(variables)
-                : args.client;
+          let client: HostRequester<Registry> | null;
+          if (pressed !== null) {
+            client = pressed.client;
+          } else if (typeof args.client === "function") {
+            client = args.client(variables);
+          } else {
+            client = args.client;
+          }
           if (client === null) {
             return Promise.reject<ResponseOfMethod<Registry, Method>>(
               hostClientUnavailableError(args.method),
@@ -645,7 +647,8 @@ export function useHostMutation<
             args.prepareRequest === undefined
               ? mapped
               : await args.prepareRequest(mapped, client);
-          const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+          const requirement =
+            args.requiredHostMethodVersion?.(variables) ?? null;
           const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
           // A keyed dispatch carries both retry identity and version floor.
           const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
