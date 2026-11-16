@@ -21,12 +21,20 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { isValidElement, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import type {
+  AuthEra,
+  RequestContextListener,
+} from "@traycer-clients/shared/auth/request-context-provider";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  poolEntry,
+  teamSandboxEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
@@ -37,6 +45,11 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import type { HydrateChatResponse } from "@traycer/protocol/host/epic/chat-hydration";
+import type {
+  ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
+} from "@traycer/protocol/host/epic/chat-records";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -54,6 +67,7 @@ import {
 import { composerDraftIsEmpty } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { setHostHeldImageHashes } from "@/lib/composer/host-held-image-hashes";
 import { composerContentImageRootHashes } from "@/lib/composer/composer-content-image-roots";
+import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import {
   subscribeSentChatMessages,
   type SentChatMessage,
@@ -75,6 +89,8 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { teamSubscription } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
@@ -96,7 +112,47 @@ vi.mock(
   }),
 );
 
-const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+const { HOST_ID, SAVED_CREATOR_USER_ID, TEAM_ENVIRONMENT_OWNER_ID } =
+  vi.hoisted(() => ({
+    HOST_ID: "host-test",
+    SAVED_CREATOR_USER_ID: "owner-1",
+    TEAM_ENVIRONMENT_OWNER_ID: "env-team-1",
+  }));
+
+const environmentListTestState = vi.hoisted(() => ({
+  data: undefined as EnvironmentListResponseV11 | undefined,
+}));
+
+const originSignInTestState = vi.hoisted(() => ({
+  userId: "owner-1",
+  generation: 0,
+  listeners: new Set<RequestContextListener>(),
+}));
+
+const hostDirectoryTestState = vi.hoisted(() => ({
+  teamSandboxForCurrentChat: false,
+}));
+
+function requestContextFor(userId: string | null) {
+  return userId === null
+    ? null
+    : createRequestContextFixture({
+        identity: { userId, username: userId, providerHandle: null },
+        origin: "renderer",
+        bearerToken: `test-bearer-${userId}`,
+      });
+}
+
+function emitOriginSignInChange(): void {
+  const context = requestContextFor(originSignInTestState.userId);
+  const era: AuthEra = {
+    identity: originSignInTestState.userId,
+    credentialGeneration: originSignInTestState.generation,
+  };
+  for (const listener of [...originSignInTestState.listeners]) {
+    listener(context, era);
+  }
+}
 
 const hydrateBoundary = vi.hoisted(
   (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
@@ -107,7 +163,8 @@ const MOCK_HOST_CLIENT = {
   // A pool build reads the pool tier's client through the surface's.
   createRequesterForHostId: () => MOCK_HOST_CLIENT,
   getActiveHostId: () => HOST_ID,
-  getRequestContextUserId: () => "owner-1",
+  getRequestContextUserId: () =>
+    useAuthStore.getState().profile?.userId ?? SAVED_CREATOR_USER_ID,
   onChange: () => () => undefined,
 };
 const MOCK_HOST_ENTRY = {
@@ -117,13 +174,24 @@ const MOCK_HOST_ENTRY = {
   websocketUrl: "ws://127.0.0.1:1/rpc",
   streamUrl: "ws://127.0.0.1:1/stream",
 };
+const MOCK_TEAM_SANDBOX_ENTRY = {
+  ...teamSandboxEntry,
+  hostId: HOST_ID,
+};
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
-  // The one row is this machine's: the app's directory answers it as such.
-  getLocalEntry: () => MOCK_HOST_ENTRY,
-  getLocalHostId: () => MOCK_HOST_ENTRY.hostId,
+  getLocalEntry: () =>
+    hostDirectoryTestState.teamSandboxForCurrentChat ? null : MOCK_HOST_ENTRY,
+  getLocalHostId: () =>
+    hostDirectoryTestState.teamSandboxForCurrentChat
+      ? null
+      : MOCK_HOST_ENTRY.hostId,
   findById: (hostId: string) => {
-    if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
+    if (hostId === MOCK_HOST_ENTRY.hostId) {
+      return hostDirectoryTestState.teamSandboxForCurrentChat
+        ? MOCK_TEAM_SANDBOX_ENTRY
+        : MOCK_HOST_ENTRY;
+    }
     return hostId === poolEntry.hostId ? poolEntry : null;
   },
 };
@@ -138,14 +206,79 @@ const MOCK_HOST_BINDING = {
     ...MOCK_HOST_CLIENT,
     resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
   },
+  auth: {
+    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
+    getRequestContextProvider: () => ({
+      current: () => requestContextFor(originSignInTestState.userId),
+      onChange: (listener: RequestContextListener) => {
+        originSignInTestState.listeners.add(listener);
+        return () => {
+          originSignInTestState.listeners.delete(listener);
+        };
+      },
+    }),
+    environmentCloud: () => {
+      const generation = originSignInTestState.generation;
+      return {
+        onOriginSignIn: () => generation === originSignInTestState.generation,
+      };
+    },
+    fetchAuthenticatedUser: () => {
+      if (!hostDirectoryTestState.teamSandboxForCurrentChat) {
+        return Promise.reject(new Error("No TeamSandbox fixture is active"));
+      }
+      const user = createAuthenticatedUserFixture(undefined);
+      return Promise.resolve({
+        ...user,
+        user: { ...user.user, id: SAVED_CREATOR_USER_ID },
+        teamSubscriptions: [
+          {
+            ...teamSubscription(0),
+            userID: SAVED_CREATOR_USER_ID,
+          },
+        ],
+      });
+    },
+    getTeamEnvironment: () =>
+      Promise.resolve(
+        hostDirectoryTestState.teamSandboxForCurrentChat
+          ? { kind: "ok" as const, environmentId: TEAM_ENVIRONMENT_OWNER_ID }
+          : { kind: "not-a-member" as const },
+      ),
+    listSandboxes: () =>
+      Promise.resolve({
+        ...(hostDirectoryTestState.teamSandboxForCurrentChat
+          ? {
+              kind: "ok" as const,
+              response: {
+                sandboxes: [
+                  sandboxSummaryFixture({
+                    hostId: HOST_ID,
+                    displayName: "Team sandbox",
+                    environmentId: TEAM_ENVIRONMENT_OWNER_ID,
+                    state: "suspended",
+                  }),
+                ],
+              },
+            }
+          : {
+              kind: "unavailable" as const,
+              reason: "No TeamSandbox fixture is active",
+            }),
+      }),
+  },
 };
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => MOCK_HOST_BINDING,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
+  useAuthService: () =>
+    hostDirectoryTestState.teamSandboxForCurrentChat
+      ? MOCK_HOST_BINDING.auth
+      : {
+          revalidateCurrentContext: () =>
+            Promise.resolve({ kind: "valid" as const }),
+        },
   useHostClient: () => MOCK_HOST_CLIENT,
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
@@ -190,6 +323,14 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => HOST_ID,
 }));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: environmentListTestState.data,
+    error: null,
+    isError: false,
+    refetch: () => Promise.resolve(),
+  }),
+}));
 
 // The real hydrate mutation, sent on the test's own host client: the one
 // boundary the tile does not own.
@@ -220,6 +361,87 @@ const CHAT_ARTIFACT = {
   name: "Chat 1",
   hostId: HOST_ID,
 };
+interface ChatSourceFixture {
+  readonly ownerUserId: string;
+  readonly starterUserId: string | null;
+}
+
+const TEAM_CREATOR_CHAT_SOURCE: ChatSourceFixture = {
+  ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+  starterUserId: SAVED_CREATOR_USER_ID,
+};
+
+const TEAM_ENVIRONMENT_LIST_RESPONSE = {
+  environments: [
+    {
+      environmentId: TEAM_ENVIRONMENT_OWNER_ID,
+      ownerKind: "organization",
+      ownerId: "team-1",
+      roomId: "room-team-1",
+      label: "Team",
+      effectiveRole: "owner",
+      kind: "team",
+      hostCount: 1,
+      providerHandle: "team",
+    },
+  ],
+} satisfies EnvironmentListResponseV11;
+
+const PERSONAL_ENVIRONMENT_LIST_RESPONSE = {
+  environments: [
+    {
+      environmentId: SAVED_CREATOR_USER_ID,
+      ownerKind: "user",
+      ownerId: SAVED_CREATOR_USER_ID,
+      roomId: "room-personal-1",
+      label: "Personal",
+      effectiveRole: "owner",
+      kind: "personal",
+      hostCount: 1,
+      providerHandle: null,
+    },
+  ],
+} satisfies EnvironmentListResponseV11;
+
+const PERSONAL_AND_TEAM_VIEWER_ENVIRONMENT_LIST_RESPONSE = {
+  environments: [
+    ...PERSONAL_ENVIRONMENT_LIST_RESPONSE.environments,
+    {
+      ...TEAM_ENVIRONMENT_LIST_RESPONSE.environments[0],
+      effectiveRole: "viewer",
+    },
+  ],
+} satisfies EnvironmentListResponseV11;
+
+type ChatAccessFixture =
+  | {
+      readonly role: "owner";
+      readonly ownerUserId: string;
+      readonly canAct: true;
+    }
+  | {
+      readonly role: "viewer";
+      readonly ownerUserId: string;
+      readonly canAct: false;
+    };
+
+// The admitted saved creator may act on the machine host. The pool's actual
+// snapshot stays viewer-only while the tile parks a message for that host.
+const ADMITTED_SAVED_CREATOR_ACCESS = {
+  role: "owner",
+  ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+  canAct: true,
+} as const satisfies ChatAccessFixture;
+const POOL_VIEWER_ACCESS = {
+  role: "viewer",
+  ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+  canAct: false,
+} as const satisfies ChatAccessFixture;
+const HOST_VIEWER_ACCESS = {
+  role: "viewer",
+  ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+  canAct: false,
+} as const satisfies ChatAccessFixture;
 const HASH = "a".repeat(64);
 const FIRST_TEXT = "fix the login bug";
 const SECOND_TEXT = "then update the tests";
@@ -258,6 +480,13 @@ function draftOf(text: string): JsonContent {
         ],
       },
     ],
+  };
+}
+
+function textOnlyDraftOf(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
   };
 }
 
@@ -332,9 +561,17 @@ function sendFramesOf(stream: ChatStream): SendFrame[] {
 /** A stream opens and its peer's snapshot arrives. */
 function openStream(
   stream: ChatStream,
-  access: { readonly role: "owner" | "viewer"; readonly canAct: boolean },
+  access: ChatAccessFixture,
   managedCommands: readonly ManagedCommand[] | undefined,
+  ownerUserId: string,
 ): void {
+  if (
+    access.role === "owner" &&
+    (access.ownerUserId !== ownerUserId ||
+      useAuthStore.getState().profile?.userId !== SAVED_CREATOR_USER_ID)
+  ) {
+    throw new Error("expected live access for the saved creator");
+  }
   act(() => {
     stream.callbacks.onConnectionStatus("open", null, null, null);
     stream.callbacks.onSnapshot({
@@ -346,7 +583,7 @@ function openStream(
         chat: {
           id: CHAT_ARTIFACT.id,
           parentId: null,
-          userId: "owner-1",
+          userId: ownerUserId,
           hostId: HOST_ID,
           title: CHAT_ARTIFACT.name,
           createdAt: 0,
@@ -384,7 +621,7 @@ function openStream(
         },
         access: {
           role: access.role,
-          ownerUserId: "owner-1",
+          ownerUserId: access.ownerUserId,
           canAct: access.canAct,
         },
         queue: { status: "idle", items: [] },
@@ -485,13 +722,46 @@ function buildHydrateClient(
   return spine.createRequester(mockLocalHostEntry);
 }
 
+function chatStarterRecord(
+  ownerUserId: string,
+  starterUserId: string | null,
+): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
+  return {
+    chatId: CHAT_ARTIFACT.id,
+    ownerUserId,
+    originHostId: HOST_ID,
+    title: CHAT_ARTIFACT.name,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: null,
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    head: null,
+    ...(starterUserId === null ? {} : { starterUserId }),
+  };
+}
+
 /** The epic's chat list, which names this chat as one its host dropped. */
-function ListedEvicted(props: { readonly children: ReactNode }): ReactNode {
+function ListedEvicted(props: {
+  readonly children: ReactNode;
+  readonly source: ChatSourceFixture;
+}): ReactNode {
   const handle = useOpenEpicHandle();
   const [listed] = useState(() => {
-    handle.store
-      .getState()
-      .applyChatRecordEvictions([{ chatId: CHAT_ARTIFACT.id, evicted: true }]);
+    const store = handle.store.getState();
+    store.applyChatRecords(
+      [chatStarterRecord(props.source.ownerUserId, props.source.starterUserId)],
+      null,
+    );
+    store.applyChatRecordEvictions([
+      { chatId: CHAT_ARTIFACT.id, evicted: true },
+    ]);
     return true;
   });
   return listed ? props.children : null;
@@ -508,7 +778,7 @@ interface Mounted {
   readonly witness: PoolChatServingWitness;
 }
 
-function mountEvictedTile(): Mounted {
+function mountEvictedTile(source: ChatSourceFixture): Mounted {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -535,7 +805,7 @@ function mountEvictedTile(): Mounted {
           <TooltipProvider>
             <ChatServingWitnessContext.Provider value={witness}>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <ListedEvicted>
+                <ListedEvicted source={source}>
                   <TabHostProvider hostId={HOST_ID}>
                     <ChatTile
                       node={CHAT_ARTIFACT}
@@ -556,8 +826,11 @@ function mountEvictedTile(): Mounted {
 }
 
 /** The tile on the pool: the witness read the chat at rest and the pool's stream is up. */
-async function mountOnThePool(): Promise<Mounted> {
-  const mounted = mountEvictedTile();
+async function mountOnThePool(
+  access: ChatAccessFixture,
+  source: ChatSourceFixture,
+): Promise<Mounted> {
+  const mounted = mountEvictedTile(source);
   await waitFor(() => {
     expect(mounted.witnessClient.sessions).toHaveLength(1);
   });
@@ -570,7 +843,12 @@ async function mountOnThePool(): Promise<Mounted> {
   await waitFor(() => {
     expect(streams).toHaveLength(1);
   });
-  openStream(streams[0], { role: "viewer", canAct: false }, undefined);
+  openStream(
+    streams[0],
+    { ...access, ownerUserId: source.ownerUserId },
+    undefined,
+    source.ownerUserId,
+  );
   await waitFor(() => {
     expect(screen.getByText("An earlier message")).not.toBeNull();
   });
@@ -668,12 +946,17 @@ beforeEach(() => {
   useAuthStore.setState({
     status: "signed-in",
     profile: {
-      userId: "owner-1",
+      userId: SAVED_CREATOR_USER_ID,
       userName: "Owner",
       email: "owner@example.com",
     },
-    contextMetadata: { userId: "owner-1", username: "Owner" },
+    contextMetadata: { userId: SAVED_CREATOR_USER_ID, username: "Owner" },
   });
+  environmentListTestState.data = TEAM_ENVIRONMENT_LIST_RESPONSE;
+  originSignInTestState.userId = SAVED_CREATOR_USER_ID;
+  originSignInTestState.generation = 0;
+  originSignInTestState.listeners.clear();
+  hostDirectoryTestState.teamSandboxForCurrentChat = false;
   useComposerDraftStore.setState({ drafts: {} });
   useComposerRunSettingsStore.getState().resetForTests();
   useComposerHarnessMemoryStore.getState().resetForTests();
@@ -707,10 +990,199 @@ afterEach(() => {
 });
 
 describe("a message sent to a chat the pool serves because its host dropped the records", () => {
+  it("keeps a noncreator pool viewer read-only without staging a send", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
+
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    putInComposer(FIRST_TEXT);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftOf(FIRST_TEXT));
+    expect(streams.flatMap(sendFramesOf)).toEqual([]);
+    expect(hydrates).toEqual([]);
+  });
+
+  it.each([
+    {
+      cause: "no saved starter",
+      source: {
+        ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+        starterUserId: null,
+      },
+      environmentList: TEAM_ENVIRONMENT_LIST_RESPONSE,
+    },
+    {
+      cause: "a system starter",
+      source: {
+        ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+        starterUserId: SYSTEM_ACTOR_ID,
+      },
+      environmentList: TEAM_ENVIRONMENT_LIST_RESPONSE,
+    },
+    {
+      cause: "a different saved starter",
+      source: {
+        ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
+        starterUserId: "creator-elsewhere",
+      },
+      environmentList: TEAM_ENVIRONMENT_LIST_RESPONSE,
+    },
+    {
+      cause: "an owner outside the answered team list",
+      source: {
+        ownerUserId: "env-team-not-listed",
+        starterUserId: SAVED_CREATOR_USER_ID,
+      },
+      environmentList: TEAM_ENVIRONMENT_LIST_RESPONSE,
+    },
+    {
+      cause: "an unanswered team list",
+      source: TEAM_CREATOR_CHAT_SOURCE,
+      environmentList: undefined,
+    },
+  ] as const)(
+    "does not park a message for $cause",
+    async ({ source, environmentList }) => {
+      environmentListTestState.data = environmentList;
+      await mountOnThePool(POOL_VIEWER_ACCESS, source);
+
+      expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Clone agent" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+      putInComposer(FIRST_TEXT);
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual(draftOf(FIRST_TEXT));
+      expect(streams.flatMap(sendFramesOf)).toEqual([]);
+      expect(hydrates).toEqual([]);
+    },
+  );
+
+  it("does not use a person-owned V15 fallback row to park on a team host", async () => {
+    environmentListTestState.data =
+      PERSONAL_AND_TEAM_VIEWER_ENVIRONMENT_LIST_RESPONSE;
+    hostDirectoryTestState.teamSandboxForCurrentChat = true;
+    await mountOnThePool(POOL_VIEWER_ACCESS, {
+      ownerUserId: SAVED_CREATOR_USER_ID,
+      starterUserId: SAVED_CREATOR_USER_ID,
+    });
+
+    expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByText(/Team sandbox is suspended/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    putInComposer(FIRST_TEXT);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftOf(FIRST_TEXT));
+    expect(streams.flatMap(sendFramesOf)).toEqual([]);
+    expect(hydrates).toEqual([]);
+  });
+
+  it("restores a parked draft when the host's fresh snapshot is viewer-only", async () => {
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+    putInComposer(FIRST_TEXT);
+    clickSend();
+    await waitFor(() => {
+      expect(pendingRows()).toHaveLength(1);
+      expect(hydrates).toHaveLength(1);
+    });
+
+    await answerHydrate(0);
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    openStream(
+      streams[1],
+      HOST_VIEWER_ACCESS,
+      undefined,
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
+
+    await waitFor(() => {
+      expect(pendingRows()).toHaveLength(0);
+    });
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftOf(FIRST_TEXT));
+    expect(streams.flatMap(sendFramesOf)).toEqual([]);
+    expect(hydrates).toHaveLength(1);
+  });
+
+  it("does not take, send, or restore a parked message after its sign-in ends", async () => {
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
+    const listenersBeforePending = originSignInTestState.listeners.size;
+    putInComposer(FIRST_TEXT);
+    clickSend();
+    await waitFor(() => {
+      expect(pendingRows()).toHaveLength(1);
+      expect(hydrates).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(originSignInTestState.listeners.size).toBe(
+        listenersBeforePending + 1,
+      );
+    });
+
+    originSignInTestState.generation += 1;
+    originSignInTestState.userId = "viewer-2";
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
+    emitOriginSignInChange();
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(
+          CHAT_ARTIFACT.id,
+          textOnlyDraftOf("another account's draft"),
+          null,
+        );
+    });
+
+    await answerHydrate(0);
+    await waitFor(() => {
+      expect(pendingRows()).toHaveLength(0);
+      expect(originSignInTestState.listeners.size).toBe(listenersBeforePending);
+    });
+
+    expect(rowsWithText(FIRST_TEXT)).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(textOnlyDraftOf("another account's draft"));
+    expect(imageRootHeld()).toBe(false);
+    expect(streams.flatMap(sendFramesOf)).toEqual([]);
+    expect(hydrates).toHaveLength(1);
+    expect(toast.getToasts()).toHaveLength(0);
+  });
+
   it("is drawn as pending, sent once by the host after it answers, and read back as sent", async () => {
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
-    await mountOnThePool();
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
     putInComposer(FIRST_TEXT);
 
     clickSend();
@@ -737,7 +1209,12 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true }, undefined);
+    openStream(
+      streams[1],
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      undefined,
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(1);
     });
@@ -766,7 +1243,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
   });
 
   it("holds a second message behind the first and sends both once, in order", async () => {
-    await mountOnThePool();
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => {
@@ -787,7 +1264,12 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true }, undefined);
+    openStream(
+      streams[1],
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      undefined,
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(2);
     });
@@ -819,7 +1301,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       const reported: SentChatMessage[] = [];
       observeSentMessages(reported);
       stageRebind();
-      await mountOnThePool();
+      await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
       putInComposer(FIRST_TEXT);
       clickSend();
       await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -833,7 +1315,12 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       await settleLegendList();
       await waitFor(() => expect(streams).toHaveLength(2));
       await settleLegendList();
-      openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+      openStream(
+        streams[1],
+        ADMITTED_SAVED_CREATOR_ACCESS,
+        [runningShell()],
+        TEAM_ENVIRONMENT_OWNER_ID,
+      );
       await settleLegendList();
       expect(
         await screen.findByTestId("teardown-commit-dialog"),
@@ -902,7 +1389,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
     stageRebind();
-    await mountOnThePool();
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -914,7 +1401,12 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await settleLegendList();
     await waitFor(() => expect(streams).toHaveLength(2));
     await settleLegendList();
-    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    openStream(
+      streams[1],
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      [runningShell()],
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
     await settleLegendList();
 
     expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
@@ -945,7 +1437,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
     stageRebind();
-    await mountOnThePool();
+    await mountOnThePool(POOL_VIEWER_ACCESS, TEAM_CREATOR_CHAT_SOURCE);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -957,7 +1449,12 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await settleLegendList();
     await waitFor(() => expect(streams).toHaveLength(2));
     await settleLegendList();
-    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    openStream(
+      streams[1],
+      ADMITTED_SAVED_CREATOR_ACCESS,
+      [runningShell()],
+      TEAM_ENVIRONMENT_OWNER_ID,
+    );
     await settleLegendList();
 
     expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
