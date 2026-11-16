@@ -679,7 +679,10 @@ describe("released request bridges", () => {
     >({
       from: { major: 1, minor: 0 },
       to: { major: 1, minor: 1 },
-      upgradeRequest: (request) => ({ ...request, configurationRevision: null }),
+      upgradeRequest: (request) => ({
+        ...request,
+        configurationRevision: null,
+      }),
       upgradeResponse: (response) => response,
     });
     const copiedRegistry = defineVersionedRpcRegistry({

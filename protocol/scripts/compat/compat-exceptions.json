@@ -500,10 +500,10 @@
     {
       "family": "unary",
       "method": "config.shell.set",
-      "version": "*",
+      "version": "1.1",
       "payload": "request",
-      "path": "**.properties.executableWriteGrant",
-      "reason": "The unused executable-write grant field is retired from this method. Release packaging stamps minimum client compatibility epoch 3, and connection admission refuses peers below epoch 3 before any method runs. The host no longer reads this field; current apps no longer mint it. The global released support floor is unchanged."
+      "path": "(root)",
+      "reason": "Only the executableWriteGrant property and its required-list entries are retired from both request union arms. Recursively applying exactly that removal to each protected cli-v1.5.2, cli-v1.5.3 and cli-v1.5.4 schema yields the current schema byte-for-byte under canonical JSON. The checker reports this union change at its root. Immutable release admission source e482ee2a9019bb7faaa2a2ec03e6758365e41606 stamps epoch 3 and rejects older generations before dispatch; the global support floor remains unchanged."
     },
     {
       "family": "unary",

@@ -377,8 +377,7 @@ export function useRpcShellConfigController(props: {
         },
         callbacks,
       ),
-    resetShell: (callbacks) =>
-      resetMutation.mutate({}, callbacks),
+    resetShell: (callbacks) => resetMutation.mutate({}, callbacks),
     addShell: (path, callbacks) =>
       addMutation.mutate(
         {

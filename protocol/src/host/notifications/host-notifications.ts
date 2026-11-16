@@ -3993,7 +3993,10 @@ export const hostNotificationHooksSaveUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  upgradeRequest: (request) => ({ hooks: request.hooks, configurationRevision: null }),
+  upgradeRequest: (request) => ({
+    hooks: request.hooks,
+    configurationRevision: null,
+  }),
   upgradeResponse: upgradeHooksStatus,
 });
 export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<

@@ -153,9 +153,7 @@ export type ConfigShellSetResponse = z.infer<
 export const configShellResetRequestSchemaV10 = emptyRequestSchema;
 
 /** v1.1 resets the selected shell. */
-export const configShellResetRequestSchema = lazySchema(() =>
-  z.object({}),
-);
+export const configShellResetRequestSchema = lazySchema(() => z.object({}));
 export type ConfigShellResetRequest = z.infer<
   typeof configShellResetRequestSchema
 >;
