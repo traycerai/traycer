@@ -39,6 +39,7 @@ import { ENVIRONMENT_RPC_METHODS } from "./environment-contracts";
 import type { NativeListResult } from "./provider-native-schemas";
 import {
   environmentChatsSubscribeV10,
+  environmentChatsSubscribeV11,
   environmentCommunicationGraphSubscribeV10,
   environmentPlainTerminalsSubscribeV10,
 } from "@traycer/protocol/host/environment/arm-streams";
@@ -986,6 +987,8 @@ import {
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
+  epicListCloudChatsV11,
+  epicListCloudChatsUpgradeV10ToV11,
   epicListCollaboratorsV10,
   epicListTaskHostsV10,
   epicListCollaboratorsV11,
@@ -11105,11 +11108,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // has nothing a user can do about except update it.,
   "epic.listCloudChats": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListCloudChatsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListCloudChatsV11,
+          upgradeFromPreviousVersion: epicListCloudChatsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -16072,8 +16079,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 const HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION = {
   "environment.chats.subscribe": {
     1: {
-      latestMinor: 0,
-      versions: { 0: { contract: environmentChatsSubscribeV10 } },
+      latestMinor: 1,
+      versions: {
+        0: { contract: environmentChatsSubscribeV10 },
+        1: { contract: environmentChatsSubscribeV11 },
+      },
     },
   },
   "environment.plainTerminals.subscribe": {

@@ -104,7 +104,7 @@ const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
  * addresses bytes by content digest through an authorized identity triple, and
  * a key is not something it should ever hold.
  */
-export const cloudChatSummarySchema = lazySchema(() =>
+export const cloudChatSummaryV10Schema = lazySchema(() =>
   z.object({
     identity: cloudChatIdentitySchema,
     ownerHostId: z.string().min(1),
@@ -138,6 +138,12 @@ export const cloudChatSummarySchema = lazySchema(() =>
     isOwnedByViewer: z.boolean(),
   }),
 );
+/** A recorded creator comparison; absence is a peer without the carrier. */
+export const cloudChatSummarySchema = lazySchema(() =>
+  cloudChatSummaryV10Schema.extend({
+    creatorUserId: z.string().min(1).nullable().optional(),
+  }),
+);
 export type CloudChatSummary = z.infer<typeof cloudChatSummarySchema>;
 
 export const listCloudChatsRequestSchema = lazySchema(() =>
@@ -154,6 +160,12 @@ export type ListCloudChatsRequest = z.infer<typeof listCloudChatsRequestSchema>;
  * correct answers and anything caching this must key on the viewer as well as
  * the task.
  */
+export const listCloudChatsResponseV10Schema = lazySchema(() =>
+  z.object({
+    chats: z.array(cloudChatSummaryV10Schema),
+  }),
+);
+
 export const listCloudChatsResponseSchema = lazySchema(() =>
   z.object({
     chats: z.array(cloudChatSummarySchema),
@@ -223,7 +235,7 @@ export const resolveCloudChatHeadResponseSchema = lazySchema(() =>
   z
     .object({
       /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
-      chat: cloudChatSummarySchema.nullable(),
+      chat: cloudChatSummaryV10Schema.nullable(),
       outcome: resolveCloudChatHeadOutcomeSchema,
     })
     // The doc line above is a validated invariant, not prose: a "missing"
@@ -515,7 +527,7 @@ export type SetCloudChatVisibilityRequest = z.infer<
 
 export const setCloudChatVisibilityResponseSchema = lazySchema(() =>
   z.object({
-    chat: cloudChatSummarySchema,
+    chat: cloudChatSummaryV10Schema,
   }),
 );
 export type SetCloudChatVisibilityResponse = z.infer<
