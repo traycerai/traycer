@@ -1,32 +1,9 @@
 import type { ReactNode } from "react";
-import { Bot } from "lucide-react";
-import { NamedBotAvatar } from "@/components/bots/bot-avatars";
-import { cn } from "@/lib/utils";
 
-/**
- * Who an A2A card's message came from or went to, before the name: a bot is
- * its mascot, an agent the agent glyph. `glyphClassName` colours the glyph;
- * a mascot keeps its own colours.
- */
-export function A2APeerPicture(props: {
-  readonly botId: string | null;
-  readonly glyphClassName: string;
-}): ReactNode {
-  const { botId, glyphClassName } = props;
-  return (
-    <span
-      className="inline-flex shrink-0"
-      data-testid="a2a-peer-picture"
-      data-peer={botId === null ? "agent" : "bot"}
-    >
-      {botId === null ? (
-        <Bot className={cn("size-3.5 shrink-0", glyphClassName)} aria-hidden />
-      ) : (
-        <NamedBotAvatar botId={botId} size="xs" />
-      )}
-    </span>
-  );
-}
+// This module imports nothing but React. cloud-ui-v2's homepage demo renders
+// `AgentHeaderLink` from source, on the server too, where a store reached
+// from here throws at import. Anything that reads app state goes in its own
+// module, as `a2a-peer-picture.tsx` does.
 
 /**
  * Clickable agent name used inside an A2A send/received segment header.

@@ -78,3 +78,32 @@ test("the post a thread opens on and a reply in the thread show their turn's rec
     /^Read 4 files · /,
   );
 });
+
+test("a row keeps its box when its receipt arrives late", async ({ page }) => {
+  await page.goto(`${fixture("bot-row-receipts")}?receipts=late`);
+  await expect(page.getByTestId("fixture-thread")).toBeVisible();
+  await page.mouse.move(1270, 890);
+  await expect(page.locator(RECEIPT)).toHaveCount(0);
+
+  const rows = page.locator(
+    '[data-testid="bot-reply-row"], [data-testid="bot-announcement"], [data-testid="bot-thread-anchor"]',
+  );
+  await expect(rows).toHaveCount(7);
+  const boxes = await rows.evaluateAll((elements) =>
+    elements.map((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    }),
+  );
+
+  await page.getByTestId("fixture-receipts-arrive").click();
+  await expect(page.locator(RECEIPT).first()).toBeVisible();
+
+  const after = await rows.evaluateAll((elements) =>
+    elements.map((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    }),
+  );
+  expect(after).toEqual(boxes);
+});

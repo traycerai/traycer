@@ -67,7 +67,10 @@ const epicNodeRefForNodeId = vi.fn(
   },
 );
 
-vi.mock("@/lib/epic-selectors", () => ({
+// Only the node resolver is stubbed; the chat chip's live-title read is the
+// real hook, which finds no mounted task here.
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   epicNodeRefForNodeId: (state: object, nodeId: string, fallback: string) =>
     epicNodeRefForNodeId(state, nodeId, fallback),
 }));

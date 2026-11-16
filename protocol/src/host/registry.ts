@@ -980,6 +980,7 @@ import {
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
+  epicGetChatTitleV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -1192,7 +1193,9 @@ import {
   simulatorScreenshotV10,
   simulatorSetKeepRunningV10,
   simulatorShutdownV10,
+  simulatorStatusUpgradeV10ToV11,
   simulatorStatusV10,
+  simulatorStatusV11,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -7125,11 +7128,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorStatusV11,
+          upgradeFromPreviousVersion: simulatorStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10702,6 +10709,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.getChatTitle": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatTitleV10,
           upgradeFromPreviousVersion: null,
         },
       },
