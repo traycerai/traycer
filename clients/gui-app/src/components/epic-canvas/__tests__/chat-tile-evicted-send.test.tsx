@@ -96,7 +96,10 @@ vi.mock(
   }),
 );
 
-const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+const { HOST_ID, SAVED_CREATOR_USER_ID } = vi.hoisted(() => ({
+  HOST_ID: "host-test",
+  SAVED_CREATOR_USER_ID: "owner-1",
+}));
 
 const hydrateBoundary = vi.hoisted(
   (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
@@ -107,7 +110,8 @@ const MOCK_HOST_CLIENT = {
   // A pool build reads the pool tier's client through the surface's.
   createRequesterForHostId: () => MOCK_HOST_CLIENT,
   getActiveHostId: () => HOST_ID,
-  getRequestContextUserId: () => "owner-1",
+  getRequestContextUserId: () =>
+    useAuthStore.getState().profile?.userId ?? SAVED_CREATOR_USER_ID,
   onChange: () => () => undefined,
 };
 const MOCK_HOST_ENTRY = {
@@ -220,6 +224,31 @@ const CHAT_ARTIFACT = {
   name: "Chat 1",
   hostId: HOST_ID,
 };
+type ChatAccessFixture =
+  | {
+      readonly role: "owner";
+      readonly ownerUserId: string;
+      readonly canAct: true;
+    }
+  | {
+      readonly role: "viewer";
+      readonly ownerUserId: string;
+      readonly canAct: false;
+    };
+
+// The live-subscribe gate grants owner access for an admitted task's saved
+// creator. The pool still takes no send frame; the tile parks one until the
+// machine host restores the chat.
+const ADMITTED_SAVED_CREATOR_ACCESS = {
+  role: "owner",
+  ownerUserId: SAVED_CREATOR_USER_ID,
+  canAct: true,
+} as const satisfies ChatAccessFixture;
+const NONCREATOR_POOL_VIEWER_ACCESS = {
+  role: "viewer",
+  ownerUserId: SAVED_CREATOR_USER_ID,
+  canAct: false,
+} as const satisfies ChatAccessFixture;
 const HASH = "a".repeat(64);
 const FIRST_TEXT = "fix the login bug";
 const SECOND_TEXT = "then update the tests";
@@ -332,9 +361,16 @@ function sendFramesOf(stream: ChatStream): SendFrame[] {
 /** A stream opens and its peer's snapshot arrives. */
 function openStream(
   stream: ChatStream,
-  access: { readonly role: "owner" | "viewer"; readonly canAct: boolean },
+  access: ChatAccessFixture,
   managedCommands: readonly ManagedCommand[] | undefined,
 ): void {
+  if (
+    access.role === "owner" &&
+    (access.ownerUserId !== SAVED_CREATOR_USER_ID ||
+      useAuthStore.getState().profile?.userId !== access.ownerUserId)
+  ) {
+    throw new Error("expected live access for the saved creator");
+  }
   act(() => {
     stream.callbacks.onConnectionStatus("open", null, null, null);
     stream.callbacks.onSnapshot({
@@ -346,7 +382,7 @@ function openStream(
         chat: {
           id: CHAT_ARTIFACT.id,
           parentId: null,
-          userId: "owner-1",
+          userId: SAVED_CREATOR_USER_ID,
           hostId: HOST_ID,
           title: CHAT_ARTIFACT.name,
           createdAt: 0,
@@ -384,7 +420,7 @@ function openStream(
         },
         access: {
           role: access.role,
-          ownerUserId: "owner-1",
+          ownerUserId: access.ownerUserId,
           canAct: access.canAct,
         },
         queue: { status: "idle", items: [] },
@@ -556,7 +592,7 @@ function mountEvictedTile(): Mounted {
 }
 
 /** The tile on the pool: the witness read the chat at rest and the pool's stream is up. */
-async function mountOnThePool(): Promise<Mounted> {
+async function mountOnThePool(access: ChatAccessFixture): Promise<Mounted> {
   const mounted = mountEvictedTile();
   await waitFor(() => {
     expect(mounted.witnessClient.sessions).toHaveLength(1);
@@ -570,7 +606,7 @@ async function mountOnThePool(): Promise<Mounted> {
   await waitFor(() => {
     expect(streams).toHaveLength(1);
   });
-  openStream(streams[0], { role: "viewer", canAct: false }, undefined);
+  openStream(streams[0], access, undefined);
   await waitFor(() => {
     expect(screen.getByText("An earlier message")).not.toBeNull();
   });
@@ -668,11 +704,11 @@ beforeEach(() => {
   useAuthStore.setState({
     status: "signed-in",
     profile: {
-      userId: "owner-1",
+      userId: SAVED_CREATOR_USER_ID,
       userName: "Owner",
       email: "owner@example.com",
     },
-    contextMetadata: { userId: "owner-1", username: "Owner" },
+    contextMetadata: { userId: SAVED_CREATOR_USER_ID, username: "Owner" },
   });
   useComposerDraftStore.setState({ drafts: {} });
   useComposerRunSettingsStore.getState().resetForTests();
@@ -707,10 +743,34 @@ afterEach(() => {
 });
 
 describe("a message sent to a chat the pool serves because its host dropped the records", () => {
+  it("keeps a noncreator pool viewer read-only without staging a send", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
+
+    await mountOnThePool(NONCREATOR_POOL_VIEWER_ACCESS);
+
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    putInComposer(FIRST_TEXT);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftOf(FIRST_TEXT));
+    expect(streams.flatMap(sendFramesOf)).toEqual([]);
+    expect(hydrates).toEqual([]);
+  });
+
   it("is drawn as pending, sent once by the host after it answers, and read back as sent", async () => {
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
-    await mountOnThePool();
+    await mountOnThePool(ADMITTED_SAVED_CREATOR_ACCESS);
     putInComposer(FIRST_TEXT);
 
     clickSend();
@@ -737,7 +797,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true }, undefined);
+    openStream(streams[1], ADMITTED_SAVED_CREATOR_ACCESS, undefined);
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(1);
     });
@@ -766,7 +826,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
   });
 
   it("holds a second message behind the first and sends both once, in order", async () => {
-    await mountOnThePool();
+    await mountOnThePool(ADMITTED_SAVED_CREATOR_ACCESS);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => {
@@ -787,7 +847,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true }, undefined);
+    openStream(streams[1], ADMITTED_SAVED_CREATOR_ACCESS, undefined);
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(2);
     });
@@ -819,7 +879,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       const reported: SentChatMessage[] = [];
       observeSentMessages(reported);
       stageRebind();
-      await mountOnThePool();
+      await mountOnThePool(ADMITTED_SAVED_CREATOR_ACCESS);
       putInComposer(FIRST_TEXT);
       clickSend();
       await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -833,7 +893,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       await settleLegendList();
       await waitFor(() => expect(streams).toHaveLength(2));
       await settleLegendList();
-      openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+      openStream(streams[1], ADMITTED_SAVED_CREATOR_ACCESS, [runningShell()]);
       await settleLegendList();
       expect(
         await screen.findByTestId("teardown-commit-dialog"),
@@ -902,7 +962,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
     stageRebind();
-    await mountOnThePool();
+    await mountOnThePool(ADMITTED_SAVED_CREATOR_ACCESS);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -914,7 +974,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await settleLegendList();
     await waitFor(() => expect(streams).toHaveLength(2));
     await settleLegendList();
-    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    openStream(streams[1], ADMITTED_SAVED_CREATOR_ACCESS, [runningShell()]);
     await settleLegendList();
 
     expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
@@ -945,7 +1005,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     const reported: SentChatMessage[] = [];
     observeSentMessages(reported);
     stageRebind();
-    await mountOnThePool();
+    await mountOnThePool(ADMITTED_SAVED_CREATOR_ACCESS);
     putInComposer(FIRST_TEXT);
     clickSend();
     await waitFor(() => expect(pendingRows()).toHaveLength(1));
@@ -957,7 +1017,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await settleLegendList();
     await waitFor(() => expect(streams).toHaveLength(2));
     await settleLegendList();
-    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    openStream(streams[1], ADMITTED_SAVED_CREATOR_ACCESS, [runningShell()]);
     await settleLegendList();
 
     expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
