@@ -7,6 +7,7 @@ import type {
 } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type { NotificationBellState } from "@/stores/notifications/merged-notifications";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
@@ -41,6 +42,8 @@ const testState: {
   backfillIdCalls: ReadonlyArray<string>[];
   /** The sort `useHistoryQuery` reports as in effect; undefined echoes the search's. */
   effectiveSort: HistorySortOption | undefined;
+  /** What the header's bell shows, which the Notifications row mirrors. */
+  bellState: NotificationBellState;
 } = {
   items: [],
   signOut: () => Promise.resolve(true),
@@ -56,6 +59,7 @@ const testState: {
   backfillTasks: new Map<string, ListTaskLight>(),
   backfillIdCalls: [],
   effectiveSort: undefined,
+  bellState: { kind: "clear" },
 };
 
 const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
@@ -166,11 +170,19 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => null,
 }));
-// The Notifications row's count and open path read the notification center's
+// The Notifications row's mark and open path read the notification center's
 // host state, which needs a host runtime this suite does not mount.
-vi.mock("@/stores/notifications/merged-notifications", () => ({
-  useMergedNotificationUnreadCount: () => 0,
-}));
+vi.mock(
+  "@/stores/notifications/merged-notifications",
+  async (importOriginal) => ({
+    notificationBellAccessibleLabel: (
+      await importOriginal<
+        typeof import("@/stores/notifications/merged-notifications")
+      >()
+    ).notificationBellAccessibleLabel,
+    useNotificationBellState: () => testState.bellState,
+  }),
+);
 vi.mock("@/hooks/notifications/use-open-mobile-notification-center", () => ({
   useOpenMobileNotificationCenter: () => rowSpies.openNotifications,
 }));
@@ -232,6 +244,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -407,6 +420,7 @@ describe("MobileNavDrawer", () => {
     testState.backfillTasks = new Map<string, ListTaskLight>();
     testState.backfillIdCalls = [];
     testState.effectiveSort = undefined;
+    testState.bellState = { kind: "clear" };
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     testState.signOut = () => Promise.resolve(true);
     testState.openSettings = () => undefined;
@@ -495,6 +509,37 @@ describe("MobileNavDrawer", () => {
 
       expect(rowSpies.openNotifications).toHaveBeenCalledTimes(1);
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("counts what needs attention on the Notifications row, as the bell does", async () => {
+      testState.bellState = { kind: "attention", count: 3 };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, 3 notifications need attention",
+      });
+      expect(
+        within(row).getByTestId("mobile-nav-notifications-attention-count")
+          .textContent,
+      ).toBe("3");
+      expect(
+        within(row).queryByTestId("mobile-nav-notifications-quiet-dot"),
+      ).toBeNull();
+    });
+
+    it("draws a dot and no count on the Notifications row for unread activity alone", async () => {
+      testState.bellState = { kind: "quietDot" };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, unread activity",
+      });
+      expect(
+        within(row).getByTestId("mobile-nav-notifications-quiet-dot"),
+      ).toBeTruthy();
+      expect(
+        within(row).queryByTestId("mobile-nav-notifications-attention-count"),
+      ).toBeNull();
     });
 
     it("opens History from the All tasks row and closes the drawer", async () => {
