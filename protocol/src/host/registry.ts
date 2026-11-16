@@ -1007,6 +1007,8 @@ import {
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
+  epicResolveCloudChatHeadV11,
+  epicResolveCloudChatHeadUpgradeV10ToV11,
   epicGetChatTitleV10,
   epicListTasksV10,
   epicListTasksV11,
@@ -11140,11 +11142,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.resolveCloudChatHead": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicResolveCloudChatHeadV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicResolveCloudChatHeadV11,
+          upgradeFromPreviousVersion: epicResolveCloudChatHeadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
