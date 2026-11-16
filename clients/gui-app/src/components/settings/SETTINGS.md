@@ -134,19 +134,6 @@ The store is persisted at version 2.
 The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
 Someone part-way through a guide keeps their progress, and a user who has not finished the tour is left alone.
 
-**Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
-rules in `set-up-personal.ts`) is not drawn on any page. It is three optional
-steps, each a sentence about what it does for the person and an Open button to
-its page - link a plan or
-add an API key (Providers), add a secret your agents will need (Secrets),
-choose how agents are picked (Agent selection) - under "Optional. An agent can
-run as soon as one provider is set up." with its own "n of 3 done". Each step
-is checked off by what the person's settings already hold, read through the
-window's own host (`providers.list`: a stored API key or a signed-in linked
-plan, never this computer's own sign-in; `environment.secrets.list`: a
-secret not revoked; `environment.status`: an agent selection item), so a step
-done in the dashboard is checked here too.
-
 The composer's account picker says what the Terminal account is the first
 time it names one ("This computer's own sign-in, which stays on this
 computer. Sign in on Providers to use one everywhere.",

@@ -1,17 +1,14 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  cleanup,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+  QueryClient,
+  QueryClientProvider,
+  type Query,
+} from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ReactNode } from "react";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SetUpPersonalGroup } from "@/components/onboarding/set-up-personal-group";
 import { useGettingStartedChecklist } from "@/components/onboarding/getting-started-checklist";
 import {
   buildEnvironmentClient,
@@ -29,6 +26,7 @@ import {
   type OwnEnvironmentTransport,
 } from "@/hooks/environment/__tests__/own-environment-authn-test-support";
 import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   recordNegotiatedHostMethods,
@@ -137,10 +135,10 @@ let runtime: OwnEnvironmentAuthRuntime;
 let transport: OwnEnvironmentTransport;
 let route: OwnEnvironmentRoute;
 
-function mountGroup(
+function mountChecklist(
   handlers: MockHandlerMap<HostRpcRegistry>,
   hostBound: boolean,
-): void {
+): QueryClient {
   const client = hostBound
     ? buildEnvironmentClient({ hostId: HOST_ID, handlers }).client
     : null;
@@ -157,11 +155,21 @@ function mountGroup(
   render(
     <OwnEnvironmentAuthProvider binding={runtime.binding}>
       <QueryClientProvider client={queryClient}>
-        <SetUpPersonalGroup surface="settings" />
         <GuideSecretCard />
       </QueryClientProvider>
     </OwnEnvironmentAuthProvider>,
   );
+  return queryClient;
+}
+
+function secretsListQueries(queryClient: QueryClient): Query[] {
+  return queryClient.getQueryCache().findAll({
+    predicate: (query) =>
+      hostQueryKeys.matchesMethodOnAnyHost(
+        query.queryKey,
+        "environment.secrets.list",
+      ),
+  });
 }
 
 function GuideSecretCard(): ReactNode {
@@ -227,7 +235,7 @@ afterEach(() => {
   resetNegotiatedManifests();
 });
 
-describe("Set up Personal's secret step through authn", () => {
+describe("the Guide's secret card through authn", () => {
   it("checks a live Personal secret even when the host does not serve the secrets-list method", async () => {
     const hostSecrets: string[] = [];
     const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -241,15 +249,9 @@ describe("Set up Personal's secret step through authn", () => {
         return { secrets: [], removed: [] };
       },
     };
-    mountGroup(handlers, true);
+    mountChecklist(handlers, true);
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("set-up-personal")
-          .querySelector('[data-step="secret"]')
-          ?.getAttribute("data-done"),
-      ).toBe("true");
       expect(screen.getByTestId("guide-secret-card").textContent).toBe("true");
     });
     expect(authnRequestsFor("/" + PERSONAL_ID + "/secrets")).toEqual([
@@ -276,15 +278,10 @@ describe("Set up Personal's secret step through authn", () => {
     };
     transport.restore();
     transport = installOwnEnvironmentTransport(route, teamDirectory);
-    mountGroup(handlers, true);
+    mountChecklist(handlers, true);
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("set-up-personal")
-          .querySelector('[data-step="secret"]')
-          ?.getAttribute("data-done"),
-      ).toBe("true");
+      expect(screen.getByTestId("guide-secret-card").textContent).toBe("true");
     });
     const secretReads = transport.requests
       .filter(
@@ -300,69 +297,27 @@ describe("Set up Personal's secret step through authn", () => {
     ).toBe(true);
     expect(hostSecrets).toEqual([]);
   });
-  it("leaves the secret step unchecked and sends no list request without a host", async () => {
-    mountGroup({}, false);
+
+  it("leaves the secret card unchecked and sends no list request without a host", async () => {
+    const queryClient = mountChecklist({}, false);
 
     await waitFor(() => {
       expect(screen.getByTestId("guide-secret-card").textContent).toBe("false");
     });
+    const queries = secretsListQueries(queryClient);
+    expect(queries).toHaveLength(1);
+    const [secretsQuery] = queries;
+    expect(secretsQuery.state).toMatchObject({
+      status: "pending",
+      fetchStatus: "idle",
+      fetchFailureCount: 0,
+      data: undefined,
+    });
+    expect(secretsQuery.isDisabled()).toBe(true);
     expect(
       transport.requests.some((request) =>
         request.url.pathname.endsWith("/secrets"),
       ),
     ).toBe(false);
-    expect(
-      screen
-        .getByTestId("set-up-personal")
-        .querySelector('[data-step="secret"]')
-        ?.getAttribute("data-done"),
-    ).toBe("false");
-  });
-
-  it("checks the Guide card from the same Personal authn list as the setup step", async () => {
-    const hostSecrets: string[] = [];
-    const client = buildEnvironmentClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.status": () =>
-          environmentStatusFixture({
-            principal: { kind: "personal" },
-          }),
-        "providers.list": () => ({ providers: [], native: null }),
-        "environment.secrets.list": () => {
-          hostSecrets.push("list");
-          return { secrets: [], removed: [] };
-        },
-      },
-    }).client;
-    hostBoundary.client = client;
-    recordNegotiatedHostMethods(HOST_ID, [
-      "environment.status",
-      "providers.list",
-    ]);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    const wrapper = (props: { children: ReactNode }) => (
-      <OwnEnvironmentAuthProvider binding={runtime.binding}>
-        <QueryClientProvider client={queryClient}>
-          {props.children}
-        </QueryClientProvider>
-      </OwnEnvironmentAuthProvider>
-    );
-    const { result } = renderHook(() => useGettingStartedChecklist(), {
-      wrapper,
-    });
-
-    await waitFor(() => {
-      expect(
-        result.current.entries.find((entry) => entry.card.id === "secret")
-          ?.presentation.done,
-      ).toBe(true);
-    });
-    expect(authnRequestsFor("/" + PERSONAL_ID + "/secrets")).toEqual([
-      "/api/v3/environments/" + PERSONAL_ID + "/secrets",
-    ]);
-    expect(hostSecrets).toEqual([]);
   });
 });

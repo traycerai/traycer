@@ -361,7 +361,6 @@ describe("GettingStartedSettingsPanel", () => {
       screen.queryByRole("button", { name: /Browser sign-ins/ }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: /Add credits/ })).toBeNull();
-    expect(screen.queryByTestId("set-up-personal")).toBeNull();
     expect(screen.queryByTestId("set-up-team-group")).toBeNull();
   });
 

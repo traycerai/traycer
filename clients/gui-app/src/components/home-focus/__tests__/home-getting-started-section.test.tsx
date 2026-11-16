@@ -244,7 +244,6 @@ describe("HomeGettingStartedSection", () => {
       screen.getByRole("button", { name: "Start a task, Not started" }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Add credits/ })).toBeNull();
-    expect(screen.queryByTestId("set-up-personal")).toBeNull();
     expect(screen.queryByTestId("set-up-team-group")).toBeNull();
   });
 
