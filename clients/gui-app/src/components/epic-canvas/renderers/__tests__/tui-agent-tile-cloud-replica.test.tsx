@@ -280,10 +280,8 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
 
 // The bootstrap hook is MOCKED so the two facts this suite turns on are
 // observable: the `adoptOnly` the tile passes, and whether a reaped exit asks
-// it to create again. `importOriginal` keeps every other export real except
-// `TerminalXtermHost`: the real host is a lazy chunk that mounts, once an
-// earlier case has warmed it, inside a later test and needs a ThemeProvider
-// this suite does not render. Nothing here asserts what it draws.
+// it to create again. The terminal host the tile renders is a null stub: no
+// case here reads the terminal surface.
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", async (importOriginal) => {
   const actual =
     await importOriginal<

@@ -1,6 +1,7 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { ChatStartedByLine } from "@/components/chat/chat-started-by-line";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
+import { ComposerDropPane } from "@/components/chat/composer/composer-drop-pane";
 import {
   resolveChatSandbox,
   wakeOf,
@@ -1993,7 +1994,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                * absolutely positioned, so it does not participate in this flex
                * layout regardless. The definite flex height also makes this a
                * size container for the dock panel's proportional height. */}
-              <div
+              <ComposerDropPane
                 data-chat-pane=""
                 className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
               >
@@ -2113,7 +2114,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </ComposerDropPane>
               <ChatTileErrorNoticeToasts handle={view.handle} />
               <ChatTileRestoreResultToasts handle={view.handle} />
               <RevertOnEditDialog
