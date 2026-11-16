@@ -1,4 +1,5 @@
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
+import { useWorktreeHostIndex } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
@@ -655,11 +656,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // The history query's own index read, observed for its settledness: an
+  // empty map while the first listing is in flight is not "owns nothing".
+  const surfaceWorktreesFetching = useWorktreeHostIndex(true).isFetching;
   // Asked of the whole sweep target: one other machine has to account for
   // every selected Task's agents, and a Task whose hosts are unknown makes the
   // answer unknown.
   const sweepPreferredHostId = useMemo(() => {
-    if (sweepEpicIds === null) return null;
+    if (sweepEpicIds === null || surfaceWorktreesFetching) return null;
     const hostIds = new Set<string>();
     let surfaceWorktreeCount = 0;
     for (const epicId of sweepEpicIds) {
@@ -676,7 +680,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       surfaceHostId: hostId,
       surfaceWorktreeCount,
     });
-  }, [hostId, items, sweepEpicIds, worktreesByEpicId]);
+  }, [
+    hostId,
+    items,
+    surfaceWorktreesFetching,
+    sweepEpicIds,
+    worktreesByEpicId,
+  ]);
   // A Task whose deletion is still in flight is not deletable AGAIN: the
   // dialog closes at kickoff, so its row renders with its controls back while
   // the host is still working, and nothing on the wire deduplicates a second
