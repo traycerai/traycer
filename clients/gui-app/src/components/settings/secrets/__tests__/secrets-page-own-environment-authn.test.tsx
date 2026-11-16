@@ -377,8 +377,7 @@ function authnSecretPaths(): string[] {
 
 function secretRequestCount(path: string, method: string): number {
   return authnTransport.requests.filter(
-    (request) =>
-      request.url.pathname === path && request.method === method,
+    (request) => request.url.pathname === path && request.method === method,
   ).length;
 }
 
@@ -479,9 +478,7 @@ describe("Secrets page reads on the window host's own environment", () => {
     });
     expect(screen.getByTestId("secret-row")).toBeTruthy();
     expect(row.textContent).toContain(SECRET_REVOKED_LABEL);
-    expect(
-      within(controls).queryByTestId("secret-row-verify"),
-    ).toBeNull();
+    expect(within(controls).queryByTestId("secret-row-verify")).toBeNull();
     expect(hostSecretCalls).toEqual([]);
   });
 
