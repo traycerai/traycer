@@ -429,6 +429,24 @@ describe("useStripTabItem through a bare presentation", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("ignores a middle click while the inline title rename is open", async () => {
+    registerEditableEpic([]);
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    await renderInApp(
+      <BareRow input={{ ...makeInput(), onClose }} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByText("Edit Title"));
+    await screen.findByTestId(`tab-title-input-epic-${EPIC_TAB.id}`);
+
+    fireEvent(row, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("activates the tab the moment a drag picks it up, before any release", async () => {
     await renderInApp(
       <BareRow input={makeInput()} />,

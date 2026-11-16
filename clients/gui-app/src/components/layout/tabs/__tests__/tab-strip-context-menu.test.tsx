@@ -596,10 +596,7 @@ describe("the Close Tabs After item", () => {
     cleanup();
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useTabsStore.setState({
-      stripOrder: [],
-      systemTabs: { history: null, settings: null },
-    });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
   // Two open task tabs; the menu is opened on the first or the last.

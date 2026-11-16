@@ -19,6 +19,11 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { useTabVisualOrderStore } from "@/stores/tabs/tab-visual-order-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
+import { tabResolveIntent } from "@/stores/tabs/registry";
+import {
+  registerTabCloseLockPredicate,
+  resetTabStructuralLockForTesting,
+} from "@/stores/tabs/tab-structural-lock";
 import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
@@ -197,10 +202,7 @@ function resetOrganization(): void {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useTabsStore.setState({
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   useTabRecoveryHistory.setState({ entries: [], ready: true });
   useTabVisualOrderStore.setState({ keys: null });
   mockUnsynced.epicIds.clear();
@@ -328,6 +330,7 @@ describe("useCloseTabFlow", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    resetTabStructuralLockForTesting();
     resetStores();
     resetOrganization();
   });
@@ -618,6 +621,66 @@ describe("useCloseTabFlow", () => {
     });
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([before, a, b]);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("navigates once to the target when the active tab was after it", () => {
+    const epics = useEpicCanvasStore.getState();
+    const target = epics.openEpicTab("epic-a", "Alpha");
+    const active = epics.openEpicTab("epic-b", "Beta");
+    const refs = [target, active].map((id) => ({
+      kind: "epic" as const,
+      id,
+    }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[1]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    const navigate = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    const targetTab = epicHeaderTab("epic-a", target, "Alpha");
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(targetTab);
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([target]);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate.mock.calls[0][1]).toEqual(tabResolveIntent(targetTab));
+  });
+
+  it("leaves a close-locked active tab after the target open and in view", () => {
+    const epics = useEpicCanvasStore.getState();
+    const target = epics.openEpicTab("epic-a", "Alpha");
+    const locked = epics.openEpicTab("epic-b", "Beta");
+    const closable = epics.openEpicTab("epic-c", "Gamma");
+    const refs = [target, locked, closable].map((id) => ({
+      kind: "epic" as const,
+      id,
+    }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[1]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    const navigate = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    registerTabCloseLockPredicate((ref) => ref.id === locked);
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(epicHeaderTab("epic-a", target, "Alpha"));
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([
+      target,
+      locked,
+    ]);
+    // The locked tab is still the one on screen, so nothing moves the view.
     expect(navigate).not.toHaveBeenCalled();
   });
 

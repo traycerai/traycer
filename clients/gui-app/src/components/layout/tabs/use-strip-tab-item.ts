@@ -481,11 +481,11 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
   // the close button and the menu's Close Tab.
   const handleAuxClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
-      if (event.button !== 1) return;
+      if (event.button !== 1 || rename.isEditing) return;
       event.preventDefault();
       if (canClose) close();
     },
-    [canClose, close],
+    [canClose, close, rename.isEditing],
   );
 
   const leaderBadge: StripTabLeaderBadge | null =

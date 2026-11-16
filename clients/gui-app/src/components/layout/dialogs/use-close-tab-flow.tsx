@@ -16,7 +16,7 @@ import {
 } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { inVisualOrder } from "@/stores/tabs/tab-visual-order-store";
-import { isTracyEntryRef } from "@/stores/bots/tracy-entry";
+import { isTabCloseLocked } from "@/stores/tabs/tab-structural-lock";
 import {
   tabMatchesPath,
   tabResolveIntent,
@@ -266,9 +266,9 @@ export function useCloseTabsAfter(): (target: HeaderTab) => void {
  * them: the Activity view's sections when the side strip draws those, the
  * strip's own order otherwise. A split's other half belongs to the target's
  * item and stays. Group boundaries do not stop it, as they do not stop Close
- * Other Tabs, so a collapsed group further on closes with the rest. The fixed
- * Tracy entry is drawn beside Home rather than among the tabs, so it is never
- * after anything.
+ * Other Tabs, so a collapsed group further on closes with the rest. A tab
+ * that cannot close is left out, so the menu item is disabled when nothing
+ * after the target can close; the pinned Tracy entry is one of those.
  */
 export function tabsDrawnAfter(
   target: TabRef,
@@ -277,19 +277,20 @@ export function tabsDrawnAfter(
   const targetItem = findStripItemForRef(layout, target);
   if (targetItem === null) return [];
   const ownItem = new Set(flattenStripItemRefs(targetItem).map(tabRefKey));
-  const drawn = inVisualOrder(getHeaderTabs()).filter(
-    (tab) => !isTracyEntryRef({ kind: tab.kind, id: tab.id }),
-  );
+  const drawn = inVisualOrder(getHeaderTabs());
   const lastOwnIndex = drawn.findLastIndex((tab) =>
     ownItem.has(tabRefKey(tab)),
   );
-  return lastOwnIndex < 0 ? [] : drawn.slice(lastOwnIndex + 1);
+  if (lastOwnIndex < 0) return [];
+  return drawn.slice(lastOwnIndex + 1).filter((tab) => !isTabCloseLocked(tab));
 }
 
 /**
  * The close behind every multi-tab menu gesture. Nothing in it is prompted:
- * a tab holding unsynced edits is kept open and named in a toast instead.
- * `layout` is the strip as it stood at the gesture, which Reopen Closed Tab
+ * a tab holding unsynced edits is kept open and named in a toast instead,
+ * and a close-locked tab is left out entirely, at the gesture and again after
+ * the awaited ungroup, so it is never counted, ungrouped or navigated away
+ * from. `layout` is the strip as it stood at the gesture, which Reopen Closed Tab
  * restores from. `afterClose` receives the tabs that actually closed.
  */
 function useCloseTabsInBulk(): (
@@ -303,14 +304,17 @@ function useCloseTabsInBulk(): (
     (candidates, layout, afterClose) => {
       // Nothing here is ever prompted, so nothing here is ever confirmed.
       const confirmed = new Set<string>();
-      const first = splitByUnsyncedEdits(candidates, confirmed);
+      const first = splitByUnsyncedEdits(
+        candidates.filter((tab) => !isTabCloseLocked(tab)),
+        confirmed,
+      );
       // Read before the closes: once the tabs are gone the strip cannot say
       // which tasks they were. Read from the tabs that will ACTUALLY close,
       // so a tab already holding edits produces no removal at all.
       const ungrouped = tasksUngroupedByClose(first.closing, organization);
       const commit = (): void => {
         const { closing, held } = splitByUnsyncedEdits(
-          first.closing,
+          first.closing.filter((tab) => !isTabCloseLocked(tab)),
           confirmed,
         );
         batchHeaderTabRecovery(() => {
