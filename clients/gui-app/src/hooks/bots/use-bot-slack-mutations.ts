@@ -53,31 +53,28 @@ export function useBotSlackRegisterMutation(
     Error,
     SlackAppRegisterRequest,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botSlackMutationKeys.register(botId),
-      mutationFn: async (request, origin) => {
-        if (origin === null) {
-          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-        }
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.registerSlackApp(request);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind === "ok") return result.app;
-        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
-      },
-      gcTime: 0,
-      onSuccess: async (app) => {
-        if (app === null) return;
-        // A new registration replaces the app's credentials, so an install URL
-        // minted before it no longer leads anywhere.
-        clear(botId);
-        await invalidate();
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botSlackMutationKeys.register(botId),
+    mutationFn: async (request, origin) => {
+      if (origin === null) {
+        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+      }
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.registerSlackApp(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind === "ok") return result.app;
+      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-  );
+    gcTime: 0,
+    onSuccess: async (app) => {
+      if (app === null) return;
+      // A new registration replaces the app's credentials, so an install URL
+      // minted before it no longer leads anywhere.
+      clear(botId);
+      await invalidate();
+    },
+  });
 }
 
 export interface BotSlackInstallUrl {
@@ -105,33 +102,30 @@ export function useBotSlackInstallUrlMutation(
     Error,
     { readonly baselineInstalledAt: number | null },
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botSlackMutationKeys.installUrl(botId),
-      mutationFn: async (_variables, origin) => {
-        if (origin === null) {
-          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-        }
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.mintSlackAppInstallUrl(botId);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind === "ok") {
-          return { url: result.url, expiresAt: result.expiresAt };
-        }
-        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
-      },
-      onSuccess: (minted, variables) => {
-        if (minted === null) return;
-        begin({
-          botId,
-          expiresAt: minted.expiresAt,
-          baselineInstalledAt: variables.baselineInstalledAt,
-        });
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botSlackMutationKeys.installUrl(botId),
+    mutationFn: async (_variables, origin) => {
+      if (origin === null) {
+        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+      }
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.mintSlackAppInstallUrl(botId);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind === "ok") {
+        return { url: result.url, expiresAt: result.expiresAt };
+      }
+      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-  );
+    onSuccess: (minted, variables) => {
+      if (minted === null) return;
+      begin({
+        botId,
+        expiresAt: minted.expiresAt,
+        baselineInstalledAt: variables.baselineInstalledAt,
+      });
+    },
+  });
 }
 
 /**
@@ -149,28 +143,25 @@ export function useBotSlackDisconnectMutation(
     Error,
     void,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botSlackMutationKeys.disconnect(botId),
-      mutationFn: async (_variables, origin) => {
-        if (origin === null) {
-          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-        }
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.disconnectSlackApp(botId);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind === "ok") return result.app;
-        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
-      },
-      onSuccess: async (app) => {
-        if (app === null) return;
-        clear(botId);
-        await invalidate();
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botSlackMutationKeys.disconnect(botId),
+    mutationFn: async (_variables, origin) => {
+      if (origin === null) {
+        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+      }
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.disconnectSlackApp(botId);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind === "ok") return result.app;
+      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-  );
+    onSuccess: async (app) => {
+      if (app === null) return;
+      clear(botId);
+      await invalidate();
+    },
+  });
 }
 
 /** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
@@ -184,22 +175,19 @@ export function useBotSlackDmsMutation(
     Error,
     boolean,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botSlackMutationKeys.dms(botId),
-      mutationFn: async (dmsEnabled, origin) => {
-        if (origin === null) {
-          throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
-        }
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.setSlackAppDms({ botId, dmsEnabled });
-        if (!signIn.isCurrent()) return null;
-        if (result.kind === "ok") return result.app;
-        throw new BotSlackAppError(result, WRITE_FAILED_LINE);
-      },
-      onSuccess: (app) => (app === null ? undefined : invalidate()),
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botSlackMutationKeys.dms(botId),
+    mutationFn: async (dmsEnabled, origin) => {
+      if (origin === null) {
+        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+      }
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.setSlackAppDms({ botId, dmsEnabled });
+      if (!signIn.isCurrent()) return null;
+      if (result.kind === "ok") return result.app;
+      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
     },
-  );
+    onSuccess: (app) => (app === null ? undefined : invalidate()),
+  });
 }

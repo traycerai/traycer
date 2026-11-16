@@ -2,16 +2,27 @@ import {
   useMutation,
   useQueryClient,
   type MutateOptions,
+  type MutationFunctionContext,
   type UseMutateFunction,
   type UseMutateAsyncFunction,
   type UseMutationOptions,
   type UseMutationResult,
 } from "@tanstack/react-query";
 
-type CapturedPress<TVariables, TCapture> = { readonly variables: TVariables } & (
+type CapturedPress<TVariables, TCapture> = {
+  readonly variables: TVariables;
+} & (
   | { readonly kind: "ready"; readonly captured: TCapture }
   | { readonly kind: "failed"; readonly error: unknown }
 );
+
+type CapturedSettledArguments<TData, TError, TVariables, TCapture, TContext> = [
+  data: TData | undefined,
+  error: TError | null,
+  press: CapturedPress<TVariables, TCapture>,
+  result: TContext | undefined,
+  context: MutationFunctionContext,
+];
 
 /**
  * Captures each press before TanStack awaits its mutation hooks. Each
@@ -47,10 +58,10 @@ export function usePressCapturedMutation<
     TContext
   >({
     ...options,
-    mutationFn: (press) =>
-      press.kind === "failed"
-        ? Promise.reject<TData>(press.error)
-        : mutationFn(press.variables, press.captured),
+    mutationFn: async (press) => {
+      if (press.kind === "failed") throw press.error;
+      return mutationFn(press.variables, press.captured);
+    },
     onMutate:
       onMutate === undefined
         ? undefined
@@ -68,10 +79,19 @@ export function usePressCapturedMutation<
     onSettled:
       onSettled === undefined
         ? undefined
-        : (data, error, press, result, context) =>
-            onSettled(data, error, press.variables, result, context),
+        : (
+            ...[data, error, press, result, context]: CapturedSettledArguments<
+              TData,
+              TError,
+              TVariables,
+              TCapture,
+              TContext
+            >
+          ) => onSettled(data, error, press.variables, result, context),
   });
-  const capture = (variables: TVariables): CapturedPress<TVariables, TCapture> => {
+  const capture = (
+    variables: TVariables,
+  ): CapturedPress<TVariables, TCapture> => {
     try {
       return { kind: "ready", variables, captured: capturePress() };
     } catch (error) {
@@ -82,7 +102,12 @@ export function usePressCapturedMutation<
   const callbacks = (
     perCall: MutateOptions<TData, TError, TVariables, TContext> | undefined,
   ):
-    | MutateOptions<TData, TError, CapturedPress<TVariables, TCapture>, TContext>
+    | MutateOptions<
+        TData,
+        TError,
+        CapturedPress<TVariables, TCapture>,
+        TContext
+      >
     | undefined =>
     perCall === undefined
       ? undefined
@@ -92,7 +117,15 @@ export function usePressCapturedMutation<
             perCall.onSuccess?.(data, press.variables, result, context),
           onError: (error, press, result, context) =>
             perCall.onError?.(error, press.variables, result, context),
-          onSettled: (data, error, press, result, context) =>
+          onSettled: (
+            ...[data, error, press, result, context]: CapturedSettledArguments<
+              TData,
+              TError,
+              TVariables,
+              TCapture,
+              TContext
+            >
+          ) =>
             perCall.onSettled?.(data, error, press.variables, result, context),
         };
   const mutate: UseMutateFunction<TData, TError, TVariables, TContext> = (
