@@ -30,6 +30,7 @@ import {
   type OrganizationView,
 } from "@traycer/protocol/host/organization/contracts";
 import { useAuthService, useHostClient } from "@/lib/host";
+import { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -104,27 +105,44 @@ export function OrganizationProvider({
       identityScope.current = null;
     };
   }, [hostId, userId, accountUserId]);
-  // A plain call rather than a mutation: nothing reads its state, and during
-  // an import the token moves every few seconds, so a mutation's pending and
-  // settled states re-rendered this provider and everything it draws on
-  // every tick. AuthService coalesces the reads itself.
+  const queryClient = useQueryClient();
+  // Read at call time, so the re-read keeps one identity, and with it
+  // `accept` and every subscription effect that depends on it.
+  const latestAuth = useRef(auth);
+  useLayoutEffect(() => {
+    latestAuth.current = auth;
+  }, [auth]);
+  // A mutation with no observer: the cache still records it under its key,
+  // but nothing here subscribes to its pending and settled states, which
+  // during an import moved every few seconds and re-rendered this provider
+  // and everything it draws on each time.
   const revalidateIdentity = useCallback(
     (expected: OrganizationIdentityScope): void => {
-      const account = useAuthStore.getState();
-      if (
-        identityScope.current !== expected ||
-        expected.userId === null ||
-        client.getActiveHostId() !== expected.hostId ||
-        client.getRequestContextUserId() !== expected.userId ||
-        account.contextMetadata?.userId !== expected.userId ||
-        !authorizesCloudCapability(account.status)
-      )
-        return;
-      void auth
-        .revalidateCurrentContextAfterInvalidation()
+      void queryClient
+        .getMutationCache()
+        .build(queryClient, {
+          mutationKey: authMutationKeys.revalidateContextAfterInvalidation(
+            expected.userId,
+          ),
+          mutationFn: (scope: OrganizationIdentityScope) => {
+            const account = useAuthStore.getState();
+            if (
+              identityScope.current !== scope ||
+              scope.userId === null ||
+              client.getActiveHostId() !== scope.hostId ||
+              client.getRequestContextUserId() !== scope.userId ||
+              account.contextMetadata?.userId !== scope.userId ||
+              !authorizesCloudCapability(account.status)
+            )
+              return Promise.resolve(null);
+            return latestAuth.current.revalidateCurrentContextAfterInvalidation();
+          },
+          retry: false,
+        })
+        .execute(expected)
         .catch(() => undefined);
     },
-    [auth, client],
+    [client, queryClient],
   );
   const scope = `${hostId}:${userId}`;
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
@@ -155,7 +173,6 @@ export function OrganizationProvider({
   // whose request context belongs to someone else must never be drawn.
   const ownAccount = userId !== null && userId === accountUserId;
   const supported = hostSupport === true && authorized && ownAccount;
-  const queryClient = useQueryClient();
   const key = useMemo(
     () => organizationKeys.view(hostId, userId),
     [hostId, userId],
