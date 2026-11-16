@@ -207,7 +207,7 @@ const MOCK_HOST_BINDING = {
     resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
   },
   auth: {
-    revalidateCurrentContext: async () => ({ kind: "valid" as const }),
+    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
     getRequestContextProvider: () => ({
       current: () => requestContextFor(originSignInTestState.userId),
       onChange: (listener: RequestContextListener) => {
@@ -223,48 +223,49 @@ const MOCK_HOST_BINDING = {
         onOriginSignIn: () => generation === originSignInTestState.generation,
       };
     },
-    fetchAuthenticatedUser: async () => {
+    fetchAuthenticatedUser: () => {
       if (!hostDirectoryTestState.teamSandboxForCurrentChat) {
-        throw new Error("No TeamSandbox fixture is active");
+        return Promise.reject(new Error("No TeamSandbox fixture is active"));
       }
       const user = createAuthenticatedUserFixture(undefined);
-      return {
+      return Promise.resolve({
         ...user,
         user: { ...user.user, id: SAVED_CREATOR_USER_ID },
-        teamSubscriptions: hostDirectoryTestState.teamSandboxForCurrentChat
-          ? [
-              {
-                ...teamSubscription(0),
-                userID: SAVED_CREATOR_USER_ID,
-              },
-            ]
-          : [],
-      };
+        teamSubscriptions: [
+          {
+            ...teamSubscription(0),
+            userID: SAVED_CREATOR_USER_ID,
+          },
+        ],
+      });
     },
-    getTeamEnvironment: async () =>
-      hostDirectoryTestState.teamSandboxForCurrentChat
-        ? { kind: "ok", environmentId: TEAM_ENVIRONMENT_OWNER_ID }
-        : { kind: "not-a-member" },
-    listSandboxes: async () => ({
-      ...(hostDirectoryTestState.teamSandboxForCurrentChat
-        ? {
-            kind: "ok" as const,
-            response: {
-              sandboxes: [
-                sandboxSummaryFixture({
-                  hostId: HOST_ID,
-                  displayName: "Team sandbox",
-                  environmentId: TEAM_ENVIRONMENT_OWNER_ID,
-                  state: "suspended",
-                }),
-              ],
-            },
-          }
-        : {
-            kind: "unavailable" as const,
-            reason: "No TeamSandbox fixture is active",
-          }),
-    }),
+    getTeamEnvironment: () =>
+      Promise.resolve(
+        hostDirectoryTestState.teamSandboxForCurrentChat
+          ? { kind: "ok" as const, environmentId: TEAM_ENVIRONMENT_OWNER_ID }
+          : { kind: "not-a-member" as const },
+      ),
+    listSandboxes: () =>
+      Promise.resolve({
+        ...(hostDirectoryTestState.teamSandboxForCurrentChat
+          ? {
+              kind: "ok" as const,
+              response: {
+                sandboxes: [
+                  sandboxSummaryFixture({
+                    hostId: HOST_ID,
+                    displayName: "Team sandbox",
+                    environmentId: TEAM_ENVIRONMENT_OWNER_ID,
+                    state: "suspended",
+                  }),
+                ],
+              },
+            }
+          : {
+              kind: "unavailable" as const,
+              reason: "No TeamSandbox fixture is active",
+            }),
+      }),
   },
 };
 vi.mock("@/lib/host", () => ({
