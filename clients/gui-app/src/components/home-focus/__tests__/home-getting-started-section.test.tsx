@@ -2,7 +2,13 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   userSubscription,
