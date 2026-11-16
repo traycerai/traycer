@@ -119,8 +119,11 @@ function answerEverythingWith(result: RunResult): void {
   runner.answer = () => result;
 }
 
-function isShowEnvironment(call: RunnerCall): boolean {
-  return call.args.join(" ") === "--user show-environment";
+function isUserManagerVersionProbe(call: RunnerCall): boolean {
+  return (
+    call.command === "systemctl" &&
+    call.args.join(" ") === "--user show --property=Version --value"
+  );
 }
 
 /**
@@ -166,7 +169,11 @@ describe("observeSwapQuiescence with no reachable systemd user session (real pro
 
     expectOnlyTolerantInheritedSystemctlCalls();
     // The reachability question was really put, once, to the real probe.
-    expect(runner.calls.filter(isShowEnvironment)).toHaveLength(1);
+    expect(runner.calls.filter(isUserManagerVersionProbe)).toHaveLength(1);
+    expect(runner.calls.find(isUserManagerVersionProbe)).toMatchObject({
+      command: "systemctl",
+      args: ["--user", "show", "--property=Version", "--value"],
+    });
   });
 
   it("an unusable bus path: both systemctl calls exit 1 with 'Argument list too long' -> service-manager-unreachable", async () => {
@@ -217,8 +224,8 @@ describe("observeSwapQuiescence with no reachable systemd user session (real pro
 
   it("a reachable manager whose unit is inactive clears - the stub reaches the real probe, and reachability is never asked", async () => {
     runner.answer = (args) =>
-      args[1] === "show-environment"
-        ? { exitCode: 0, stdout: "HOME=/home/user\n", stderr: "" }
+      args.join(" ") === "--user show --property=Version --value"
+        ? { exitCode: 0, stdout: "255.4\n", stderr: "" }
         : { exitCode: 3, stdout: "inactive\n", stderr: "" };
 
     await withPlatform("linux", async () => {
@@ -239,8 +246,8 @@ describe("observeSwapQuiescence with no reachable systemd user session (real pro
 
   it("a reachable manager that keeps the unit activating stays service-may-respawn - reachable is not unreachable", async () => {
     runner.answer = (args) =>
-      args[1] === "show-environment"
-        ? { exitCode: 0, stdout: "HOME=/home/user\n", stderr: "" }
+      args.join(" ") === "--user show --property=Version --value"
+        ? { exitCode: 0, stdout: "255.4\n", stderr: "" }
         : { exitCode: 3, stdout: "activating\n", stderr: "" };
 
     await withPlatform("linux", async () => {
