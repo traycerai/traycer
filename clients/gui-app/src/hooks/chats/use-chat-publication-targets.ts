@@ -210,7 +210,9 @@ function useChatPublicationTargetsQuery(
         args.epicId.length > 0 &&
         args.chatIds.length > 0,
       staleTime:
-        args.publicationRedirectRevisionSupported === true
+        args.publicationRedirectRevisionSupported === true &&
+        args.publicationRedirectRevision !== null &&
+        !args.chatRecordListFailed
           ? Infinity
           : 5 * 60_000,
       retry: (failureCount, error) =>
