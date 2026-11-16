@@ -21,7 +21,9 @@ import {
 interface PressTestAuth {
   getIdentityGeneration(): number;
   isIdentityCurrent(generation: number): boolean;
-  registerSlackApp(request: SlackAppRegisterRequest): Promise<SlackAppWriteResult>;
+  registerSlackApp(
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
   mintSlackAppInstallUrl(botId: string): Promise<SlackAppInstallUrlResult>;
   disconnectSlackApp(botId: string): Promise<SlackAppWriteResult>;
   setSlackAppDms(request: SlackAppDmsRequest): Promise<SlackAppWriteResult>;
@@ -93,9 +95,9 @@ function pressTestAuth(): PressTestAuth {
   };
 }
 
-function renderWithQueryClient<T>(
-  hook: () => T,
-): { readonly result: { readonly current: T } } {
+function renderWithQueryClient<T>(hook: () => T): {
+  readonly result: { readonly current: T };
+} {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -137,7 +139,9 @@ describe("the press-captured Slack mutations", () => {
     const variables = { baselineInstalledAt: null };
 
     await act(async () => {
-      await expect(result.current.mutateAsync(variables)).resolves.toMatchObject({
+      await expect(
+        result.current.mutateAsync(variables),
+      ).resolves.toMatchObject({
         url: "https://slack.example.test/install",
       });
     });

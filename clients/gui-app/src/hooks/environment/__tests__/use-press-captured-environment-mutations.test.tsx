@@ -253,7 +253,10 @@ describe("the press-captured environment mutations", () => {
       },
     });
     const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
     });
     const { result } = renderHook(
       () => useEnvironmentMoveStartMutation(fixture.client, null),
@@ -261,7 +264,9 @@ describe("the press-captured environment mutations", () => {
     );
 
     await act(async () => {
-      await expect(result.current.mutateAsync(ACCEPTANCE)).resolves.toMatchObject({
+      await expect(
+        result.current.mutateAsync(ACCEPTANCE),
+      ).resolves.toMatchObject({
         kind: "started",
       });
     });
@@ -283,7 +288,10 @@ describe("the press-captured environment mutations", () => {
     useAuthStore.setState({ status: "signed-in" });
     bindPressHosts([HOST_ID]);
     const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
     });
     const { result } = renderHook(
       () => useRemoteAccessTurnOnMutation(null, HOST_ID),
@@ -293,14 +301,18 @@ describe("the press-captured environment mutations", () => {
     await act(async () => {
       await expect(result.current.mutateAsync()).resolves.toBeUndefined();
     });
-    expect(environmentRequests).toEqual([`/api/v3/hosts/${HOST_ID}/remote-access`]);
+    expect(environmentRequests).toEqual([
+      `/api/v3/hosts/${HOST_ID}/remote-access`,
+    ]);
 
     await act(async () => {
       const pending = result.current.mutateAsync();
       generation.value += 1;
       await expect(pending).resolves.toBeUndefined();
     });
-    expect(environmentRequests).toEqual([`/api/v3/hosts/${HOST_ID}/remote-access`]);
+    expect(environmentRequests).toEqual([
+      `/api/v3/hosts/${HOST_ID}/remote-access`,
+    ]);
   });
 
   it("keeps Move on its pressed client across a held onMutate and host rerender", async () => {
@@ -309,7 +321,10 @@ describe("the press-captured environment mutations", () => {
     const pressedHost = moveClientLog(HOST_ID);
     const currentHost = moveClientLog(OTHER_HOST_ID);
     const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
     });
     const held = heldMutationStart(
       queryClient,
@@ -355,7 +370,10 @@ describe("the press-captured environment mutations", () => {
     const pressedHost = refreshClientLog(HOST_ID);
     const currentHost = refreshClientLog(OTHER_HOST_ID);
     const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
     });
     const held = heldMutationStart(
       queryClient,
@@ -387,9 +405,9 @@ describe("the press-captured environment mutations", () => {
     ]);
     expect(pressedHost.refreshRequests).toEqual([{}]);
     expect(currentHost.refreshRequests).toEqual([]);
-    expect(
-      useHostAccessPromptsStore.getState().remoteAccessAnswered,
-    ).toEqual({ [HOST_ID]: true });
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
+      [HOST_ID]: true,
+    });
 
     await act(async () => {
       await expect(result.current.mutateAsync()).resolves.toBeUndefined();
@@ -399,8 +417,9 @@ describe("the press-captured environment mutations", () => {
       `/api/v3/hosts/${OTHER_HOST_ID}/remote-access`,
     ]);
     expect(currentHost.refreshRequests).toEqual([{}]);
-    expect(
-      useHostAccessPromptsStore.getState().remoteAccessAnswered,
-    ).toEqual({ [HOST_ID]: true, [OTHER_HOST_ID]: true });
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
+      [HOST_ID]: true,
+      [OTHER_HOST_ID]: true,
+    });
   });
 });

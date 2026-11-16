@@ -66,9 +66,7 @@ import {
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
-import {
-  SECRETS_EMPTY_TEXT,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -852,7 +850,6 @@ describe("saving a secret", () => {
     expect(screen.queryByTestId("secret-save-done")).toBeNull();
     expect(host.reads.list).toBe(1);
   });
-
 });
 
 describe("the add form's words", () => {
