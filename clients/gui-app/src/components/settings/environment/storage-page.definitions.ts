@@ -5,8 +5,8 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  * The Storage page's search entry, its groups and their rows. They are gated
  * on the host advertising the item write, which no shell predicate can decide,
  * so each folds into the page's entry: a result must land somewhere. That is
- * also why the two rows labelled "When" cannot land on the wrong one: there is
- * one entry, and both groups show on the page it opens.
+ * also why the rows labelled "When" cannot land on the wrong one: there is one
+ * entry, and every group shows on the page it opens.
  */
 export const STORAGE = defineSettingsSection("storage", {
   page: {
@@ -66,5 +66,24 @@ export const STORAGE = defineSettingsSection("storage", {
     description: "Counted from the chat's last activity.",
     availableWhen: alwaysAvailable,
     keywords: ["archived", "archive", "hours", "days"],
+  },
+  fileEditSnapshots: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "File edit snapshots",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["snapshots", "undo", "diffs"],
+  },
+  fileEditSnapshotWindow: {
+    kind: "row",
+    group: "fileEditSnapshots",
+    search: { contributesTo: "page" },
+    label: "When",
+    description:
+      "Counted from the chat's last activity. Older edits may lose Undo and diffs.",
+    availableWhen: alwaysAvailable,
+    keywords: ["snapshots", "undo", "diffs", "days"],
   },
 });

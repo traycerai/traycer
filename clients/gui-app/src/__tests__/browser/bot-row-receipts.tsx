@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { BotAnnouncement } from "@traycer/protocol/persistence/epic/messages";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
@@ -8,6 +8,7 @@ import {
   type ChatBotPresentation,
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
+import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
@@ -29,9 +30,14 @@ import "@/index.css";
  * running reply and the thread's rows, and none for the announcement the host
  * posted itself when the bot was created. Nothing is hovered or focused: the
  * spec reads what a row shows at rest. `?theme=dark` draws it dark.
+ * `?receipts=late` answers no receipt for any row until the button above the
+ * lists is clicked, as production does until its host lookup resolves.
  */
 const theme = new URLSearchParams(window.location.search).get("theme");
 useSettingsStore.getState().setTheme(theme === "dark" ? "dark" : "light");
+
+const receiptsLate =
+  new URLSearchParams(window.location.search).get("receipts") === "late";
 
 const NOW = Date.now();
 const MINUTE = 60_000;
@@ -77,19 +83,27 @@ function replyReceipt(
   return null;
 }
 
-const presentation: ChatBotPresentation = {
-  botTitle: "Tracy",
-  threadLine: null,
-  openThread: null,
-  openAnnouncementThread: null,
-  threadAnchorKinds: [],
-  chooseOption: null,
-  questions: null,
-  failedRequest: null,
-  failedRecovery: null,
-  replyReceipt,
-  requestReceipt: null,
-};
+function noReceipt(): ChatBotTurnReceipt | null {
+  return null;
+}
+
+function presentationWith(
+  receipt: ChatBotPresentation["replyReceipt"],
+): ChatBotPresentation {
+  return {
+    botTitle: "Tracy",
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    threadAnchorKinds: [],
+    chooseOption: null,
+    questions: null,
+    failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: receipt,
+    requestReceipt: null,
+  };
+}
 
 function row(input: {
   readonly messageId: string;
@@ -222,10 +236,25 @@ function Rows(props: {
 }
 
 export function Page(): ReactElement {
+  const [arrived, setArrived] = useState(!receiptsLate);
+  const presentation = useMemo(
+    () => presentationWith(arrived ? replyReceipt : noReceipt),
+    [arrived],
+  );
   return (
     <TooltipProvider>
       <ChatBotPresentationContext.Provider value={presentation}>
         <div className="flex min-h-safe-svh w-full flex-wrap gap-6 bg-background p-4 text-foreground">
+          {receiptsLate ? (
+            <div className="w-full">
+              <Button
+                data-testid="fixture-receipts-arrive"
+                onClick={() => setArrived(true)}
+              >
+                Receipts arrive
+              </Button>
+            </div>
+          ) : null}
           <section
             className="flex w-full max-w-xl flex-col"
             data-testid="fixture-channel"

@@ -183,6 +183,10 @@ class SnapshotSession implements IStreamSession {
   }
 
   requestReconnect(): void {}
+
+  hasSentOpenRequest(): boolean {
+    return true;
+  }
 }
 
 /** A stream client whose every subscribe is a `SnapshotSession`. */
