@@ -19,6 +19,7 @@ import {
 } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -74,13 +75,16 @@ vi.mock("@/lib/links/open-link", () => ({
 
 function seedLegacyProviderRecords(
   harness: TeamPageHarness,
-  environmentId: string,
+  source: ConfigurationSource,
 ): void {
+  if (source.kind !== "pool") {
+    throw new Error("Legacy provider records require a pool source.");
+  }
   const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
   const queryKey = cloudProviderKeyKeys.records(
     viewerId,
     harness.auth.getIdentityGeneration(),
-    environmentId,
+    source.environmentId,
   );
   harness.queryClient.setQueryDefaults(queryKey, { staleTime: Infinity });
   harness.queryClient.setQueryData<EnvironmentProfileRecords>(queryKey, {
@@ -119,7 +123,7 @@ describe("TeamProviders items", () => {
         removed: [],
       }),
     });
-    seedLegacyProviderRecords(harness, source.environmentId);
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
@@ -239,7 +243,7 @@ describe("TeamProviders items", () => {
         removed: [],
       }),
     });
-    seedLegacyProviderRecords(harness, source.environmentId);
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
