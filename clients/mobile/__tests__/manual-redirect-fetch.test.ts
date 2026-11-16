@@ -260,13 +260,18 @@ describe("manual redirect fetch on the phone", () => {
   it("maps a native status outside Response's range to the real helper's network error", async () => {
     const native = recordAnswer({ status: 600, headers: {}, text: "invalid" });
     const platform = vi.fn(unusedPlatformFetch);
-    vi.stubGlobal("fetch", manualRedirectFetch(platform, native.requester));
+    const fetch = manualRedirectFetch(platform, native.requester);
+
+    const invalidResponse = await fetch(OFFERS_URL, { redirect: "manual" });
+    expect(invalidResponse.type).toBe("error");
+    expect(invalidResponse.status).toBe(0);
+    vi.stubGlobal("fetch", fetch);
 
     await expect(
       listCreditOffersViaHttp(AUTHN, "fake-user-bearer", null),
     ).resolves.toEqual({ kind: "network-error" });
 
-    expect(native.calls).toHaveLength(1);
+    expect(native.calls).toHaveLength(2);
     expect(platform).not.toHaveBeenCalled();
   });
 });
