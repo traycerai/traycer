@@ -9,8 +9,8 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
-  callHostRpc,
-  callHostRpcWithDispatch,
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
   PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -103,8 +103,8 @@ export function buildAgentCreateCommand(opts: {
     assertSurfaceHarnessPair(request.surface, request.harnessId);
     const result = await toAgentCliError(
       request.serviceTier === undefined
-        ? callHostRpc("agent.create", request)
-        : callHostRpcWithDispatch("agent.create", request, {
+        ? callAgentHostRpc("agent.create", request)
+        : callAgentHostRpcWithDispatch("agent.create", request, {
             ...PLAIN_DISPATCH,
             requiredHostMethodVersion:
               AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
