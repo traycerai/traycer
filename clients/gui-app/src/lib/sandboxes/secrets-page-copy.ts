@@ -87,9 +87,6 @@ export const SECRET_RESTART_LINE =
 export const SECRET_REPLACE_STALE =
   "Changed somewhere else just now. Look again before you replace it.";
 
-export const SECRET_SAVED_OFFLINE =
-  "Saved. It reaches your account when this computer is connected.";
-
 /** If a secret leaked: the order that closes it fastest. */
 export const SECRET_RECOVERY_TITLE = "If this secret leaked";
 

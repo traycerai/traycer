@@ -1,4 +1,7 @@
-import type { AuthnSecretsCreateResponse } from "@traycer-clients/shared/environment/configuration-secrets";
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
 import {
   EnvironmentCloudError,
   SETTINGS_REFUSED_MESSAGE,
@@ -78,11 +81,14 @@ export type EnvironmentCloudMethod =
   | "environment.secrets.rotation"
   | "environment.secrets.consent";
 
-/** Authn's create answers no host-side pending-upload arm. */
+/** Authn's value writes answer no host-side pending-upload arm. */
 export type EnvironmentCloudResponse<Method extends EnvironmentCloudMethod> =
   ResponseOfMethod<HostRpcRegistry, Method> &
     (Method extends "environment.secrets.create"
       ? AuthnSecretsCreateResponse
+      : unknown) &
+    (Method extends "environment.secrets.replaceValue"
+      ? AuthnSecretsReplaceValueResponse
       : unknown);
 
 type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
