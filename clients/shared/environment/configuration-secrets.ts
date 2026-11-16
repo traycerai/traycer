@@ -77,6 +77,11 @@ export type AuthnSecretsCreateResponse = Exclude<
   { readonly outcome: "pending" }
 >;
 
+export type AuthnSecretsReplaceValueResponse = Exclude<
+  EnvironmentSecretsReplaceValueResponse,
+  { readonly outcome: "pending" }
+>;
+
 const CONSENT_NOT_OFFERED = "This consent is not offered.";
 const REFUSED = "Your environment did not accept this change.";
 const MAX_MESSAGE_LENGTH = 300;
@@ -345,7 +350,7 @@ export async function replaceSecretValue(
   cloud: EnvironmentCloud,
   environmentId: string,
   request: EnvironmentSecretsReplaceValueRequestV11,
-): Promise<EnvironmentSecretsReplaceValueResponse> {
+): Promise<AuthnSecretsReplaceValueResponse> {
   const answer = await send(
     cloud,
     environmentId,
