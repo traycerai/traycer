@@ -841,12 +841,20 @@ describe("Team Review through the addressed page", () => {
     const mcp = await within(dialog).findByTestId("retrospective-held-mcp-modern");
     expect(mcp.textContent).toContain("server-new");
     expect(mcp.textContent).toContain("server-old");
-    expect(mcp.textContent).toContain("Off:");
+    expect(mcp.textContent).toContain("Off: Cursor");
     expect(
       within(mcp)
         .getAllByRole("switch")
-        .map((toggle) => toggle.getAttribute("aria-checked")),
-    ).toEqual(["false", "true", "true", "false"]);
+        .map((toggle) => ({
+          name: toggle.getAttribute("aria-label"),
+          checked: toggle.getAttribute("aria-checked"),
+        })),
+    ).toEqual([
+      { name: "Claude Code search", checked: "false" },
+      { name: "Claude Code read", checked: "true" },
+      { name: "Claude Code search", checked: "true" },
+      { name: "Claude Code read", checked: "false" },
+    ]);
 
     const pack = within(dialog).getByTestId("retrospective-held-pack-policy");
     expect(pack.textContent).toContain("claude-pack: 1.3.0 · Downloads automatically");
