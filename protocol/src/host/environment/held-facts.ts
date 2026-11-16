@@ -51,6 +51,8 @@ function shown(text: string): string | null {
   return bounded.trim().length === 0 ? null : bounded;
 }
 
+export { shown as maskedHeldText };
+
 export interface HeldFacts {
   readonly command: string | null;
   readonly description: string | null;

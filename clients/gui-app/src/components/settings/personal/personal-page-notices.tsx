@@ -31,6 +31,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useConfigurationName } from "@/components/settings/environment/mcp-servers-model";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Under a Personal page's status line: its convergence notices ("LOG_LEVEL
@@ -41,7 +45,9 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
  */
 export function PersonalPageNotices(): ReactNode {
   const value = useContext(PersonalPageContext);
-  if (value === null || value.client === null) return null;
+  const source = useConfigurationSource();
+  const team = source.kind === "pool" && source.configuration === "team";
+  if (value === null || (value.client === null && !team)) return null;
   if (value.notices.length === 0 && value.review.length === 0) return null;
   const { client } = value;
   return (
@@ -49,15 +55,17 @@ export function PersonalPageNotices(): ReactNode {
       className="flex max-w-[72ch] flex-col gap-1.5"
       data-testid="personal-page-notices"
     >
-      {value.notices.map((notice) => (
-        <NoticeRow
-          key={notice.noticeId}
-          client={client}
-          hostId={value.hostId}
-          hostName={value.hostName}
-          notice={notice}
-        />
-      ))}
+      {client === null
+        ? null
+        : value.notices.map((notice) => (
+            <NoticeRow
+              key={notice.noticeId}
+              client={client}
+              hostId={value.hostId}
+              hostName={value.hostName}
+              notice={notice}
+            />
+          ))}
       {value.review.map((entry) => (
         <ReviewRow
           key={entry.entryId}
@@ -260,6 +268,20 @@ function ReviewRow(props: {
   readonly hostId: string | null;
   readonly hostName: string;
 }): ReactNode {
+  const source = useConfigurationSource();
+  if (source.kind === "pool" && source.configuration === "team") {
+    return (
+      <TeamReviewRow entry={props.entry} environmentId={source.environmentId} />
+    );
+  }
+  return <HostReviewRow {...props} />;
+}
+
+function HostReviewRow(props: {
+  readonly entry: ReviewHeldEntry;
+  readonly hostId: string | null;
+  readonly hostName: string;
+}): ReactNode {
   const openRetrospective = useRetrospectiveSheetStore(
     (state) => state.openSheet,
   );
@@ -278,6 +300,42 @@ function ReviewRow(props: {
             return;
           }
           navigateToSettingsSection("secrets");
+        }}
+      >
+        Review
+      </Button>
+    </li>
+  );
+}
+
+function TeamReviewRow(props: {
+  readonly entry: ReviewHeldEntry;
+  readonly environmentId: string;
+}): ReactNode {
+  const openReview = useRetrospectiveSheetStore(
+    (state) => state.openEnvironmentReview,
+  );
+  const viewerId = useCloudChatViewerId();
+  const environmentName = useConfigurationName();
+  return (
+    <li className={ROW_CLASS} data-testid="personal-review-row">
+      <span className="min-w-0 text-foreground">{reviewText(props.entry)}</span>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="personal-review-link"
+        onClick={() => {
+          if (
+            viewerId.length === 0 ||
+            useAuthStore.getState().contextMetadata?.userId !== viewerId
+          )
+            return;
+          openReview({
+            environmentId: props.environmentId,
+            environmentName,
+            viewerId,
+          });
         }}
       >
         Review

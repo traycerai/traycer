@@ -11,6 +11,8 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import type { RetrospectiveSheetTarget } from "@/stores/settings/retrospective-sheet-store";
+import { TeamEnvironmentReviewSession } from "@/components/settings/move/team-environment-review-session";
 
 /**
  * The environment sheets, mounted once for the whole app rather than inside
@@ -83,11 +85,40 @@ function RetrospectiveSheetFromStore(): ReactNode {
   const target = useRetrospectiveSheetStore((state) => state.target);
   const open = useRetrospectiveSheetStore((state) => state.open);
   const closeSheet = useRetrospectiveSheetStore((state) => state.closeSheet);
-  const hostId = target === null ? null : target.hostId;
+  if (target === null) return null;
+  const onOpenChange = (next: boolean): void => {
+    if (!next) closeSheet();
+  };
+  if ("environmentId" in target) {
+    return (
+      <TeamEnvironmentReviewSession
+        key={target.opening}
+        target={target}
+        open={open}
+        onOpenChange={onOpenChange}
+      />
+    );
+  }
+  return (
+    <HostRetrospectiveSheet
+      target={target}
+      open={open}
+      onOpenChange={onOpenChange}
+    />
+  );
+}
+
+function HostRetrospectiveSheet(props: {
+  readonly target: RetrospectiveSheetTarget;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const { target } = props;
+  const hostId = target.hostId;
   const named = useHostClientForHostId(hostId);
   // `null` resolves the window's following client, which is not the target.
   const client = hostId === null ? null : named;
-  if (target === null || client === null) return null;
+  if (client === null) return null;
   return (
     <RetrospectiveSession
       key={target.hostId}
@@ -96,11 +127,9 @@ function RetrospectiveSheetFromStore(): ReactNode {
       stopClient={client}
       stopHostId={target.hostId}
       hostName={target.hostName}
-      open={open}
+      open={props.open}
       held={null}
-      onOpenChange={(next) => {
-        if (!next) closeSheet();
-      }}
+      onOpenChange={props.onOpenChange}
     />
   );
 }

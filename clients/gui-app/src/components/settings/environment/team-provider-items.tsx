@@ -33,10 +33,11 @@ export function TeamPackItem(props: {
     autoDownload !== saved.autoDownload;
   if (!canEdit)
     return (
-      <p className="text-ui-sm">
-        {props.packId}: {saved.pinnedVersion ?? "Latest"} ·{" "}
-        {saved.autoDownload ? "Downloads automatically" : "Manual download"}
-      </p>
+      <PackPolicyReadout
+        packId={props.packId}
+        pinnedVersion={saved.pinnedVersion}
+        autoDownload={saved.autoDownload}
+      />
     );
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
@@ -79,5 +80,19 @@ export function TeamPackItem(props: {
         Save{put.isPending ? <MutedAgentSpinner /> : null}
       </Button>
     </section>
+  );
+}
+
+/** The complete stored pack policy, without installing an editor or writes. */
+export function PackPolicyReadout(props: {
+  readonly packId: string;
+  readonly pinnedVersion: string | null;
+  readonly autoDownload: boolean;
+}): ReactNode {
+  return (
+    <p className="text-ui-sm">
+      {props.packId}: {props.pinnedVersion ?? "Latest"} ·{" "}
+      {props.autoDownload ? "Downloads automatically" : "Manual download"}
+    </p>
   );
 }

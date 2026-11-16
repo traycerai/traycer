@@ -24,6 +24,8 @@ export function FallbackPolicySummary(props: {
   readonly policy: FallbackPolicy;
   /** Rendered among the settings, where the team's page has always put it. */
   readonly accounts: ReactNode | null;
+  /** Safe display labels when the read uses independent structural row ids. */
+  readonly tierLabels: Readonly<Record<string, string>> | null;
 }): ReactNode {
   const policy = props.policy;
   return (
@@ -38,11 +40,11 @@ export function FallbackPolicySummary(props: {
       {props.accounts}
       {policy.tierGroups.map((group) => (
         <div key={group.id}>
-          <h3 className="font-medium">{group.id}</h3>
-          {group.candidates.map((candidate) => (
-            <p
-              key={`${candidate.harnessId}:${candidate.modelFamily}:${candidate.reasoningEffort}`}
-            >
+          <h3 className="font-medium">
+            {props.tierLabels?.[group.id] ?? group.id}
+          </h3>
+          {group.candidates.map((candidate, index) => (
+            <p key={`${group.id}:${String(index)}`}>
               {/* `null` is a real choice - no effort constraint - and the
                   editor's own control calls it "Any effort". Rendering the
                   raw value left a row ending in a bare separator, which read
@@ -63,7 +65,10 @@ export function FallbackPolicySummary(props: {
           it, so the read-out and the control are one statement. */}
       <p>
         For a model not in any tier:{" "}
-        {policy.defaultTierGroupId ?? "None - skip this step"}
+        {policy.defaultTierGroupId === null
+          ? "None - skip this step"
+          : (props.tierLabels?.[policy.defaultTierGroupId] ??
+            policy.defaultTierGroupId)}
       </p>
       {Object.entries(policy.reasonOverrides ?? {}).map(([reason, value]) => (
         <p key={reason}>
