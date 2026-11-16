@@ -60,7 +60,11 @@ export function FallbackTeamRoutingInEffect(props: {
         </div>
       ) : null}
       <section className="flex flex-col gap-3 px-5 text-ui-sm text-muted-foreground">
-        <FallbackPolicySummary policy={props.policy} accounts={null} />
+        <FallbackPolicySummary
+          policy={props.policy}
+          accounts={null}
+          tierLabels={null}
+        />
       </section>
     </div>
   );
