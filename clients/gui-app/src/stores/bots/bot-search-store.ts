@@ -97,11 +97,7 @@ interface BotSearchState {
   /** A result whose thread the channel could not find. */
   readonly missedKey: string | null;
   readonly recents: ReadonlyArray<BotSearchRecent>;
-  readonly present: (
-    scope: BotSearchScope,
-    query: string | null,
-    fresh: boolean,
-  ) => void;
+  readonly present: (scope: BotSearchScope, fresh: boolean) => void;
   readonly setQuery: (query: string) => void;
   readonly setScope: (scope: BotSearchScope) => void;
   readonly setFilters: (filters: Partial<BotSearchFilters>) => void;
@@ -168,11 +164,10 @@ export const useBotSearchStore = create<BotSearchState>()(
       focusAsked: 0,
       focusAnswered: 0,
       recents: [],
-      present: (scope, query, fresh) =>
+      present: (scope, fresh) =>
         set((state) => ({
           ...(fresh ? SESSION : null),
           scope,
-          query: query ?? (fresh ? "" : state.query),
           opens: state.opens + 1,
           focusAsked: state.focusAsked + 1,
         })),
@@ -280,16 +275,12 @@ function railOf(botId: string): BotRail | null {
 
 /**
  * Opens the search panel in `botId`'s rail, over whatever it holds, on
- * `scope`. A search already there stays with its query and filters unless
- * `query` names another; a new one starts empty.
+ * `scope`. A search already there stays with its query and filters; a new
+ * one starts empty.
  */
-export function openBotSearch(
-  botId: string,
-  scope: BotSearchScope,
-  query: string | null,
-): void {
+export function openBotSearch(botId: string, scope: BotSearchScope): void {
   const rail = railOf(botId);
-  useBotSearchStore.getState().present(scope, query, rail?.kind !== "search");
+  useBotSearchStore.getState().present(scope, rail?.kind !== "search");
   useBotOpenThreadStore.getState().setRail(botId, searchRailOver(rail));
 }
 

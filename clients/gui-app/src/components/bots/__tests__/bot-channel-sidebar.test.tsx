@@ -1019,7 +1019,7 @@ describe("<BotChannelSidebar /> Threads", () => {
     return screen.getByTestId("bot-channel-threads-row");
   }
 
-  it("stands above the first section and counts the followed threads with new replies across every bot", () => {
+  it("stands first in the column, above the first section, and counts the followed threads with new replies across every bot", () => {
     // Two followed threads with new replies on two bots count; a caught-up
     // one and an unfollowed one with new replies do not.
     mocks.state.threadReads = {
@@ -1051,11 +1051,9 @@ describe("<BotChannelSidebar /> Threads", () => {
     };
     mount("bot-release", view(false));
 
-    // The search box stands first in the column; Threads is the first row.
     const nav = screen.getByTestId("bot-channel-sidebar");
-    const searchBox = screen.getByTestId("bot-column-search");
-    expect(nav.firstElementChild).toBe(searchBox);
-    expect(threadsRow().previousElementSibling).toBe(searchBox);
+    expect(nav.firstElementChild).toBe(threadsRow());
+    expect(within(nav).queryByRole("textbox")).toBeNull();
     expect(threadsRow().textContent).toBe("Threads2 with new replies");
     expect(threadsRow().getAttribute("aria-current")).toBeNull();
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
