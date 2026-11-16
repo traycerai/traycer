@@ -51,6 +51,7 @@ export function resolveSeededProfileId(
     (profile) => normalizedProfileId(profile) === profileId,
   );
   if (stillActive) return profileId;
+  // The host withholds ambiguous aliases; unexpected duplicate claims stay unknown.
   let aliasedProfile: ProviderProfile | null = null;
   for (const profile of profiles) {
     if (profile.aliases?.includes(profileId) !== true) continue;
