@@ -487,3 +487,35 @@ test("focus let go of before the host's chat indicator stops listing the archive
   await readFocusRecord(page);
   expect(await describeActive(page)).toBe("body");
 });
+
+// The same archived agent, kept listed only by the host's chat indicator, when
+// the host's answer stops being vouched for rather than changing: the read
+// fails after the answer was held.
+test("a focused archived agent whose host indicator read then fails hands focus to the task's open button", async ({
+  page,
+}) => {
+  await openArchivedAgent(page);
+
+  await callHook(page, "failArchivedIndicatorRead", []);
+
+  await expect(page.locator(ARCHIVED)).toHaveCount(0);
+  await readFocusRecord(page);
+  expect(await describeActive(page)).toBe("the task's open button");
+});
+
+test("focus let go of before the host's indicator read for the archived agent fails stays on the body", async ({
+  page,
+}) => {
+  await openArchivedAgent(page);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
+  });
+  expect(await describeActive(page)).toBe("body");
+
+  await callHook(page, "failArchivedIndicatorRead", []);
+
+  await expect(page.locator(ARCHIVED)).toHaveCount(0);
+  await readFocusRecord(page);
+  expect(await describeActive(page)).toBe("body");
+});

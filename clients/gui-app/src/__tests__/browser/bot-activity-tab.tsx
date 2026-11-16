@@ -261,6 +261,9 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
+// When set, the host cannot read the indicators of the archived agent's chat.
+let archivedIndicatorReadFails = false;
+
 let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
@@ -285,23 +288,30 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         updatesExternallyManaged: null,
         previousExit: null,
       }),
-      "host.notifications.indicatorState": (request) => ({
-        epics: Object.fromEntries(
-          request.epicIds.flatMap((id) =>
-            Object.hasOwn(EPIC_INDICATORS, id)
-              ? [[id, EPIC_INDICATORS[id]]]
-              : [],
+      "host.notifications.indicatorState": (request) => {
+        if (
+          archivedIndicatorReadFails &&
+          request.chatIds.includes("agent-archived")
+        )
+          throw new Error("the host could not read the indicators");
+        return {
+          epics: Object.fromEntries(
+            request.epicIds.flatMap((id) =>
+              Object.hasOwn(EPIC_INDICATORS, id)
+                ? [[id, EPIC_INDICATORS[id]]]
+                : [],
+            ),
           ),
-        ),
-        chats: Object.fromEntries(
-          request.chatIds.flatMap((id) =>
-            Object.hasOwn(CHAT_INDICATORS, id)
-              ? [[id, CHAT_INDICATORS[id]]]
-              : [],
+          chats: Object.fromEntries(
+            request.chatIds.flatMap((id) =>
+              Object.hasOwn(CHAT_INDICATORS, id)
+                ? [[id, CHAT_INDICATORS[id]]]
+                : [],
+            ),
           ),
-        ),
-        complete: true,
-      }),
+          complete: true,
+        };
+      },
       "epic.getTaskContexts": (request) => ({
         tasks: Object.fromEntries(
           request.taskIds.map((id) => [
@@ -536,6 +546,18 @@ Object.defineProperty(window, "offerBotTaskMethods", {
 Object.defineProperty(window, "clearArchivedIndicator", {
   value: (): void => {
     Reflect.deleteProperty(CHAT_INDICATORS, "agent-archived");
+    void queryClient.invalidateQueries({
+      predicate: (query) =>
+        JSON.stringify(query.queryKey).includes("agent-archived"),
+    });
+  },
+});
+// The host failing to answer the archived agent's chat indicator again: the
+// row's chat-indicator scope keeps its last answer but can no longer vouch for
+// it, so what it attested stops counting.
+Object.defineProperty(window, "failArchivedIndicatorRead", {
+  value: (): void => {
+    archivedIndicatorReadFails = true;
     void queryClient.invalidateQueries({
       predicate: (query) =>
         JSON.stringify(query.queryKey).includes("agent-archived"),

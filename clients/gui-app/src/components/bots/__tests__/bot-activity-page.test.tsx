@@ -4297,6 +4297,139 @@ describe("<BotActivityPage /> what the cloud notification feed takes off a task 
   });
 });
 
+describe("<BotActivityPage /> what evidence becoming fresh or going stale does to a focused node", () => {
+  // A tracking task with no schedule and no completion to wait for is listed as
+  // status unknown only while its evidence is not fresh; once every source
+  // vouches for it, it has nothing going on and leaves.
+  const quietUnscheduled = (): BotTaskEntry =>
+    task("t-quiet", {
+      cadence: { kind: "none" },
+      inputNeeded: [],
+      lastCheckinAt: NOW,
+    });
+  const listUnknown = (): HTMLElement => {
+    render(
+      <Harness
+        threads={[]}
+        tasks={[quietUnscheduled()]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
+    const open = within(row("t-quiet")).getByTestId("bot-activity-task-open");
+    open.focus();
+    return open;
+  };
+  const sources: ReadonlyArray<{
+    readonly name: string;
+    readonly start: () => void;
+    readonly vouch: () => void;
+  }> = [
+    {
+      name: "the cloud notification feed connects with its snapshot",
+      start: () => {
+        mocks.state.feedMode = "cloud";
+        working({});
+        useCloudNotificationsStore.setState({
+          hasSnapshot: false,
+          connectionState: "unavailable",
+        });
+      },
+      vouch: () => holdCloudFeed([]),
+    },
+    {
+      name: "the activity plane comes to span the fleet",
+      start: () => {
+        mocks.state.feedMode = "cloud";
+        holdCloudFeed([]);
+        narrowActivity();
+      },
+      vouch: () => working({}),
+    },
+  ];
+
+  it.each(sources)(
+    "hands focus from the row open button to the Activity section when $name and the status-unknown row leaves",
+    ({ start, vouch }) => {
+      start();
+      listUnknown();
+
+      act(() => vouch());
+
+      expect(rowIds()).toEqual([]);
+      expect(document.activeElement).toBe(
+        screen.getByTestId("bot-activity-page"),
+      );
+    },
+  );
+
+  it.each(sources)(
+    "leaves focus on the body after a direct blur from the row open button when $name and the status-unknown row leaves",
+    ({ start, vouch }) => {
+      start();
+      const open = listUnknown();
+      open.blur();
+      expect(document.activeElement).toBe(document.body);
+
+      act(() => vouch());
+
+      expect(rowIds()).toEqual([]);
+      expect(document.activeElement).toBe(document.body);
+    },
+  );
+
+  it.each([
+    [
+      "hands focus from an archived agent whose cloud-fed unread result stops being attested, in a task that stays listed, to the row open button",
+      false,
+    ],
+    [
+      "leaves focus on the body after a direct blur from an archived agent whose cloud-fed unread result then stops being attested",
+      true,
+    ],
+  ] as const)("%s", async (_name, blurred) => {
+    const user = userEvent.setup();
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-u", "a-archived", "host-a")]);
+    working({ "t-u": { working: ["a-live"], turn: ["a-live"] } });
+    warmTask("t-u", [
+      { id: "a-archived", parentId: null, title: "Archived", archivedAt: 5 },
+      { id: "a-live", parentId: null, title: "Live", archivedAt: null },
+    ]);
+    render(
+      <Harness
+        threads={[]}
+        tasks={[task("t-u", { inputNeeded: [] })]}
+        boundHere={false}
+        notificationSubscriptions={null}
+      />,
+    );
+    await user.click(
+      within(row("t-u")).getByTestId("bot-activity-task-chevron"),
+    );
+    const archived = row("t-u").querySelector<HTMLButtonElement>(
+      '[data-agent-id="a-archived"]',
+    );
+    if (archived === null)
+      throw new Error("the archived agent with an unread result is not listed");
+    archived.focus();
+    if (blurred) archived.blur();
+
+    act(() =>
+      useCloudNotificationsStore.getState().setConnectionState("reconnecting"),
+    );
+
+    expect(row("t-u").querySelector('[data-agent-id="a-archived"]')).toBeNull();
+    expect(document.activeElement).toBe(
+      blurred
+        ? document.body
+        : within(row("t-u")).getByTestId("bot-activity-task-open"),
+    );
+  });
+});
+
 describe("<BotActivityPage /> a pane that stops being the focused one in the same commit as a removal", () => {
   // The real boundary: it publishes the pane's activity and conceals only its
   // own portal host, not the page. Focusing something here would make the pane
