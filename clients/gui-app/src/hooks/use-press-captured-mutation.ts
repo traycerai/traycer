@@ -78,12 +78,10 @@ export function usePressCapturedMutation<
     () => observer.getCurrentResult(),
     () => observer.getCurrentResult(),
   );
-  const execute: UseMutateAsyncFunction<
-    TData,
-    TError,
-    TVariables,
-    TContext
-  > = (variables, perCall) => {
+  const execute: UseMutateAsyncFunction<TData, TError, TVariables, TContext> = (
+    variables,
+    perCall,
+  ) => {
     let capture: PressCapture<TCapture>;
     try {
       capture = { kind: "ready", captured: capturePress(variables) };
