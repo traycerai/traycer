@@ -1388,11 +1388,13 @@ export const worktreeHostEntrySchemaV15 = lazySchema(() =>
 export type WorktreeHostEntryV15 = z.infer<typeof worktreeHostEntrySchemaV15>;
 
 /**
- * `worktree.listAllForHost` v1.6 entry. `gitUnreadable` is `true` when the
- * worktree's `.git` gitlink exists but git cannot resolve the repository it
- * points at (main repo missing / moved / re-cloned, or admin entry pruned).
- * The row IS resolved; its branch and dirty count are unknowable, so clients
- * must not treat it as clean.
+ * `worktree.listAllForHost` v1.6 entry. `gitUnreadable` is `true` when git
+ * cannot read all of the worktree. Either its `.git` gitlink points at a
+ * repository git cannot resolve (main repo missing / moved / re-cloned, or
+ * admin entry pruned), and its branch and dirty count are placeholders; or an
+ * initialized submodule's gitlink does, and branch and dirty count cover only
+ * what git could read. The row IS resolved either way, and clients must not
+ * treat it as clean.
  */
 export const worktreeHostEntrySchemaV16 = lazySchema(() =>
   worktreeHostEntrySchemaV15.extend({

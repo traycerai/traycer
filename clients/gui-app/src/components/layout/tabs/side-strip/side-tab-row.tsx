@@ -9,7 +9,6 @@ import type {
 } from "react";
 import { ChevronRight, X } from "lucide-react";
 import * as m from "motion/react-m";
-import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Button } from "@/components/ui/button";
 import { DropLine } from "@/components/ui/drop-line";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -28,7 +27,6 @@ import {
   SIDE_SPLIT_HALF_FOCUSED_CLASS,
   SIDE_SPLIT_HALF_REST_CLASS,
   SIDE_SPLIT_PREVIEW_TILE_CLASS,
-  SIDE_STRIP_NAV_TILE_COUNT_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
   SIDE_TAB_HOVER_CLASS,
@@ -138,10 +136,9 @@ export interface SideTabRowProps {
   readonly tile: SideTabTile;
   /**
    * The one state that needs the user: the collapsed tile's badge, the
-   * meter's attention pip, and what starts the entry pulse. A count is drawn
-   * as the unread-count pill in the same corner.
+   * meter's attention pip, and what starts the entry pulse.
    */
-  readonly badge: RailBadgeKind | { readonly count: number } | null;
+  readonly badge: RailBadgeKind | null;
   /** The task's live agents, drawn by the collapsed tile's meter. */
   readonly agents: SideTabLiveAgents;
   /** Expanded: the one trailing status, or `null` for a row with none. */
@@ -480,24 +477,6 @@ function SideTabAccent(props: {
 
 function CornerBadge(props: { readonly badge: SideTabRowProps["badge"] }) {
   if (props.badge === null) return null;
-  if (typeof props.badge !== "string") {
-    return (
-      <span
-        className={cn(
-          SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
-          "pointer-events-none flex",
-        )}
-      >
-        <UnreadCountBadge
-          count={props.badge.count}
-          size="xs"
-          testId="side-tab-rail-count"
-          corner={cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "static")}
-          noun="unread"
-        />
-      </span>
-    );
-  }
   return (
     <span
       className={cn(SIDE_TAB_RAIL_BADGE_POSITION_CLASS, "pointer-events-none")}
