@@ -401,6 +401,11 @@ function ReaderSurfaces(): ReactNode {
       <button type="button" aria-expanded="true" aria-haspopup="dialog">
         Monitor
       </button>
+      <div role="tree">
+        <div role="treeitem" aria-expanded="true">
+          <button type="button">chat row</button>
+        </div>
+      </div>
       <div role="menu">
         <div role="menuitem" tabIndex={-1}>
           item
@@ -442,6 +447,13 @@ function renderLoadingTile(isActive: boolean) {
       );
       if (trigger === null) throw new Error("expected the popover trigger");
       return trigger;
+    },
+    treeRowButton: (): HTMLElement => {
+      const row = view.container.ownerDocument.querySelector<HTMLElement>(
+        "[role='treeitem'] button",
+      );
+      if (row === null) throw new Error("expected the tree row button");
+      return row;
     },
     menuItem: (): HTMLElement => {
       const item =
@@ -588,6 +600,17 @@ describe("<ChatTile /> first-snapshot focus hold", () => {
     expect(document.activeElement).toBe(tile.renameInput());
   });
 
+  it("does not hold focus on a plain row inside an expanded tree item", async () => {
+    const tile = renderLoadingTile(true);
+    await waitForStream();
+    fireEvent.pointerDown(document.body);
+    tile.treeRowButton().focus();
+
+    await deliverAndFlush([userMessage()], []);
+
+    expect(document.activeElement).toBe(composerEditor());
+  });
+
   it("focuses the composer at load when the reader did nothing meanwhile", async () => {
     renderLoadingTile(true);
     await waitForStream();
@@ -597,23 +620,35 @@ describe("<ChatTile /> first-snapshot focus hold", () => {
     expect(document.activeElement).toBe(composerEditor());
   });
 
-  it("keeps the held field on a pane switch until a later gesture releases the hold", async () => {
-    const tile = renderLoadingTile(true);
-    await waitForStream();
-    fireEvent.pointerDown(document.body);
-    tile.renameInput().focus();
-    await deliverAndFlush([userMessage()], []);
+  it.each([
+    {
+      gesture: "pointerdown",
+      release: () => fireEvent.pointerDown(document.body),
+    },
+    {
+      gesture: "keydown",
+      release: () => fireEvent.keyDown(document.body, { key: "a" }),
+    },
+  ])(
+    "keeps the held field on a pane switch until a later $gesture releases the hold",
+    async ({ release }) => {
+      const tile = renderLoadingTile(true);
+      await waitForStream();
+      fireEvent.pointerDown(document.body);
+      tile.renameInput().focus();
+      await deliverAndFlush([userMessage()], []);
 
-    tile.setActive(false);
-    tile.setActive(true);
-    await advanceLegendListFrames(4);
-    expect(document.activeElement).toBe(tile.renameInput());
+      tile.setActive(false);
+      tile.setActive(true);
+      await advanceLegendListFrames(4);
+      expect(document.activeElement).toBe(tile.renameInput());
 
-    fireEvent.pointerDown(document.body);
-    tile.setActive(false);
-    tile.setActive(true);
-    await advanceLegendListFrames(4);
+      release();
+      tile.setActive(false);
+      tile.setActive(true);
+      await advanceLegendListFrames(4);
 
-    expect(document.activeElement).toBe(composerEditor());
-  });
+      expect(document.activeElement).toBe(composerEditor());
+    },
+  );
 });

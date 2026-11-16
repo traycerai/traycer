@@ -19,6 +19,10 @@ const OVERLAY_SELECTOR = [
   "[data-radix-popper-content-wrapper]",
 ].join(",");
 
+// An expanded tree row is `aria-expanded` too, so the popup claim is required.
+const OPEN_POPUP_TRIGGER_SELECTOR =
+  "[aria-expanded='true'][aria-haspopup]:not([aria-haspopup='false'])";
+
 /**
  * Whether focus sits in something the reader is in the middle of using
  * outside `surface`: a field they are typing in, an open menu or popover, or
@@ -36,7 +40,7 @@ function focusIsHeldOutside(surface: Element | null): boolean {
   return (
     active.matches(TEXT_ENTRY_SELECTOR) ||
     active.closest(OVERLAY_SELECTOR) !== null ||
-    active.closest("[aria-expanded='true']") !== null
+    active.closest(OPEN_POPUP_TRIGGER_SELECTOR) !== null
   );
 }
 
