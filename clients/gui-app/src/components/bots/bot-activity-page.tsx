@@ -1,7 +1,9 @@
 import {
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -115,6 +117,39 @@ export function BotActivityPage(props: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
   const { botId, hostId, boundHere, active, resolveMember } = props;
+  const activityRef = useRef<HTMLElement>(null);
+  const lastTaskFocus = useRef<{ taskId: string; target: HTMLElement } | null>(
+    null,
+  );
+  const rememberTaskFocus = useCallback(
+    (taskId: string, target: EventTarget): void => {
+      if (target instanceof HTMLElement)
+        lastTaskFocus.current = { taskId, target };
+    },
+    [],
+  );
+  useLayoutEffect(() => {
+    const previous = lastTaskFocus.current;
+    const activity = activityRef.current;
+    if (previous === null || activity === null || previous.target.isConnected)
+      return;
+    if (document.activeElement !== document.body) return;
+    const row = Array.from(
+      activity.querySelectorAll<HTMLElement>("[data-task-id]"),
+    ).find((element) => element.dataset.taskId === previous.taskId);
+    // An existing reporting trigger is Radix's own close-focus target.
+    if (
+      row?.querySelector('[aria-label="Reporting actions"]') !== null &&
+      row !== undefined
+    )
+      return;
+    const target =
+      row?.querySelector<HTMLButtonElement>(
+        '[data-testid="bot-activity-task-open"]',
+      ) ?? activity;
+    lastTaskFocus.current = null;
+    target.focus();
+  });
   const viewer = useAuthStore((s) => s.profile);
   const nameOf = useCallback(
     (memberId: string): string =>
@@ -157,6 +192,8 @@ export function BotActivityPage(props: {
   const heading = "Tasks";
   return (
     <section
+      ref={activityRef}
+      tabIndex={-1}
       aria-label={heading}
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
@@ -191,6 +228,7 @@ export function BotActivityPage(props: {
                 boundHere={boundHere}
                 nameOf={nameOf}
                 entry={entry}
+                onTaskFocus={rememberTaskFocus}
                 indicator={active.indicatorOf(entry.task.taskId)}
                 title={
                   contexts.tasksById.get(entry.task.taskId)?.epic?.light
@@ -428,6 +466,7 @@ type ActiveTaskRowProps = {
   readonly boundHere: boolean;
   readonly nameOf: (userId: string) => string;
   readonly entry: BotActiveTask;
+  readonly onTaskFocus: (taskId: string, target: EventTarget) => void;
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
@@ -520,6 +559,7 @@ function ActiveTaskRowBody(
         task.state === "ended" ? "bot-activity-ended-task" : "bot-activity-task"
       }
       data-task-id={taskId}
+      onFocusCapture={(event) => props.onTaskFocus(taskId, event.target)}
       data-band={entry.band}
       className="flex flex-col gap-0.5"
     >

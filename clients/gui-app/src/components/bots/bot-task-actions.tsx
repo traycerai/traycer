@@ -46,8 +46,6 @@ function TaskActionMenu(props: {
 }): ReactNode {
   const { botId, hostId, task, nameOf } = props;
   const ended = task.state === "ended" && task.endedReason === "by-bot";
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const client = useTabHostClient();
   const canRun = useHostMethodSupport(hostId, "bot.task.runNow") === true;
@@ -56,8 +54,10 @@ function TaskActionMenu(props: {
   const runNow = useBotTaskRunNowMutation(client);
   const setPaused = useBotTaskSetPausedMutation(client);
   const stop = useBotTaskStopMutation(client);
-  if (ended && confirmOpen && !stop.isPending) setConfirmOpen(false);
-  if (!ended && !canRun && !canPause && !canStop) return null;
+  const supported = canRun || canPause || canStop;
+  const { confirmOpen, setConfirmOpen, menuOpen, setMenuOpen, visible } =
+    useReportingSurfaceState(ended, supported, stop.isPending);
+  if (!visible) return null;
   const pending = runNow.isPending || setPaused.isPending;
   return (
     <>
@@ -156,6 +156,36 @@ function TaskActionMenu(props: {
       />
     </>
   );
+}
+
+function useReportingSurfaceState(
+  ended: boolean,
+  supported: boolean,
+  stopPending: boolean,
+): {
+  confirmOpen: boolean;
+  setConfirmOpen: (open: boolean) => void;
+  menuOpen: boolean;
+  setMenuOpen: (open: boolean) => void;
+  visible: boolean;
+} {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [previousEnded, setPreviousEnded] = useState(ended);
+  if (previousEnded !== ended) {
+    setPreviousEnded(ended);
+    if (ended && menuOpen) setMenuOpen(false);
+  }
+  if ((ended || !supported) && confirmOpen && !stopPending)
+    setConfirmOpen(false);
+  if (!ended && !supported && menuOpen) setMenuOpen(false);
+  return {
+    confirmOpen,
+    setConfirmOpen,
+    menuOpen,
+    setMenuOpen,
+    visible: ended || supported || stopPending,
+  };
 }
 
 function ReportingMetadata(props: {

@@ -9,7 +9,14 @@
  * reachability, the member actions' writes and navigation.
  */
 import { type ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -111,8 +118,17 @@ const mocks = vi.hoisted(() => {
       settle: null as ((outcome: "success" | "failure") => void) | null,
     },
     /** Check in now and pause/resume: answered at once, or held until `settle`. */
-    runNow: { hold: false, settle: null as (() => void) | null },
-    setPaused: { hold: false, settle: null as (() => void) | null },
+    runNow: {
+      hold: false,
+      settle: null as (() => void) | null,
+      /** The held call fails: the request stops pending and nothing else changes. */
+      fail: null as (() => void) | null,
+    },
+    setPaused: {
+      hold: false,
+      settle: null as (() => void) | null,
+      fail: null as (() => void) | null,
+    },
     asked,
     /** `hostId`'s `host.notifications.indicatorState` answer for a request. */
     answerIndicators(
@@ -191,7 +207,14 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 vi.mock("@/hooks/bots/use-bot-task-action-mutations", async () => {
   const { useState } = await import("react");
   const held =
-    (method: string, control: { hold: boolean; settle: (() => void) | null }) =>
+    (
+      method: string,
+      control: {
+        hold: boolean;
+        settle: (() => void) | null;
+        fail: (() => void) | null;
+      },
+    ) =>
     () => {
       const [isPending, setPending] = useState(false);
       return {
@@ -200,6 +223,7 @@ vi.mock("@/hooks/bots/use-bot-task-action-mutations", async () => {
           if (!control.hold) return;
           setPending(true);
           control.settle = () => setPending(false);
+          control.fail = () => setPending(false);
         },
         isPending,
         variables: undefined,
@@ -607,8 +631,10 @@ beforeEach(() => {
   mocks.stop.settle = null;
   mocks.runNow.hold = false;
   mocks.runNow.settle = null;
+  mocks.runNow.fail = null;
   mocks.setPaused.hold = false;
   mocks.setPaused.settle = null;
+  mocks.setPaused.fail = null;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
   // Every case starts with the fleet vouched, so a quiet seen row can leave.
@@ -3042,6 +3068,82 @@ describe("<BotActivityPage /> a held check-in or pause", () => {
     },
     5_000,
   );
+
+  it.each([
+    ["Check in now", "bot.task.runNow", "runNow"],
+    ["Pause reports", "bot.task.setPaused", "setPaused"],
+  ] as const)(
+    "while %s is held, Space and a pointer click on the busy trigger neither reopen the menu nor dispatch again, and focus stays",
+    async (item, method, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks[key].hold = true;
+      mount([periodic("t-every", {})], { boundHere: true });
+      const trigger = within(row("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      });
+      await focusMenuItem(user, item);
+      const returned = focusReturns(trigger);
+      await user.keyboard("{Enter}");
+      await returned;
+
+      await user.keyboard(" ");
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+
+      await user.click(trigger);
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(trigger.getAttribute("aria-busy")).toBe("true");
+      expect(mocks.actions.map((action) => action.method)).toEqual([method]);
+
+      act(() => mocks[key].settle?.());
+
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(mocks.actions).toHaveLength(1);
+    },
+    5_000,
+  );
+
+  it.each([
+    ["Check in now", "bot.task.runNow", "runNow"],
+    ["Pause reports", "bot.task.setPaused", "setPaused"],
+  ] as const)(
+    "when the held %s fails, focus stays on the same trigger, it stops being busy, and the menu opens again and can send it once more",
+    async (item, method, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks[key].hold = true;
+      mount([periodic("t-every", {})], { boundHere: true });
+      const trigger = within(row("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      });
+      await focusMenuItem(user, item);
+      const returned = focusReturns(trigger);
+      await user.keyboard("{Enter}");
+      await returned;
+      expect(trigger.getAttribute("aria-busy")).toBe("true");
+
+      act(() => mocks[key].fail?.());
+
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(trigger.getAttribute("aria-disabled")).not.toBe("true");
+      expect(mocks.actions).toHaveLength(1);
+
+      await user.keyboard("{Enter}");
+      const again = screen.getByRole("menuitem", { name: item });
+      expect(again.getAttribute("aria-disabled")).not.toBe("true");
+      await user.click(again);
+
+      expect(mocks.actions.map((action) => action.method)).toEqual([
+        method,
+        method,
+      ]);
+    },
+    5_000,
+  );
 });
 
 describe("<BotActivityPage /> a task whose reporting ends while its confirmation closes", () => {
@@ -3168,6 +3270,422 @@ describe("<BotActivityPage /> a task the bot ends while its confirmation is open
     expect(screen.queryByText("End reporting?")).toBeNull();
     expect(mocks.actions).toEqual([]);
   }, 5_000);
+});
+
+describe("<BotActivityPage /> a task the bot ends while its menu is open", () => {
+  const tracking = (): BotTaskEntry => periodic("t-every", {});
+  const endedByBot = (): BotTaskEntry =>
+    task("t-every", {
+      cadence: { kind: "none" },
+      state: "ended",
+      endedReason: "by-bot",
+      inputNeeded: [],
+    });
+  const harness = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode => (
+    <Harness
+      threads={[]}
+      tasks={tasks}
+      boundHere
+      notificationSubscriptions={null}
+    />
+  );
+
+  it("closes the menu, returns focus to the same Reporting actions trigger and sends nothing; a later tracking snapshot does not reopen it", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(REPORT_METHODS);
+    const view = render(harness([tracking()]));
+    const trigger = within(row("t-every")).getByRole("button", {
+      name: "Reporting actions",
+    });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const item = screen.getByRole("menuitem", { name: "Check in now" });
+    for (let step = 0; step < 6 && document.activeElement !== item; step += 1)
+      await user.keyboard("{ArrowDown}");
+    if (document.activeElement !== item)
+      throw new Error("arrow keys never reached Check in now");
+
+    const returned = focusReturns(trigger);
+    view.rerender(harness([endedByBot()]));
+    await returned;
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(
+      within(endedRowFor("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      }),
+    ).toBe(trigger);
+    expect(mocks.actions).toEqual([]);
+
+    view.rerender(harness([tracking()]));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(mocks.actions).toEqual([]);
+  }, 5_000);
+});
+
+/**
+ * The sweep: each surface of the reporting controls crossed with each way the
+ * controls can go away under it. Whatever the surface, nothing of it may
+ * outlive the controls, no request may follow, a held answer that arrives
+ * later must change nothing, a later restored row must start fresh, and the
+ * keyboard must not be stranded on a removed node.
+ */
+type ReportingSurface =
+  | "menu"
+  | "confirmation"
+  | "stop in flight"
+  | "check-in in flight"
+  | "pause in flight";
+
+const REPORTING_SURFACES: ReadonlyArray<ReportingSurface> = [
+  "menu",
+  "confirmation",
+  "stop in flight",
+  "check-in in flight",
+  "pause in flight",
+];
+
+/** Brings the keyboard to the menu item named `name`, with the menu open. */
+async function focusMenuItem(user: UserEvent, name: string): Promise<void> {
+  const trigger = within(row("t-every")).getByRole("button", {
+    name: "Reporting actions",
+  });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  const item = screen.getByRole("menuitem", { name });
+  for (let step = 0; step < 6 && document.activeElement !== item; step += 1)
+    await user.keyboard("{ArrowDown}");
+  if (document.activeElement !== item)
+    throw new Error(`arrow keys never reached ${name}`);
+}
+
+/** Puts the controls of `t-every` into `surface` and returns once it is up. */
+async function reachReportingSurface(
+  user: UserEvent,
+  surface: ReportingSurface,
+): Promise<void> {
+  if (surface === "menu") {
+    await focusMenuItem(user, "Check in now");
+  } else if (surface === "confirmation") {
+    await openEndReportingByKeyboard(user);
+  } else if (surface === "stop in flight") {
+    mocks.stop.hold = true;
+    await openEndReportingByKeyboard(user);
+    await user.click(screen.getByRole("button", { name: "End reporting" }));
+  } else {
+    const key = surface === "check-in in flight" ? "runNow" : "setPaused";
+    mocks[key].hold = true;
+    await focusMenuItem(
+      user,
+      surface === "check-in in flight" ? "Check in now" : "Pause reports",
+    );
+    await user.keyboard("{Enter}");
+  }
+}
+
+describe("<BotActivityPage /> reporting controls that go away under an open surface", () => {
+  const tracking = (): BotTaskEntry => periodic("t-every", {});
+  const endedFor = (endedReason: "completed" | "archived" | "deleted") =>
+    task("t-every", {
+      cadence: { kind: "none" },
+      state: "ended",
+      endedReason,
+      inputNeeded: [],
+    });
+  /** A second, untouched row: it holds the focus a person moved on to. */
+  const page = (
+    tasks: ReadonlyArray<BotTaskEntry>,
+    boundHere: boolean,
+  ): ReactNode => (
+    <Harness
+      threads={[]}
+      tasks={[...tasks, periodic("t-other", {})]}
+      boundHere={boundHere}
+      notificationSubscriptions={null}
+    />
+  );
+  type Way = {
+    readonly name: string;
+    readonly apply: (view: RenderResult) => void;
+    /** Where focus that was on the controls goes: the row survives or not. */
+    readonly fallback: "row open button" | "Activity section";
+    /** A stop already sent stays pending across loss and restore. */
+    readonly keepsDispatched: boolean;
+  };
+  const WAYS: ReadonlyArray<Way> = [
+    {
+      name: "the task completes",
+      apply: (view) => view.rerender(page([endedFor("completed")], true)),
+      fallback: "row open button",
+      keepsDispatched: false,
+    },
+    {
+      name: "the task is archived",
+      apply: (view) => view.rerender(page([endedFor("archived")], true)),
+      fallback: "row open button",
+      keepsDispatched: false,
+    },
+    {
+      name: "the task is deleted",
+      apply: (view) => view.rerender(page([endedFor("deleted")], true)),
+      fallback: "Activity section",
+      keepsDispatched: false,
+    },
+    {
+      name: "the row leaves the list",
+      apply: (view) => view.rerender(page([], true)),
+      fallback: "Activity section",
+      keepsDispatched: false,
+    },
+    {
+      name: "the tab is bound to another host",
+      apply: (view) => view.rerender(page([tracking()], false)),
+      fallback: "row open button",
+      keepsDispatched: false,
+    },
+    {
+      name: "the negotiated manifest stops offering the methods",
+      apply: (view) => {
+        mocks.state.supported = new Set();
+        view.rerender(page([tracking()], true));
+      },
+      fallback: "row open button",
+      keepsDispatched: true,
+    },
+  ];
+  const expectFocusFellBack = (fallback: Way["fallback"]): void => {
+    const region = screen.getByTestId("bot-activity-page");
+    if (fallback === "row open button") {
+      expect(document.activeElement).toBe(
+        region.querySelector(
+          '[data-task-id="t-every"] [data-testid="bot-activity-task-open"]',
+        ),
+      );
+    } else {
+      expect(document.activeElement).toBe(region);
+      expect(region.getAttribute("tabindex")).toBe("-1");
+    }
+  };
+
+  const confirmDialog = (): HTMLElement => {
+    const found = screen
+      .getByText("End reporting?")
+      .closest<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+    if (found === null) throw new Error("no confirmation dialog");
+    return found;
+  };
+  /** A stop already sent keeps its modal, and confirming again sends nothing. */
+  const expectSentStopHolds = async (
+    user: UserEvent,
+    dispatched: number,
+  ): Promise<void> => {
+    const dialog = confirmDialog();
+    await user.click(
+      within(dialog).getByRole("button", { name: /^(End reporting|Ending)/ }),
+    );
+    expect(mocks.actions).toHaveLength(dispatched);
+  };
+
+  describe.each(REPORTING_SURFACES)("while the %s is up", (surface) => {
+    it.each(WAYS)(
+      "and $name: nothing of it stays, no request follows, a late answer changes nothing, focus falls back to the agreed target, and a restored row starts fresh",
+      async (way) => {
+        const user = userEvent.setup();
+        mocks.state.supported = new Set(REPORT_METHODS);
+        const view = render(page([tracking()], true));
+        await reachReportingSurface(user, surface);
+        const dispatched = mocks.actions.length;
+
+        way.apply(view);
+
+        if (way.keepsDispatched && surface === "stop in flight") {
+          await expectSentStopHolds(user, dispatched);
+          act(() => mocks.stop.settle?.("success"));
+          expect(screen.queryByText("End reporting?")).toBeNull();
+          mocks.state.supported = new Set(REPORT_METHODS);
+          view.rerender(page([tracking()], true));
+          expect(screen.queryByText("End reporting?")).toBeNull();
+          expect(mocks.actions).toHaveLength(dispatched);
+          return;
+        }
+        expect(screen.queryByText("End reporting?")).toBeNull();
+        expect(screen.queryByRole("menu")).toBeNull();
+        expectFocusFellBack(way.fallback);
+        act(() => {
+          mocks.stop.settle?.("success");
+          mocks.runNow.settle?.();
+          mocks.setPaused.settle?.();
+        });
+        expect(mocks.actions).toHaveLength(dispatched);
+
+        mocks.state.supported = new Set(REPORT_METHODS);
+        view.rerender(page([tracking()], true));
+        const fresh = within(row("t-every")).getByRole("button", {
+          name: "Reporting actions",
+        });
+        if (!(way.keepsDispatched && surface.endsWith("in flight")))
+          expect(fresh.getAttribute("aria-busy")).not.toBe("true");
+        expect(screen.queryByText("End reporting?")).toBeNull();
+        expect(screen.queryByRole("menu")).toBeNull();
+        expect(mocks.actions).toHaveLength(dispatched);
+      },
+    );
+  });
+
+  describe.each([
+    "stop in flight",
+    "check-in in flight",
+    "pause in flight",
+  ] as const)(
+    "after the person moved on from a held request (%s)",
+    (surface) => {
+      it.each(WAYS)(
+        "and $name: focus stays on what they moved to, after the removal and after the answer",
+        async (way) => {
+          const user = userEvent.setup();
+          mocks.state.supported = new Set(REPORT_METHODS);
+          const view = render(page([tracking()], true));
+          const trigger = within(row("t-every")).getByRole("button", {
+            name: "Reporting actions",
+          });
+          const returned = focusReturns(trigger);
+          await reachReportingSurface(user, surface);
+          await returned;
+          const elsewhere = within(row("t-other")).getByTestId(
+            "bot-activity-task-open",
+          );
+          elsewhere.focus();
+          expect(document.activeElement).toBe(elsewhere);
+
+          way.apply(view);
+
+          expect(document.activeElement).toBe(elsewhere);
+          act(() => {
+            mocks.stop.settle?.("success");
+            mocks.runNow.settle?.();
+            mocks.setPaused.settle?.();
+          });
+          expect(document.activeElement).toBe(elsewhere);
+        },
+        5_000,
+      );
+    },
+  );
+
+  describe("when the negotiated manifest stops offering the methods and offers them again", () => {
+    const lose = (view: RenderResult): void => {
+      mocks.state.supported = new Set();
+      view.rerender(page([tracking()], true));
+    };
+    const restore = (view: RenderResult): void => {
+      mocks.state.supported = new Set(REPORT_METHODS);
+      view.rerender(page([tracking()], true));
+    };
+
+    it("leaves a menu that was open closed", async () => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      const view = render(page([tracking()], true));
+      await reachReportingSurface(user, "menu");
+
+      lose(view);
+      expect(screen.queryByRole("menu")).toBeNull();
+      restore(view);
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(
+        within(row("t-every")).getByRole("button", {
+          name: "Reporting actions",
+        }),
+      ).toBeTruthy();
+    });
+
+    it("closes an unsent confirmation and does not bring it back", async () => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      const view = render(page([tracking()], true));
+      await reachReportingSurface(user, "confirmation");
+
+      lose(view);
+      expect(screen.queryByText("End reporting?")).toBeNull();
+      restore(view);
+
+      expect(screen.queryByText("End reporting?")).toBeNull();
+      expect(mocks.actions).toHaveLength(0);
+    });
+
+    it("keeps an already sent stop's modal open until it settles, then closes it for good", async () => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      const view = render(page([tracking()], true));
+      await reachReportingSurface(user, "stop in flight");
+      expect(mocks.actions).toHaveLength(1);
+
+      lose(view);
+      restore(view);
+
+      expect(screen.getByText("End reporting?")).toBeTruthy();
+      await expectSentStopHolds(user, 1);
+      act(() => mocks.stop.settle?.("success"));
+      expect(screen.queryByText("End reporting?")).toBeNull();
+      lose(view);
+      restore(view);
+
+      expect(screen.queryByText("End reporting?")).toBeNull();
+      expect(mocks.actions).toHaveLength(1);
+    });
+  });
+
+  it.each([
+    ["Check in now", "runNow"],
+    ["Pause reports", "setPaused"],
+  ] as const)(
+    "a held %s survives the bot ending reporting: the same trigger stays busy and focused until the answer arrives, then goes quiet, with no further request",
+    async (item, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks[key].hold = true;
+      const view = render(page([tracking()], true));
+      const trigger = within(row("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      });
+      await focusMenuItem(user, item);
+      const returned = focusReturns(trigger);
+      await user.keyboard("{Enter}");
+      await returned;
+
+      view.rerender(
+        page(
+          [
+            task("t-every", {
+              cadence: { kind: "none" },
+              state: "ended",
+              endedReason: "by-bot",
+              inputNeeded: [],
+            }),
+          ],
+          true,
+        ),
+      );
+
+      expect(
+        within(endedRowFor("t-every")).getByRole("button", {
+          name: "Reporting actions",
+        }),
+      ).toBe(trigger);
+      expect(trigger.getAttribute("aria-busy")).toBe("true");
+      expect(document.activeElement).toBe(trigger);
+
+      act(() => mocks[key].settle?.());
+
+      expect(trigger.getAttribute("aria-busy")).not.toBe("true");
+      expect(document.activeElement).toBe(trigger);
+      expect(mocks.actions).toHaveLength(1);
+    },
+    5_000,
+  );
 });
 
 describe("<BotActivityPage /> ending reporting from the keyboard", () => {
