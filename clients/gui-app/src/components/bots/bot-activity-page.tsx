@@ -94,6 +94,15 @@ function reportingFocusSurface(target: HTMLElement): "menu" | "dialog" | null {
   return null;
 }
 
+function taskRowFor(
+  activity: HTMLElement,
+  taskId: string,
+): HTMLElement | undefined {
+  return Array.from(
+    activity.querySelectorAll<HTMLElement>("[data-task-id]"),
+  ).find((element) => element.dataset.taskId === taskId);
+}
+
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
 const NO_FOCUS = {
   focusedAt: undefined,
@@ -131,15 +140,27 @@ export function BotActivityPage(props: {
     taskId: string;
     target: HTMLElement;
     reportingSurface: "menu" | "dialog" | null;
+    reportingTrigger: HTMLButtonElement | null;
   } | null>(null);
   const rememberTaskFocus = useCallback(
     (taskId: string, target: EventTarget): void => {
-      if (target instanceof HTMLElement)
+      if (target instanceof HTMLElement) {
+        const activity = activityRef.current;
+        const reportingSurface = reportingFocusSurface(target);
+        const row =
+          activity === null ? undefined : taskRowFor(activity, taskId);
         lastTaskFocus.current = {
           taskId,
           target,
-          reportingSurface: reportingFocusSurface(target),
+          reportingSurface,
+          reportingTrigger:
+            reportingSurface === null
+              ? null
+              : (row?.querySelector<HTMLButtonElement>(
+                  '[aria-label="Reporting actions"]',
+                ) ?? null),
         };
+      }
     },
     [],
   );
@@ -170,16 +191,19 @@ export function BotActivityPage(props: {
       lastTaskFocus.current = null;
       return;
     }
-    const row = Array.from(
-      activity.querySelectorAll<HTMLElement>("[data-task-id]"),
-    ).find((element) => element.dataset.taskId === previous.taskId);
+    const row = taskRowFor(activity, previous.taskId);
     const reportingTrigger =
       previous.reportingSurface !== null
         ? row?.querySelector<HTMLButtonElement>(
             '[aria-label="Reporting actions"]',
           )
         : null;
-    if (previous.reportingSurface === "menu" && reportingTrigger) return;
+    if (
+      previous.reportingSurface === "menu" &&
+      reportingTrigger &&
+      reportingTrigger === previous.reportingTrigger
+    )
+      return;
     const target =
       reportingTrigger ??
       row?.querySelector<HTMLButtonElement>(

@@ -4430,32 +4430,33 @@ describe("<BotActivityPage /> what evidence becoming fresh or going stale does t
   });
 });
 
+// The real boundary: it publishes the pane's activity and conceals only its
+// own portal host, not the page. Focusing something here would make the pane
+// the focused one again (its focus capture), so a pane that is no longer
+// focused must not be handed focus back.
+const scene = {
+  setFocused: (_focused: boolean): void => undefined,
+  activations: 0,
+};
+function Pane(props: { readonly children: ReactNode }): ReactNode {
+  const [focused, setFocused] = useState(true);
+  useEffect(() => {
+    scene.setFocused = setFocused;
+  }, []);
+  return (
+    <div
+      onFocusCapture={() => {
+        if (!focused) scene.activations += 1;
+      }}
+    >
+      <SurfacePresentationBoundary visible focused={focused}>
+        {props.children}
+      </SurfacePresentationBoundary>
+    </div>
+  );
+}
+
 describe("<BotActivityPage /> a pane that stops being the focused one in the same commit as a removal", () => {
-  // The real boundary: it publishes the pane's activity and conceals only its
-  // own portal host, not the page. Focusing something here would make the pane
-  // the focused one again (its focus capture), so a pane that is no longer
-  // focused must not be handed focus back.
-  const scene = {
-    setFocused: (_focused: boolean): void => undefined,
-    activations: 0,
-  };
-  function Pane(props: { readonly children: ReactNode }): ReactNode {
-    const [focused, setFocused] = useState(true);
-    useEffect(() => {
-      scene.setFocused = setFocused;
-    }, []);
-    return (
-      <div
-        onFocusCapture={() => {
-          if (!focused) scene.activations += 1;
-        }}
-      >
-        <SurfacePresentationBoundary visible focused={focused}>
-          {props.children}
-        </SurfacePresentationBoundary>
-      </div>
-    );
-  }
   beforeEach(() => {
     scene.activations = 0;
   });
@@ -4540,6 +4541,183 @@ describe("<BotActivityPage /> a pane that stops being the focused one in the sam
     ).toBeNull();
     expect(document.activeElement).toBe(document.body);
     expect(scene.activations).toBe(0);
+  });
+});
+
+/** An agent of `taskId` that runs on `hostId`, added to its open session's stores. */
+function addAgentOn(taskId: string, agentId: string, hostId: string): void {
+  const handle = getOpenEpicRegistry().peek(taskId);
+  if (handle === null) throw new Error(`${taskId} is not warm`);
+  act(() => {
+    handle.store.setState((state) => ({
+      chats: {
+        allIds: [...state.chats.allIds, agentId],
+        byId: {
+          ...state.chats.byId,
+          [agentId]: chatProjection(agentId, {
+            title: agentId,
+            hostId,
+            updatedAt: 1,
+          }),
+        },
+      },
+      tree: {
+        rootIds: [...state.tree.rootIds, agentId],
+        childrenByParent: { ...state.tree.childrenByParent, [agentId]: [] },
+        nodeById: {
+          ...state.tree.nodeById,
+          [agentId]: {
+            id: agentId,
+            parentId: null,
+            title: agentId,
+            type: "chat",
+            status: null,
+            createdAt: 0,
+            updatedAt: 1,
+          },
+        },
+      },
+    }));
+  });
+}
+
+describe("<BotActivityPage /> a reporting trigger replaced when the hosts that answer for the task's agents change", () => {
+  // The row's chat-indicator layers nest once per host that runs one of the
+  // task's agents, so a session arriving (no layer, then one) or an agent of
+  // another host arriving (one layer, then two) rebuilds what is inside them,
+  // trigger included, while the person's focus is in the old trigger's menu.
+  // Only the task's session and its agents' stores change.
+  type Change = {
+    readonly name: string;
+    readonly before: () => void;
+    readonly change: () => void;
+  };
+  const AGENT: WarmAgent = {
+    id: "a-one",
+    parentId: null,
+    title: "First",
+    archivedAt: null,
+  };
+  const CHANGES: ReadonlyArray<Change> = [
+    {
+      name: "the task's session arrives",
+      before: () => undefined,
+      change: () => warmTask("t-every", [AGENT]),
+    },
+    {
+      name: "an agent of a second host arrives",
+      before: () => warmTask("t-every", [AGENT]),
+      change: () => addAgentOn("t-every", "a-two", "host-b"),
+    },
+  ];
+  beforeEach(() => {
+    scene.activations = 0;
+    mocks.state.realManifest = true;
+  });
+  const mount = (change: Change): void => {
+    change.before();
+    act(() =>
+      recordNegotiatedHostMethods(HOST_ID, ["host.status", ...REPORT_METHODS]),
+    );
+    render(
+      <Pane>
+        <Harness
+          threads={[]}
+          tasks={[periodic("t-every", {})]}
+          boundHere
+          notificationSubscriptions={null}
+        />
+      </Pane>,
+    );
+  };
+  // An open menu hides the rest of the page from the accessibility tree.
+  const trigger = (): HTMLElement =>
+    within(row("t-every")).getByRole("button", {
+      name: "Reporting actions",
+      hidden: true,
+    });
+
+  it.each(CHANGES)(
+    "when $name, the focused menu item's trigger is replaced and focus arrives at the replacement trigger with the menu closed and nothing sent",
+    async (change) => {
+      const user = userEvent.setup();
+      mount(change);
+      const old = trigger();
+      await focusMenuItem(user, "Check in now");
+
+      act(() => change.change());
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const replacement = trigger();
+      expect(old.isConnected).toBe(false);
+      expect(replacement).not.toBe(old);
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(replacement);
+      expect(mocks.actions).toHaveLength(0);
+    },
+    5_000,
+  );
+
+  it.each(CHANGES)(
+    "when $name after a direct blur from the trigger, focus stays on the body",
+    (change) => {
+      mount(change);
+      const old = trigger();
+      old.focus();
+      old.blur();
+      expect(document.activeElement).toBe(document.body);
+
+      act(() => change.change());
+
+      expect(old.isConnected).toBe(false);
+      expect(document.activeElement).toBe(document.body);
+    },
+  );
+
+  it.each(CHANGES)(
+    "when $name in the commit where the pane stops being the focused one, focus stays on the body and the pane is not activated",
+    async (change) => {
+      const user = userEvent.setup();
+      mount(change);
+      const old = trigger();
+      await focusMenuItem(user, "Check in now");
+
+      act(() => {
+        change.change();
+        scene.setFocused(false);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(old.isConnected).toBe(false);
+      expect(document.activeElement).toBe(document.body);
+      expect(scene.activations).toBe(0);
+    },
+    5_000,
+  );
+
+  it("keeps the original trigger, its open menu and the focused item when another agent of the same host arrives", async () => {
+    const user = userEvent.setup();
+    const change: Change = {
+      name: "same host",
+      before: () => warmTask("t-every", [AGENT]),
+      change: () => addAgentOn("t-every", "a-two", "host-a"),
+    };
+    mount(change);
+    const original = trigger();
+    await focusMenuItem(user, "Check in now");
+    const item = screen.getByRole("menuitem", { name: "Check in now" });
+
+    act(() => change.change());
+
+    expect(original.isConnected).toBe(true);
+    expect(trigger()).toBe(original);
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(document.activeElement).toBe(item);
+    expect(mocks.actions).toHaveLength(0);
   });
 });
 
