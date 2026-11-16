@@ -110,25 +110,22 @@ export function useBotDeleteMutation(): UseMutationResult<
     Error,
     BotDeleteRequest,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botMutationKeys.delete(),
-      mutationFn: async (request, origin) => {
-        if (origin === null) throw botSetupError({ kind: "no_response" });
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.deleteBot(request);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind !== "ok") throw botSetupError(result);
-        return { deleted: result.deleted };
-      },
-      onSuccess: (answer) => {
-        if (answer === null) return;
-        invalidateBotLists(queryClient);
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.delete(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.deleteBot(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { deleted: result.deleted };
     },
-  );
+    onSuccess: (answer) => {
+      if (answer === null) return;
+      invalidateBotLists(queryClient);
+    },
+  });
 }
 
 export function useBotUpdateTitleMutation(
@@ -167,26 +164,23 @@ export function useBotUpdateRunSettingsMutation(): UseMutationResult<
     Error,
     BotUpdateRunSettingsRequest,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botMutationKeys.updateRunSettings(),
-      mutationFn: async (request, origin) => {
-        if (origin === null) throw botSetupError({ kind: "no_response" });
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.updateBotRunSettings(request);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind !== "ok") throw botSetupError(result);
-        return { bot: result.bot, signIn };
-      },
-      onSuccess: (written) => {
-        if (written === null) return;
-        applyBotSettingsToViews(queryClient, written.bot);
-        invalidateBotLists(queryClient);
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateRunSettings(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotRunSettings(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { bot: result.bot, signIn };
     },
-  );
+    onSuccess: (written) => {
+      if (written === null) return;
+      applyBotSettingsToViews(queryClient, written.bot);
+      invalidateBotLists(queryClient);
+    },
+  });
 }
 
 /**
@@ -211,26 +205,23 @@ export function useBotUpdateReplyModeMutation(): UseMutationResult<
     Error,
     BotUpdateReplyModeRequest,
     BotWriteOrigin | null
-  >(
-    () => captureBotWriteOrigin(binding?.auth ?? null),
-    {
-      mutationKey: botMutationKeys.updateReplyMode(),
-      mutationFn: async (request, origin) => {
-        if (origin === null) throw botSetupError({ kind: "no_response" });
-        const { auth, signIn } = origin;
-        if (!signIn.isCurrent()) return null;
-        const result = await auth.updateBotReplyMode(request);
-        if (!signIn.isCurrent()) return null;
-        if (result.kind !== "ok") throw botSetupError(result);
-        return result.bot;
-      },
-      onSuccess: (bot) => {
-        if (bot === null) return;
-        applyBotSettingsToViews(queryClient, bot);
-        invalidateBotLists(queryClient);
-      },
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateReplyMode(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotReplyMode(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return result.bot;
     },
-  );
+    onSuccess: (bot) => {
+      if (bot === null) return;
+      applyBotSettingsToViews(queryClient, bot);
+      invalidateBotLists(queryClient);
+    },
+  });
 }
 
 /**

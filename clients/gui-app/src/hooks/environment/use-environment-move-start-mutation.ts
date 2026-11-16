@@ -51,38 +51,36 @@ export function useEnvironmentMoveStartMutation(
     HostRpcError,
     EnvironmentMoveAcceptance,
     PressedMove
-  >(
-    () => ({ operation: cloud === null ? null : cloud(), client }),
-    {
-      mutationKey: environmentMutationKeys.moveStart(),
-      mutationFn: (accepted, pressed) =>
-        withHostQueryErrorBoundary(METHOD, async () => {
-          const { operation, client: pressedClient } = pressed;
-          cloudVerdictPreflight(METHOD)();
-          if (pressedClient === null || operation === null)
-            throw hostClientUnavailableError(METHOD);
-          if (!operation.onOriginSignIn()) return { kind: "sign_in_changed" } as const;
-          try {
-            return await runEnvironmentMove(
-              {
-                stage: (request) =>
-                  pressedClient.request("environment.move.stage", request),
-                start: (request) =>
-                  pressedClient.request("environment.move.start", request),
-              },
-              operation,
-              accepted,
-            );
-          } catch (error) {
-            throw environmentCloudHostError(METHOD, error);
-          }
-        }),
-      onSettled: () => {
-        void invalidateEnvironmentReads(queryClient, MOVE_READS);
-      },
-      onError: (error) => {
-        if (errorMessage !== null) toastFromHostError(error, errorMessage);
-      },
+  >(() => ({ operation: cloud === null ? null : cloud(), client }), {
+    mutationKey: environmentMutationKeys.moveStart(),
+    mutationFn: (accepted, pressed) =>
+      withHostQueryErrorBoundary(METHOD, async () => {
+        const { operation, client: pressedClient } = pressed;
+        cloudVerdictPreflight(METHOD)();
+        if (pressedClient === null || operation === null)
+          throw hostClientUnavailableError(METHOD);
+        if (!operation.onOriginSignIn())
+          return { kind: "sign_in_changed" } as const;
+        try {
+          return await runEnvironmentMove(
+            {
+              stage: (request) =>
+                pressedClient.request("environment.move.stage", request),
+              start: (request) =>
+                pressedClient.request("environment.move.start", request),
+            },
+            operation,
+            accepted,
+          );
+        } catch (error) {
+          throw environmentCloudHostError(METHOD, error);
+        }
+      }),
+    onSettled: () => {
+      void invalidateEnvironmentReads(queryClient, MOVE_READS);
     },
-  );
+    onError: (error) => {
+      if (errorMessage !== null) toastFromHostError(error, errorMessage);
+    },
+  });
 }
