@@ -9,12 +9,21 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
+import {
+  useCloseTabFlow,
+  useCloseTabsAfter,
+} from "@/components/layout/dialogs/use-close-tab-flow";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useTabVisualOrderStore } from "@/stores/tabs/tab-visual-order-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
+import { tabResolveIntent } from "@/stores/tabs/registry";
+import {
+  registerTabCloseLockPredicate,
+  resetTabStructuralLockForTesting,
+} from "@/stores/tabs/tab-structural-lock";
 import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
@@ -193,11 +202,9 @@ function resetOrganization(): void {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useTabsStore.setState({
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   useTabRecoveryHistory.setState({ entries: [], ready: true });
+  useTabVisualOrderStore.setState({ keys: null });
   mockUnsynced.epicIds.clear();
 }
 
@@ -323,6 +330,7 @@ describe("useCloseTabFlow", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    resetTabStructuralLockForTesting();
     resetStores();
     resetOrganization();
   });
@@ -572,6 +580,138 @@ describe("useCloseTabFlow", () => {
       expect.objectContaining({ id: "split-ab", kind: "split" }),
     ]);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes only the tabs after the target and keeps its split partner and the tabs before it", () => {
+    const epics = useEpicCanvasStore.getState();
+    const before = epics.openEpicTab("epic-x", "Xray");
+    const a = epics.openEpicTab("epic-a", "Alpha");
+    const b = epics.openEpicTab("epic-b", "Beta");
+    const c = epics.openEpicTab("epic-c", "Gamma");
+    const d = epics.openEpicTab("epic-d", "Delta");
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "tab",
+          id: `tab:epic:${before}`,
+          ref: { kind: "epic", id: before },
+        },
+        {
+          kind: "split",
+          id: "split-ab",
+          left: { kind: "tab", ref: { kind: "epic", id: a } },
+          right: { kind: "tab", ref: { kind: "epic", id: b } },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: `tab:epic:${c}`, ref: { kind: "epic", id: c } },
+        { kind: "tab", id: `tab:epic:${d}`, ref: { kind: "epic", id: d } },
+      ],
+      activeItemId: `tab:epic:${before}`,
+      stripOrder: [before, a, b, c, d].map((id) => ({ kind: "epic", id })),
+      systemTabs: { history: null, settings: null },
+    });
+    const navigate = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(epicHeaderTab("epic-a", a, "Alpha"));
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([before, a, b]);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("navigates once to the target when the active tab was after it", () => {
+    const epics = useEpicCanvasStore.getState();
+    const target = epics.openEpicTab("epic-a", "Alpha");
+    const active = epics.openEpicTab("epic-b", "Beta");
+    const refs = [target, active].map((id) => ({
+      kind: "epic" as const,
+      id,
+    }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[1]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    const navigate = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    const targetTab = epicHeaderTab("epic-a", target, "Alpha");
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(targetTab);
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([target]);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate.mock.calls[0][1]).toEqual(tabResolveIntent(targetTab));
+  });
+
+  it("leaves a close-locked active tab after the target open and in view", () => {
+    const epics = useEpicCanvasStore.getState();
+    const target = epics.openEpicTab("epic-a", "Alpha");
+    const locked = epics.openEpicTab("epic-b", "Beta");
+    const closable = epics.openEpicTab("epic-c", "Gamma");
+    const refs = [target, locked, closable].map((id) => ({
+      kind: "epic" as const,
+      id,
+    }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[1]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    const navigate = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    registerTabCloseLockPredicate((ref) => ref.id === locked);
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(epicHeaderTab("epic-a", target, "Alpha"));
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([
+      target,
+      locked,
+    ]);
+    // The locked tab is still the one on screen, so nothing moves the view.
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("follows the order the strip draws when the Activity view reorders it", () => {
+    const epics = useEpicCanvasStore.getState();
+    const first = epics.openEpicTab("epic-a", "Alpha");
+    const second = epics.openEpicTab("epic-b", "Beta");
+    const third = epics.openEpicTab("epic-c", "Gamma");
+    const refs = [first, second, third].map((id) => ({
+      kind: "epic" as const,
+      id,
+    }));
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[0]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+    });
+    // Drawn third, first, second: only the second is after the first.
+    useTabVisualOrderStore.setState({
+      keys: [third, first, second].map((id) => tabRefKey({ kind: "epic", id })),
+    });
+    vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    const { result } = renderHook(() => useCloseTabsAfter());
+
+    act(() => {
+      result.current(epicHeaderTab("epic-a", first, "Alpha"));
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([first, third]);
   });
 
   it("batches recovery entries when closing a tab group", () => {
