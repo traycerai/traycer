@@ -27,6 +27,7 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import { chatRecordHeadStampSchema } from "@traycer/protocol/host/epic/chat-records";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
 import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
@@ -715,7 +716,10 @@ export const hostAgentCreateFromRemoteSenderUpgradeV10ToV11 = defineUpgradePath<
  * The created agent's record as the cloud acknowledged it, relayed by the
  * owning host: the fields of the cloud row that a host keeps for a record
  * another host owns. `tenantKind` stays a plain string, as on the cloud row,
- * so a tenant a newer deploy adds still parses.
+ * so a tenant a newer deploy adds still parses. Timestamps and the head are
+ * bounded as the record rows a host serves bound them
+ * (`chatRecordSummarySchema`, `chatRecordHeadStampSchema`): integer
+ * milliseconds, never negative.
  */
 export const hostAgentCreatedRecordSchema = lazySchema(() =>
   z.object({
@@ -724,24 +728,18 @@ export const hostAgentCreatedRecordSchema = lazySchema(() =>
     ownerUserId: z.string().min(1),
     ownerHostId: z.string().min(1),
     tenantKind: z.string().min(1),
-    createdAt: z.number(),
+    createdAt: z.number().int().nonnegative(),
     visibility: cloudChatVisibilitySchema,
     metadataRevision: z.number().int().nonnegative(),
     title: z.string().nullable(),
     isTitleEditedByUser: z.boolean(),
     parentChatId: z.string().nullable(),
     isArchived: z.boolean(),
-    archiveChangedAt: z.number().nullable(),
+    archiveChangedAt: z.number().int().nonnegative().nullable(),
     runSettingsSummary: z.string().nullable(),
-    metadataUpdatedAt: z.number(),
+    metadataUpdatedAt: z.number().int().nonnegative(),
     roleClaims: z.array(roleClaimSchema),
-    head: z
-      .object({
-        headSha256: z.string().regex(/^[0-9a-f]{64}$/),
-        throughRecordSeq: z.number().int().nonnegative(),
-        publishedAt: z.number(),
-      })
-      .nullable(),
+    head: chatRecordHeadStampSchema.nullable(),
   }),
 );
 export type HostAgentCreatedRecord = z.infer<

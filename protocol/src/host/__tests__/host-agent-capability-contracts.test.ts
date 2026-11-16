@@ -638,6 +638,42 @@ describe("host-agent capability contracts", () => {
         ).toEqual({ status: "pending" });
       });
 
+      const VALID_HEAD = {
+        headSha256: "a".repeat(64),
+        throughRecordSeq: 4,
+        publishedAt: 1_700_000_000_400,
+      } as const;
+
+      it("parses an admitted record that carries a valid head", () => {
+        const record = { ...CREATED_RECORD, head: VALID_HEAD };
+        expect(
+          hostAgentCreateFromRemoteSenderV12.responseSchema.parse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "admitted", record },
+          }).admission,
+        ).toEqual({ status: "admitted", record });
+      });
+
+      it.each([
+        ["head.publishedAt -1", { head: { ...VALID_HEAD, publishedAt: -1 } }],
+        ["head.publishedAt 0.5", { head: { ...VALID_HEAD, publishedAt: 0.5 } }],
+        ["createdAt 0.5", { createdAt: 0.5 }],
+        ["metadataUpdatedAt -1", { metadataUpdatedAt: -1 }],
+        ["archiveChangedAt 0.5", { archiveChangedAt: 0.5 }],
+      ])("refuses an admitted reply whose record has %s", (_name, override) => {
+        expect(
+          hostAgentCreateFromRemoteSenderV12.responseSchema.safeParse({
+            agentId: "child-1",
+            warnings: [],
+            admission: {
+              status: "admitted",
+              record: { ...CREATED_RECORD, ...override },
+            },
+          }).success,
+        ).toBe(false);
+      });
+
       it("refuses an admitted reply that carries no record", () => {
         expect(
           hostAgentCreateFromRemoteSenderV12.responseSchema.safeParse({
