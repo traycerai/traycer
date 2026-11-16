@@ -14,6 +14,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createReadCursorHostFixture,
   firstAdvanceSettles,
+  removeNativeAbortAny,
   requestContextOf,
   type ReadCursorHostFixture,
 } from "./bot-read-cursor-test-support";
@@ -330,5 +331,45 @@ describe("a natural read whose requester or client is retired before it is sent"
     expect(fixture.advances).toEqual([TARGET]);
     expect(fixture.advanceUsers).toEqual(["user-a"]);
     expect(cachedCursor(fixture.queryClient)).toEqual(OLD);
+  });
+});
+
+describe("a natural read on a WebView without AbortSignal.any", () => {
+  let restoreAbortAny = (): void => undefined;
+  beforeEach(() => {
+    restoreAbortAny = removeNativeAbortAny();
+  });
+  afterEach(() => {
+    restoreAbortAny();
+  });
+
+  it("is sent and written to the cache", async () => {
+    const { rerender } = await mountWithCachedRead(fixture, undefined);
+    const settled = firstAdvanceSettles(fixture);
+    rerender({ fixture, target: NEW });
+    await act(async () => {
+      await settled;
+    });
+
+    expect(fixture.advances).toEqual([TARGET]);
+    expect(cachedCursor(fixture.queryClient)).toEqual(NEW);
+  });
+
+  it("is not sent under the next identity when the requester's context changes before its dispatch", async () => {
+    const { rerender } = await mountWithCachedRead(fixture, undefined);
+    const hold = holdFirstAdvanceBeforeDispatch(fixture);
+    rerender({ fixture, target: NEW });
+    await hold.arrived;
+
+    act(() => {
+      fixture.spine.setRequestContext(requestContextOf("user-b"));
+    });
+    const settled = firstAdvanceSettles(fixture);
+    hold.release();
+    await act(async () => {
+      await settled;
+    });
+
+    expect(fixture.advances).toEqual([]);
   });
 });

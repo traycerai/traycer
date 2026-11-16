@@ -12,6 +12,7 @@ import {
 } from "@/hooks/bots/use-bot-read-cursor";
 import {
   createReadCursorHostFixture,
+  removeNativeAbortAny,
   type ReadCursorHostFixture,
 } from "./bot-read-cursor-test-support";
 
@@ -143,5 +144,79 @@ describe("the advance mutation's result", () => {
     expect(result.current.isIdle).toBe(true);
     expect(result.current.error).toBeNull();
     expect(result.current.variables).toBeUndefined();
+  });
+});
+
+describe("the advance mutation's supplied retirement signal, without AbortSignal.any", () => {
+  let restoreAbortAny = (): void => undefined;
+  beforeEach(() => {
+    restoreAbortAny = removeNativeAbortAny();
+  });
+  afterEach(() => {
+    restoreAbortAny();
+  });
+
+  /** The abort listeners the hook put on `signal` and took off again, in order. */
+  function watchAbortListeners(signal: AbortSignal) {
+    const added: EventListenerOrEventListenerObject[] = [];
+    const removed: EventListenerOrEventListenerObject[] = [];
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    vi.spyOn(signal, "addEventListener").mockImplementation(
+      (type, listener, options) => {
+        if (type === "abort") added.push(listener);
+        add(type, listener, options);
+      },
+    );
+    vi.spyOn(signal, "removeEventListener").mockImplementation(
+      (type, listener, options) => {
+        if (type === "abort") removed.push(listener);
+        remove(type, listener, options);
+      },
+    );
+    return { added, removed };
+  }
+
+  it("dispatches nothing and rejects when the signal is already aborted", async () => {
+    const { result } = mount();
+    const retired = new AbortController();
+    retired.abort();
+
+    await expect(
+      (async () =>
+        result.current.mutateAsync({ ...REQUEST, signal: retired.signal }))(),
+    ).rejects.toBeDefined();
+
+    expect(fixture.advances).toEqual([]);
+  });
+
+  it("takes its abort listener off the signal once the advance succeeds", async () => {
+    const { result } = mount();
+    const live = new AbortController();
+    const listeners = watchAbortListeners(live.signal);
+
+    await act(async () => {
+      await result.current.mutateAsync({ ...REQUEST, signal: live.signal });
+    });
+
+    expect(fixture.advances).toEqual([REQUEST]);
+    expect(listeners.added).not.toHaveLength(0);
+    expect(listeners.removed).toEqual(listeners.added);
+  });
+
+  it("takes its abort listener off the signal once the advance is refused", async () => {
+    fixture.refuseAdvances.value = true;
+    const { result } = mount();
+    const live = new AbortController();
+    const listeners = watchAbortListeners(live.signal);
+
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ ...REQUEST, signal: live.signal }),
+      ).rejects.toBeDefined();
+    });
+
+    expect(listeners.added).not.toHaveLength(0);
+    expect(listeners.removed).toEqual(listeners.added);
   });
 });

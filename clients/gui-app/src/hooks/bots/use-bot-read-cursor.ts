@@ -168,6 +168,10 @@ export function useBotReadCursorAdvanceMutation(
         if (event.reason === "auth-changed") authority.abort();
       });
       const supplied = "signal" in variables ? variables.signal : null;
+      // The mobile WebView floor predates AbortSignal.any.
+      const forwardAbort = (): void => authority.abort(supplied?.reason);
+      if (supplied?.aborted) forwardAbort();
+      else supplied?.addEventListener("abort", forwardAbort, { once: true });
       return {
         request: {
           botId: variables.botId,
@@ -179,11 +183,11 @@ export function useBotReadCursorAdvanceMutation(
         client,
         clientIsCurrent: () =>
           currentClient.current === scope && scope.client === client,
-        dispose: () => unsubscribe?.(),
-        signal:
-          supplied === null
-            ? authority.signal
-            : AbortSignal.any([authority.signal, supplied]),
+        dispose: () => {
+          unsubscribe?.();
+          supplied?.removeEventListener("abort", forwardAbort);
+        },
+        signal: authority.signal,
         viewer,
         lifetime,
       };

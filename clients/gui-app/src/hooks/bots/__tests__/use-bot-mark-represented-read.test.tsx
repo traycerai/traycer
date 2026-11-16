@@ -5,6 +5,7 @@ import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented
 import {
   createReadCursorHostFixture,
   firstAdvanceSettles,
+  removeNativeAbortAny,
   requestContextOf,
   type ReadCursorHostFixture,
 } from "./bot-read-cursor-test-support";
@@ -321,6 +322,104 @@ describe("the cross's batch and the identity that clicked it", () => {
     await continuationRuns(settled);
 
     expect(fixture.advances).toEqual([THREAD_ONE]);
+    expect(mutationsStarted(fixture)).toBe(1);
+  });
+});
+
+interface BatchView {
+  readonly markRead: () => void;
+  readonly pending: boolean;
+  readonly failed: boolean;
+}
+
+/** The view, and `until`: a promise resolved from the render that first shows a batch state `test` accepts. */
+function mountObserved(targets: readonly BotReadCursorAdvanceRequest[]) {
+  const fixture = mocks.fixture;
+  if (fixture === null) throw new Error("no host");
+  const waiters: Array<{
+    readonly test: (view: BatchView) => boolean;
+    readonly resolve: () => void;
+  }> = [];
+  const view = renderHook(
+    () => {
+      const state = useBotMarkRepresentedRead(targets);
+      for (const waiter of waiters.splice(0)) {
+        if (waiter.test(state)) waiter.resolve();
+        else waiters.push(waiter);
+      }
+      return state;
+    },
+    { wrapper: fixture.Wrapper },
+  );
+  const until = (test: (state: BatchView) => boolean): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (test(view.result.current)) resolve();
+      else waiters.push({ test, resolve });
+    });
+  return { ...view, until };
+}
+
+describe("the cross on a WebView without AbortSignal.any", () => {
+  let restoreAbortAny = (): void => undefined;
+  beforeEach(() => {
+    restoreAbortAny = removeNativeAbortAny();
+  });
+  afterEach(() => {
+    restoreAbortAny();
+  });
+
+  it("sends and completes every target", async () => {
+    const fixture = mocks.fixture;
+    if (fixture === null) throw new Error("no host");
+    const { result, until } = mountObserved(TARGETS);
+    let marked = false;
+    // A failed batch also ends the wait, so a refusal fails the case, not hangs it.
+    const ended = until((state) => state.failed || (marked && !state.pending));
+
+    act(() => {
+      marked = true;
+      result.current.markRead();
+    });
+    await act(async () => {
+      await ended;
+    });
+
+    expect(fixture.advances).toEqual([THREAD_ONE, THREAD_TWO]);
+    expect(result.current.failed).toBe(false);
+  });
+
+  it("sends nothing under the next identity when the switch comes before its dispatch", async () => {
+    const fixture = mocks.fixture;
+    if (fixture === null) throw new Error("no host");
+    let release = (): void => undefined;
+    fixture.heldMutate.promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const arrived = new Promise<void>((resolve) => {
+      fixture.heldMutate.waiters.push(resolve);
+    });
+    const { result, until } = mountObserved(TARGETS);
+    // The first mutation reaches the cache's own `onMutate`, or the batch fails.
+    const reached = Promise.race([arrived, until((state) => state.failed)]);
+
+    act(() => {
+      result.current.markRead();
+    });
+    await act(async () => {
+      await reached;
+    });
+    expect(mutationsStarted(fixture)).toBe(1);
+
+    act(() => {
+      fixture.spine.setRequestContext(requestContextOf("user-b"));
+    });
+    const settled = firstAdvanceSettles(fixture);
+    release();
+    await act(async () => {
+      await settled;
+    });
+
+    expect(fixture.advances).toEqual([]);
     expect(mutationsStarted(fixture)).toBe(1);
   });
 });

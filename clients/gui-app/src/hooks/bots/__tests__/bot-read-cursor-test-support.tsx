@@ -190,3 +190,17 @@ export function createReadCursorHostFixture(initial: {
     heldSuccess,
   };
 }
+
+/**
+ * Removes `AbortSignal.any`, as the iOS 15.5 WebView floor has none: the
+ * property is gone, not stubbed. Returns the call that puts it back.
+ */
+export function removeNativeAbortAny(): () => void {
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  if (original === undefined) throw new Error("AbortSignal.any is absent");
+  if (!Reflect.deleteProperty(AbortSignal, "any"))
+    throw new Error("AbortSignal.any cannot be removed");
+  return () => {
+    Object.defineProperty(AbortSignal, "any", original);
+  };
+}
