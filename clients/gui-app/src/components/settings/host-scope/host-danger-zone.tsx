@@ -60,15 +60,12 @@ export function HostDangerZone(props: {
 
 function isTeamOwnedHost(host: HostScopeOption): boolean {
   const entry = host.entry;
-  // The machine kind identifies a team computer even without owner details.
-  // The directory can learn a new owner before the registry refreshes.
-  return (
-    host.kind === "machine" ||
-    host.item?.owner?.kind === "team" ||
-    (entry !== null &&
-      isRemoteHostDirectoryEntry(entry) &&
-      entry.owner?.kind === "team")
-  );
+  const owner =
+    host.item?.owner ??
+    (entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.owner : null);
+  // Ownership is independent of lifecycle; explicit owners take precedence.
+  // The machine kind identifies a team computer when owner details are absent.
+  return owner === null ? host.kind === "machine" : owner.kind === "team";
 }
 
 /**
