@@ -182,11 +182,7 @@ function renderTeamPage(harness: TeamPageHarness): void {
 }
 
 async function reviewButton(): Promise<HTMLElement> {
-  const rows = await screen.findAllByTestId("personal-review-row");
-  const row = rows[0];
-  if (row === undefined) {
-    throw new Error("Team Review needs a public review notice row");
-  }
+  const [row] = await screen.findAllByTestId("personal-review-row");
   return within(row).findByRole("button", { name: "Review" });
 }
 
@@ -284,11 +280,7 @@ describe("Team Review through the addressed page", () => {
     const { harness } = createReviewHarness("editor", rows);
     renderTeamPage(harness);
 
-    const reviewRows = await screen.findAllByTestId("personal-review-row");
-    const reviewRow = reviewRows[0];
-    if (reviewRow === undefined) {
-      throw new Error("Team Review needs a public review notice row");
-    }
+    const [reviewRow] = await screen.findAllByTestId("personal-review-row");
     expect(screen.getAllByTestId("personal-review-link")).toHaveLength(1);
     expect(reviewRow.textContent).toContain("NODE_ENV");
     expect(screen.queryByText("skill-a")).toBeNull();
@@ -807,7 +799,7 @@ describe("Team Review through the addressed page", () => {
     const refreshedApprove = await within(row).findByRole("button", {
       name: "Approve",
     });
-    expect(refreshedApprove).toBeEnabled();
+    expect(refreshedApprove.disabled).toBe(false);
     fireEvent.click(refreshedApprove);
     await waitFor(() =>
       expect(choiceRequests(scenario.harness)).toHaveLength(2),
