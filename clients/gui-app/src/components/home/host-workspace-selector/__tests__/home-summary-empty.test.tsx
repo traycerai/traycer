@@ -1096,6 +1096,35 @@ describe("landing workspace summary empty state", () => {
     queryClient.clear();
   });
 
+  it("removes a local folder the host returned no summary for without recording it in Recent", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    mocks.summariesQuery.current = {
+      data: { workspaces: [] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+    mockRecentRequests(() => Promise.resolve(successfulRecentRecordResponse()));
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    fireEvent.click(await screen.findByTestId("folder-remove"));
+
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([]);
+    expect(mocks.request).not.toHaveBeenCalledWith(
+      "workspace.prepareFolders",
+      expect.objectContaining({ operation: "recordRecentWorkspace" }),
+    );
+
+    queryClient.clear();
+  });
+
   it("disables Move to Recent during its record RPC and ignores a second click", async () => {
     const workspacePath = "/workspace/app";
     seedActiveWorkspaceForRecentTest(workspacePath);
