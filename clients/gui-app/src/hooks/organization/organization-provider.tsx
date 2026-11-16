@@ -19,7 +19,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -30,7 +30,6 @@ import {
   type OrganizationView,
 } from "@traycer/protocol/host/organization/contracts";
 import { useAuthService, useHostClient } from "@/lib/host";
-import { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -105,9 +104,12 @@ export function OrganizationProvider({
       identityScope.current = null;
     };
   }, [hostId, userId, accountUserId]);
-  const { mutate: revalidateIdentity } = useMutation({
-    mutationKey: authMutationKeys.revalidateContextAfterInvalidation(userId),
-    mutationFn: (expected: OrganizationIdentityScope) => {
+  // A plain call rather than a mutation: nothing reads its state, and during
+  // an import the token moves every few seconds, so a mutation's pending and
+  // settled states re-rendered this provider and everything it draws on
+  // every tick. AuthService coalesces the reads itself.
+  const revalidateIdentity = useCallback(
+    (expected: OrganizationIdentityScope): void => {
       const account = useAuthStore.getState();
       if (
         identityScope.current !== expected ||
@@ -117,11 +119,13 @@ export function OrganizationProvider({
         account.contextMetadata?.userId !== expected.userId ||
         !authorizesCloudCapability(account.status)
       )
-        return Promise.resolve(null);
-      return auth.revalidateCurrentContextAfterInvalidation();
+        return;
+      void auth
+        .revalidateCurrentContextAfterInvalidation()
+        .catch(() => undefined);
     },
-    retry: false,
-  });
+    [auth, client],
+  );
   const scope = `${hostId}:${userId}`;
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
   useLayoutEffect(() => {

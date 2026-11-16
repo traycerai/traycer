@@ -170,20 +170,6 @@ function signIn(userId: string): void {
   });
 }
 
-/**
- * `useMutation`'s `mutate()` registers a `Mutation` in the client's
- * mutation cache synchronously, before the mutation function itself ever
- * runs - so an empty cache right after a render/rerender (both already
- * `act`-wrapped, which flushes the synchronous callback that would have
- * called `mutate`) proves `mutate` was never invoked at all, not merely that
- * its result has not landed yet. That is a stronger, zero-wait witness for
- * "never calls revalidateCurrentContextAfterInvalidation" than waiting on
- * the fake implementation's own call count.
- */
-function mutationCacheSize(queryClient: QueryClient): number {
-  return queryClient.getMutationCache().getAll().length;
-}
-
 beforeEach(() => {
   state.identity.hostId = "host-1";
   state.identity.userId = "user-1";
@@ -215,7 +201,6 @@ describe("OrganizationProvider revalidates auth on membership-changing tokens", 
 
     renderProvider(queryClient);
 
-    expect(mutationCacheSize(queryClient)).toBe(0);
     expect(revalidateCurrentContextAfterInvalidation).not.toHaveBeenCalled();
   });
 
@@ -231,7 +216,6 @@ describe("OrganizationProvider revalidates auth on membership-changing tokens", 
     state.chunkView = emptyView("chunk-token-2");
     rerenderProvider(rendered, queryClient);
 
-    expect(mutationCacheSize(queryClient)).toBe(0);
     expect(revalidateCurrentContextAfterInvalidation).not.toHaveBeenCalled();
   });
 
@@ -270,8 +254,8 @@ describe("OrganizationProvider revalidates auth on membership-changing tokens", 
       ),
     );
 
-    // Nothing downstream of the mutation reacts to its own resolution; settle
-    // it only so the test leaves no pending promise behind.
+    // Nothing downstream of the call reacts to its resolution; settle it only
+    // so the test leaves no pending promise behind.
     act(() => settleFirst());
   });
 
@@ -291,7 +275,6 @@ describe("OrganizationProvider revalidates auth on membership-changing tokens", 
       ),
     );
     revalidateCurrentContextAfterInvalidation.mockClear();
-    const cacheSizeBeforeScopeSwitch = mutationCacheSize(queryClient);
 
     // Switch host/account scope. The new scope's own first observed token
     // ("token-from-b") differs from the old scope's last token
@@ -302,7 +285,6 @@ describe("OrganizationProvider revalidates auth on membership-changing tokens", 
     state.accountView = emptyView("token-from-b");
     rerenderProvider(rendered, queryClient);
 
-    expect(mutationCacheSize(queryClient)).toBe(cacheSizeBeforeScopeSwitch);
     expect(revalidateCurrentContextAfterInvalidation).not.toHaveBeenCalled();
   });
 });

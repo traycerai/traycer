@@ -4,7 +4,12 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import {
+  Profiler,
+  useEffect,
+  type ProfilerOnRenderCallback,
+  type ReactNode,
+} from "react";
 import {
   act,
   cleanup,
@@ -33,8 +38,11 @@ import { useTabsStore } from "@/stores/tabs/store";
 
 /** The stream transport as the provider uses it: frames, and recovery evidence. */
 interface FakeStreamClient {
-  readonly subscribe: () => {
-    readonly onServerFrame: () => void;
+  readonly subscribe: (
+    method: string,
+    request: { readonly taskIds: readonly string[] },
+  ) => {
+    readonly onServerFrame: (listener: (envelope: unknown) => void) => void;
     readonly close: () => void;
   };
   readonly subscribeAvailabilityRecovered: (listener: () => void) => () => void;
@@ -74,6 +82,8 @@ const state = vi.hoisted(() => {
       };
     }) => Promise<unknown>
   >();
+  const revalidateAuth = vi.fn<() => Promise<null>>();
+  const probes = { openTasks: 0, taskSubscriptions: 0, dialogHost: 0 };
   // The stream transport the surface binding hands out: `null` until a test
   // dials one. The host's recovery evidence is its availability listeners.
   const stream: {
@@ -82,13 +92,23 @@ const state = vi.hoisted(() => {
   // What the pool tier resolves the surface's stream to. `null` is the
   // no-pool plan, where the answer is the surface's own stream.
   const poolStream: { current: FakeStreamClient | null } = { current: null };
-  return { client, identity, view, support, mutateAsync, stream, poolStream };
+  return {
+    client,
+    identity,
+    view,
+    support,
+    mutateAsync,
+    revalidateAuth,
+    probes,
+    stream,
+    poolStream,
+  };
 });
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => state.client,
   useAuthService: () => ({
-    revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+    revalidateCurrentContextAfterInvalidation: state.revalidateAuth,
   }),
 }));
 
@@ -147,17 +167,36 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: state.view }),
+  useHostQuery: (args: {
+    readonly method: string;
+    readonly params: { readonly taskIds: readonly string[] };
+  }) => {
+    if (
+      args.method === "organization.refresh" &&
+      args.params.taskIds.length > 0
+    )
+      state.probes.taskSubscriptions += 1;
+    return { data: state.view };
+  },
   useHostMutation: () => ({ mutateAsync: state.mutateAsync }),
 }));
 
 vi.mock("@/components/organization/organization-dialogs", () => ({
-  OrganizationDialogHost: () => null,
+  OrganizationDialogHost: () => {
+    state.probes.dialogHost += 1;
+    return null;
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", async (load) => {
   const actual = await load<typeof import("@/lib/epic-selectors")>();
-  return { ...actual, useRegisteredEpicLocalHome: () => false };
+  return {
+    ...actual,
+    useRegisteredEpicLocalHome: () => {
+      state.probes.openTasks += 1;
+      return false;
+    },
+  };
 });
 
 function emptyView(): OrganizationView {
@@ -210,6 +249,10 @@ function resetStores(): void {
   state.identity.authUserId = "user-1";
   state.support.current = true;
   state.mutateAsync.mockReset();
+  state.revalidateAuth.mockReset().mockResolvedValue(null);
+  state.probes.openTasks = 0;
+  state.probes.taskSubscriptions = 0;
+  state.probes.dialogHost = 0;
   state.mutateAsync.mockImplementation(() =>
     Promise.resolve({
       commandId: "command-1",
@@ -295,6 +338,60 @@ afterEach(() => {
 });
 
 describe("OrganizationProvider lifecycle projection", () => {
+  it("keeps a token-only account-wide frame from rerendering its tab and chunk children", async () => {
+    const revalidateAuth = state.revalidateAuth;
+    const subscriptions = new Map<string, (envelope: unknown) => void>();
+    const stream: FakeStreamClient = {
+      subscribe: (_method, request) => ({
+        onServerFrame: (listener) => {
+          subscriptions.set(request.taskIds.join(","), listener);
+        },
+        close: () => undefined,
+      }),
+      subscribeAvailabilityRecovered: () => () => undefined,
+    };
+    state.stream.current = { wsStreamClient: stream };
+    openTask("task-1");
+    state.view = { ...emptyView(), historyInvalidation: "token-1" };
+    const queryClient = new QueryClient();
+    const providerCommits = vi.fn<ProfilerOnRenderCallback>();
+    const rendered = render(
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="organization-provider" onRender={providerCommits}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </Profiler>
+      </QueryClientProvider>,
+    );
+    expect(subscriptions.has("")).toBe(true);
+    expect(subscriptions.has("task-1")).toBe(true);
+    expect(state.probes.openTasks).toBeGreaterThan(0);
+    expect(state.probes.taskSubscriptions).toBeGreaterThan(0);
+    expect(state.probes.dialogHost).toBeGreaterThan(0);
+
+    const pushAccountWideFrame = (token: string): void => {
+      act(() => {
+        subscriptions.get("")?.({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          view: { ...state.view, historyInvalidation: token },
+        });
+      });
+    };
+    pushAccountWideFrame("token-1");
+    providerCommits.mockClear();
+    state.probes.openTasks = 0;
+    state.probes.taskSubscriptions = 0;
+    state.probes.dialogHost = 0;
+    pushAccountWideFrame("token-2");
+
+    await waitFor(() => expect(revalidateAuth).toHaveBeenCalledTimes(1));
+    expect(providerCommits.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(state.probes.openTasks).toBe(0);
+    expect(state.probes.taskSubscriptions).toBe(0);
+    expect(state.probes.dialogHost).toBe(0);
+    rendered.unmount();
+  });
+
   it("opens saved siblings when a grouped task is opened", async () => {
     const taskOneTabId = openTask("task-1");
     state.view = viewWithGroup([
