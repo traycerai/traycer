@@ -768,7 +768,8 @@ export class AuthService {
   // `signIn()` has superseded the attempt it captured and drop its stale result.
   private nextEpoch: number = 0;
   // Monotonic identity-transition generation, bumped by every transition this
-  // service initiates (`signIn` / `signOut` / `dispose`) and re-checked after
+  // service initiates (`signIn` / `signOut` / `dispose`), and by an external
+  // signed-out projection retiring a live or held identity. Re-checked after
   // each await of the sign-in finalization tail (token save, local
   // provisioning) and of `start()`'s rehydration. Complements the attempt
   // epoch rather than replacing it: the epoch fences replayed/superseded
@@ -990,13 +991,13 @@ export class AuthService {
 
   /**
    * Live identity-transition generation for observing interactive sign-in,
-   * sign-out, and disposal independently of same-user credential rotations.
+   * sign-out, disposal, and externally projected retirement of a live or held
+   * identity independently of same-user credential rotations.
    *
    * NOT a credential counter, and it must not be pressed into service as one:
-   * it moves on `signIn` / `signOut` / `dispose` only, so every ordinary
-   * same-user rotation (proactive refresh, reconcile adopt, external
-   * projection) leaves it exactly where it was. Callers fencing a DESTRUCTIVE
-   * decision on "is the credential that observed this still current?" want
+   * ordinary same-user rotations (proactive refresh, reconcile adopt, or a
+   * signed-in external projection) leave it unchanged. Callers fencing a
+   * DESTRUCTIVE decision on "is the credential that observed this still current?" want
    * {@link getCredentialGeneration}.
    */
   getIdentityGeneration(): number {
@@ -2153,9 +2154,10 @@ export class AuthService {
    * Re-read the file and confirm it still carries `token` before an AUTOMATIC
    * path adopts it into a signed-in UI.
    *
-   * The generation fences cannot cover this. `identityGeneration` moves only on
-   * a LOCAL `signIn`/`signOut`/`dispose`; an external mutation - most
-   * importantly another slot's explicit sign-out, which deletes the shared file
+   * The generation fences cannot cover this. `identityGeneration` moves on
+   * local sign-in/sign-out/disposal and external identity retirement. A file
+   * mutation - most importantly another slot's explicit sign-out, which deletes
+   * the shared file
    * for the whole machine by design - arrives through the watcher and reconcile,
    * which deliberately leave it alone. So a deletion that lands while our
    * `/user` probe is in flight leaves every fence intact: the UI is already
@@ -2556,6 +2558,11 @@ export class AuthService {
       return;
     }
     if (session.status === "signed-out") {
+      // Retire captured operations before the signed-out projection announces.
+      // A later same-user projection must not revive the sign-in they chose.
+      if (this.currentProfile !== null) {
+        this.identityGeneration += 1;
+      }
       this.applySignedOut("retired");
       return;
     }
