@@ -28,7 +28,7 @@ import {
   buildAgentRoleListCommand,
   buildAgentRoleRelinquishCommand,
 } from "../agent-role";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callAgentHostRpc } from "../../internal/host-rpc";
 import { buildProgramWithAgentRoles } from "../../index";
 import { CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -73,11 +73,11 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callAgentHostRpc: vi.fn(),
   };
 });
 
-const callHostRpcMock = vi.mocked(callHostRpc);
+const callAgentHostRpcMock = vi.mocked(callAgentHostRpc);
 
 const CLAIM_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -114,7 +114,7 @@ const RELINQUISH_RESPONSE: RelinquishAgentRoleResponseV11 = {
 };
 
 beforeEach(() => {
-  callHostRpcMock.mockReset();
+  callAgentHostRpcMock.mockReset();
   delete process.env.TRAYCER_EPIC_ID;
   delete process.env.TRAYCER_AGENT_ID;
 });
@@ -126,7 +126,7 @@ afterEach(() => {
 
 describe("agent role claim command function", () => {
   it("builds the typed request, parses the response, and renders via the SHARED formatter", async () => {
-    callHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
+    callAgentHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
 
     const result = await buildAgentRoleClaimCommand({
       epicId: "epic-1",
@@ -135,7 +135,7 @@ describe("agent role claim command function", () => {
       scope: "auth migration",
     })(makeCtx());
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
+    expect(callAgentHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
       epicId: "epic-1",
       claimantAgentId: "agent-1",
       role: "Planner",
@@ -148,7 +148,7 @@ describe("agent role claim command function", () => {
   });
 
   it("NORMALIZES role/scope through the protocol schema before transport", async () => {
-    callHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
+    callAgentHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
 
     await buildAgentRoleClaimCommand({
       epicId: "epic-1",
@@ -160,7 +160,7 @@ describe("agent role claim command function", () => {
     // NFC + whitespace fold + trim happened CLIENT-side: the wire carries the
     // normalized text, so both surfaces persist identical claims for
     // identical raw input.
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
+    expect(callAgentHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
       epicId: "epic-1",
       claimantAgentId: "agent-1",
       role: "Planner agent",
@@ -182,11 +182,11 @@ describe("agent role claim command function", () => {
       expect(error.message).toContain("role");
       return true;
     });
-    expect(callHostRpcMock).not.toHaveBeenCalled();
+    expect(callAgentHostRpcMock).not.toHaveBeenCalled();
   });
 
   it("defaults ids from $TRAYCER_EPIC_ID / $TRAYCER_AGENT_ID; explicit flags win", async () => {
-    callHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
+    callAgentHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
     process.env.TRAYCER_EPIC_ID = "epic-env";
     process.env.TRAYCER_AGENT_ID = "agent-env";
 
@@ -196,7 +196,7 @@ describe("agent role claim command function", () => {
       role: "Planner",
       scope: "auth migration",
     })(makeCtx());
-    expect(callHostRpcMock).toHaveBeenLastCalledWith(
+    expect(callAgentHostRpcMock).toHaveBeenLastCalledWith(
       "agent.roles.claim",
       expect.objectContaining({
         epicId: "epic-env",
@@ -210,7 +210,7 @@ describe("agent role claim command function", () => {
       role: "Planner",
       scope: "auth migration",
     })(makeCtx());
-    expect(callHostRpcMock).toHaveBeenLastCalledWith(
+    expect(callAgentHostRpcMock).toHaveBeenLastCalledWith(
       "agent.roles.claim",
       expect.objectContaining({
         epicId: "epic-flag",
@@ -222,13 +222,13 @@ describe("agent role claim command function", () => {
 
 describe("agent role list command function", () => {
   it("sends ONLY epicId (the wire request has no agent field) and renders via the shared formatter", async () => {
-    callHostRpcMock.mockResolvedValue(LIST_RESPONSE);
+    callAgentHostRpcMock.mockResolvedValue(LIST_RESPONSE);
 
     const result = await buildAgentRoleListCommand({ epicId: "epic-1" })(
       makeCtx(),
     );
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.list", {
+    expect(callAgentHostRpcMock).toHaveBeenCalledWith("agent.roles.list", {
       epicId: "epic-1",
     });
     expect(result.human).toBe(formatListRolesResponse(LIST_RESPONSE));
@@ -249,11 +249,11 @@ describe("agent role relinquish command function", () => {
       expect(error.message).toContain("claimId");
       return true;
     });
-    expect(callHostRpcMock).not.toHaveBeenCalled();
+    expect(callAgentHostRpcMock).not.toHaveBeenCalled();
   });
 
   it("sends the typed request and renders the release", async () => {
-    callHostRpcMock.mockResolvedValue(RELINQUISH_RESPONSE);
+    callAgentHostRpcMock.mockResolvedValue(RELINQUISH_RESPONSE);
 
     const result = await buildAgentRoleRelinquishCommand({
       epicId: "epic-1",
@@ -261,7 +261,7 @@ describe("agent role relinquish command function", () => {
       claimId: CLAIM_ID,
     })(makeCtx());
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.relinquish", {
+    expect(callAgentHostRpcMock).toHaveBeenCalledWith("agent.roles.relinquish", {
       epicId: "epic-1",
       claimantAgentId: "agent-1",
       claimId: CLAIM_ID,
