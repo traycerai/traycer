@@ -1020,6 +1020,48 @@ describe("changeProviderApiKey shared flow", () => {
     replacement.release();
   });
 
+  it("sends Content-Type only with the set's body, never on the clear", async () => {
+    const fetchMock = installFetch(
+      async (_input, init) =>
+        new Response(
+          JSON.stringify(
+            recordBody(
+              "cursor",
+              init?.method === "PUT"
+                ? { action: "set", apiKey: API_KEY }
+                : { action: "clear" },
+            ),
+          ),
+          { status: 200 },
+        ),
+    );
+    const send = (change: ProviderApiKeyChange) =>
+      changeProviderKeyRecordViaHttp(
+        AUTHN_BASE,
+        BEARER,
+        ENVIRONMENT_FROM_HOST,
+        "cursor",
+        change,
+        null,
+      );
+
+    await send({ action: "clear" });
+    await send({ action: "set", apiKey: API_KEY });
+
+    const [clearInit, setInit] = fetchMock.mock.calls.map(([, init]) => init);
+    expect(clearInit?.method).toBe("DELETE");
+    expect(clearInit?.body).toBeNull();
+    expect(new Headers(clearInit?.headers).has("Content-Type")).toBe(false);
+    expect(new Headers(clearInit?.headers).get("Accept")).toBe(
+      "application/json",
+    );
+    expect(setInit?.method).toBe("PUT");
+    expect(typeof setInit?.body).toBe("string");
+    expect(new Headers(setInit?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+  });
+
   it("does not settle until the computer's settle request resolves", async () => {
     let releaseSettle: (
       response: ProvidersSettleApiKeyChangeResponse,

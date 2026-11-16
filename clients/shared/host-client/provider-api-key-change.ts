@@ -228,7 +228,11 @@ export async function changeProviderKeyRecordViaHttp(
         headers: {
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
-          "Content-Type": "application/json",
+          // A clear has no body, and authn's JSON parser refuses a DELETE that
+          // declares one (FST_ERR_CTP_EMPTY_JSON_BODY): only a set declares it.
+          ...(change.action === "set"
+            ? { "Content-Type": "application/json" }
+            : {}),
         },
         body:
           change.action === "set"
