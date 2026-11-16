@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
   within,
+  type Queries,
   type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -362,7 +363,9 @@ function createHarness(source: ConfigurationSource): ProviderPageHarness {
   return harness;
 }
 
-async function renderPage(harness: ProviderPageHarness): Promise<RenderResult> {
+async function renderPage(
+  harness: ProviderPageHarness,
+): Promise<RenderResult<Queries, HTMLElement, HTMLElement>> {
   await signInOwnEnvironment(harness.runtime);
   return render(<TeamProviders />, { wrapper: harness.wrapper });
 }
