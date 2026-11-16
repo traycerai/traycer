@@ -524,12 +524,14 @@ function carriesMarked(
 /**
  * The boxes' drafts with what retirement adds below each (`retiredParts`):
  * below the draft the store keeps for that box, else below `unread`'s, the
- * one stored for it that the store has not read yet.
+ * one stored for it that the store has not read yet. A box whose stored draft
+ * storage could not read (`"unknown"`) takes nothing: what is stored for it
+ * stays as it is, and its parts go with the account's other unsaved state.
  */
 function retiredThreadBoxes(
   state: BotDraftsState,
   fold: BotRetireFold,
-  unread: (botId: string, key: string) => BotThreadBoxDraft | null,
+  unread: (botId: string, key: string) => BotThreadBoxDraft | null | "unknown",
 ): ByBot<BotThreadBoxDraft> {
   let threadBoxes = state.threadBoxes;
   for (const botId of new Set([
@@ -544,12 +546,9 @@ function retiredThreadBoxes(
     ])) {
       const parts = retiredParts(offers[key], carries[key]);
       if (parts.length === 0) continue;
-      threadBoxes = withEntry(
-        threadBoxes,
-        botId,
-        key,
-        fold(threadBoxes[botId]?.[key] ?? unread(botId, key), parts),
-      );
+      const below = threadBoxes[botId]?.[key] ?? unread(botId, key);
+      if (below === "unknown") continue;
+      threadBoxes = withEntry(threadBoxes, botId, key, fold(below, parts));
     }
   }
   return threadBoxes;
@@ -802,14 +801,18 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const name =
           useBotDraftsStore.persist.getOptions().name ?? PERSIST_OPTIONS.name;
         // Still being read: a box this window did not change holds what is
-        // stored for it, images by their hash, which the write keeps.
+        // stored for it, images by their hash, which the write keeps. Where
+        // storage cannot read that, what it holds is unknown, not nothing.
         const stored = readingStoredDrafts ? storedBotBoxDrafts(name) : {};
-        const threadBoxes = retiredThreadBoxes(state, fold, (botId, key) =>
-          changedDuringRead.bots.has(botId) ||
-          changedDuringRead.keys.has(boxKey(botId, key))
-            ? null
-            : (stored[botId]?.[key] ?? null),
-        );
+        const threadBoxes = retiredThreadBoxes(state, fold, (botId, key) => {
+          if (
+            changedDuringRead.bots.has(botId) ||
+            changedDuringRead.keys.has(boxKey(botId, key))
+          ) {
+            return null;
+          }
+          return stored === null ? "unknown" : (stored[botId]?.[key] ?? null);
+        });
         // Written under the retiring account's key, then nothing more is.
         if (threadBoxes !== state.threadBoxes) set({ threadBoxes });
         retireBotBoxDraftWrites(

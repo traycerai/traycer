@@ -726,6 +726,8 @@ interface MovedAnswer {
   readonly question: string;
   readonly answer: string;
   readonly settlement: QuestionCardSettlement;
+  /** Who settled it: the member's user id; `null` for the asker. */
+  readonly settledBy: string | null;
 }
 
 /**
@@ -836,9 +838,10 @@ function BotQuestionCard(props: {
       const moved = taken
         .flatMap(([key, draft]): ReadonlyArray<MovedAnswer> => {
           const entry = byKey.get(key);
-          if (entry === undefined) return [];
+          const settled = entry?.item.settlement ?? null;
+          if (entry === undefined || settled === null) return [];
           const settlement = botQuestionCardSettlement(
-            entry.item.settlement,
+            settled,
             memberName,
             viewerUserId,
           );
@@ -851,21 +854,23 @@ function BotQuestionCard(props: {
                   question: entry.item.text,
                   answer: own,
                   settlement,
+                  settledBy:
+                    settled.by.kind === "person" ? settled.by.userId : null,
                 },
               ];
         })
         .sort((a, b) => a.index - b.index);
-      let latest: MovedAnswer | null = null;
-      for (const item of moved) {
-        if (latest === null || item.settlement.at > latest.settlement.at) {
-          latest = item;
-        }
-      }
-      if (latest === null) return null;
+      if (moved.length === 0) return null;
+      const first = moved[0];
+      // Settled by more than one, the line credits none of them with what
+      // the others did.
+      const oneSettler = moved.every(
+        (item) => item.settledBy === first.settledBy,
+      );
       return {
         block: questionCardMovedBlock(moved, question.questions.length > 1),
         notice: questionCardMovedLine(
-          latest.settlement.by,
+          oneSettler ? first.settlement.by : null,
           questionCardMovedHow(moved.map((item) => item.settlement)),
           botTitle,
           moved.length,

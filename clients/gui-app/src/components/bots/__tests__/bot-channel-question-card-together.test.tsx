@@ -228,6 +228,7 @@ const QUESTION_ID = "bot-question:req-q";
 const QUESTION_REQUEST = "req-q";
 const SET_REQUEST = "req-set";
 const TEAMMATE_USER_ID = "user-teammate";
+const OTHER_TEAMMATE_USER_ID = "user-other-teammate";
 
 const V14: SchemaVersion = { major: 1, minor: 4 };
 const V15: SchemaVersion = { major: 1, minor: 5 };
@@ -237,10 +238,15 @@ const HOLD = "Anything to hold back from the train?";
 const WATCH = "What should I watch for you?";
 const FIRST = "Which should I check first?";
 
-const resolveMember: BotMemberResolver = (userId) =>
-  userId === TEAMMATE_USER_ID
-    ? { displayName: "Tess Teammate", avatarUrl: null }
-    : null;
+const MEMBER_NAMES = new Map([
+  [TEAMMATE_USER_ID, "Tess Teammate"],
+  [OTHER_TEAMMATE_USER_ID, "Bo Teammate"],
+]);
+
+const resolveMember: BotMemberResolver = (userId) => {
+  const displayName = MEMBER_NAMES.get(userId);
+  return displayName === undefined ? null : { displayName, avatarUrl: null };
+};
 
 function deploy(settlement: BotQuestionSettlement | null): BotQuestionItem {
   return {
@@ -1843,6 +1849,76 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
     );
     expect(textOf(boxInput("Message Release Bot"))).toBe(
       `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+  });
+
+  /** The line over the box when the card's questions were settled by more than one person, so no one of them is named. */
+  const SETTLED_BY_SEVERAL_LINE =
+    "These questions were settled first. Your answers are in your message box, not sent.";
+
+  /** Two questions the member has answered in the card, and the transcript row the settlements arrive in. */
+  async function twoAnsweredQuestions(): Promise<
+    (settlements: [BotQuestionSettlement, BotQuestionSettlement]) => void
+  > {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    return ([first, second]) =>
+      transcript.write([questionRow([deploy(first), hold(second)])]);
+  }
+
+  function expectBothAnswersMovedUnder(line: string): void {
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(line);
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+  }
+
+  it("names no one, and moves both answers, when two teammates each settle one of two questions on their own in one update", async () => {
+    const settle = await twoAnsweredQuestions();
+    const at = Date.now();
+
+    settle([
+      byPerson(TEAMMATE_USER_ID, "After the train", null, at),
+      byPerson(OTHER_TEAMMATE_USER_ID, null, null, at + 1_000),
+    ]);
+
+    expectBothAnswersMovedUnder(SETTLED_BY_SEVERAL_LINE);
+  });
+
+  it("names no one, and moves both answers, when the viewer in another window settles one of two questions on its own and a teammate settles the other in one update", async () => {
+    const settle = await twoAnsweredQuestions();
+    const at = Date.now();
+
+    settle([
+      byPerson(VIEWER_USER_ID, "Now", null, at),
+      byPerson(TEAMMATE_USER_ID, null, null, at + 1_000),
+    ]);
+
+    expectBothAnswersMovedUnder(SETTLED_BY_SEVERAL_LINE);
+  });
+
+  it("still names the teammate, and moves both answers, when one teammate settles both questions on their own in one update", async () => {
+    const settle = await twoAnsweredQuestions();
+    const at = Date.now();
+
+    settle([
+      byPerson(TEAMMATE_USER_ID, "After the train", null, at),
+      byPerson(TEAMMATE_USER_ID, null, null, at + 1_000),
+    ]);
+
+    expectBothAnswersMovedUnder(
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
   });
 

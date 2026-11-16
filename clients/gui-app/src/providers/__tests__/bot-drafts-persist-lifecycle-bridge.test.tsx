@@ -624,4 +624,97 @@ describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", ()
 
     expect(localStorage.getItem(keyOfA)).toBe(before);
   });
+
+  /** A's stored draft of the channel box (text, image) and a second box `other`, read while A is signed in and B signs in after a move meanwhile: the fixture of both cases below. */
+  async function aWithAMovedAnswerBeforeB(): Promise<{
+    readonly run: Run;
+    readonly release: () => void;
+    readonly readsSettled: () => Promise<void>;
+    readonly keyOfA: string;
+    readonly before: string | null;
+  }> {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBoxes({
+        [CHANNEL]: {
+          text: "A's own draft",
+          content: boxDoc("A's own draft ", [hashedImage(hash)]),
+        },
+        other: { text: "two", content: null },
+      }),
+    );
+    const before = localStorage.getItem(keyOfA);
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The move goes through the store directly: no UI can make one during the
+    // read, because the bot tab waits for the read before it shows its box.
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+    return { run, release, readsSettled, keyOfA, before };
+  }
+
+  it("keeps A's stored text, image and second box under A's key, with the answer moved meanwhile folded onto them, when the retirement's read of A's key succeeds", async () => {
+    const { run, release, readsSettled, keyOfA, before } =
+      await aWithAMovedAnswerBeforeB();
+
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
+    release();
+    await readsSettled();
+
+    const stored = localStorage.getItem(keyOfA) ?? "";
+    expect(stored).toContain("A's own draft");
+    expect(stored).toContain('"hash":"');
+    expect(stored).toContain("Hold the migration");
+    expect(stored).toContain('"text":"two"');
+    expect(stored).not.toBe(before);
+  });
+
+  it("leaves A's stored text and image in place when the one read of A's key that throws is the retirement's own, and every later read of it succeeds", async () => {
+    const { run, release, readsSettled, keyOfA, before } =
+      await aWithAMovedAnswerBeforeB();
+    // Armed only once the move is made, so the first read of A's key from here
+    // on is the retirement's: the throw is taken once, and its stack names the
+    // reader, which is how this case shows it hit `storedBotBoxDrafts`. The
+    // final read of A's key below goes through the spy too, so it shows that
+    // later reads succeed.
+    const read = Storage.prototype.getItem.bind(localStorage);
+    const thrownFrom: string[] = [];
+    const reads = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation((asked: string) => {
+        if (asked === keyOfA) {
+          if (thrownFrom.length === 0) {
+            thrownFrom.push(new Error("storage cannot be read").stack ?? "");
+            throw new Error("storage cannot be read");
+          }
+        }
+        return read(asked);
+      });
+    onTestFinished(() => reads.mockRestore());
+
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
+    release();
+    await readsSettled();
+
+    expect(thrownFrom).toHaveLength(1);
+    expect(thrownFrom[0]).toContain("storedBotBoxDrafts");
+    expect(localStorage.getItem(keyOfA)).toBe(before);
+  });
 });

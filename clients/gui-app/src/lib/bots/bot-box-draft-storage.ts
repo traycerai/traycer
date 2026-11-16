@@ -242,14 +242,14 @@ export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
 /**
  * The drafts stored under `name` as storage holds them now, each image named
  * by its hash, which a write keeps as it is: what an account retiring while
- * its drafts are still being read puts its moves below.
+ * its drafts are still being read puts its moves below. `null` where storage
+ * cannot read them: what it holds is unknown, never nothing stored.
  */
-export function storedBotBoxDrafts(name: string): StoredBoxDrafts {
+export function storedBotBoxDrafts(name: string): StoredBoxDrafts | null {
   try {
     return readStoredValue(name)?.state.threadBoxes ?? {};
   } catch {
-    // The write that follows cannot read them either, so it lands nothing.
-    return {};
+    return null;
   }
 }
 
