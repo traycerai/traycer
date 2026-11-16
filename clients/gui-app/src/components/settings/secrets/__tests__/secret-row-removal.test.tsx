@@ -11,6 +11,7 @@ vi.mock("sonner", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -49,21 +50,24 @@ import type {
   EnvironmentSecretsDestroyResponseV11,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import {
   mountTeamPage,
   mountTeamPageNegotiating,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
+  setTeamEnvironmentCloudOverride,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
-import {
-  RETIRED_PROVIDER_VARIABLES,
-  RETIRED_SECRET_ROW_FIELDS,
-} from "@traycer/protocol/host/released-wire-rows";
+import { secretRowFixture } from "./secret-row-test-support";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 
@@ -73,22 +77,6 @@ function dayMonth(at: number): string {
     day: "numeric",
     month: "short",
   }).format(at);
-}
-
-function secretFixture(): EnvironmentSecretV12 {
-  return {
-    ...RETIRED_SECRET_ROW_FIELDS,
-    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-    secretId: "sec-1",
-    name: "STRIPE_KEY",
-    kind: "api_key",
-    protocol: null,
-    destinations: [],
-    currentVersionId: "ver-2",
-    revoked: false,
-    updatedAt: AT,
-    variables: [],
-  };
 }
 
 function versionsFixture(): SecretVersion[] {
@@ -152,12 +140,12 @@ function withoutFailures(
 
 interface Host {
   removal: EnvironmentSecretRemovalV12 | null;
-  /** The host finishes the removal when it answers a destroy. */
+  /** The fixture finishes the removal when its destroy handler answers. */
   finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
-  /** Runs when a destroy is answered, to change what the next versions read says. */
+  /** Runs after a destroy answer, to change the next versions read. */
   onDestroy: (() => void) | null;
-  /** The versions read fails: set by `onDestroy` to fail the read after a destroy. */
+  /** The versions read fails: set by `onDestroy` to fail the read after destroy. */
   versionsFail: boolean;
   secrets: EnvironmentSecretV12[];
   /** The list's `removed`: secrets revoked within the last 30 days. */
@@ -188,7 +176,7 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
       removed: host.removed,
     }),
     "environment.secrets.versions": () => {
-      if (host.versionsFail) throw new Error("the host is unreachable");
+      if (host.versionsFail) throw new Error("authn is unavailable");
       return {
         versions: versionsFixture(),
         removal: host.removal === null ? null : withoutFailures(host.removal),
@@ -217,8 +205,16 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
   return harness;
 }
 
-/** A Personal host whose connection negotiated `environment.secrets.destroy@1.0`. */
-function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
+/** A Personal host, optionally viewing its own host-scoped secrets. */
+function mountPersonalRowAtDestroy10(
+  host: Host,
+  pick: "personal" | "local",
+): TeamPageHarness {
+  if (pick === "local") {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+    });
+  }
   const harness = mountTeamPageNegotiating(
     { kind: "host" },
     {
@@ -278,16 +274,79 @@ function freshHost(overrides: Partial<Host>): Host {
     destroyAnswer: { outcome: "revoked" },
     onDestroy: null,
     versionsFail: false,
-    secrets: [secretFixture()],
+    secrets: [
+      secretRowFixture({
+        destinations: [],
+        currentVersionId: "ver-2",
+        updatedAt: AT,
+      }),
+    ],
     removed: [],
     ...overrides,
   };
 }
 
 function destroyCalls(harness: TeamPageHarness) {
-  return harness.messenger.calls.filter(
-    (call) => call.method === "environment.secrets.destroy",
+  return harness
+    .paramsOf("environment.secrets.destroy")
+    .map((params) => ({ method: "environment.secrets.destroy", params }));
+}
+
+interface CapturedSecretRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly body: unknown;
+}
+
+function capturedSecretRequests(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return harness.cloudRequests.slice(start).flatMap((request) => {
+    const parsedUrl = new URL(request.url);
+    if (
+      !parsedUrl.pathname.startsWith("/api/v3/environments/") ||
+      !parsedUrl.pathname.includes("/secrets")
+    ) {
+      return [];
+    }
+    return [
+      {
+        method: request.method,
+        path: `${parsedUrl.pathname}${parsedUrl.search}`,
+        body: request.body ?? null,
+      },
+    ];
+  });
+}
+
+function destroyRequests(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return capturedSecretRequests(harness, start).filter(
+    ({ method, path }) => method === "POST" && path.endsWith("/destroy"),
   );
+}
+
+function removalRequestsSince(
+  harness: TeamPageHarness,
+  start: number,
+): CapturedSecretRequest[] {
+  return capturedSecretRequests(harness, start);
+}
+
+function removalRequestOrder(
+  harness: TeamPageHarness,
+  start: number,
+): string[] {
+  return capturedSecretRequests(harness, start).flatMap(({ method, path }) => {
+    if (method === "GET" && path.endsWith("/secrets/sec-1/versions"))
+      return ["environment.secrets.versions"];
+    if (method === "POST" && path.endsWith("/versions/ver-2/destroy"))
+      return ["environment.secrets.destroy"];
+    return [];
+  });
 }
 
 beforeEach(() => {
@@ -308,7 +367,7 @@ afterEach(() => {
 });
 
 describe("Remove on a team secret", () => {
-  it("destroys the current version in the pool environment, then keeps the row as Removing", async () => {
+  it("sends the current-version removal to authn, then keeps the row as Removing", async () => {
     const host = freshHost({});
     const harness = mountRow(host);
     const user = userEvent.setup();
@@ -320,22 +379,30 @@ describe("Remove on a team secret", () => {
         `Added on ${dayMonth(AT - 1_000)}. Version 2.`,
       );
     });
-    // The host answers revoked and the next versions read carries the removal.
+    // authn answers revoked and the next versions read carries the removal.
     host.removal = removal("revoked");
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => {
       expect(destroyCalls(harness)).toHaveLength(1);
     });
+    expect(destroyRequests(harness, 0)).toEqual([
+      {
+        method: "POST",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
+        body: { allowCurrent: true },
+      },
+    ]);
+    expect(
+      harness.messenger.calls.filter(
+        ({ method }) => method === "environment.secrets.destroy",
+      ),
+    ).toEqual([]);
     const [call] = destroyCalls(harness);
     expect(call.params).toEqual({
       secretId: "sec-1",
       versionId: "ver-2",
       environmentId: "env-a",
-    });
-    expect(call.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.destroy",
-      version: { major: 1, minor: 1 },
     });
     const status = await screen.findByTestId("secret-removal-status");
     expect(status.textContent).toBe(
@@ -367,13 +434,13 @@ describe("Remove on a team secret", () => {
   });
 });
 
-describe("Remove on a Personal host that negotiated destroy@1.0", () => {
-  it("shows the update remedy for the current version and sends nothing", async () => {
-    // @1.0 refuses the current version; only @1.1 revokes it.
+describe("Remove on Personal", () => {
+  it("sends the current-version removal to authn without a host version floor", async () => {
     const harness = mountPersonalRowAtDestroy10(
       freshHost({
         destroyAnswer: { outcome: "refused", code: "version_current" },
       }),
+      "personal",
     );
     const user = userEvent.setup();
 
@@ -387,14 +454,26 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
-      "These secrets need an updated host.",
+      "This is the current value. Replace or revoke it first.",
     );
-    expect(destroyCalls(harness)).toEqual([]);
+    expect(destroyRequests(harness, 0)).toEqual([
+      {
+        method: "POST",
+        path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-2/destroy",
+        body: { allowCurrent: true },
+      },
+    ]);
+    expect(
+      harness.messenger.calls.filter(
+        ({ method }) => method === "environment.secrets.destroy",
+      ),
+    ).toEqual([]);
   });
 
-  it("sends nothing to destroy a replaced version on that host either, since the call names Personal's id", async () => {
+  it("sends a replaced-version destroy to authn, with no host version floor", async () => {
     const harness = mountPersonalRowAtDestroy10(
       freshHost({ destroyAnswer: { outcome: "destroyed", destroyedAt: AT } }),
+      "personal",
     );
     const user = userEvent.setup();
 
@@ -408,17 +487,49 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
       ),
     );
 
-    // The old host is refused before anything is sent, in the page's words.
+    await waitFor(() => expect(destroyRequests(harness, 0)).toHaveLength(1));
+    expect(destroyRequests(harness, 0)).toEqual([
+      {
+        method: "POST",
+        path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-1/destroy",
+        body: { allowCurrent: true },
+      },
+    ]);
     expect(
-      (await within(replaced).findByTestId("secret-version-note")).textContent,
-    ).toBe("These secrets need an updated host.");
+      harness.messenger.calls.filter(
+        ({ method }) => method === "environment.secrets.destroy",
+      ),
+    ).toEqual([]);
+    expect(within(replaced).queryByTestId("secret-version-note")).toBeNull();
+  });
+
+  it("keeps the host version floor for its own unscoped environment", async () => {
+    const harness = mountPersonalRowAtDestroy10(
+      freshHost({
+        destroyAnswer: { outcome: "refused", code: "version_current" },
+      }),
+      "local",
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId("secret-row-remove"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "These secrets need an updated host.",
+    );
+    expect(harness.paramsOf("environment.secrets.list")).toContainEqual({
+      environmentId: null,
+    });
+    expect(destroyRequests(harness, 0)).toEqual([]);
     expect(destroyCalls(harness)).toEqual([]);
   });
 });
 
 describe("a secret with a removal", () => {
   it.each(["revoked", "cleanup_requested"] as const)(
-    "keeps a %s row and offers Retry, which destroys the same current version while the host still reports it pending",
+    "keeps a %s row and offers Retry, which destroys the same current version while authn still reports it pending",
     async (outcome) => {
       const host = freshHost({
         removal: removal(outcome),
@@ -444,19 +555,22 @@ describe("a secret with a removal", () => {
         versionId: "ver-2",
         environmentId: "env-a",
       });
-      expect(call.requiredHostMethodVersion).toEqual({
-        method: "environment.secrets.destroy",
-        version: { major: 1, minor: 1 },
-      });
+      expect(destroyRequests(harness, 0)).toEqual([
+        {
+          method: "POST",
+          path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
+          body: { allowCurrent: true },
+        },
+      ]);
       // Destroyed is the one outcome that takes the row out of the list: the
-      // host finished on that destroy, and the versions read after it says so.
+      // next versions read carries that answer.
       await waitFor(() => {
         expect(screen.queryByTestId("secret-row")).toBeNull();
       });
     },
   );
 
-  it("sends no destroy when Retry is pressed after the host has already finished the removal", async () => {
+  it("sends no destroy when Retry is pressed after authn already finished the removal", async () => {
     const host = freshHost({ removal: removal("cleanup_requested") });
     const harness = mountRow(host);
     const user = userEvent.setup();
@@ -698,7 +812,7 @@ describe("a removed secret the list has moved to removed", () => {
     try {
       mountRowAs(
         freshHost({
-          secrets: [{ ...secretFixture(), secretId: "sec-2" }],
+          secrets: [secretRowFixture({ secretId: "sec-2" })],
           removed: [
             {
               id: "sec-1",
@@ -761,12 +875,31 @@ describe("a removed secret the list has moved to removed", () => {
     expect(screen.queryByTestId("removed-secret-row")).toBeNull();
   });
 
-  it("retries by reading the versions, then destroying the current one", async () => {
+  it("keeps the confirmation read on the sign-in that chose the version", async () => {
     const host = removedHost(removal("cleanup_requested"));
     const harness = mountRow(host);
     const user = userEvent.setup();
 
     const status = await screen.findByTestId("secret-removal-status");
+    const baseCloud =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+    const operationRequests: EnvironmentTransportRequest[] = [];
+    const laterCloud = { ...baseCloud, bearer: { ...baseCloud.bearer } };
+    setTeamEnvironmentCloudOverride({
+      ...baseCloud,
+      transport: async (request: EnvironmentTransportRequest) => {
+        operationRequests.push(request);
+        const answer = await baseCloud.transport(request);
+        if (
+          request.method === "POST" &&
+          new URL(request.url).pathname.endsWith("/destroy")
+        ) {
+          setTeamEnvironmentCloudOverride(laterCloud);
+        }
+        return answer;
+      },
+    });
+    const requestStart = harness.cloudRequests.length;
     await user.click(within(status).getByRole("button", { name: "Retry" }));
 
     await waitFor(() => {
@@ -778,15 +911,130 @@ describe("a removed secret the list has moved to removed", () => {
       versionId: "ver-2",
       environmentId: "env-a",
     });
-    const order = harness.messenger.calls
-      .map((entry) => entry.method)
-      .filter(
-        (method) =>
-          method === "environment.secrets.versions" ||
-          method === "environment.secrets.destroy",
-      );
+    expect(
+      operationRequests.map(({ method, url, body }) => ({
+        method,
+        path: new URL(url).pathname,
+        body,
+      })),
+    ).toEqual([
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+      },
+      {
+        method: "POST",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
+        body: { allowCurrent: true },
+      },
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+      },
+    ]);
+    const retryRequests = removalRequestsSince(harness, requestStart);
+    expect(retryRequests.slice(0, 3)).toEqual([
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+      },
+      {
+        method: "POST",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
+        body: { allowCurrent: true },
+      },
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+      },
+    ]);
+    const secretReadPaths = [
+      "/api/v3/environments/env-a/secrets/sec-1/versions",
+      "/api/v3/environments/env-a/secrets",
+      "/api/v3/environments/env-a/secrets/sec-1/rotation",
+    ];
+    for (const request of retryRequests.slice(3)) {
+      expect(request.method).toBe("GET");
+      expect(secretReadPaths).toContain(request.path.split("?")[0]);
+    }
+    const order = removalRequestOrder(harness, requestStart);
     expect(order.indexOf("environment.secrets.versions")).toBeLessThan(
       order.indexOf("environment.secrets.destroy"),
+    );
+  });
+
+  it("does not send destroy or confirmation on a sign-in that replaced the held versions read", async () => {
+    const host = removedHost(removal("cleanup_requested"));
+    const harness = mountRow(host);
+    const status = await screen.findByTestId("secret-removal-status");
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(1);
+    });
+    const readsBeforeRetry = harness.paramsOf(
+      "environment.secrets.versions",
+    ).length;
+    const requestStart = harness.cloudRequests.length;
+    const baseCloud =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+    let signInA = true;
+    let heldRead = false;
+    let releaseRead: () => void = () => {
+      throw new Error("Retry did not start its versions read");
+    };
+    setTeamEnvironmentCloudOverride({
+      ...baseCloud,
+      onOriginSignIn: () => signInA,
+      transport: async (request: EnvironmentTransportRequest) => {
+        const path = new URL(request.url).pathname;
+        if (
+          !heldRead &&
+          request.method === "GET" &&
+          path.endsWith(`/secrets/sec-1/versions`)
+        ) {
+          heldRead = true;
+          const answer: EnvironmentTransportAnswer =
+            await baseCloud.transport(request);
+          return new Promise<EnvironmentTransportAnswer>((resolve) => {
+            releaseRead = () => resolve(answer);
+          });
+        }
+        return baseCloud.transport(request);
+      },
+    });
+    const user = userEvent.setup();
+    await user.click(within(status).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(
+        readsBeforeRetry + 1,
+      );
+    });
+    expect(
+      within(screen.getByTestId("secret-removal-status")).getByRole("button", {
+        name: "Retry",
+      }),
+    ).toHaveProperty("disabled", true);
+
+    signInA = false;
+    act(() => {
+      releaseRead();
+    });
+
+    await waitFor(() => expect(harness.queryClient.isMutating()).toBe(0));
+    expect(harness.paramsOf("environment.secrets.destroy")).toEqual([]);
+    expect(removalRequestsSince(harness, requestStart)).toEqual([
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+      },
+    ]);
+    expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(
+      readsBeforeRetry + 1,
     );
   });
 
@@ -822,16 +1070,6 @@ describe("Retry on a removal still waiting for a host", () => {
     };
   }
 
-  function methodOrder(harness: TeamPageHarness): string[] {
-    return harness.messenger.calls
-      .map((call) => call.method)
-      .filter(
-        (method) =>
-          method === "environment.secrets.versions" ||
-          method === "environment.secrets.destroy",
-      );
-  }
-
   async function retry(): Promise<void> {
     const status = await screen.findByTestId("secret-removal-status");
     await userEvent
@@ -850,7 +1088,7 @@ describe("Retry on a removal still waiting for a host", () => {
     });
     expect(toastCall).toHaveBeenCalledWith(WAITING);
     expect(destroyCalls(harness)).toHaveLength(1);
-    const order = methodOrder(harness);
+    const order = removalRequestOrder(harness, 0);
     expect(order.lastIndexOf("environment.secrets.versions")).toBeGreaterThan(
       order.indexOf("environment.secrets.destroy"),
     );

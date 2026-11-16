@@ -1,13 +1,18 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
+
+const SAVED_KINDS = ["env_override"] as const;
 
 // Removing a provider env override resets the provider's adapter host-side
 // (same rationale as the set mutation), so refresh the Settings panel + both
@@ -18,10 +23,22 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
   RequestOfMethod<HostRpcRegistry, "providers.deleteEnvOverride">,
   { readonly hostId: string | null }
 > {
+  const prepareSave = useSettingsSave(useHostClient(), SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostScopedMutation({
     method: "providers.deleteEnvOverride",
     mutationKey: providersMutationKeys.deleteEnvOverride(),
     errorMessage: "Couldn't remove the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, client, pressedOn) =>
+        prepareSave(
+          { method: "providers.deleteEnvOverride", request },
+          client.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
   });
 }

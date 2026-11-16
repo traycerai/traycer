@@ -11,10 +11,12 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ProviderMcpAuthWrite,
-  ProviderMcpServerTransportWrite,
-} from "@traycer/protocol/host/provider-native-schemas";
+import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import type { ProviderMcpAuthWrite } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderMcpAddDialog } from "@/components/settings/panels/provider-mcp-add-dialog";
 import type { McpMutateVariables } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 
@@ -29,8 +31,6 @@ const mcpMocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   reset: vi.fn(),
   mutateIsPending: false,
-  readTransport: null as (() => ProviderMcpServerTransportWrite) | null,
-  dispatchedTransport: null as ProviderMcpServerTransportWrite | null,
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
   credentialRefusal: null as string | null,
 }));
@@ -40,17 +40,12 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
-  useProvidersMcpMutate: (
-    readTransport: (() => ProviderMcpServerTransportWrite) | null,
-  ) => {
-    mcpMocks.readTransport = readTransport;
-    return {
-      mutate: mcpMocks.mutate,
-      mutateAsync: mcpMocks.mutateAsync,
-      reset: mcpMocks.reset,
-      isPending: mcpMocks.mutateIsPending,
-    };
-  },
+  useProvidersMcpMutate: () => ({
+    mutate: mcpMocks.mutate,
+    mutateAsync: mcpMocks.mutateAsync,
+    reset: mcpMocks.reset,
+    isPending: mcpMocks.mutateIsPending,
+  }),
   useProvidersMcpApplyRemedy: () => ({
     mutateAsync: mcpMocks.mutateAsync,
     isPending: false,
@@ -117,31 +112,13 @@ const SINGLE_HEADER_CAPS: ProviderMcpCapabilities = {
 
 function expectAddTransport(
   call: McpMutateVariables,
-): ProviderMcpServerTransportWrite {
+): Extract<McpMutateVariables["mutation"], { action: "add" }>["transport"] {
   if (call.mutation.action !== "add") {
     throw new Error(
       `expected an "add" mutation, got "${call.mutation.action}"`,
     );
   }
-  const transport = mcpMocks.dispatchedTransport;
-  if (transport === null) {
-    throw new Error("expected transport to be read at dispatch");
-  }
-  return transport;
-}
-
-function installDispatchReader(): void {
-  mcpMocks.mutate.mockImplementation((variables) => {
-    if (
-      variables.mutation.action === "add" ||
-      variables.mutation.action === "update"
-    ) {
-      if (mcpMocks.readTransport === null) {
-        throw new Error("transport reader was not registered");
-      }
-      mcpMocks.dispatchedTransport = mcpMocks.readTransport();
-    }
-  });
+  return call.mutation.transport;
 }
 
 function expectRemoteAuth(
@@ -185,9 +162,6 @@ function renderDialog(args: {
 describe("<ProviderMcpAddDialog />", () => {
   beforeEach(() => {
     mcpMocks.mutate.mockReset();
-    mcpMocks.readTransport = null;
-    mcpMocks.dispatchedTransport = null;
-    installDispatchReader();
     mcpMocks.reset.mockReset();
     mcpMocks.mutateIsPending = false;
     mcpMocks.credentialRefusal = null;
@@ -269,17 +243,12 @@ describe("<ProviderMcpAddDialog />", () => {
 
     await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     const call = mcpMocks.mutate.mock.calls[0][0];
-    const auth = expectRemoteAuth(call);
-    expect(
-      auth !== null &&
-        auth.type === "header" &&
-        auth.name === "Authorization" &&
-        auth.value === "Bearer one" &&
-        auth.additionalHeaders !== undefined &&
-        auth.additionalHeaders.length === 1 &&
-        auth.additionalHeaders[0]?.name === "X-Api-Key" &&
-        auth.additionalHeaders[0]?.value === "two",
-    ).toBe(true);
+    expect(expectRemoteAuth(call)).toEqual({
+      type: "header",
+      name: "Authorization",
+      value: "Bearer one",
+      additionalHeaders: [{ name: "X-Api-Key", value: "two" }],
+    });
   });
 
   it("codex env auth sends only an env-var name reference, never a value field", async () => {
@@ -512,6 +481,41 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(nameInput.value).toBe("GITHUB_TOKEN");
   });
 
+  it("hides an abandoned MCP add but reports a transport failure", async () => {
+    renderDialog({
+      capabilities: FULL_CAPS,
+      providerId: "amp",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+      target: { value: "mcp-server" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com" } },
+    );
+
+    mcpMocks.mutate.mockImplementationOnce((_variables, options) => {
+      options.onError(abandonedSaveError("providers.mcp.mutate"));
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeTruthy();
+
+    const transportFailure = saveTransportFailure("providers.mcp.mutate");
+    mcpMocks.mutate.mockImplementationOnce((_variables, options) => {
+      options.onError(transportFailure);
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
+    expect(
+      await within(dialog).findByText(transportFailure.message),
+    ).toBeTruthy();
+  });
+
   it("enables Save changes only after an edit becomes dirty", async () => {
     const server: ProviderMcpServer = {
       name: "srv",
@@ -626,14 +630,10 @@ describe("<ProviderMcpAddDialog />", () => {
     if (transport.type !== "stdio") {
       throw new Error("expected a stdio transport");
     }
-    expect(
-      transport.env !== null &&
-        transport.env.length === 2 &&
-        transport.env[0]?.name === "GITHUB_TOKEN" &&
-        transport.env[0]?.value === "ghp_one" &&
-        transport.env[1]?.name === "FOO" &&
-        transport.env[1]?.value === "bar",
-    ).toBe(true);
+    expect(transport.env).toEqual([
+      { name: "GITHUB_TOKEN", value: "ghp_one" },
+      { name: "FOO", value: "bar" },
+    ]);
   });
 
   it("hand-rolls the footer instead of DialogFooter's p-4-only negative margins", () => {
@@ -662,9 +662,6 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
 
   beforeEach(() => {
     mcpMocks.mutate.mockReset();
-    mcpMocks.readTransport = null;
-    mcpMocks.dispatchedTransport = null;
-    installDispatchReader();
     mcpMocks.reset.mockReset();
     mcpMocks.mutateIsPending = false;
     mcpMocks.credentialRefusal = REFUSAL;
@@ -845,15 +842,13 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
     await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
-    expect(mcpMocks.mutate.mock.lastCall?.[0].mutation).toEqual({
+    expect(mcpMocks.mutate.mock.lastCall?.[0].mutation).toMatchObject({
       action: "add",
-      name: "srv",
-    });
-    expect(mcpMocks.dispatchedTransport).toEqual({
-      type: "stdio",
-      command: "npx",
-      args: [],
-      env: [{ name: "NODE_ENV", value: "production" }],
+      transport: {
+        type: "stdio",
+        command: "npx",
+        env: [{ name: "NODE_ENV", value: "production" }],
+      },
     });
     expect(screen.queryByText(REFUSAL_LINES)).toBeNull();
   });
@@ -944,16 +939,14 @@ describe("<ProviderMcpAddDialog /> on a host that takes no credentials", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
     await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
-    expect(mcpMocks.mutate.mock.lastCall?.[0].mutation).toEqual({
+    expect(mcpMocks.mutate.mock.lastCall?.[0].mutation).toMatchObject({
       action: "add",
-      name: "srv",
+      transport: {
+        type: "http",
+        url: "https://alice:token@host/mcp",
+        auth: null,
+      },
     });
-    expect(
-      mcpMocks.dispatchedTransport !== null &&
-        mcpMocks.dispatchedTransport.type === "http" &&
-        mcpMocks.dispatchedTransport.url === "https://alice:token@host/mcp" &&
-        mcpMocks.dispatchedTransport.auth === null,
-    ).toBe(true);
   });
 
   it("control: on a host that takes credentials the same header server is submitted", async () => {

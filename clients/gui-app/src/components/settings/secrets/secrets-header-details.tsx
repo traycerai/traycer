@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { SettingsDetailsButton } from "@/components/settings/details/settings-details-button";
 import { useDetailsEnvironmentId } from "@/components/settings/details/use-details-environment-id";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
-import { useHostClient } from "@/lib/host";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
@@ -15,7 +14,7 @@ export function SecretsHeaderDetails(): ReactNode {
   // On a Local pick no chip holds the host list the drawer counts sandboxes
   // from, so this reads it.
   useHostsRunningPersonal(pick.kind === "local");
-  const environmentId = useDetailsEnvironmentId(useHostClient());
+  const environmentId = useDetailsEnvironmentId();
   if (environmentId === null) return null;
   return (
     <SettingsDetailsButton

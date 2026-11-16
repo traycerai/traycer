@@ -10,7 +10,6 @@ import {
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
-import { useOptionalHostClient } from "@/lib/host";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -72,10 +71,7 @@ export function useTeamEnvironmentOwnership(
     authorizesCloudCapability(state.status),
   );
   const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
-  const environments = useEnvironmentListQuery(
-    useOptionalHostClient(),
-    listApplies,
-  );
+  const environments = useEnvironmentListQuery(listApplies);
   const subscribe = useCallback(
     (listener: () => void) =>
       ownerHostId === null

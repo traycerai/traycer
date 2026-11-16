@@ -1,4 +1,5 @@
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
 import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -649,7 +650,14 @@ function useProfileRename(
         });
         return;
       }
-      renameProfile.mutate(request, { onSuccess: () => onRenamed(label) });
+      renameProfile.mutate(
+        {
+          ...request,
+          enabled: profile.enabled,
+          environmentProfileId: profile.environmentProfileId ?? null,
+        },
+        { onSuccess: () => onRenamed(label) },
+      );
     },
     isPending:
       nameRecord.isPending ||
@@ -845,6 +853,8 @@ export function ProfileEditDialog(props: {
           providerId,
           profileId: props.profile.profileId,
           accentColor,
+          enabled: props.profile.enabled,
+          environmentProfileId: props.profile.environmentProfileId ?? null,
         },
         {
           onSuccess: () => {
@@ -981,8 +991,8 @@ export function ProfileEditDialog(props: {
       />
 
       <ProfileEditErrors
-        renameError={renameProfile.error}
-        recolorError={recolorProfile.error}
+        renameError={reportedSaveFailure(renameProfile.error)}
+        recolorError={reportedSaveFailure(recolorProfile.error)}
         removeError={removeProfile.error}
       />
     </ProfileEditDialogPresentation>

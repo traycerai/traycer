@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -24,17 +24,32 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+  setTeamEnvironmentCloudOverride,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   moveInvitationIsOutstanding,
   retireOnboardingReminder,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
 
 interface ToastButton {
   readonly label: string;
@@ -76,6 +91,9 @@ const toastState = vi.hoisted(() => {
         handler?.();
       }),
       invokeDismiss: (id: string): void => byId.get(id)?.onDismiss?.(),
+      invokeAction: (): void => {
+        [...byId.values()].at(-1)?.action?.onClick();
+      },
       /** The options of the toast shown under `id`, or `null` for none. */
       optionsFor: (id: string): ToastOptions | null => byId.get(id) ?? null,
       invokeActionFor: (id: string): void => {
@@ -124,7 +142,9 @@ async function expectMoveInvitation(): Promise<ToastOptions> {
 }
 
 // The host directory is the boundary: which computer this is. Its reads stay
-// real, over a fake host.
+// real, over a fake host. Personal's holds and the environment list are the
+// app's own reads from authn on the person's sign-in, served by the fake authn
+// the page harness mounts.
 const thisComputer = vi.hoisted((): { current: ThisComputer } => ({
   current: { hostId: null, hostName: "this computer", client: null },
 }));
@@ -141,23 +161,101 @@ function renderGuide(): RenderResult {
   return mountGuide().view;
 }
 
+/** What authn's review answers as Personal's holds; set by `computerHolding`. */
+const authnHolds = vi.hoisted(
+  (): { current: readonly Record<string, unknown>[] } => ({ current: [] }),
+);
+
+/** The review entry as authn lists it: a hold for an executable entry, else a link to make. */
+function authnReviewEntry(
+  entry: EnvironmentReviewEntryV12,
+): Record<string, unknown> {
+  if (entry.reason !== "executable_entry") {
+    return {
+      type: "needs_link",
+      key: entry.key,
+      harnessId: "harness-1",
+      name: "Harness",
+      hostId: null,
+      hostName: "Old laptop",
+    };
+  }
+  return {
+    type: "held",
+    heldId: entry.entryId,
+    revision: 1,
+    kind: entry.kind,
+    key: entry.key,
+    os: null,
+    hostId: "old",
+    sharingGeneration: null,
+    hostName: "Old laptop",
+    heldAt: entry.heldAt,
+    op: "put",
+    value:
+      entry.kind === "mcp_server"
+        ? {
+            definition: { transport: "stdio", command: "run-server", args: [] },
+          }
+        : { value: "setting" },
+    live: null,
+  };
+}
+
+function mountAuthn(): TeamPageHarness {
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+  });
+  const cloud = harness.auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        request.method === "GET" &&
+        new URL(request.url).pathname.endsWith("/review")
+      ) {
+        return {
+          status: 200,
+          text: JSON.stringify({
+            review: { hosts: [], needsYou: authnHolds.current },
+          }),
+        };
+      }
+      return cloud.transport(request);
+    },
+  });
+  return harness;
+}
+
 function mountGuide(): {
   readonly view: RenderResult;
   readonly queryClient: QueryClient;
 } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const harness = mountAuthn();
   const view = render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <FirstTaskLandingGuide
         enabled
         rootRef={{ current: null }}
         workspaceFolders={null}
       />
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
-  return { view, queryClient };
+  return { view, queryClient: harness.queryClient };
 }
 
 function mountGuideWithLifecycleBridge(): {
@@ -181,15 +279,36 @@ function mountGuideWithLifecycleBridge(): {
     );
   }
 
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const harness = mountAuthn();
   const view = render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <LifecycleGuide />
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
   return { view, hideGuide: () => setGuideVisible(false) };
+}
+
+/**
+ * This computer, whose review authn lists as `entries`; its own host answers
+ * `environment.review` with the record of the sheet alone.
+ */
+function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
+  authnHolds.current = entries.map(authnReviewEntry);
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.review": () => ({
+        entries: [],
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
 
 /** This computer, with a fake host answering `environment.status` with `status`. */
@@ -197,10 +316,17 @@ function computerWithStatus(status: EnvironmentStatusResponseV12): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
+      "environment.review": () => ({
+        entries: [],
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
       "environment.status": () => status,
     },
   });
   recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
@@ -217,6 +343,12 @@ function computerWhoseStatusFailsAfterOneRead(
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
+      "environment.review": () => ({
+        entries: [],
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
       "environment.status": () => {
         reads += 1;
         if (reads > 1) throw new Error("status read failed");
@@ -225,6 +357,7 @@ function computerWhoseStatusFailsAfterOneRead(
     },
   });
   recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
@@ -236,6 +369,20 @@ const NOT_MOVED_STATUS = environmentStatusFixture({
   consent: null,
   pendingUploads: [],
 });
+
+function held(
+  overrides: Partial<EnvironmentReviewEntryV12>,
+): EnvironmentReviewEntryV12 {
+  return {
+    ...reviewEntryFixture({}),
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
+    ...overrides,
+  };
+}
 
 describe("FirstTaskLandingGuide getting-started toast", () => {
   beforeEach(() => {
@@ -261,11 +408,18 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // which outlives any one mount by design.
     retireOnboardingReminder();
     resetNegotiatedManifests();
+    resetTeamPageHarness();
+    authnHolds.current = [];
     thisComputer.current = {
       hostId: null,
       hostName: "this computer",
       client: null,
     };
+    useRetrospectiveSheetStore.setState({
+      target: null,
+      open: false,
+      heldToastDismissed: false,
+    });
     useMoveSheetStore.setState({ target: null });
     toastState.reset();
     useOnboardingStore.getState().reset();
@@ -300,57 +454,50 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
   });
 
-  it("shows the usual Start toast with a held command and does not read the review", async () => {
-    let reviewReads = 0;
-    const entry: EnvironmentReviewEntryV12 = {
-      ...reviewEntryFixture({}),
-      command: null,
-      event: null,
-      description: null,
-      harness: null,
-      value: null,
-      reason: "executable_entry",
-      kind: "mcp_server",
-      key: "github",
-    };
-    const { client } = buildEnvironmentClient({
-      hostId: "old",
-      handlers: {
-        "environment.review": () => {
-          reviewReads += 1;
-          return {
-            entries: [entry],
-            shownAt: null,
-            acknowledgedAt: null,
-            evidence: { version: null, at: null },
-          };
-        },
-        "environment.status": () => NOT_MOVED_STATUS,
-      },
-    });
-    recordNegotiatedHostManifest("old", {
-      "environment.review": { major: 1, minor: 2 },
-      "environment.status": { major: 1, minor: 1 },
-    });
-    thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
-    const mounted = mountGuide();
+  it("replaces the setup reminder with a Review toast while this computer's earlier upload holds something", async () => {
+    computerHolding([
+      held({ reason: "executable_entry", kind: "mcp_server", key: "github" }),
+    ]);
+    renderGuide();
 
-    await expectMoveInvitation();
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "An earlier version shared this computer's settings",
+        expect.anything(),
+      ),
+    );
+    // The toast waits for the review, so the reminder never shows first.
+    expect(toastState).not.toHaveBeenCalledWith(
+      "You're all set",
+      expect.anything(),
+    );
+    const [, options] = toastState.mock.calls[toastState.mock.calls.length - 1];
+    // The verb is the toast's own action: `… · Review`, with no line of its
+    // own repeating it.
+    expect(options.description ?? null).toBeNull();
+    expect(options.action?.label).toBe("Review");
 
+    act(() => toastState.invokeAction());
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      open: true,
+      target: { hostId: "old", hostName: "Old laptop" },
+    });
+  });
+
+  it("keeps the setup reminder when nothing is on hold", async () => {
+    computerHolding([]);
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
     expect(toastState).not.toHaveBeenCalledWith(
       "An earlier version shared this computer's settings",
       expect.anything(),
     );
-    expect(
-      toastState.mock.calls.some(
-        ([, options]) => options.action?.label === "Review",
-      ),
-    ).toBe(false);
-    await act(async () => {
-      await mounted.queryClient.refetchQueries({}, { throwOnError: true });
-      mounted.view.unmount();
-    });
-    expect(reviewReads).toBe(0);
   });
 
   it("offers to move this computer to Personal and opens its move sheet", async () => {
@@ -554,20 +701,44 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // invitation is not the setup reminder's other wording.
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
-    /** This computer's `environment.status` answers whatever `answer` holds. */
+    /**
+     * This computer, whose `environment.status` answers whatever `answer`
+     * holds: the move's own state as the host reports it over time.
+     *
+     * `reads` counts the answers the host has given each read. A mount shows
+     * no toast until both have answered once (`held`/`move` are `pending`
+     * until then), so the counts are what says a mount has got far enough for
+     * a claim about what it did NOT show to mean anything.
+     */
     function computerWhoseStatusChanges(
       answer: () => EnvironmentStatusResponseV12,
-    ): void {
+    ): { readonly reads: () => { status: number; review: number } } {
+      let status = 0;
+      let review = 0;
       const { client } = buildEnvironmentClient({
         hostId: "old",
         handlers: {
-          "environment.status": () => answer(),
+          "environment.review": () => {
+            review += 1;
+            return {
+              entries: [],
+              shownAt: null,
+              acknowledgedAt: null,
+              evidence: { version: null, at: null },
+            };
+          },
+          "environment.status": () => {
+            status += 1;
+            return answer();
+          },
         },
       });
       recordNegotiatedHostManifest("old", {
+        "environment.review": { major: 1, minor: 2 },
         "environment.status": { major: 1, minor: 1 },
       });
       thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+      return { reads: () => ({ status, review }) };
     }
 
     it("carries its own id, so the setup reminder never stands in its place", async () => {
@@ -630,20 +801,25 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       // they come back. The toast is still up, unanswered, so no reminder may
       // take its turn beside it.
       let answer = NOT_MOVED_STATUS;
-      computerWhoseStatusChanges(() => answer);
+      const host = computerWhoseStatusChanges(() => answer);
       const first = mountGuide();
       await expectMoveInvitation();
 
       first.view.unmount();
       answer = environmentStatusFixture({});
-      const second = mountGuide();
+      mountGuide();
 
       // The second mount publishes nothing of its own - the invitation is
       // already up and the reminder is held back - so there is no toast to
-      // wait on. Await a successful status refetch and flush its committed
-      // effects before checking that a regressed reminder did not run here.
+      // wait on. Wait for its own reads instead, and flush the render they
+      // cause: without that, the claim below could be made before a regressed
+      // reminder effect had run at all.
+      await waitFor(() => {
+        const { status, review } = host.reads();
+        expect(Math.min(status, review)).toBeGreaterThan(1);
+      });
       await act(async () => {
-        await second.queryClient.refetchQueries({}, { throwOnError: true });
+        await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
       // Still on screen - `optionsFor` loses an id the moment it is

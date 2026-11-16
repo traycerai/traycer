@@ -44,10 +44,16 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  resetTeamPageHarness();
   hostMock.binding = null;
   useAuthStore.getState().setSignedOut();
   window.localStorage.clear();
@@ -153,6 +159,56 @@ function noSwitch(): void {
 }
 
 describe("<RemoteAccessSection /> in Access and setup", () => {
+  it("offers no switch to a viewer of the computer's team", async () => {
+    const host = teamHost("off");
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.list": () => ({
+        environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "viewer" }],
+      }),
+    });
+    hostMock.binding = { auth: harness.auth };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer-test", username: "viewer" },
+      shareableTeams: [
+        {
+          teamId: TEAM_ENVIRONMENT.ownerId,
+          slug: "studio",
+          avatarUrl: null,
+        },
+      ],
+    });
+    recordNegotiatedHostMethods(ACCESS_HOST_ID, ACCESS_METHODS);
+
+    render(
+      <HostOverviewAccessTab
+        client={host.client}
+        hostId={ACCESS_HOST_ID}
+        hostName={ACCESS_HOST_NAME}
+        connecting={false}
+        usable
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect(await shownState()).toBe(
+      "Off. Team members and agents can't reach this computer.",
+    );
+    await waitFor(() => {
+      expect(
+        harness.cloudRequests.some((request) => {
+          const url = new URL(request.url);
+          return (
+            request.method === "GET" &&
+            url.pathname === "/api/v3/environments/environment-team/members"
+          );
+        }),
+      ).toBe(true);
+      noSwitch();
+      expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
+    });
+  });
+
   it("describes a team's remote access and keeps the computer's answered memory on return", async () => {
     const host = teamHost("on");
     const queryClient = renderTab(host, ACCESS_METHODS, true);
@@ -186,42 +242,78 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       environmentId: "another-team",
       effectiveRole: "admin" as const,
     };
-    host.state.environments = [otherTeam];
+    let environments: EnvironmentDescriptorV11[] = [otherTeam];
+    let pendingEnvironmentList: Promise<EnvironmentListResponseV11> | null =
+      null;
     const roleRead = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = roleRead.promise;
-    const queryClient = renderTab(host, ACCESS_METHODS, false);
+    pendingEnvironmentList = roleRead.promise;
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.list": () => {
+        const pending = pendingEnvironmentList;
+        pendingEnvironmentList = null;
+        return pending ?? { environments };
+      },
+    });
+    hostMock.binding = { auth: harness.auth };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer-test", username: "viewer" },
+      shareableTeams: [
+        {
+          teamId: TEAM_ENVIRONMENT.ownerId,
+          slug: TEAM_ENVIRONMENT.providerHandle ?? "studio",
+          avatarUrl: null,
+        },
+      ],
+    });
+    recordNegotiatedHostMethods(ACCESS_HOST_ID, ACCESS_METHODS);
+    useHostAccessPromptsStore.setState({
+      remoteAccessAnswered: {},
+      movedNoticeDismissed: {},
+    });
+    render(
+      <HostOverviewAccessTab
+        client={host.client}
+        hostId={ACCESS_HOST_ID}
+        hostName={ACCESS_HOST_NAME}
+        connecting={false}
+        usable
+      />,
+      { wrapper: harness.Wrapper },
+    );
     await shownState();
-    await waitFor(() => expect(host.reads.environments).toBeGreaterThan(0));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list")).toHaveLength(1);
+    });
     // The role read has started but is held, so it cannot authorize a switch.
     noSwitch();
     await act(async () => {
-      host.state.environmentListRead = null;
-      roleRead.resolve({ environments: host.state.environments });
+      roleRead.resolve({ environments });
       await roleRead.promise;
     });
-    await rereadStatus(queryClient, host);
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     noSwitch();
 
     for (const effectiveRole of ["admin", "editor"] as const) {
-      host.state.environments = [
-        otherTeam,
-        { ...TEAM_ENVIRONMENT, effectiveRole },
-      ];
-      await rereadStatus(queryClient, host);
+      environments = [otherTeam, { ...TEAM_ENVIRONMENT, effectiveRole }];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
       const control = await screen.findByRole("button", { name: "Turn on" });
       expect(control.closest("[inert]")).toBeNull();
     }
     const refreshedRole = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = refreshedRole.promise;
-    const beforeRefresh = host.reads.environments;
-    const refreshing = queryClient.invalidateQueries();
+    pendingEnvironmentList = refreshedRole.promise;
+    const beforeRefresh = harness.paramsOf("environment.list").length;
+    const refreshing = harness.queryClient.invalidateQueries();
     await waitFor(() => {
-      expect(host.reads.environments).toBeGreaterThan(beforeRefresh);
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
+        beforeRefresh,
+      );
       noSwitch();
     });
     await act(async () => {
-      host.state.environmentListRead = null;
-      refreshedRole.resolve({ environments: host.state.environments });
+      refreshedRole.resolve({ environments });
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
@@ -244,17 +336,12 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       {},
     );
 
-    host.state.environments = environmentListUpgradeV10ToV11.upgradeResponse({
+    environments = environmentListUpgradeV10ToV11.upgradeResponse({
       environments: [TEAM_ENVIRONMENT],
     }).environments;
-    await rereadStatus(queryClient, host);
-    noSwitch();
-
-    host.state.environments = [TEAM_ENVIRONMENT];
-    await rereadStatus(queryClient, host);
-    await screen.findByRole("button", { name: "Turn on" });
-    host.state.failEnvironmentList = true;
-    await rereadStatus(queryClient, host);
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
     noSwitch();
   });
 

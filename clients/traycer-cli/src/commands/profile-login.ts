@@ -1037,7 +1037,12 @@ async function nameNewProfile(
       {
         providerId,
         enabled: true,
-        profileAction: { type: "rename", profileId: profile.profileId, label },
+        profileAction: {
+          type: "rename",
+          profileId: profile.profileId,
+          label,
+          environmentProfileId: null,
+        },
       },
       {
         ...PLAIN_DISPATCH,

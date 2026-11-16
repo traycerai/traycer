@@ -1,7 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { MoveSheet } from "@/components/settings/move-sheet";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
-import { isReviewV11 } from "@/components/settings/move/review-v11";
 import { statusPlanesSupported } from "@/components/settings/move/status-planes-supported";
 import { planesHaveSharedUnrecorded } from "@/components/settings/move/status-planes";
 import { useThisComputer } from "@/components/settings/move/this-computer";
@@ -63,13 +62,14 @@ function RetrospectiveShowOnce(): ReactNode {
     enabled,
   );
   const statusData = enabled ? status.data : null;
-  const reviewData = enabled ? review.data : null;
+  // Decided on the host's own record of the sheet, never before it answers.
+  const reviewData =
+    enabled && review.data?.recorded === true ? review.data : null;
   const decided = statusData !== null && reviewData !== null;
   const due =
     statusData !== null &&
     reviewData !== null &&
     planesHaveSharedUnrecorded(statusData.planes) &&
-    isReviewV11(reviewData) &&
     reviewData.shownAt === null;
   const { hostId, hostName } = computer;
   useEffect(() => {

@@ -484,7 +484,7 @@ describe("the subject's own controls", () => {
 });
 
 describe("Export diagnostics", () => {
-  it("keeps an export failure's own message, not the details-load line", async () => {
+  it("shows the connection refusal when the export reread cannot reach authn", async () => {
     let reads = 0;
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => {
@@ -501,7 +501,7 @@ describe("Export diagnostics", () => {
     await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Couldn't reach the history.");
+    expect(alert.textContent).toContain("Connect to manage settings.");
     expect(alert.textContent).not.toContain("Couldn't load details.");
   });
 
@@ -739,13 +739,16 @@ describe("the Secrets header's Details", () => {
       false,
     ]);
     expect(screen.queryByText("OLD_DESTROYED")).toBeNull();
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.list",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname ===
+              "/api/v3/environments/env-a/secrets",
+        )
+        .map((request) => new URL(request.url).searchParams.get("include")),
+    ).toEqual(["cleanup_failure"]);
   });
 
   it("shows only sandbox status for one removed secret and retries its cleanup", async () => {
@@ -832,13 +835,17 @@ describe("the Secrets header's Details", () => {
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
       { environmentId: "env-a", secretId: "sec-cleanup" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.versions",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.versions",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname.endsWith(
+              "/secrets/sec-cleanup/versions",
+            ),
+        )
+        .map((request) => new URL(request.url).pathname),
+    ).toEqual(["/api/v3/environments/env-a/secrets/sec-cleanup/versions"]);
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => {

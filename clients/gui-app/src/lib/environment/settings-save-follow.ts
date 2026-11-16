@@ -1,0 +1,73 @@
+/**
+ * A settings save as the coordinator follows it, and its send. A leaf: it
+ * imports no hook and nothing of `@/lib/host`, because `useHostMutation`
+ * sends through it and sits inside that barrel's own import graph.
+ */
+import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
+
+/** One save about to be sent to a host, as the coordinator follows it. */
+export type PendingSettingsSave =
+  | {
+      readonly kind: "send";
+      /** The host's answer proposed the save to its configuration. */
+      readonly answered: () => void;
+      /**
+       * The save was not proposed: it failed, nothing answered it, or the
+       * host's answer proposes nothing to a configuration.
+       */
+      readonly failed: () => void;
+    }
+  /**
+   * The sign-in the save was pressed on ended, or its account changed, while
+   * it was prepared: it is not sent, and ends as an aborted request, which no
+   * notice reports.
+   */
+  | { readonly kind: "abandoned"; readonly method: string };
+
+/**
+ * Sends a followed save and tells `pending` whether the host proposed it:
+ * `proposes` reads the host's answer, and an answer that proposes nothing (a
+ * save completed on a computer bound to no environment) settles the save as
+ * not proposed, so nothing is applied for it.
+ */
+export async function sendFollowedSave<T>(
+  pending: PendingSettingsSave,
+  send: () => Promise<T>,
+  proposes: (answer: T) => boolean,
+): Promise<T> {
+  if (pending.kind === "abandoned") {
+    throw new HostRequestAbortedError({
+      message: "The account changed before the save was sent",
+      requestId: crypto.randomUUID(),
+      method: pending.method,
+      mayHaveDispatched: false,
+    });
+  }
+  let answer: T;
+  try {
+    answer = await send();
+  } catch (cause) {
+    pending.failed();
+    throw cause;
+  }
+  if (proposes(answer)) pending.answered();
+  else pending.failed();
+  return answer;
+}
+
+/** `proposes` for a method none of whose answers is a local-only save. */
+export function everyAnswerProposes(): boolean {
+  return true;
+}
+
+/**
+ * `error`, or null when it is a request abandoned before it was sent, as
+ * {@link sendFollowedSave} abandons a save whose sign-in has ended: nothing
+ * went out, so the screen stays as it was before the press and says nothing.
+ * Any other failure, a lost reply included, is returned as it is.
+ */
+export function reportedSaveFailure<E>(error: E): E | null {
+  return error instanceof HostRequestAbortedError && !error.mayHaveDispatched
+    ? null
+    : error;
+}

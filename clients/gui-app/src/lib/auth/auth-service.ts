@@ -36,6 +36,7 @@ import {
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
@@ -52,6 +53,7 @@ import type {
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -3229,6 +3231,13 @@ export class AuthService
     return result;
   }
 
+  /** The signed-in person's environments, from traycer-server's directory. */
+  async listEnvironments(): Promise<EnvironmentDirectoryResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listEnvironments(bearer);
+  }
+
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
@@ -6404,6 +6413,28 @@ export class AuthService
     for (const handler of this.sessionSnapshotListeners) {
       handler(snapshot);
     }
+  }
+
+  /**
+   * One operation's calls to authn's environment routes
+   * (`@traycer-clients/shared/environment`), on this session's verified
+   * bearer: the one `cloudBearer()` answers, asked at each call. The
+   * operation is bound to the sign-in current now, the person and the
+   * identity generation: after a sign-out or a sign-in, as anyone, it sends
+   * nothing more. A same-user refresh keeps it.
+   */
+  environmentCloud(): EnvironmentCloud {
+    const userId = this.currentProfile?.userId ?? null;
+    const generation = this.identityGeneration;
+    return {
+      authnBaseUrl: this.runnerHost.authnBaseUrl,
+      bearer: { kind: "cloud", getBearerToken: () => this.cloudBearer() },
+      transport: this.runnerHost.environmentTransport,
+      onOriginSignIn: () =>
+        userId !== null &&
+        this.currentProfile?.userId === userId &&
+        this.identityGeneration === generation,
+    };
   }
 }
 
