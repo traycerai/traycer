@@ -81,16 +81,16 @@ function authForCurrentGeneration(): PressTestAuth {
       return {
         authnBaseUrl: "https://authn.example.test/",
         bearer: { kind: "cloud", getBearerToken: () => "synthetic-token" },
-        transport: async (request) => {
+        transport: (request) => {
           environmentRequests.push(new URL(request.url).pathname);
-          return {
+          return Promise.resolve({
             status: 200,
             text: JSON.stringify(
               new URL(request.url).pathname.endsWith("move-acceptances")
                 ? { acceptanceId: ACCEPTANCE_ID }
                 : { remoteAccess: { enabled: true, epoch: 1 } },
             ),
-          };
+          });
         },
         onOriginSignIn: () => pressedAt === generation.value,
       };

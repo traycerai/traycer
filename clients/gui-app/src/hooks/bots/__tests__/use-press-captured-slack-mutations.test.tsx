@@ -70,25 +70,25 @@ function pressTestAuth(): PressTestAuth {
   return {
     getIdentityGeneration: () => generation.value,
     isIdentityCurrent: (pressedAt) => pressedAt === generation.value,
-    registerSlackApp: async () => {
+    registerSlackApp: () => {
       dispatches.push("register");
-      return { kind: "ok", app: APP };
+      return Promise.resolve<SlackAppWriteResult>({ kind: "ok", app: APP });
     },
-    mintSlackAppInstallUrl: async () => {
+    mintSlackAppInstallUrl: () => {
       dispatches.push("install-url");
-      return {
+      return Promise.resolve<SlackAppInstallUrlResult>({
         kind: "ok",
         url: "https://slack.example.test/install",
         expiresAt: 1_800_000_000_000,
-      };
+      });
     },
-    disconnectSlackApp: async () => {
+    disconnectSlackApp: () => {
       dispatches.push("disconnect");
-      return { kind: "ok", app: APP };
+      return Promise.resolve<SlackAppWriteResult>({ kind: "ok", app: APP });
     },
-    setSlackAppDms: async (request) => {
+    setSlackAppDms: (request) => {
       dispatches.push(request.dmsEnabled ? "dms-on" : "dms-off");
-      return { kind: "ok", app: APP };
+      return Promise.resolve<SlackAppWriteResult>({ kind: "ok", app: APP });
     },
   };
 }
