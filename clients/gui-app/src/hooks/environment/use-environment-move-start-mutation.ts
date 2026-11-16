@@ -25,6 +25,11 @@ const METHOD = "environment.move.start";
 /** What a move or a give changes: where the computer stands, and its plan. */
 const MOVE_READS = ["environment.status", "environment.move.plan"] as const;
 
+interface PressedMove {
+  readonly operation: EnvironmentCloud | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}
+
 /**
  * The click on a move or a give, on the computer `client` reaches: it stages
  * what the person accepted, records the acceptance at authn on their sign-in,
@@ -45,24 +50,25 @@ export function useEnvironmentMoveStartMutation(
     EnvironmentMoveResult,
     HostRpcError,
     EnvironmentMoveAcceptance,
-    EnvironmentCloud | null
+    PressedMove
   >(
-    () => (cloud === null ? null : cloud()),
+    () => ({ operation: cloud === null ? null : cloud(), client }),
     {
       mutationKey: environmentMutationKeys.moveStart(),
-      mutationFn: (accepted, operation) =>
+      mutationFn: (accepted, pressed) =>
         withHostQueryErrorBoundary(METHOD, async () => {
+          const { operation, client: pressedClient } = pressed;
           cloudVerdictPreflight(METHOD)();
-          if (client === null || operation === null)
+          if (pressedClient === null || operation === null)
             throw hostClientUnavailableError(METHOD);
           if (!operation.onOriginSignIn()) return { kind: "sign_in_changed" } as const;
           try {
             return await runEnvironmentMove(
               {
                 stage: (request) =>
-                  client.request("environment.move.stage", request),
+                  pressedClient.request("environment.move.stage", request),
                 start: (request) =>
-                  client.request("environment.move.start", request),
+                  pressedClient.request("environment.move.start", request),
               },
               operation,
               accepted,
