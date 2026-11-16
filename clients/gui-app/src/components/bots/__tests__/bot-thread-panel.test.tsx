@@ -510,6 +510,21 @@ function mountPanel(
   return render(panelTree(thread));
 }
 
+/** The panel as the bot's surface draws it, under that bot's identity. */
+function mountPanelInBotSurface(
+  thread: BotThreadPanelThread,
+  messages: ReadonlyArray<Message>,
+): RenderResult {
+  stageSessions(messages);
+  return render(
+    <BotIdentityContext
+      value={{ botId: BOT_ID, title: "Release Bot", owner: null }}
+    >
+      {panelTree(thread)}
+    </BotIdentityContext>,
+  );
+}
+
 /** The thread's session over `messages`, and the channel's over `channelMessages`. */
 function stageSessions(messages: ReadonlyArray<Message>): void {
   mocks.handle = {
@@ -1504,7 +1519,7 @@ describe("<BotThreadPanel /> the anchor", () => {
   });
 
   it("still draws the bot's picture in the replying strip while the bot replies in the thread", () => {
-    mountPanel(listed("user-teammate"), []);
+    mountPanelInBotSurface(listed("user-teammate"), []);
 
     act(() => {
       activityStore.setState({
@@ -1606,7 +1621,7 @@ describe("<BotThreadPanel /> the anchor", () => {
 
   it("draws a bot's own announcement in the bot's frame, with no request badge", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    mountPanel(listed(null), []);
+    mountPanelInBotSurface(listed(null), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Release Bot")).toBeTruthy();
