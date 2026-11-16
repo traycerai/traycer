@@ -89,6 +89,18 @@ vi.mock(
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
+}));
 vi.mock("@/lib/tab-navigation", async (importOriginal) =>
   tabNavigationMock(
     await importOriginal<typeof import("@/lib/tab-navigation")>(),
@@ -285,7 +297,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -317,18 +328,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         type="button"
         data-testid="stub-channel-open-turn"
         onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
-        }
       />
       {props.setupHistory}
       <MentionsProbe />
@@ -468,6 +467,15 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  installShellForm,
+  SHELL_WIDTH_MENU,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
@@ -517,15 +525,28 @@ beforeEach(() => {
 });
 
 /** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
-function renderOverCloudFeed(): void {
+function renderInCloudFeed(children: ReactNode): void {
   useCloudNotificationsStore.setState({
     hasSnapshot: true,
     connectionState: "connected",
   });
   render(
     <NotificationFeedModeContext.Provider value="cloud">
-      {surface()}
+      {children}
     </NotificationFeedModeContext.Provider>,
+  );
+}
+
+function renderOverCloudFeed(): void {
+  renderInCloudFeed(surface());
+}
+
+function renderOverCloudFeedUnderHeader(): void {
+  renderInCloudFeed(
+    <MobileBotHeaderSlotProvider>
+      <MobileAppHeader />
+      {surface()}
+    </MobileBotHeaderSlotProvider>,
   );
 }
 
@@ -1042,7 +1063,7 @@ describe("<BotTabSurface /> views", () => {
     async (_way, testId) => {
       const user = userEvent.setup();
       render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
       expect(screen.getByTestId("stub-session")).toBeTruthy();
       await user.click(screen.getByTestId("stub-sidebar-threads"));
 
@@ -1121,5 +1142,105 @@ describe("<BotTabSurface /> views", () => {
       screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
     ).toBe("false");
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+  });
+});
+
+function signInAda(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "user-ada",
+      userName: "Ada",
+      email: "ada@example.com",
+    },
+    contextMetadata: { userId: "user-ada", username: "ada" },
+  });
+}
+
+describe("the Channel actions trigger's active count in the compact header", () => {
+  let shell: ShellFormHarness;
+  beforeEach(() => {
+    shell = installShellForm(SHELL_WIDTH_MENU);
+    const tracy = { kind: "tracy", id: "tracy" } as const;
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(tracy), ref: tracy }],
+      activeItemId: tabItemId(tracy),
+      stripOrder: [tracy],
+    });
+  });
+  afterEach(() => {
+    shell.dispose();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it("shows the active count on the closed trigger and names it by prefix, matching what the Activity list shows", async () => {
+    const user = userEvent.setup();
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+        trackingTask("task-periodic"),
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests(
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
+      "cloud",
+      "connected",
+    );
+    renderOverCloudFeedUnderHeader();
+
+    const trigger = screen.getByRole("button", { name: /^Channel actions/ });
+    const badge = within(trigger).getByTestId(
+      "bot-channel-actions-activity-count",
+    );
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await user.click(trigger);
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /^Activity/ }),
+    );
+    const count = screen
+      .getByTestId("stub-activity")
+      .dataset.rowIds?.split(",").length;
+    expect(count).toBeGreaterThan(0);
+    expect(badge.textContent).toContain(String(count));
+    expect(
+      within(
+        screen.getByRole("button", {
+          name: new RegExp(`^Channel actions,?\\s*${String(count)}\\s*active`),
+        }),
+      ).getByTestId("bot-channel-actions-activity-count"),
+    ).toBeTruthy();
+  });
+
+  it("draws no count and the plain name when no task is active", async () => {
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          inputNeeded: [],
+        },
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeedUnderHeader();
+
+    expect(
+      screen.queryByTestId("bot-channel-actions-activity-count"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Channel actions" }),
+    ).toBeTruthy();
   });
 });

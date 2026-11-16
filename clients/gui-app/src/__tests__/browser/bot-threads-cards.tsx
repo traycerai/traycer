@@ -685,6 +685,7 @@ export function Page(): ReactElement {
                 <BotThreadsView
                   level2={null}
                   hostId={HOST_ID}
+                  channelId={TRACY_ID}
                   channelTitle="Tracy"
                   onBack={noop}
                 />

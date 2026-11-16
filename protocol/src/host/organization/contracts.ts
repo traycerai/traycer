@@ -11,6 +11,7 @@ import {
   personalAppearanceSchema,
   taskLabelStateSchema,
   cloudListTasksRequestSchema,
+  cloudListTasksRequestSchemaPre12,
   cloudListTasksResponseSchemaV10,
   cloudListTasksResponseSchema,
 } from "./schemas";
@@ -177,13 +178,13 @@ export const organizationCommandV10 = defineRpcContract({
 export const organizationHistoryV10 = defineRpcContract({
   method: "organization.history",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: cloudListTasksRequestSchema,
+  requestSchema: cloudListTasksRequestSchemaPre12,
   responseSchema: cloudListTasksResponseSchemaV10,
 });
 export const organizationHistoryV11 = defineRpcContract({
   method: "organization.history",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: cloudListTasksRequestSchema,
+  requestSchema: cloudListTasksRequestSchemaPre12,
   responseSchema: cloudListTasksResponseSchema,
 });
 export const organizationHistoryUpgradeV10ToV11 = defineUpgradePath<
@@ -192,6 +193,22 @@ export const organizationHistoryUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: organizationHistoryV10.schemaVersion,
   to: organizationHistoryV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+// The `created-desc` sort, as `epic.listTasks@1.10` adds it.
+export const organizationHistoryV12 = defineRpcContract({
+  method: "organization.history",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: cloudListTasksRequestSchema,
+  responseSchema: cloudListTasksResponseSchema,
+});
+export const organizationHistoryUpgradeV11ToV12 = defineUpgradePath<
+  typeof organizationHistoryV11,
+  typeof organizationHistoryV12
+>({
+  from: organizationHistoryV11.schemaVersion,
+  to: organizationHistoryV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

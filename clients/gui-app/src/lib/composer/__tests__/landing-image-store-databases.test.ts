@@ -40,6 +40,10 @@ const holds = vi.hoisted(() => ({
   refuseWrites: false,
   /** How many reads of the image database were started. */
   reads: 0,
+  /** Callers waiting for the count of started reads to reach a number. */
+  readWaiters: [] as Array<{ count: number; resolve: () => void }>,
+  /** The writes of an image's measured size: the store starts them and nobody awaits them. */
+  sizeWrites: [] as Promise<void>[],
 }));
 
 // A read is held after the database answered it, which is the point between a
@@ -54,13 +58,18 @@ vi.mock("idb-keyval", async (importOriginal) => {
       store: UseStore | undefined,
     ): Promise<void> => {
       if (holds.refuseWrites) throw new Error("the write was refused");
-      await real.set(key, value, store);
+      const written = real.set(key, value, store);
+      if (typeof value === "number") holds.sizeWrites.push(written);
+      await written;
     },
     get: async <T>(
       key: IDBValidKey,
       store: UseStore | undefined,
     ): Promise<T | undefined> => {
       holds.reads += 1;
+      for (const waiter of holds.readWaiters) {
+        if (holds.reads >= waiter.count) waiter.resolve();
+      }
       const value = await real.get<T>(key, store);
       const gate = holds.afterRead;
       if (gate !== null) {
@@ -75,6 +84,19 @@ vi.mock("idb-keyval", async (importOriginal) => {
 /** The bytes as plain numbers: fake-indexeddb clones them in another realm, where `toEqual` on a typed array fails. */
 function numbers(bytes: ArrayLike<number> | undefined): number[] | undefined {
   return bytes === undefined ? undefined : Array.from(bytes);
+}
+
+/** Resolves once the image database has been asked for its `count`th read: the put's read, which comes just after it seeded the session. */
+function readStarted(count: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    holds.readWaiters.push({ count, resolve });
+    if (holds.reads >= count) resolve();
+  });
+}
+
+/** Every size write the store started has ended, so a read of the sizes database sees it. */
+async function settledSizeWrites(): Promise<void> {
+  await Promise.allSettled(holds.sizeWrites);
 }
 
 /** A window: the store module loaded afresh, with its own connections and memory. */
@@ -96,6 +118,8 @@ afterEach(() => {
   holds.readDone = (): void => undefined;
   holds.refuseWrites = false;
   holds.reads = 0;
+  holds.sizeWrites = [];
+  holds.readWaiters = [];
 });
 
 describe("the landing image databases when another window deletes them", () => {
@@ -166,16 +190,14 @@ describe("the landing image databases when another window deletes them", () => {
   it("records a new image's size in the new sizes database once the sizes database was deleted", async () => {
     const windowB = await loadWindow();
     const firstHash = await windowB.putImage(new Uint8Array([1, 2, 3]));
-    await vi.waitFor(async () =>
-      expect(await rawGet(SIZES_DB, "sizes", firstHash)).toBe(3),
-    );
+    await settledSizeWrites();
+    expect(await rawGet(SIZES_DB, "sizes", firstHash)).toBe(3);
 
     expect(await deleteDatabaseOutcome(SIZES_DB)).toBe("deleted");
 
     const hash = await windowB.putImage(new Uint8Array([7, 8, 9, 10]));
-    await vi.waitFor(async () =>
-      expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(4),
-    );
+    await settledSizeWrites();
+    expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(4);
   });
 });
 
@@ -300,11 +322,11 @@ describe("an operation of the window that a deletion of the image database overt
     ): Promise<{ readonly window: Window; readonly hash: string }> {
       const { window, hash } = await windowOverDiskOnlyImage(SEEDED);
       const held = await holdImageDatabase(hash);
+      const reads = holds.reads;
       const put = window.putImage(SEEDED);
       // The put has seeded the session, which it does just before it queues its read.
-      await vi.waitFor(() =>
-        expect(window.sessionImageBytes(hash)).not.toBeNull(),
-      );
+      await readStarted(reads + 1);
+      expect(window.sessionImageBytes(hash)).not.toBeNull();
 
       const deletion = deleteAndAwaitInvalidation(
         IMAGES_DB,
@@ -378,9 +400,8 @@ describe("an operation of the window that a deletion of the image database overt
         settledAt.push(window.landingImageDeletions());
         return stored;
       });
-      await vi.waitFor(() =>
-        expect(window.sessionImageBytes(hash)).not.toBeNull(),
-      );
+      await readStarted(reads + 1);
+      expect(window.sessionImageBytes(hash)).not.toBeNull();
 
       const deletion1 = deleteAndAwaitInvalidation(
         IMAGES_DB,
@@ -394,7 +415,7 @@ describe("an operation of the window that a deletion of the image database overt
       const held2 = (await opening2).hold(hash);
       onTestFinished(() => held2.release());
       await held2.started;
-      await vi.waitFor(() => expect(holds.reads).toBe(reads + 2));
+      await readStarted(reads + 2);
 
       const deletion2 = deleteAndAwaitInvalidation(
         IMAGES_DB,
@@ -421,9 +442,8 @@ describe("an operation of the window that a deletion of the image database overt
     const window = await loadWindow();
     await window.awaitLandingImageSizes();
     const hash = await window.putImage(SEEDED);
-    await vi.waitFor(async () =>
-      expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3),
-    );
+    await settledSizeWrites();
+    expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3);
     window.releaseSession(hash);
 
     // As the wipe does: the image database and the sizes database together.
@@ -434,9 +454,8 @@ describe("an operation of the window that a deletion of the image database overt
     await Promise.all([deletion.removed, deleteDatabaseWhenClosed(SIZES_DB)]);
     await window.putImage(SEEDED);
 
-    await vi.waitFor(async () =>
-      expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3),
-    );
+    await settledSizeWrites();
+    expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3);
   });
 
   it("reports a reclaim absent, and claims neither presence nor a size, once another window's sweep removed the bytes it had seen", async () => {
@@ -528,6 +547,63 @@ describe("an operation of the window that a deletion of the image database overt
       expect(await flushed).toBe(1);
       await deletion.removed;
       expect(window.reclaimCustodyHashesForTests()).toEqual([hash]);
+      expect(await window.flushReclaimCustody()).toBe(0);
+      expect(window.reclaimCustodyHashesForTests()).toEqual([]);
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+    });
+  });
+
+  describe("a reclaim whose root probe throws", () => {
+    /** An `isRooted` that answers `false` for its first two looks, as the reclaim makes them before it deletes, and runs `atCommit` at the third, after the delete has committed. */
+    function probeThatFailsAfterTheDelete(atCommit: () => void): () => boolean {
+      let looks = 0;
+      return () => {
+        looks += 1;
+        if (looks < 3) return false;
+        atCommit();
+        throw new Error("the roots cannot be read");
+      };
+    }
+
+    it("keeps the bytes, and rejects nothing, when the probe throws at its first look", async () => {
+      const { window, hash } = await windowOverDiskOnlyImage(SEEDED);
+
+      const outcome = await window.reclaimImageBytes(hash, () => {
+        throw new Error("the roots cannot be read");
+      });
+
+      expect(outcome).toBe("kept");
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+    });
+
+    it("puts the bytes back in the database when the probe throws after the delete committed", async () => {
+      const { window, hash } = await windowOverDiskOnlyImage(SEEDED);
+
+      const outcome = await window.reclaimImageBytes(
+        hash,
+        probeThatFailsAfterTheDelete(() => undefined),
+      );
+
+      expect(outcome).toBe("kept");
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+      expect(window.reclaimCustodyHashesForTests()).toEqual([]);
+    });
+
+    it("answers the bytes from custody, and writes them back with the next flush, when the probe throws after the delete committed and the write that puts them back is refused", async () => {
+      const { window, hash } = await windowOverDiskOnlyImage(SEEDED);
+
+      await window
+        .reclaimImageBytes(
+          hash,
+          probeThatFailsAfterTheDelete(() => {
+            holds.refuseWrites = true;
+          }),
+        )
+        .catch(() => undefined);
+      holds.refuseWrites = false;
+
+      expect(window.reclaimCustodyHashesForTests()).toEqual([hash]);
+      expect(numbers(await window.getImageBytes(hash))).toEqual([1, 2, 3]);
       expect(await window.flushReclaimCustody()).toBe(0);
       expect(window.reclaimCustodyHashesForTests()).toEqual([]);
       expect(await storedBytes(hash)).toEqual([1, 2, 3]);

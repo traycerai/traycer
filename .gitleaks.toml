@@ -156,3 +156,11 @@ paths = [
   '''^clients/gui-app/src/components/simulator-tile/__tests__/simulator-tile\.test\.tsx$''',
 ]
 regexes = ['''^Pixel_8_API_35_traycer_[23]$''']
+[[rules.allowlists]]
+description = "Privacy canary in the desktop runner-IPC suite: `TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9` is a made-up value named for what it is, set as the API key so the test can assert it stays out of main logs, bridge errors, and renderer results. The generic-api-key rule fires on the `apiKey` identifier; it is not an issued key. Rule-scoped like the entries above, so the exact source path and the exact value narrow it and any other value in that file still reports."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/ipc/__tests__/runner-ipc\.test\.ts$''',
+]
+regexes = ['''^TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9$''']

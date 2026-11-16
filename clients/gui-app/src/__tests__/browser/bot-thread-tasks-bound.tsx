@@ -453,7 +453,6 @@ function PaneBody(): ReactElement {
                   onClose={noop}
                   onEditPost={noop}
                   onOpenTurn={noop}
-                  onOpenSession={noop}
                   landOn={null}
                   quote={null}
                 />

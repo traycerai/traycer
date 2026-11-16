@@ -780,27 +780,118 @@ export function BotMessageComposerUnavailable(props: {
   readonly testId: string;
 }): ReactNode {
   const { testId } = props;
-  const inputId = useId();
   const reasonId = useId();
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value=""
+      describedBy={reasonId}
+      testId={testId}
+      top={null}
+      below={
+        <p
+          id={reasonId}
+          className="px-1 text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-reason`}
+        >
+          {props.reason}
+        </p>
+      }
+    />
+  );
+}
+
+/**
+ * A box whose kept draft names images still being read back (T186): drawn as
+ * the box is, holding the draft's text and the message it replies to, with
+ * nothing to type and nothing to send until they are, and the draft can be
+ * discarded instead. Images whose read never ends hold this box only, never
+ * the tab. A reply chosen or cancelled meanwhile shows here (T166).
+ */
+export function BotMessageComposerReading(props: {
+  readonly placeholder: string;
+  /** The accessible name of the box. */
+  readonly label: string;
+  readonly reading: BotComposerReading;
+  /** Whether the bot's host takes the reply, as the box's `reply.reach`. */
+  readonly replyReach: BotReplyReach;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const lineId = useId();
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value={props.reading.text}
+      describedBy={lineId}
+      testId={testId}
+      top={
+        <ReplyStrip
+          target={props.replyReach === "none" ? null : props.reading.replyTo}
+          heldBack={props.replyReach === "held-back"}
+          testId={`${testId}-reply`}
+          onCancel={props.reading.cancelReply}
+        />
+      }
+      below={
+        <div className="flex items-center gap-2 px-1 text-ui-xs text-muted-foreground">
+          <p
+            id={lineId}
+            className="min-w-0 flex-1"
+            data-testid={`${testId}-reading`}
+          >
+            This draft&apos;s images are still loading.
+          </p>
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            onClick={props.reading.discard}
+            data-testid={`${testId}-discard`}
+          >
+            Discard draft
+          </Button>
+        </div>
+      }
+    />
+  );
+}
+
+/** The box with `top` and `value` in it, nothing to type into and nothing to send, and `below` under it. */
+function InertBotBox(props: {
+  readonly placeholder: string;
+  readonly label: string;
+  readonly value: string;
+  /** The id of what `below` says about the box. */
+  readonly describedBy: string;
+  readonly top: ReactNode;
+  readonly below: ReactNode;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const inputId = useId();
   return (
     <div
       className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
       data-testid={testId}
     >
       <div className="flex flex-col rounded-lg border border-border bg-background">
+        {props.top}
         <label htmlFor={inputId} className="sr-only">
           {props.label}
         </label>
         <Textarea
           id={inputId}
-          value=""
+          value={props.value}
           variant="bare"
           size="sm"
           rows={1}
           placeholder={props.placeholder}
           disabled
           readOnly
-          aria-describedby={reasonId}
+          aria-describedby={props.describedBy}
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
         />
@@ -819,13 +910,7 @@ export function BotMessageComposerUnavailable(props: {
           </Button>
         </div>
       </div>
-      <p
-        id={reasonId}
-        className="px-1 text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-reason`}
-      >
-        {props.reason}
-      </p>
+      {props.below}
     </div>
   );
 }
@@ -1350,6 +1435,18 @@ export type BotComposerCarry = {
 export type BotComposerNotice = BotBoxNotice & {
   readonly clear: () => void;
   readonly clearFailure: () => void;
+};
+
+/**
+ * A box whose kept draft names images still being read back (T186): the
+ * draft's text and the message it replies to, dropping the draft, images,
+ * reply and all, and cancelling the reply alone (T166).
+ */
+export type BotComposerReading = {
+  readonly text: string;
+  readonly replyTo: BotReplyTarget | null;
+  readonly discard: () => void;
+  readonly cancelReply: () => void;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

@@ -1,4 +1,6 @@
+import { within } from "@testing-library/react";
 import { createStore } from "zustand";
+import { expect } from "vitest";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
@@ -28,6 +30,24 @@ export function postRow(messageId: string, text: string): Message {
       resolvedByMessageId: null,
     },
   };
+}
+
+const QUOTED_TEXT = "implementation not confirmed started.";
+
+/** The first paragraph the host stores when a member types a quote above a plain line. */
+export const QUOTE_LINE = `> ${QUOTED_TEXT}`;
+
+/** The second paragraph of that post: the plain line under the quote. */
+export const PLAIN_LINE = "can you confirm it?";
+
+/** Expects a row of `QUOTE_LINE` then `PLAIN_LINE` to draw the quote alone in a blockquote. */
+export function expectPlainLineOutsideQuote(row: HTMLElement): void {
+  const quote = within(row).getByRole("blockquote");
+  expect(quote.textContent).toContain(QUOTED_TEXT);
+  expect(quote.textContent).not.toContain(PLAIN_LINE);
+  expect(
+    within(row).getByText(PLAIN_LINE, { exact: false }).closest("blockquote"),
+  ).toBeNull();
 }
 
 /** A chat's session holding the posts in `textByMessageId`, for a `ChannelPost`. */

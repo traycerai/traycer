@@ -9,10 +9,7 @@ import {
   releaseSession,
   sha256Hex,
 } from "@/lib/composer/landing-image-store";
-import {
-  landingLiveImageRootHashes,
-  tryReserveLandingImageResidency,
-} from "@/lib/composer/landing-image-budget";
+import { tryReserveLandingImageResidencyIfRooted } from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64Async, base64ToBytes } from "@/lib/composer/image-base64";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "./draft-blob-transport-budget";
@@ -811,9 +808,10 @@ async function storeRecoveredHostBlob(
   // different lengths until their digests have been checked. An unverified
   // smaller reply must not reserve on behalf of a larger valid reply.
   if ((await sha256Hex(bytes)) !== hash) return "invalid";
-  const reservation = landingLiveImageRootHashes().has(hash)
-    ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
-    : null;
+  const reservation = tryReserveLandingImageResidencyIfRooted(
+    hash,
+    bytes.byteLength,
+  );
   if (reservation === null) return "ephemeral";
   try {
     return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";

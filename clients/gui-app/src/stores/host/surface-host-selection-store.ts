@@ -80,6 +80,22 @@ export function composerSurfaceKey(windowId: string | null): string {
 }
 
 /**
+ * The staging surface a start-page draft composes under: the window's
+ * {@link composerSurfaceKey}, or - for a draft opened FOR one machine
+ * (`LandingDraftTab.namedHostId`) - one of its own, so a sandbox staged for
+ * the window's other drafts never takes its Send. Never a pin: nothing
+ * selects a host under a draft's own key, since its host is fixed.
+ */
+export function landingDraftSurfaceKey(
+  windowSurfaceKey: string,
+  draftId: string | null,
+  namedHostId: string | null,
+): string {
+  if (draftId === null || namedHostId === null) return windowSurfaceKey;
+  return surfaceHostKey("composer", `draft:${draftId}`);
+}
+
+/**
  * The in-Epic new-conversation modal's placement pin: one per EPIC, on every
  * device that opens it. Deliberately NOT the window-keyed `composer` pin the
  * modal used to share with the landing composer: the two never show at once

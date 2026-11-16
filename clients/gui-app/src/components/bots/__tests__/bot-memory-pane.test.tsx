@@ -452,13 +452,13 @@ describe("what the bot knows, in the rail", () => {
       /^Written .+ in the channel · never confirmed since$/,
     );
     expect(
-      within(pane).getByText(/reads them before every reply/).textContent,
+      within(pane).getByText(/reads these before every reply/).textContent,
     ).toBe(
-      "Release Bot wrote these and reads them before every reply. To change one, tell Release Bot in the channel.",
+      "Release Bot reads these before every reply. Release Bot's memory is its own. Common memory is what all your bots and agents here can remember and use. To change one, tell Release Bot in the channel.",
     );
   });
 
-  it("lists the shared entries below under the two group titles, each with the bot that wrote it, a legacy entry tagged both ways reading as shared", async () => {
+  it("lists the common memory entries below under the two group titles, each with the bot that wrote it, a legacy entry tagged both ways reading as common memory", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
     const legacyBoth = entry({
@@ -480,12 +480,12 @@ describe("what the bot knows, in the rail", () => {
       within(pane)
         .getAllByRole("heading", { level: 3 })
         .map((heading) => heading.firstChild?.textContent),
-    ).toEqual(["Its own", "Shared"]);
+    ).toEqual(["Release Bot's memory", "Common memory"]);
     const own = within(pane).getByTestId("bot-memory-own");
     expect(textsOf(own)).not.toContain(legacyBoth.text);
     const shared = within(pane).getByTestId("bot-memory-shared");
     expect(within(shared).getByRole("heading").textContent).toBe(
-      "Shared2 · tidied by the main bot",
+      "Common memory2",
     );
     expect(textsOf(shared)).toEqual([legacyBoth.text, SHARED.text]);
     expect(metaOf(rowsOf(shared)[1])).toMatch(
@@ -560,11 +560,13 @@ describe("what the bot knows, in the rail", () => {
     render(<MountedKnowingChannel />);
     const pane = await openPane(user, MEMORY);
 
-    expect(within(pane).getByRole("meter").getAttribute("aria-valuenow")).toBe(
-      "4",
-    );
+    expect(
+      within(pane)
+        .getByRole("meter", { name: "Release Bot's memory" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("4");
     expect(within(pane).getByTestId("bot-memory-meter-line").textContent).toBe(
-      "Release Bot's own memories: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
+      "Release Bot's memory: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
     );
 
     sendMemory({
@@ -573,13 +575,15 @@ describe("what the bot knows, in the rail", () => {
     });
     await waitFor(() =>
       expect(
-        within(pane).getByRole("meter").getAttribute("aria-valuenow"),
+        within(pane)
+          .getByRole("meter", { name: "Release Bot's memory" })
+          .getAttribute("aria-valuenow"),
       ).toBe("45"),
     );
     expect(
       within(pane).getByTestId("bot-memory-meter-line").textContent,
     ).toMatch(
-      /^Release Bot's own memories: 3, about half full \(3,600 of 8,000 characters\)\. /,
+      /^Release Bot's memory: 3, about half full \(3,600 of 8,000 characters\)\. /,
     );
   });
 

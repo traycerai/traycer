@@ -5,6 +5,7 @@
  * and the module mocks are in `bot-search-surface-support.tsx`.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   TAB_HOST,

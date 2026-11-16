@@ -16,7 +16,10 @@ import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftNamedHostId,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import {
   useWorktreeIntentStagingStore,
@@ -70,9 +73,11 @@ function useLandingFoldersAndIntent(draftId: string | null): {
     );
   });
   // The landing composer's placement is its surface pin (pin ?? effective),
-  // so the global folder fallback reads the bucket of the host it will
-  // actually create on.
-  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
+  // or the host its draft was opened for, so the global folder fallback reads
+  // the bucket of the host it will actually create on.
+  const namedHostId = useLandingDraftNamedHostId(draftId);
+  const pinnedHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const activeHostId = namedHostId ?? pinnedHostId;
   const globalWorkspace = useWorkspaceFoldersStore((state) =>
     selectWorkspaceFoldersBucket(state, activeHostId),
   );

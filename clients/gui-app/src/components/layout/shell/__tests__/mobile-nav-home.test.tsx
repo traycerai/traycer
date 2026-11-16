@@ -65,6 +65,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 // One-time, real reconciliation install - mirrors `tab-navigation.test.ts`,
 // the only other suite that drives `activateTabIntent` against real stores.
@@ -181,8 +182,10 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: { items: [], totalCount: 0 },
+    sort: params.search.sort,
+    createdSortAvailable: true,
     isPending: false,
     isFetching: false,
     error: null,

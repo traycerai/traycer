@@ -23,6 +23,7 @@ import {
   type Mock,
 } from "vitest";
 import type { AnchoredDraftTidInsertion } from "@/components/comments/anchored-draft-popover";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasFrameEvents } from "../canvas-frame";
@@ -196,9 +197,19 @@ interface MountedProvider {
   readonly nodeKeyDowns: Mock<(event: unknown) => void>;
   /** Every path the provider told its parent frame events had been selected as the board. */
   readonly boardSelects: readonly (string | null)[];
+  /** Moves the provider's pane in or out of focus without remounting it. */
+  readonly setPaneFocused: (focused: boolean) => void;
 }
 
 function mountProvider(artifactId: string): MountedProvider {
+  return mountProviderInPane(artifactId, true);
+}
+
+/** A provider in a pane that is focused, or one that is not: Escape reaches only a focused pane's. */
+function mountProviderInPane(
+  artifactId: string,
+  paneFocused: boolean,
+): MountedProvider {
   let captured: CanvasFrameEvents | null = null;
   let showOverlay: (shown: boolean) => void = () => undefined;
   const host = bridge();
@@ -230,24 +241,29 @@ function mountProvider(artifactId: string): MountedProvider {
     );
   }
 
-  const view = render(
-    <QueryClientProvider client={new QueryClient()}>
-      <CanvasFrameEventsContext
-        value={{
-          onBridge: () => undefined,
-          onStatus: () => undefined,
-          onEditPointer: () => undefined,
-          onBoardSelect: (path) => {
-            boardSelects.push(path);
-          },
-        }}
-      >
-        <CanvasSelectionProvider {...scope(artifactId)}>
-          <Probe />
-        </CanvasSelectionProvider>
-      </CanvasFrameEventsContext>
-    </QueryClientProvider>,
+  // One client and one parent-events value for every render: a new one would
+  // re-run the provider's effects, which retire its selection.
+  const queryClient = new QueryClient();
+  const parentEvents: CanvasFrameEvents = {
+    onBridge: () => undefined,
+    onStatus: () => undefined,
+    onEditPointer: () => undefined,
+    onBoardSelect: (path) => {
+      boardSelects.push(path);
+    },
+  };
+  const paneTree = (focused: boolean) => (
+    <PaneSurfaceActivityContext value={{ visible: true, focused }}>
+      <QueryClientProvider client={queryClient}>
+        <CanvasFrameEventsContext value={parentEvents}>
+          <CanvasSelectionProvider {...scope(artifactId)}>
+            <Probe />
+          </CanvasSelectionProvider>
+        </CanvasFrameEventsContext>
+      </QueryClientProvider>
+    </PaneSurfaceActivityContext>
   );
+  const view = render(paneTree(paneFocused));
   const events = (): CanvasFrameEvents => {
     if (captured === null) throw new Error("provider events not captured");
     return captured;
@@ -278,6 +294,7 @@ function mountProvider(artifactId: string): MountedProvider {
     },
     nodeKeyDowns,
     boardSelects,
+    setPaneFocused: (focused) => view.rerender(paneTree(focused)),
   };
 }
 
@@ -756,5 +773,76 @@ describe("CanvasSelectionProvider tid adoption", () => {
     });
 
     expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(false);
+  });
+});
+
+describe("CanvasSelectionProvider beside another view of the same artifact", () => {
+  it("keeps the selection made in an unfocused pane when Escape is pressed in the focused one", async () => {
+    const tile = mountProviderInPane("artifact-a", false);
+    mountProviderInPane("artifact-a", true);
+    await answer(tile.pick(), element("div.tile"));
+    expect(selectedSelector()).toBe("div.tile");
+
+    pressEscape();
+
+    expect(selectedSelector()).toBe("div.tile");
+  });
+
+  it("clears the selection of the later view and consumes Escape, though an earlier view of the same pane hears it first", async () => {
+    mountProviderInPane("artifact-a", true);
+    const later = mountProviderInPane("artifact-a", true);
+    await answer(later.pick(), element("div.later"));
+    expect(selectedSelector()).toBe("div.later");
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+    });
+
+    act(() => {
+      window.dispatchEvent(escape);
+    });
+
+    expect(selectedSelector()).toBeNull();
+    expect(escape.defaultPrevented).toBe(true);
+  });
+
+  it("takes Escape in the focused view once the view that holds the selection has lost its pane's focus, and keeps that selection", async () => {
+    mountProviderInPane("artifact-a", true);
+    const holder = mountProviderInPane("artifact-a", true);
+    // Losing focus retires what the view had selected, so its next pick is
+    // the selection a stale focused entry would defer to.
+    holder.setPaneFocused(false);
+    await answer(holder.pick(), element("div.holder"));
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+    });
+
+    act(() => {
+      window.dispatchEvent(escape);
+    });
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(selectedSelector()).toBe("div.holder");
+  });
+
+  it("still clears a selection of the artifact that no view owns, such as a revealed comment's element", () => {
+    mountProviderInPane("artifact-a", false);
+    mountProviderInPane("artifact-a", true);
+    act(() => {
+      useCanvasSelectionStore.getState().select({
+        artifactId: "artifact-a",
+        boardPath: BOARD,
+        page: null,
+        servedSha256: SHA,
+        element: element("div.revealed"),
+        textRange: null,
+      });
+    });
+    expect(selectedSelector()).toBe("div.revealed");
+
+    pressEscape();
+
+    expect(selectedSelector()).toBeNull();
   });
 });

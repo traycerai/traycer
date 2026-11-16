@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type {
   BotComposerCarry,
   BotComposerNotice,
+  BotComposerReading,
   BotComposerSeed,
   BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
@@ -22,8 +23,9 @@ import {
  * (`notice`): all but those a send still out carries, or the failed send
  * offered back holds, which the box adds only once that send failed or that
  * offer went. `key` is the message a thread hangs off, or the channel's own
- * conversation; `null` keeps nothing. What the box does once its account has
- * retired changes nothing.
+ * conversation; `null` keeps nothing. A box whose stored draft's images are
+ * still being read back waits (`reading`), holding none of it yet. What the
+ * box does once its account has retired changes nothing.
  */
 export function useKeptBoxDraft(
   botId: string,
@@ -34,6 +36,7 @@ export function useKeptBoxDraft(
   readonly keptDraft: BotKeptDraft | null;
   readonly moved: BotComposerCarry | null;
   readonly notice: BotComposerNotice | null;
+  readonly reading: BotComposerReading | null;
 } {
   const kept = useBotDraftsStore((state) =>
     key === null ? null : (state.threadBoxes[botId]?.[key] ?? null),
@@ -51,8 +54,29 @@ export function useKeptBoxDraft(
   const boxNotice = useBotDraftsStore((state) =>
     key === null ? null : (state.boxNotices[botId]?.[key] ?? null),
   );
-  const { typeThreadBox, offerUnsent, sendCarry, noticeBox, setReplyTarget } =
-    useBotDraftActions();
+  const waiting = useBotDraftsStore((state) =>
+    key === null ? null : (state.boxesReading[botId]?.[key] ?? null),
+  );
+  const {
+    typeThreadBox,
+    offerUnsent,
+    sendCarry,
+    noticeBox,
+    discardReadingBox,
+    setReplyTarget,
+  } = useBotDraftActions();
+  const reading = useMemo<BotComposerReading | null>(
+    () =>
+      key === null || waiting === null
+        ? null
+        : {
+            text: waiting.text,
+            replyTo: waiting.replyTo,
+            discard: () => discardReadingBox(botId, key),
+            cancelReply: () => setReplyTarget(botId, key, null),
+          },
+    [botId, discardReadingBox, key, setReplyTarget, waiting],
+  );
   const moved = useMemo<BotComposerCarry | null>(
     () =>
       key === null || carry === null
@@ -110,6 +134,7 @@ export function useKeptBoxDraft(
     keptDraft,
     moved,
     notice,
+    reading,
   };
 }
 

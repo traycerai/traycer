@@ -16,8 +16,12 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { Bot, Layers, Users } from "lucide-react";
-import { NamedBotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
+import { Layers, Users } from "lucide-react";
+import {
+  NamedBotAvatar,
+  PersonAvatar,
+  PlainBotAvatar,
+} from "@/components/bots/bot-avatars";
 import {
   useBotIdentity,
   type BotIdentity,
@@ -106,7 +110,7 @@ const CATEGORIES: ReadonlyArray<BotMentionCategory> = [
     providerId: "bots",
     label: "Bots",
     description: "Other bots",
-    icon: () => <Bot className={MENU_ICON_CLASS} aria-hidden />,
+    icon: () => <PlainBotAvatar size="xs" />,
   },
   {
     kind: "task",

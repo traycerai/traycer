@@ -1424,7 +1424,7 @@ function TaskOverdueBadge() {
 }
 
 /**
- * The ask that the main bot tidy the environment's shared memory, waiting for
+ * The ask that the main bot tidy the common memory, waiting for
  * its next turn (a `memory-curation` item on the main bot's trunk).
  * Content-free like the check-in chip: how far over the memory is is read
  * when the item is delivered.
@@ -1432,7 +1432,7 @@ function TaskOverdueBadge() {
 function MemoryCurationBadge() {
   return (
     <TooltipWrapper
-      label="The shared memory is over its limit; the bot is asked to tidy it on its next turn."
+      label="Common memory is over its limit; the bot is asked to tidy it on its next turn."
       side="top"
       sideOffset={6}
       align={undefined}
@@ -1505,7 +1505,8 @@ const CANCEL_COPY: Record<
   },
   "memory-curation": {
     ariaLabel: "Dismiss memory notice",
-    tooltip: "Dismiss this notice — the bot won't be asked to tidy the memory",
+    tooltip:
+      "Dismiss this notice — the bot won't be asked to tidy common memory",
   },
   "notification-digest": {
     ariaLabel: "Dismiss notification digest",

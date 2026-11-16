@@ -13,6 +13,7 @@ import {
   BOT_ID,
   CHANNEL,
   OWNER_LABEL,
+  hydrationAfter,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import {
   app,
@@ -20,6 +21,7 @@ import {
   endCase,
   lastSend,
   mountBox,
+  settledBoxInput,
   scriptedSendMutation,
   settleSend,
   startCase,
@@ -98,7 +100,6 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
     /** The bridge mounted with account A signed in and its drafts read. */
     async function signedInAsA(): Promise<void> {
-      vi.useRealTimers();
       ui.rtl.render(
         withQueryClient(
           <ui.bridge.BotDraftsPersistLifecycleBridge>
@@ -106,10 +107,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
           </ui.bridge.BotDraftsPersistLifecycleBridge>,
         ),
       );
-      signInAs(ACCOUNT_A);
-      await vi.waitFor(() =>
-        expect(app.drafts.persist.hasHydrated()).toBe(true),
-      );
+      await hydrationAfter(app, () => signInAs(ACCOUNT_A));
     }
 
     function moveIn(typed: string): void {
@@ -147,25 +145,13 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     /** The box this describe's case has open; the bridge stays mounted when it is opened again. */
     let boxView: { readonly unmount: () => void } | null = null;
 
-    /** Runs `action` and resolves once the next read of an account's drafts has finished. */
-    function hydrationAfter(action: () => void): Promise<void> {
-      return new Promise<void>((resolve) => {
-        const stop = app.drafts.persist.onFinishHydration(() => {
-          stop();
-          resolve();
-        });
-        action();
-      });
-    }
-
     /** The box closed while `action` changes the account, then opened again once the new read finished: what it shows. */
     async function reopenedBoxAfter(action: () => void): Promise<string> {
-      vi.useRealTimers();
-      const hydrated = hydrationAfter(action);
+      const hydrated = hydrationAfter(app, action);
       boxView?.unmount();
       await hydrated;
       boxView = ui.rtl.render(<ui.owner.OwnerBox initial={CHANNEL} />);
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       return boxText();
     }
 
@@ -182,9 +168,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
     it("gives A the same when another account signed in between", async () => {
       await offeredBackBesideANewerDraft();
-      vi.useRealTimers();
       boxView?.unmount();
-      await hydrationAfter(() => signInAs(ACCOUNT_B));
+      await hydrationAfter(app, () => signInAs(ACCOUNT_B));
 
       const shown = await reopenedBoxAfter(() => signInAs(ACCOUNT_A));
 
@@ -238,7 +223,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
           }}
         />,
       );
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       typeBox("{Enter}");
       view.unmount();
       await settleSend(lastSend(), (callbacks) =>

@@ -13,7 +13,6 @@ import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conv
 import {
   BOT_ID,
   CHANNEL,
-  OWNER_LABEL,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import {
   app,
@@ -22,6 +21,7 @@ import {
   endCase,
   lastSend,
   mountBox,
+  settledBoxInput,
   RESPONSE,
   scriptedSendMutation,
   settleSend,
@@ -63,9 +63,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
   describe("a send of a box that edits a failed post, with an answer moved in under the edit", () => {
     /** The box editing the failed post, an answer moved in under it, and Send pressed. */
     async function sendWithAnAnswerMovedIn(): Promise<void> {
-      vi.useRealTimers();
       ui.rtl.render(<ui.owner.OwnerBoxEditing initial={CHANNEL} edit={EDIT} />);
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       ui.rtl.act(() => {
         const drafts = app.drafts.getState();
         drafts.setAnswer(BOT_ID, "first", {
@@ -155,9 +154,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
 
     /** The box editing the failed post, the answer moved in below it, and the replacement refused. */
     async function refusedReplacement(): Promise<void> {
-      vi.useRealTimers();
       ui.rtl.render(<ui.owner.OwnerBoxEditing initial={CHANNEL} edit={EDIT} />);
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       moveIn(MOVED);
       typeBox("{Enter}");
       await settleSend(lastSend(), (callbacks) =>
@@ -183,9 +181,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       await refusedReplacement();
       ui.rtl.cleanup();
 
-      vi.useRealTimers();
       ui.rtl.render(<ui.owner.OwnerBox initial={CHANNEL} />);
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
 
       expect(occurrences(MOVED)).toBe(1);
     });
@@ -197,9 +194,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       expect(boxText()).toBe(MOVED);
       typeBox("{Enter}");
       ui.rtl.cleanup();
-      vi.useRealTimers();
       ui.rtl.render(<ui.owner.OwnerBox initial={CHANNEL} />);
-      await ui.box.findBoxInput(OWNER_LABEL);
+      await settledBoxInput();
       expect(boxText()).toBe("");
     }
 
@@ -223,7 +219,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         callbacks.onError?.(new Error("host refused the post")),
       );
 
-      await vi.waitFor(() => expect(occurrences(MOVED)).toBe(1));
+      await ui.rtl.act(async () => {});
+      expect(occurrences(MOVED)).toBe(1);
     });
 
     /** A box sent with the moved answer, a newer draft typed while the send is out, and the send refused: the old message is offered back. */

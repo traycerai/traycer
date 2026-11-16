@@ -155,7 +155,13 @@ function useListScript(): ListScript {
 // cases do not drive: neither knows any task.
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
   const tasksById = new Map<string, never>();
-  const read = () => ({ tasksById, isPending: false, error: null });
+  const read = () => ({
+    tasksById,
+    resolutionsById: new Map<string, never>(),
+    pendingTaskIds: new Set<string>(),
+    isPending: false,
+    error: null,
+  });
   return {
     useEpicGetTaskContexts: read,
     useEpicGetTaskContextsForClient: read,

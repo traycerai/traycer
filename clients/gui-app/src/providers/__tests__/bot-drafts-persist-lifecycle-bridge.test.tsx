@@ -31,6 +31,7 @@ import {
   THREAD,
   boxDoc,
   hashedImage,
+  hydrationAfter,
   startSignedOutApp,
   storeImageBytes,
   type App,
@@ -88,6 +89,15 @@ function signInAs(run: Run, userId: string): void {
       contextMetadata: { userId, username: userId },
     });
   });
+}
+
+/** The next read of an account's drafts finished after `action`, and what it fed has rendered. */
+async function hydratedAndRenderedAfter(
+  run: Run,
+  action: () => void,
+): Promise<void> {
+  await hydrationAfter(run.app, action);
+  await run.rtl.act(async () => {});
 }
 
 const IMAGE_STORE = "@/lib/composer/landing-image-store";
@@ -193,11 +203,9 @@ describe("<BotDraftsPersistLifecycleBridge /> drafts stored before drafts belong
     const run = await startOver();
     mountBridge(run);
 
-    signInAs(run, ACCOUNT_A);
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
-    await vi.waitFor(() =>
-      expect(localStorage.getItem(LEGACY_BOX_DRAFTS_KEY)).toBeNull(),
-    );
+    expect(localStorage.getItem(LEGACY_BOX_DRAFTS_KEY)).toBeNull();
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
   });
 });
@@ -206,10 +214,7 @@ describe("<BotDraftsPersistLifecycleBridge /> what the drafts' writer logs", () 
   it("names no account in any log line when the storage refuses a write whose error message carries the key", async () => {
     const run = await startOver();
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     // Only the drafts are written while this runs; any other write is dropped.
     vi.spyOn(Storage.prototype, "setItem").mockImplementation((key: string) => {
       if (key.startsWith("traycer-gui-app:bot-box-drafts")) {
@@ -249,11 +254,7 @@ describe("<BotDraftsPersistLifecycleBridge /> the images an account's stored dra
     );
     mountBridge(run);
 
-    signInAs(run, ACCOUNT_B);
-
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     expect(run.app.imageRoots().has(hash)).toBe(true);
   });
 });
@@ -271,10 +272,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read an account switch overtook"
     mountBridge(run);
     signInAs(run, ACCOUNT_A);
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -316,10 +314,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read the account signing out ove
       "A's own draft",
     );
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
     expect(
       localStorage.getItem(run.keys.botBoxDraftsKey(ACCOUNT_B)) ?? "",
@@ -331,10 +326,7 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
   it("writes nothing under the anonymous key when a box changes after the account signed out", async () => {
     const run = await startOver();
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     run.rtl.act(() => {
       run.auth.useAuthStore.setState({
         status: "signed-out",
@@ -361,10 +353,7 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
     const anonKey = run.keys.botBoxDraftsKey(null);
     localStorage.setItem(anonKey, storedBox("Left under anon", null));
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
     const storage = run.app.drafts.persist.getOptions().storage;
     if (storage === undefined) throw new Error("the drafts store persists");
@@ -416,10 +405,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -431,13 +417,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       stored.indexOf("Hold the migration"),
     );
 
-    let finished = false;
-    const stop = run.app.drafts.persist.onFinishHydration(() => {
-      finished = true;
-    });
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() => expect(finished).toBe(true));
-    stop();
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
     const kept = JSON.stringify(
       run.app.drafts.getState().threadBoxes[BOT_ID]?.[CHANNEL],
@@ -485,10 +465,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -539,10 +516,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -706,10 +680,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", ()
       }),
     );
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     const { readable, stored } = makeKeyUnreadable(keyOfA);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
@@ -775,14 +746,104 @@ describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", ()
     });
     const { readable } = makeKeyUnreadable(keyOfA);
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
     readable();
 
+    expect(localStorage.getItem(keyOfA)).toBe(before);
+  });
+
+  /** A's stored draft of the channel box (text, image) and a second box `other`, read while A is signed in and B signs in after a move meanwhile: the fixture of both cases below. */
+  async function aWithAMovedAnswerBeforeB(): Promise<{
+    readonly run: Run;
+    readonly release: () => void;
+    readonly readsSettled: () => Promise<void>;
+    readonly keyOfA: string;
+    readonly before: string | null;
+  }> {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBoxes({
+        [CHANNEL]: {
+          text: "A's own draft",
+          content: boxDoc("A's own draft ", [hashedImage(hash)]),
+        },
+        other: { text: "two", content: null },
+      }),
+    );
+    const before = localStorage.getItem(keyOfA);
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The move goes through the store directly: no UI can make one during the
+    // read, because the bot tab waits for the read before it shows its box.
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+    return { run, release, readsSettled, keyOfA, before };
+  }
+
+  it("keeps A's stored text, image and second box under A's key, with the answer moved meanwhile folded onto them, when the retirement's read of A's key succeeds", async () => {
+    const { run, release, readsSettled, keyOfA, before } =
+      await aWithAMovedAnswerBeforeB();
+
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
+    release();
+    await readsSettled();
+
+    const stored = localStorage.getItem(keyOfA) ?? "";
+    expect(stored).toContain("A's own draft");
+    expect(stored).toContain('"hash":"');
+    expect(stored).toContain("Hold the migration");
+    expect(stored).toContain('"text":"two"');
+    expect(stored).not.toBe(before);
+  });
+
+  it("leaves A's stored text and image in place when the one read of A's key that throws is the retirement's own, and every later read of it succeeds", async () => {
+    const { run, release, readsSettled, keyOfA, before } =
+      await aWithAMovedAnswerBeforeB();
+    // Armed only once the move is made, so the first read of A's key from here
+    // on is the retirement's: the throw is taken once, and its stack names the
+    // reader, which is how this case shows it hit `storedBotBoxDrafts`. The
+    // final read of A's key below goes through the spy too, so it shows that
+    // later reads succeed.
+    const read = Storage.prototype.getItem.bind(localStorage);
+    const thrownFrom: string[] = [];
+    const reads = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation((asked: string) => {
+        if (asked === keyOfA) {
+          if (thrownFrom.length === 0) {
+            thrownFrom.push(new Error("storage cannot be read").stack ?? "");
+            throw new Error("storage cannot be read");
+          }
+        }
+        return read(asked);
+      });
+    onTestFinished(() => reads.mockRestore());
+
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
+    release();
+    await readsSettled();
+
+    expect(thrownFrom).toHaveLength(1);
+    expect(thrownFrom[0]).toContain("storedBotBoxDrafts");
     expect(localStorage.getItem(keyOfA)).toBe(before);
   });
 });
