@@ -1,4 +1,5 @@
 import {
+  credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
@@ -336,7 +337,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         : `stopped service '${locked.jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`;
     return {
       data: {
-        credentialProvision,
+        credentialProvision: credentialProvisionForResult(credentialProvision),
         restarted,
         deferredForParkedActivation,
         label: label.id,

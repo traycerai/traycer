@@ -1,4 +1,5 @@
 import {
+  credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
@@ -329,7 +330,10 @@ async function runServiceStart(
   const note = formatCredentialProvisionNote(credentialProvision);
   return {
     ...result,
-    data: { ...result.data, credentialProvision },
+    data: {
+      ...result.data,
+      credentialProvision: credentialProvisionForResult(credentialProvision),
+    },
     human: note === null ? result.human : `${result.human}; ${note}`,
   };
 }

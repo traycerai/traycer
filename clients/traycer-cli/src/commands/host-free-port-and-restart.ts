@@ -1,4 +1,5 @@
 import {
+  credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
@@ -310,7 +311,7 @@ export function buildHostFreePortAndRestartCommand(
     const note = formatCredentialProvisionNote(credentialProvision);
     return {
       data: {
-        credentialProvision,
+        credentialProvision: credentialProvisionForResult(credentialProvision),
         port: args.port,
         pid: args.pid,
         processName: null,

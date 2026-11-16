@@ -1,4 +1,5 @@
 import {
+  credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
@@ -22,6 +23,10 @@ import type { UpdateMutationCapability } from "@traycer-clients/shared/host-upda
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 
+interface FinalizeStartObservation {
+  started: boolean;
+}
+
 // `traycer cli finalize-upgrade` - hidden, internal-only command the
 // Windows/POSIX detached finalize-helper script invokes (via the
 // STAGED CLI binary, once the parent CLI process has exited) to
@@ -36,10 +41,6 @@ import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 // timeout it writes NO marker: `pendingUpgrade` stays populated in the
 // manifest, so the next `host restart` retries the whole flow - "defers
 // to the existing pending-upgrade marker for the next restart".
-interface FinalizeStartObservation {
-  started: boolean;
-}
-
 export const cliFinalizeUpgradeCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
@@ -84,7 +85,10 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
   const note = formatCredentialProvisionNote(credentialProvision);
   const human = humanForOutcome(outcome);
   return {
-    data: { ...outcome, credentialProvision },
+    data: {
+      ...outcome,
+      credentialProvision: credentialProvisionForResult(credentialProvision),
+    },
     human: note === null ? human : `${human}; ${note}`,
     exitCode: 0,
   };

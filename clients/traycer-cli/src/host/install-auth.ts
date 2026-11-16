@@ -147,9 +147,12 @@ export async function resolveHostAuthOrNull(
       {
         environment: ctx.runtime.environment,
         stage,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host install could not read the stored credentials; treating as signed out",
+      { errorName: error.name, errorMessage: error.message },
     );
     return null;
   }
@@ -368,10 +371,12 @@ async function provisionWithStoredAuth(
     ctx.runtime.logger.warn(
       "Host credential provisioning threw; the command itself was unaffected",
       {
-        environment: ctx.runtime.environment,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host credential provisioning threw; the command itself was unaffected",
+      { errorName: error.name, errorMessage: error.message },
     );
     outcome = { kind: "error", message: error.message };
   }
@@ -380,6 +385,17 @@ async function provisionWithStoredAuth(
     outcome: outcome.kind,
   });
   return outcome;
+}
+
+interface HostCredentialProvisionSummary {
+  readonly kind: HostCredentialProvisionOutcome["kind"];
+}
+
+/** Only a fixed outcome kind crosses the new command-result boundary. */
+export function credentialProvisionForResult(
+  outcome: HostCredentialProvisionOutcome | null,
+): HostCredentialProvisionSummary | null {
+  return outcome === null ? null : { kind: outcome.kind };
 }
 
 // Terminal-line rendering of the provisioning outcome. `null` (not attempted)
