@@ -45,13 +45,11 @@ export function buildConfigShellSetCommand(
         ? {
             path: args.path,
             args: requestArgs,
-            executableWriteGrant: null,
             selection: { kind: "not_stated" },
           }
         : {
             path: null,
             args: requestArgs ?? [],
-            executableWriteGrant: null,
             selection: { kind: "not_stated" },
           },
     );

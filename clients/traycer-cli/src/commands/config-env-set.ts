@@ -30,7 +30,6 @@ export function buildConfigEnvSetCommand(args: ConfigEnvSetArgs): CommandFn {
     const response = await writeConfigViaRunningHost("config.env.set", {
       key: args.key,
       value: args.value,
-      executableWriteGrant: null,
     });
     if (response === null) await setEnvOverride(args.key, args.value);
     return {
