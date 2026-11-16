@@ -117,7 +117,9 @@ interface AuthSaveHarness {
 
 const activeHarnesses: AuthSaveHarness[] = [];
 
-function makeHarness(mutationGate: Promise<void> | null = null): AuthSaveHarness {
+function makeHarness(
+  mutationGate: Promise<void> | null = null,
+): AuthSaveHarness {
   window.localStorage.clear();
   useSettingsSaveMemoryStore.persist.setOptions({
     name: settingsSaveMemoryKey(null),
@@ -131,9 +133,7 @@ function makeHarness(mutationGate: Promise<void> | null = null): AuthSaveHarness
   const hostWrites: ProvidersSetPackPolicyRequestV11[] = [];
   const recordsAtSend: (SettingsSaveMemoryRecord | null)[] = [];
   const mutationCache = new MutationCache(
-    mutationGate === null
-      ? {}
-      : { onMutate: () => mutationGate },
+    mutationGate === null ? {} : { onMutate: () => mutationGate },
   );
   const queryClient = new QueryClient({
     mutationCache,
@@ -278,10 +278,7 @@ async function startAuth(harness: AuthSaveHarness): Promise<void> {
   await act(async () => harness.auth.start());
 }
 
-async function signIn(
-  harness: AuthSaveHarness,
-  token: string,
-): Promise<void> {
+async function signIn(harness: AuthSaveHarness, token: string): Promise<void> {
   await act(async () => {
     await harness.auth.signIn();
     harness.runnerHost.deviceFlow.emitResult({
@@ -422,10 +419,7 @@ describe("settings save origin through the real AuthService", () => {
     await act(async () => {
       await expect(
         Promise.all([signedOutPress, signedInPress]),
-      ).resolves.toEqual([
-        { autoDownload: false },
-        { autoDownload: false },
-      ]);
+      ).resolves.toEqual([{ autoDownload: false }, { autoDownload: false }]);
     });
 
     expect(harness.hostWrites).toEqual([PACK_POLICY, PACK_POLICY]);
@@ -443,7 +437,8 @@ describe("settings save origin through the real AuthService", () => {
     const harness = makeHarness(gate.promise);
     await startAuth(harness);
     await signIn(harness, "account-token-a");
-    const signedInUserId = harness.auth.getCurrentSessionSnapshot().profile?.userId;
+    const signedInUserId =
+      harness.auth.getCurrentSessionSnapshot().profile?.userId;
     expect(signedInUserId).toBe(USER_ID);
     const mutation = renderHook(() => useProvidersSetPackPolicy(), {
       wrapper: harness.wrapper,
@@ -471,9 +466,7 @@ describe("settings save origin through the real AuthService", () => {
 
     expect(harness.hostWrites).toEqual([]);
     expect(
-      harness.authnRequests.some((request) =>
-        request.url.includes("/review"),
-      ),
+      harness.authnRequests.some((request) => request.url.includes("/review")),
     ).toBe(false);
     expect(
       Object.values(useSettingsSaveMemoryStore.getState().records),

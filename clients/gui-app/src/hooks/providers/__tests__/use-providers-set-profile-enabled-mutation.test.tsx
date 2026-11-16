@@ -345,8 +345,10 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
 
   it("keeps an enabled profile unavailable through its real gate until the enable settles", async () => {
     const queryClient = createAppQueryClient();
-    let resolveEnable: (value: { profileId: string; enabled: boolean }) => void =
-      () => undefined;
+    let resolveEnable: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
     const pendingEnable = new Promise<{
       profileId: string;
       enabled: boolean;
@@ -403,10 +405,14 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
 
   it("keeps reused variables pending under each host key across a requester change", async () => {
     const queryClient = createAppQueryClient();
-    let resolveA: (value: { profileId: string; enabled: boolean }) => void =
-      () => undefined;
-    let resolveB: (value: { profileId: string; enabled: boolean }) => void =
-      () => undefined;
+    let resolveA: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
+    let resolveB: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
     const writeA = new Promise<{ profileId: string; enabled: boolean }>(
       (resolve) => {
         resolveA = resolve;
