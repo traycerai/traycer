@@ -93,7 +93,7 @@ export function SweepHostChoiceScope(props: {
   /** The censused host's own count from the dialog's proof; `null` unsettled. */
   readonly currentHostCount: number | null;
   readonly unavailableHostId: string | null;
-  /** Refreshing or sweeping: the census the chip names is not settled. */
+  /** A census already on screen is being re-proved. Not a first load. */
   readonly disabled: boolean;
   /** Switching would discard checks the person made by hand. */
   readonly hasSelectionOverrides: boolean;
