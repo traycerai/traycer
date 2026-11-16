@@ -105,7 +105,6 @@ type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
 type SetEnvOverrideVariables = {
   readonly providerId: string;
   readonly key: string;
-  readonly executableWriteGrant: null;
 };
 type SubmitLoginCodeOptions = {
   readonly onSuccess: (result: {
@@ -144,7 +143,6 @@ const setEnvOverrideMutationVariablesSchema = z.strictObject({
   providerId: z.string(),
   key: z.string(),
   value: z.string(),
-  executableWriteGrant: z.null(),
 });
 const setEnvOverrideMutationCallsSchema = z.array(
   z.tuple([setEnvOverrideMutationVariablesSchema]).rest(z.unknown()),
@@ -2183,7 +2181,6 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.setEnvOverrideVariables).toHaveBeenCalledWith({
       providerId: "claude-code",
       key: "ANTHROPIC_API_KEY",
-      executableWriteGrant: null,
     });
   });
 

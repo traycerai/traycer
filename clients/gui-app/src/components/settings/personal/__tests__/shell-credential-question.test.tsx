@@ -421,7 +421,6 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "API_TOKEN",
       value: API_KEY_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
@@ -437,7 +436,6 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "NOTES",
       value: API_KEY_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -451,7 +449,6 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "debug",
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -474,7 +471,6 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "EDITOR",
       value: API_KEY_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
@@ -756,7 +752,6 @@ describe("a variable this computer keeps its own value for", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
-      executableWriteGrant: null,
     });
     expect(clear).not.toHaveBeenCalled();
 
@@ -788,7 +783,6 @@ describe("a variable this computer keeps its own value for", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: API_KEY_VALUE,
-      executableWriteGrant: null,
     });
     await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
     expect(clear).toHaveBeenCalledWith({
@@ -857,7 +851,6 @@ describe("a variable name a cloud secret declares on Personal", () => {
     expect(set).toHaveBeenCalledWith({
       key: NAME,
       value: "ordinary-value",
-      executableWriteGrant: null,
     });
     expect(
       (await screen.findByLabelText<HTMLInputElement>(`Value for ${NAME}`))

@@ -90,16 +90,10 @@ for (const row of rows) {
         observation.requestContainsValue = params.value === FAKE_VALUE;
         observation.requestTargetMatches =
           params.providerId === "codex" &&
-          params.key === "MODEL_PROVIDER_TOKEN" &&
-          params.executableWriteGrant === null;
+          params.key === "MODEL_PROVIDER_TOKEN";
         observation.requestTargetMatches =
           observation.requestTargetMatches &&
-          hasExactObjectKeys(params, [
-            "providerId",
-            "key",
-            "value",
-            "executableWriteGrant",
-          ]);
+          hasExactObjectKeys(params, ["providerId", "key", "value"]);
         if (row.fail) throw new Error("Safe provider variable refusal");
         return { state };
       },
@@ -123,7 +117,6 @@ for (const row of rows) {
     const variables = {
       providerId: "codex",
       key: "MODEL_PROVIDER_TOKEN",
-      executableWriteGrant: null,
     } satisfies Omit<
       RequestOfMethod<HostRpcRegistry, "providers.setEnvOverride">,
       "value"
@@ -189,7 +182,6 @@ for (const row of rows) {
       variablesContainOnlyTarget: hasExactObjectKeys(mutation.state.variables, [
         "providerId",
         "key",
-        "executableWriteGrant",
       ]),
       mutationSettled:
         mutation.state.status === (row.fail ? "error" : "success"),

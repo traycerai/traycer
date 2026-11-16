@@ -5713,7 +5713,6 @@ describe("<ProvidersSettingsPanel />", () => {
         providerId: "cursor",
         key: "CURSOR_API_KEY",
         value: KEY_VALUE,
-        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
@@ -5731,7 +5730,6 @@ describe("<ProvidersSettingsPanel />", () => {
         providerId: "cursor",
         key: "NOTES",
         value: KEY_VALUE,
-        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
@@ -5757,7 +5755,6 @@ describe("<ProvidersSettingsPanel />", () => {
         providerId: "opencode",
         key: "ANTHROPIC_API_KEY",
         value: KEY_VALUE,
-        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
@@ -5834,7 +5831,6 @@ describe("<ProvidersSettingsPanel />", () => {
         providerId: "amp",
         key: "AMP_API_KEY",
         value: KEY_VALUE,
-        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });

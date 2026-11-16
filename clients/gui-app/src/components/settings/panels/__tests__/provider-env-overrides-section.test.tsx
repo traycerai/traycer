@@ -164,7 +164,6 @@ const mocks = vi.hoisted(() => ({
 type SetOverrideVariables = {
   readonly providerId: string;
   readonly key: string;
-  readonly executableWriteGrant: string | null;
 };
 
 vi.mock(
@@ -229,11 +228,9 @@ function expectSetOverrideTargetVariables(providerId: string): void {
   expect({
     keys: Object.keys(variables).sort(),
     providerId: variables.providerId,
-    executableWriteGrant: variables.executableWriteGrant,
   }).toEqual({
-    keys: ["executableWriteGrant", "key", "providerId"],
+    keys: ["key", "providerId"],
     providerId,
-    executableWriteGrant: null,
   });
 }
 
@@ -241,7 +238,6 @@ type OutgoingSetOverrideRequest = {
   readonly providerId: string;
   readonly key: string;
   readonly value: string;
-  readonly executableWriteGrant: null;
 };
 
 function outgoingSetOverrideMatches(
@@ -250,14 +246,13 @@ function outgoingSetOverrideMatches(
 ): boolean {
   if (!isRecord(actual)) return false;
   const actualKeys = Object.keys(actual).sort();
-  const expectedKeys = ["executableWriteGrant", "key", "providerId", "value"];
+  const expectedKeys = ["key", "providerId", "value"];
   return (
     actualKeys.length === expectedKeys.length &&
     actualKeys.every((key, index) => key === expectedKeys[index]) &&
     actual.providerId === expected.providerId &&
     actual.key === expected.key &&
-    actual.value === expected.value &&
-    actual.executableWriteGrant === expected.executableWriteGrant
+    actual.value === expected.value
   );
 }
 
@@ -429,7 +424,6 @@ describe("ProviderEnvOverridesSection on a sandbox host", () => {
       providerId: "cursor",
       key: "CURSOR_API_KEY",
       value: "sk-cursor",
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -597,7 +591,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         providerId,
         key: variable,
         value: HELD_VALUE,
-        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     },
@@ -615,7 +608,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "kiro",
       key: "NOTES",
       value: HELD_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -632,7 +624,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "kiro",
       key: "KIRO_API_KEY",
       value: HELD_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -717,7 +708,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "cursor",
       key: "NOTES",
       value: HELD_VALUE,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
@@ -789,7 +779,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           providerId: "claude-code",
           key: "ANTHROPIC_BASE_URL",
           value: OWN_URL,
-          executableWriteGrant: null,
         }),
     ).toBe(true);
     // The clear RPC follows the save's resolved promise.

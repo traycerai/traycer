@@ -977,7 +977,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getEnvironmentProviders,
           RunnerHostInvoke.replaceEnvironmentApiKey,
           RunnerHostInvoke.decideSecretRequest,
-          RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,

@@ -34,7 +34,6 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
@@ -535,11 +534,8 @@ function LocalValueRow(props: {
   readonly override: LocalOverride;
 }): ReactNode {
   const [draft, setDraft] = useState<string | null>(null);
-  const grant = useExecutableWriteGrant();
   const set = useHostScopedMutationForClient(props.client, {
     method: "config.env.localOverride.set",
-    // The value can select what starts, so it carries the grant.
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.localOverrideSet(),
     errorMessage: "Couldn't save the value.",
     scope: LOCAL_OVERRIDE_SCOPE,
@@ -629,7 +625,6 @@ function LocalValueRow(props: {
                 set.mutate({
                   target: props.override.target,
                   value: draft,
-                  executableWriteGrant: null,
                 })
               }
             >

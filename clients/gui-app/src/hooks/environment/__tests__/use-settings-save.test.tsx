@@ -58,6 +58,7 @@ import {
   useSettingsSave,
   useSettingsItemExists,
 } from "@/hooks/environment/use-settings-save";
+import { captureSettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
 import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
 import { HostRuntimeContext, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -747,7 +748,6 @@ function setRequest(value: string) {
     providerId: PROVIDER_ID,
     key: "CODEX_API_KEY",
     value,
-    executableWriteGrant: null,
   } as const;
 }
 
@@ -770,7 +770,6 @@ function setTarget(value: string) {
   return {
     providerId: PROVIDER_ID,
     key: "CODEX_API_KEY",
-    executableWriteGrant: null,
   } as const;
 }
 
@@ -1198,7 +1197,7 @@ describe("settings-save callers", () => {
         request: setRequest("new-value"),
       },
       OTHER_HOST_ID,
-      harness.environmentCloud(),
+      captureSettingsSaveOrigin(() => harness.environmentCloud()),
     );
     const answer = await sendFollowedSave(pending, sent, everyAnswerProposes);
 

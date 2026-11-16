@@ -1315,7 +1315,6 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: SIGN_IN_URL,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -1337,7 +1336,6 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
     expect(set).toHaveBeenCalledWith({
       key: "OPENAI_API_KEY",
       value: "sk-test",
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -1383,7 +1381,6 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
     expect(set).toHaveBeenCalledWith({
       key: "NODE_ENV",
       value: "production",
-      executableWriteGrant: null,
     });
   });
 
@@ -1404,7 +1401,6 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: SIGN_IN_URL,
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -1480,7 +1476,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "OPENAI_API_KEY",
       value: "sk-x",
-      executableWriteGrant: null,
     });
     expect(remove).not.toHaveBeenCalled();
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
@@ -1503,7 +1498,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "GITHUB_TOKEN",
       value: "vim",
-      executableWriteGrant: null,
     });
     await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
     expect(remove).toHaveBeenCalledWith({ key: "EDITOR" });
@@ -1524,7 +1518,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "EDITOR",
       value: "vim",
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -1562,7 +1555,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: PASSWORD_URL,
-      executableWriteGrant: null,
     });
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "REPO_URL" },
@@ -1599,7 +1591,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
-      executableWriteGrant: null,
     });
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
