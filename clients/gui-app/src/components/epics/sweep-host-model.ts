@@ -46,6 +46,37 @@ export function namesHostOutsideSurface(input: {
 }
 
 /**
+ * The host a Sweep should OPEN on instead of the surface's own, or `null` to
+ * open where the surface is.
+ *
+ * The surface's listing is the only worktree oracle in hand at open, and when
+ * it has settled on "nothing here" while the Task's agents all sit on one
+ * other machine, that machine is where the leftovers are. Opening on the
+ * surface's host would spend a census proving an empty list first.
+ *
+ * Same hint as {@link namesHostOutsideSurface}, same limits: it names where
+ * AGENTS are, so the dialog's own census still judges. Anything short of one
+ * unambiguous other host - an unsettled listing, worktrees here, agents on two
+ * other machines - answers `null`.
+ */
+export function sweepOpeningHostId(input: {
+  readonly hostIds: Iterable<string> | null;
+  readonly surfaceHostId: string | null;
+  /** `null` while the surface's own listing has not settled. */
+  readonly surfaceWorktreeCount: number | null;
+}): string | null {
+  if (input.hostIds === null || input.surfaceHostId === null) return null;
+  if (input.surfaceWorktreeCount !== 0) return null;
+  const others = new Set<string>();
+  for (const hostId of input.hostIds) {
+    if (hostId !== input.surfaceHostId) others.add(hostId);
+  }
+  if (others.size !== 1) return null;
+  const [only] = others;
+  return only;
+}
+
+/**
  * Whether Sweep must ask WHICH host before it can proceed.
  *
  * Worktrees are per host and one Sweep dialog is one host's census, so a Task
