@@ -57,6 +57,13 @@ async function refreshOverOpenConnection(
   }
 }
 
+interface PressedRemoteAccess {
+  readonly operation: EnvironmentCloud | null;
+  readonly hostId: string | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly entry: HostDirectoryEntry | null;
+}
+
 /**
  * Turns Remote access on for `hostId`: the app's own call to authn on the
  * person's sign-in. Once authn has said yes, the computer is asked once to
@@ -84,26 +91,37 @@ export function useRemoteAccessTurnOnMutation(
     void,
     HostRpcError,
     void,
-    EnvironmentCloud | null
+    PressedRemoteAccess
   >(
-    () => (cloud === null ? null : cloud()),
+    () => ({
+      operation: cloud === null ? null : cloud(),
+      hostId,
+      client,
+      entry,
+    }),
     {
       mutationKey: environmentMutationKeys.remoteAccessTurnOn(),
-      mutationFn: (_variables, operation) =>
+      mutationFn: (_variables, pressed) =>
         withHostQueryErrorBoundary(METHOD, async () => {
+          const {
+            operation,
+            hostId: pressedHostId,
+            client: pressedClient,
+            entry: pressedEntry,
+          } = pressed;
           cloudVerdictPreflight(METHOD)();
-          if (operation === null || hostId === null)
+          if (operation === null || pressedHostId === null)
             throw hostClientUnavailableError(METHOD);
           if (!operation.onOriginSignIn()) return;
           try {
-            await turnOnHostRemoteAccess(operation, hostId);
+            await turnOnHostRemoteAccess(operation, pressedHostId);
           } catch (error) {
             throw environmentCloudHostError(METHOD, error);
           }
           if (!operation.onOriginSignIn()) return;
-          await refreshOverOpenConnection(entry, client);
+          await refreshOverOpenConnection(pressedEntry, pressedClient);
           if (!operation.onOriginSignIn()) return;
-          answerRemoteAccess(hostId);
+          answerRemoteAccess(pressedHostId);
         }),
       onSettled: () => {
         void invalidateEnvironmentReads(queryClient, ["environment.status"]);
