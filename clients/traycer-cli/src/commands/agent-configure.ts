@@ -5,8 +5,8 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import { AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
-  callHostRpc,
-  callHostRpcWithDispatch,
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
   PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -60,8 +60,8 @@ export function buildAgentConfigureCommand(opts: {
     });
     const result = await toAgentCliError(
       request.serviceTier === undefined
-        ? callHostRpc("agent.configure", request)
-        : callHostRpcWithDispatch("agent.configure", request, {
+        ? callAgentHostRpc("agent.configure", request)
+        : callAgentHostRpcWithDispatch("agent.configure", request, {
             ...PLAIN_DISPATCH,
             requiredHostMethodVersion:
               AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,

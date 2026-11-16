@@ -4,7 +4,7 @@ import {
   sendAgentMessageResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
-  callHostRpcWithDispatch,
+  callAgentHostRpcWithDispatch,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -89,7 +89,7 @@ export function buildAgentSendCommand(opts: {
       workspace,
     });
     const result = await toAgentCliError(
-      callHostRpcWithDispatch(
+      callAgentHostRpcWithDispatch(
         "agent.sendMessage",
         request,
         workspace === null ? SEND_MESSAGE_DISPATCH : WORKSPACE_SEND_DISPATCH,
