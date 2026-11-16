@@ -2,6 +2,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { MoreHorizontal, Tag } from "lucide-react";
 import {
   useOrganization,
+  useOrganizationView,
   organizationPreflight,
 } from "@/hooks/organization/organization-context";
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
@@ -126,14 +127,14 @@ function LabelHistoryFilters(props: OrganizationFilterProps) {
   );
 }
 function GroupHistoryFilters(props: OrganizationFilterProps) {
-  const organization = useOrganization();
+  const viewGroups = useOrganizationView(
+    (view) => view?.groups.groups,
+    Object.is,
+  );
   const selectedGroups = props.search.groupIds ?? [];
   const selectedGroupSet = new Set(selectedGroups);
   const groups = new Map(
-    (organization?.view?.groups.groups ?? []).map((group) => [
-      group.groupId,
-      group.name,
-    ]),
+    (viewGroups ?? []).map((group) => [group.groupId, group.name]),
   );
   for (const groupId of selectedGroups) {
     if (!groups.has(groupId)) groups.set(groupId, "Unavailable group");

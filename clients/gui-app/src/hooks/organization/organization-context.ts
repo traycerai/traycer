@@ -2,7 +2,9 @@ import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { createContext, use, useEffect, useId } from "react";
+import { createContext, use, useEffect, useId, useMemo } from "react";
+import type { StoreApi } from "zustand";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import type {
   OrganizationAction,
   OrganizationView,
@@ -29,8 +31,16 @@ export interface OrganizationContextValue {
    * {@link supported} is false: a readiness or authorization flap must not
    * empty a menu whose groups are still this account's. Use `supported` to
    * decide whether an edit may be sent, never to decide what to show.
+   *
+   * Read here, in a handler, and never in render: a render reads its own
+   * slice through {@link useOrganizationView}. The view is not part of this
+   * value because every frame replaces it, and a frame that moved only the
+   * History token or another task's metadata must not re-render a consumer
+   * whose slice it left alone.
    */
-  readonly view: OrganizationView | undefined;
+  readonly readView: () => OrganizationView | undefined;
+  /** Calls `listener` after each new view; returns the unsubscribe. */
+  readonly subscribeView: (listener: () => void) => () => void;
   readonly register: (key: string, taskIds: readonly string[]) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
   /**
@@ -59,8 +69,119 @@ export function useOrganizationTasks(taskIds: readonly string[]) {
   );
   return organization;
 }
-export function taskOrganization(
+
+const NO_VIEW_SOURCE: Pick<
+  OrganizationContextValue,
+  "readView" | "subscribeView"
+> = {
+  readView: () => undefined,
+  subscribeView: () => () => undefined,
+};
+
+/**
+ * The part of the organization view `select` picks, re-rendering only when
+ * `isEqual` says the picked value changed. The host replaces the whole view
+ * on every frame, so `isEqual` is what keeps a frame that left this slice
+ * alone from reaching the component.
+ */
+export function useOrganizationView<T>(
+  select: (view: OrganizationView | undefined) => T,
+  isEqual: (a: T, b: T) => boolean,
+): T {
+  const source = useOrganization() ?? NO_VIEW_SOURCE;
+  const store = useMemo(
+    (): Pick<
+      StoreApi<OrganizationView | undefined>,
+      "getState" | "getInitialState" | "subscribe"
+    > => ({
+      getState: source.readView,
+      getInitialState: source.readView,
+      subscribe: (listener) => {
+        let previous = source.readView();
+        return source.subscribeView(() => {
+          const next = source.readView();
+          listener(next, previous);
+          previous = next;
+        });
+      },
+    }),
+    [source],
+  );
+  return useStoreWithEqualityFn(store, select, isEqual);
+}
+
+/** One task's organization, re-rendering only when that task's own changes. */
+export function useTaskOrganization(
+  taskId: string,
+  fallback: TaskOrganization | undefined,
+): TaskOrganization | undefined {
+  return useOrganizationView(
+    (view) => taskOrganization(view, taskId, fallback),
+    sameTaskOrganization,
+  );
+}
+
+function sameTaskOrganization(
+  a: TaskOrganization | undefined,
+  b: TaskOrganization | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return (
+    a.group === b.group &&
+    (a.labels === b.labels ||
+      (a.labels.length === 0 && b.labels.length === 0)) &&
+    (a.appearance === b.appearance ||
+      (a.appearance.taskId === b.appearance.taskId &&
+        a.appearance.version === b.appearance.version &&
+        a.appearance.color === b.appearance.color &&
+        a.appearance.icon === b.appearance.icon))
+  );
+}
+
+/** The parts of a view {@link taskOrganization} reads. */
+export type OrganizationTaskSlices = Pick<
+  OrganizationView,
+  "groups" | "appearances" | "taskLabels"
+>;
+
+function selectTaskSlices(
   view: OrganizationView | undefined,
+): OrganizationTaskSlices | undefined {
+  if (view === undefined) return undefined;
+  return {
+    groups: view.groups,
+    appearances: view.appearances,
+    taskLabels: view.taskLabels,
+  };
+}
+
+function sameTaskSlices(
+  a: OrganizationTaskSlices | undefined,
+  b: OrganizationTaskSlices | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.groups === b.groups &&
+    a.appearances === b.appearances &&
+    a.taskLabels === b.taskLabels
+  );
+}
+
+/**
+ * Every task's groups, appearance and labels, for a list that draws many
+ * tasks. A frame that moved only the History token, the catalog or the
+ * pending queue leaves all three untouched (the view cache shares unchanged
+ * structure across frames), so it does not reach the list.
+ */
+export function useOrganizationTaskSlices():
+  | OrganizationTaskSlices
+  | undefined {
+  return useOrganizationView(selectTaskSlices, sameTaskSlices);
+}
+
+export function taskOrganization(
+  view: OrganizationTaskSlices | undefined,
   taskId: string,
   fallback: TaskOrganization | undefined,
 ): TaskOrganization | undefined {
@@ -72,8 +193,9 @@ export function taskOrganization(
   const appearance =
     view.appearances.find((a) => a.taskId === taskId) ?? fallback?.appearance;
   const labels =
-    Object.entries(view.taskLabels).find(([id]) => id === taskId)?.[1].labels ??
-    fallback?.labels;
+    (Object.hasOwn(view.taskLabels, taskId)
+      ? view.taskLabels[taskId]?.labels
+      : undefined) ?? fallback?.labels;
   if (appearance === undefined && labels === undefined && group === null)
     return fallback;
   return {
