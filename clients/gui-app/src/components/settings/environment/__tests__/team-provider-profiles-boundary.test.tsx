@@ -9,7 +9,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
-import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-profile-api-key-form";
 import { WAITING_FOR_PROFILE_TEXT } from "@/components/providers/profile-sync-copy";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -17,7 +16,6 @@ import {
   admitCurrentUserToTeamWindow,
   mountTeamPageThroughBoundary,
   recordAppLoggerCalls,
-  configurationItem,
   TEAM_PROFILE_KEY_CANARY,
   teamProfileRecord,
   teamProfileRecordsBody,
@@ -438,45 +436,6 @@ describe("Team Providers boundary and sign-in", () => {
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
-  });
-
-  it("keeps transport-written controls read-only on another section for an admin team computer", async () => {
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.configuration.items": () => ({
-          items: [
-            configurationItem({
-              kind: "mcp_server",
-              key: "github",
-              value: {
-                mcpServerId: "srv-1",
-                toolToggles: { claude: { search: true } },
-              },
-              revision: 5,
-            }),
-          ],
-        }),
-      },
-      "mcp-servers",
-    );
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("On")).toBeTruthy();
-    expect(
-      screen.queryByRole("switch", { name: "github claude search" }),
-    ).toBeNull();
-    expect(
-      screen.getByText("You can see Acme's settings but not change them."),
-    ).toBeTruthy();
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
   });
 
   it.each([

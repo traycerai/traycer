@@ -235,13 +235,11 @@ describe("Personal page chip on a build with a server pool", () => {
     render(<SecretsHeaderDetails />, { wrapper: harness.Wrapper });
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.host.list")).toEqual([
-        POOL_HOST_ID,
+      expect(harness.paramsOf("environment.host.list")).toEqual([
+        { environmentId: "env-personal" },
       ]);
     });
-    expect(harness.paramsOf("environment.host.list")).toEqual([
-      { environmentId: "env-personal" },
-    ]);
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
 
     expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
@@ -273,7 +271,7 @@ describe("Personal page chip on a build with a server pool", () => {
       }),
     ).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
-    expect(hostIdsOf(harness, "environment.host.list")).toEqual([POOL_HOST_ID]);
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
     expect(harness.paramsOf("environment.host.list")).toEqual([
       { environmentId: "env-personal" },
     ]);

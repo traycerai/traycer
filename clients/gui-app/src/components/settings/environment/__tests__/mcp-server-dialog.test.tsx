@@ -175,6 +175,24 @@ function mountTeamPage(
   };
 }
 
+/** Lose the account write's answer after the real fake transport records it. */
+function rejectMcpPutResponse(): void {
+  const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      const answer = await cloud.transport(request);
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname.endsWith("/mcp-servers")
+      ) {
+        throw new Error("Safe MCP write failure");
+      }
+      return answer;
+    },
+  });
+}
+
 const PUT_1_1 = { major: 1, minor: 1 };
 
 function negotiate(put: { major: number; minor: number }): void {
@@ -568,12 +586,8 @@ describe("The MCP server dialog", () => {
   it("keeps the typed PAT in the form after a failed put", async () => {
     negotiate(PUT_1_1);
     const routes = handlers({ servers: [], secrets: [], answer: SAVED });
-    const harness = mountTeamPage(personalPoolSource(), {
-      ...routes,
-      "environment.configuration.mcpServers.put": () => {
-        throw new Error("Safe MCP write failure");
-      },
-    });
+    const harness = mountTeamPage(personalPoolSource(), routes);
+    rejectMcpPutResponse();
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
     const dialog = await openAdd();
     await fillPersonalPatTarget(dialog);
@@ -613,17 +627,8 @@ describe("The MCP server dialog", () => {
       appQueryClients.push(queryClient);
       const observers = captureMutationObservers(queryClient);
       const routes = handlers({ servers: [], secrets: [], answer: SAVED });
-      const harness = mountTeamPage(
-        personalPoolSource(),
-        fail
-          ? {
-              ...routes,
-              "environment.configuration.mcpServers.put": () => {
-                throw new Error("Safe MCP write failure");
-              },
-            }
-          : routes,
-      );
+      const harness = mountTeamPage(personalPoolSource(), routes);
+      if (fail) rejectMcpPutResponse();
       await waitFor(() =>
         expect(useAuthStore.getState().status).toBe("signed-in"),
       );

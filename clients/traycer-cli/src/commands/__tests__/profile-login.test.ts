@@ -4161,6 +4161,7 @@ describe("profile login outcomes", () => {
         type: "rename",
         profileId: "prof_new",
         label: "jane.doe",
+        environmentProfileId: null,
       },
     });
     expectOutcomeCalls([

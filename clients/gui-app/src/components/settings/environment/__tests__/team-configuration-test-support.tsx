@@ -246,6 +246,11 @@ export function teamProfileRecordsBody(
   };
 }
 
+const DEFAULT_TEAM_PROFILE_ITEMS: TeamProfileRecordHttpAnswer = {
+  status: 200,
+  body: { items: [] },
+};
+
 export const teamProfileRecordHttpBoundary: {
   list: TeamProfileRecordHttpAnswer;
   nextListAnswer: DeferredTeamProfileRecordAnswer | null;
@@ -261,7 +266,7 @@ export const teamProfileRecordHttpBoundary: {
 } = {
   list: { status: 200, body: { enabled: false } },
   nextListAnswer: null,
-  items: { status: 200, body: { items: [] } },
+  items: DEFAULT_TEAM_PROFILE_ITEMS,
   action: {
     status: 200,
     body: {
@@ -644,6 +649,19 @@ function teamFetch(
   }
   const profileResponse = teamAuthnResponse(url);
   if (profileResponse !== null) return profileResponse;
+  return accountFetch(url, method, headers, {
+    rawBody,
+    signal: init?.signal ?? new AbortController().signal,
+  });
+}
+
+function accountFetch(
+  url: URL,
+  method: string,
+  headers: Headers,
+  request: { readonly rawBody: string | null; readonly signal: AbortSignal },
+): Promise<Response> {
+  const { rawBody, signal } = request;
   if (
     verifiedSettingsTransport === null ||
     (method !== "GET" &&
@@ -659,13 +677,61 @@ function teamFetch(
     method,
     headers: Object.fromEntries(headers.entries()),
     body,
-    signal: init?.signal ?? new AbortController().signal,
-  }).then(
-    (answer) =>
-      new Response(answer.text, {
-        status: answer.status,
-        headers: { "Content-Type": "application/json" },
-      }),
+    signal,
+  }).then((answer) => accountResponse(url, method, answer));
+}
+
+function accountResponse(
+  url: URL,
+  method: string,
+  answer: EnvironmentTransportAnswer,
+): Response {
+  const text =
+    method === "GET" &&
+    url.pathname.endsWith("/secrets/harness-connections") &&
+    answer.status === 200 &&
+    answer.text !== null
+      ? withBoundaryConnections(answer.text)
+      : answer.text;
+  return new Response(text, {
+    status: answer.status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/**
+ * authn answers one connection list for the whole environment: the account's
+ * plan sign-ins and the profile boundary's API-key bindings arrive together,
+ * as the plans read and the key form both read it.
+ */
+function withBoundaryConnections(accountText: string): string {
+  const account: unknown = JSON.parse(accountText);
+  const boundary = teamProfileRecordHttpBoundary.connections.body;
+  return JSON.stringify({
+    connections: [
+      ...connectionRows(account),
+      ...connectionRows(boundary).map((row) => ({
+        harnessId: "claude",
+        kind: "api_key",
+        status: "connected",
+        linkedBy: null,
+        ...row,
+      })),
+    ],
+  });
+}
+
+function connectionRows(body: unknown): readonly object[] {
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("connections" in body) ||
+    !Array.isArray(body.connections)
+  )
+    return [];
+  const rows: readonly unknown[] = body.connections;
+  return rows.filter(
+    (row): row is object => typeof row === "object" && row !== null,
   );
 }
 
@@ -779,22 +845,135 @@ function teamAuthnResponse(url: URL): Promise<Response> | null {
     return teamHttpResponse(teamProfileRecordHttpBoundary.action);
   if (url.pathname.endsWith("/provider-keys/cursor"))
     return teamHttpResponse(teamProfileRecordHttpBoundary.keyAction);
-  if (url.pathname.endsWith("/harness-connections"))
+  if (
+    url.pathname.endsWith("/harness-connections") &&
+    verifiedSettingsTransport === null
+  )
     return teamHttpResponse(teamProfileRecordHttpBoundary.connections);
   if (
     url.pathname.includes("/harness-connections/") &&
     url.pathname.endsWith("/connect")
   )
     return teamHttpResponse(teamProfileRecordHttpBoundary.replaceKey);
-  if (url.pathname.endsWith("/items/managed_profile"))
+  return teamItemsResponse(url);
+}
+
+/**
+ * The profile boundary's item answers. Under a verified account transport the
+ * defaults leave the route to the account handler; a test that states its own
+ * items or write refusal answers here.
+ */
+function teamItemsResponse(url: URL): Promise<Response> | null {
+  if (
+    url.pathname.endsWith("/items/managed_profile") &&
+    (verifiedSettingsTransport === null ||
+      teamProfileRecordHttpBoundary.items !== DEFAULT_TEAM_PROFILE_ITEMS ||
+      teamProfileRecordHttpBoundary.itemWriteStatus !== 200)
+  )
     return Promise.resolve(
       new Response(null, {
         status: teamProfileRecordHttpBoundary.itemWriteStatus,
       }),
     );
-  if (url.pathname.endsWith("/items"))
-    return teamHttpResponse(teamProfileRecordHttpBoundary.items);
+  if (
+    url.pathname.endsWith("/items") &&
+    (verifiedSettingsTransport === null ||
+      teamProfileRecordHttpBoundary.items !== DEFAULT_TEAM_PROFILE_ITEMS)
+  )
+    return teamHttpResponse(
+      itemsPageAnswer(
+        teamProfileRecordHttpBoundary.items,
+        url.searchParams.get("kind"),
+      ),
+    );
   return null;
+}
+
+/**
+ * The account read asks authn for one kind per page, and authn answers whole
+ * rows; a test states only the rows it means, so each page carries that kind's
+ * rows with authn's row fields filled in.
+ */
+function itemsPageAnswer(
+  answer: TeamProfileRecordHttpAnswer,
+  kind: string | null,
+): TeamProfileRecordHttpAnswer {
+  const body = answer.body;
+  if (
+    answer.status !== 200 ||
+    typeof body !== "object" ||
+    body === null ||
+    !("items" in body) ||
+    !Array.isArray(body.items)
+  )
+    return answer;
+  const rows: readonly unknown[] = body.items;
+  return {
+    status: 200,
+    body: {
+      items: rows.flatMap((row) =>
+        typeof row === "object" &&
+        row !== null &&
+        (kind === null || ("kind" in row && row.kind === kind))
+          ? [
+              {
+                os: null,
+                updatedAt: 1,
+                writtenBy: { source: "live", hostId: null, hostName: null },
+                ...row,
+              },
+            ]
+          : [],
+      ),
+    },
+  };
+}
+
+/**
+ * The teams the signed-in user belongs to, as the account directory shows
+ * them. authn's user answer names the same teams, so a revalidation that
+ * re-projects the user keeps the team the page is mounted for.
+ */
+let negotiatedTeams: readonly { teamId: string; slug: string }[] = [];
+
+function publishAccountTeams(
+  environments: readonly EnvironmentDescriptorV11[],
+): void {
+  const shareableTeams = shareableTeamsFor(environments);
+  negotiatedTeams = shareableTeams;
+  useAuthStore.setState({ shareableTeams });
+}
+
+function negotiatedTeamSubscription(team: {
+  readonly teamId: string;
+  readonly slug: string;
+}): unknown {
+  return {
+    id: `team-test-subscription-${team.teamId}`,
+    userID: null,
+    orgID: team.teamId,
+    teamID: team.teamId,
+    customerId: "team-test-customer",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
+    subscriptionExpiry: null,
+    trialEndsAt: null,
+    subscriptionStatus: "FREE",
+    hasPaymentMethod: false,
+    isInTrial: false,
+    rechargeRateSeconds: 0,
+    totalPlanCredits: 0,
+    hasActiveBundle: false,
+    bundleSummary: { bundleTotal: 0, bundleConsumed: 0, bundleRemaining: 0 },
+    team: {
+      id: team.teamId,
+      slug: team.slug,
+      avatarUrl: null,
+      privacyMode: false,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+    },
+  };
 }
 
 function teamNegotiatedUserResponse(): Promise<Response> {
@@ -831,7 +1010,7 @@ function teamNegotiatedUserResponse(): Promise<Response> {
           isInTrial: false,
           rechargeRateSeconds: 0,
         },
-        teamSubscriptions: [],
+        teamSubscriptions: negotiatedTeams.map(negotiatedTeamSubscription),
         payAsYouGoUsage: { allowPayAsYouGo: false },
       }),
       {
@@ -1286,9 +1465,7 @@ function buildLegacyTeamPage(
         currentRows = response.list.environments.map(
           descriptorFromEnvironmentList,
         );
-        useAuthStore.setState({
-          shareableTeams: shareableTeamsFor(currentRows),
-        });
+        publishAccountTeams(currentRows);
       }
       return response ?? { kind: "no_response" };
     },
@@ -1346,10 +1523,8 @@ function buildLegacyTeamPage(
   };
   teamHostBoundary.binding = authBinding;
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
-  useAuthStore.setState({
-    status: "signed-in",
-    shareableTeams: shareableTeamsFor(currentRows),
-  });
+  useAuthStore.setState({ status: "signed-in" });
+  publishAccountTeams(currentRows);
   activeTeamPageRuntimes.push({ runtime, directory, auth });
   return {
     runnerHost,
@@ -1388,8 +1563,10 @@ function buildVerifiedTeamProvidersPage(
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
   teamWindowRegistered = false;
   const authHarness = buildTeamAuthRuntime(queryClient);
-  void startVerifiedTeamAuth(authHarness);
   const assembly = assembleTeamPage(options, queryClient, authHarness);
+  void startVerifiedTeamAuth(authHarness).then(() =>
+    authHarness.auth.listEnvironments(),
+  );
   return createTeamPageHarness(assembly, (props) => (
     <RunnerHostProvider runnerHost={assembly.runnerHost}>
       <HostRuntimeContext.Provider value={assembly.binding}>
@@ -1512,7 +1689,7 @@ function assembleTeamPage(
     const answer = await cloudHandlers.listEnvironments();
     if (answer?.kind === "ok") {
       currentRows = answer.list.environments.map(descriptorFromEnvironmentList);
-      useAuthStore.setState({ shareableTeams: shareableTeamsFor(currentRows) });
+      publishAccountTeams(currentRows);
     }
     return answer ?? { kind: "no_response" };
   };
@@ -1563,6 +1740,7 @@ function assembleTeamPage(
 }
 
 export function resetTeamPageHarness(): void {
+  negotiatedTeams = [];
   for (const mounted of activeTeamPageRuntimes.splice(0)) {
     mounted.runtime.dispose();
     mounted.directory.dispose();
@@ -1593,7 +1771,7 @@ export function resetTeamPageHarness(): void {
     body: { enabled: false },
   };
   teamProfileRecordHttpBoundary.nextListAnswer = null;
-  teamProfileRecordHttpBoundary.items = { status: 200, body: { items: [] } };
+  teamProfileRecordHttpBoundary.items = DEFAULT_TEAM_PROFILE_ITEMS;
   teamProfileRecordHttpBoundary.action = {
     status: 200,
     body: {

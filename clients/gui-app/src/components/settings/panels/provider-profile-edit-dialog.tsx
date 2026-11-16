@@ -640,8 +640,13 @@ function useProfileRename(
   return {
     rename: (providerId, label, onRenamed) => {
       const request = { providerId, profileId: profile.profileId, label };
+      const renameRequest = {
+        ...request,
+        enabled: profile.enabled,
+        environmentProfileId: profile.environmentProfileId ?? null,
+      };
       if (usesRecord) {
-        nameRecord.mutate(request, { onSuccess: onRenamed });
+        nameRecord.mutate(renameRequest, { onSuccess: onRenamed });
         return;
       }
       if (answersName) {
@@ -650,14 +655,9 @@ function useProfileRename(
         });
         return;
       }
-      renameProfile.mutate(
-        {
-          ...request,
-          enabled: profile.enabled,
-          environmentProfileId: profile.environmentProfileId ?? null,
-        },
-        { onSuccess: () => onRenamed(label) },
-      );
+      renameProfile.mutate(renameRequest, {
+        onSuccess: () => onRenamed(label),
+      });
     },
     isPending:
       nameRecord.isPending ||

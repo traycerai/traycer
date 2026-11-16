@@ -1343,7 +1343,6 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
   });
 
   it("hides an abandoned shell-variable save but reports a transport failure", async () => {
-    credentialRefusal.current = REFUSAL;
     const cli = envCli();
     const set = envSetSpy(cli);
     set.mockRejectedValueOnce(abandonedSaveError("config.env.set"));
@@ -1352,7 +1351,7 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
       overrideHandlers: { "config.env.set": set },
     });
 
-    await addVariable("NODE_ENV", "NODE_ENV", "production");
+    await addVariable("OPENAI_API_KEY", "NODE_ENV", "production");
 
     await waitFor(() => {
       expect(set).toHaveBeenCalledTimes(1);

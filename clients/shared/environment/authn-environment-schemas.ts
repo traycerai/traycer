@@ -32,6 +32,7 @@ export const ITEM_ROUTE_KINDS = [
   "auto_policy",
   "sandbox_defaults",
   "storage_policy",
+  "snapshot_policy",
 ] as const;
 
 const revisionSchema = lazySchema(() => z.number().int().nonnegative());

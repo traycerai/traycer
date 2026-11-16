@@ -12,9 +12,11 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import type {
   EnvironmentConfigurationItem,
+  EnvironmentConfigurationItemsResponse,
   EnvironmentConfigurationItemWriteResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { ITEM_ROUTE_KINDS } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { toast } from "sonner";
 import {
@@ -158,6 +160,15 @@ function snapshotItem(
 }
 
 function renderSection(ui: ReactNode): void {
+  // One deferred inventory answer feeds the account reader's per-kind pages;
+  // each HTTP page and the transport's kind filtering still run normally.
+  const itemReads = new Map<
+    string,
+    {
+      readonly answer: Promise<EnvironmentConfigurationItemsResponse>;
+      remainingPages: number;
+    }
+  >();
   harness = mountTeamPage(poolSource("owner"), {
     "environment.list": () => ({
       environments: [
@@ -167,11 +178,24 @@ function renderSection(ui: ReactNode): void {
       ],
     }),
     "environment.configuration.items": (params) => {
-      if (host.readFails) throw new Error("read refused");
-      if (host.read !== null) return host.read(params.environmentId);
-      return {
-        items: params.environmentId === TEAM_ENV ? host.teamItems : host.items,
-      };
+      const environmentId = params.environmentId;
+      let batch = itemReads.get(environmentId);
+      if (batch === undefined) {
+        batch = {
+          answer: (async () => {
+            if (host.readFails) throw new Error("read refused");
+            if (host.read !== null) return host.read(environmentId);
+            return {
+              items: environmentId === TEAM_ENV ? host.teamItems : host.items,
+            };
+          })(),
+          remainingPages: ITEM_ROUTE_KINDS.length,
+        };
+        itemReads.set(environmentId, batch);
+      }
+      batch.remainingPages -= 1;
+      if (batch.remainingPages === 0) itemReads.delete(environmentId);
+      return batch.answer;
     },
     [PUT]: () =>
       host.put === null

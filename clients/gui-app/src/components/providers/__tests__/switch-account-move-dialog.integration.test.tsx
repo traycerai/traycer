@@ -1131,6 +1131,7 @@ describe("Switch account moves only previewed work", () => {
       type: "recolor",
       profileId: DESTINATION_ID,
       accentColor: pickedColor,
+      environmentProfileId: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -1157,6 +1158,7 @@ describe("Switch account moves only previewed work", () => {
       type: "recolor",
       profileId: DESTINATION_ID,
       accentColor: pickedColor,
+      environmentProfileId: null,
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Move 1" }));

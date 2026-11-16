@@ -667,6 +667,7 @@ describe("alias look-up", () => {
         type: "rename",
         profileId: "row-own",
         label: "Renamed",
+        environmentProfileId: null,
       },
     });
     expect(result.exitCode).toBe(0);
@@ -762,7 +763,12 @@ describe("alias look-up", () => {
     })(makeCtx(false, false));
     expect(onlyCallTo("providers.setEnabled")[1]).toEqual(
       expect.objectContaining({
-        profileAction: { type: "rename", profileId: typed, label: "Renamed" },
+        profileAction: {
+          type: "rename",
+          profileId: typed,
+          label: "Renamed",
+          environmentProfileId: null,
+        },
       }),
     );
     expect(renamed.data).toEqual(expect.objectContaining({ profileId: typed }));
@@ -959,6 +965,7 @@ describe("alias look-up", () => {
           type: "rename",
           profileId: "shared-id",
           label: "Renamed",
+          environmentProfileId: null,
         },
       }),
     );
@@ -1045,6 +1052,7 @@ describe("a 10.10 answer", () => {
           type: "rename",
           profileId: "prof_work",
           label: "Work account",
+          environmentProfileId: null,
         },
       },
     );
@@ -1198,6 +1206,7 @@ describe("rename on a row with other names", () => {
           type: "rename",
           profileId: "row-plain",
           label: "Chosen",
+          environmentProfileId: null,
         },
       },
       PROFILE_ACTION_DISPATCH,

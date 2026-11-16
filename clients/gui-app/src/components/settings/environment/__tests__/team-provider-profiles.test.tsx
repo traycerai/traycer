@@ -1211,7 +1211,7 @@ describe("TeamProviders profiles", () => {
       accountIdentity: "Work label",
     });
     let current = stored;
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => ({
         outcome: "conflict",
@@ -1281,7 +1281,7 @@ describe("TeamProviders profiles", () => {
       color: "#3b82f6",
     });
     let current = stored;
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [current]),
       "environment.configuration.items.put": () => ({
         outcome: "conflict",

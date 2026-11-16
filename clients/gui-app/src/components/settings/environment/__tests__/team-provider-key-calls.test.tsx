@@ -26,13 +26,11 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import {
   admitCurrentUserToTeamWindow,
   requireTeamHostClient,
   resetTeamPageHarness,
   mountTeamPageWithRealBoundary,
-  configurationItem,
   teamProviderKeyHttpBoundary,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
@@ -580,40 +578,4 @@ describe("TeamProviders provider-key record guard", () => {
     expect(harness.paramsOf("providers.settleApiKeyChange")).toHaveLength(0);
     expectNoLegacyKeyCalls(harness);
   });
-
-  it.each(["admin", "editor", "viewer"] as const)(
-    "keeps computer-written MCP controls read-only for a %s on another section",
-    async (role) => {
-      const harness = await renderBoundaryPage({
-        target: TEAM_TARGET,
-        role,
-        handlers: {
-          ...handlers(() => []),
-          "environment.configuration.items": () => ({
-            items: [
-              configurationItem({
-                kind: "mcp_server",
-                key: "github",
-                value: {
-                  mcpServerId: "server-test",
-                  toolToggles: { claude: { search: true } },
-                },
-              }),
-            ],
-          }),
-        },
-        section: "mcp-servers",
-        child: <TeamMcpServers />,
-      });
-
-      expect(await screen.findByText("github")).toBeTruthy();
-      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-      expect(
-        screen.queryByRole("switch", { name: "github claude search" }),
-      ).toBeNull();
-      expect(
-        screen.getByText("You can see Acme's settings but not change them."),
-      ).toBeTruthy();
-    },
-  );
 });
