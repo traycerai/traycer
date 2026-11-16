@@ -1,5 +1,6 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { resetShell } from "../store/config-store";
+import { writeConfigViaRunningHost } from "../internal/config-host-write";
 
 // Runner-aware `traycer config shell reset`. Clears ONLY the current selection
 // (returns to the system default / login shell); remembered shells and their
@@ -9,7 +10,10 @@ import { resetShell } from "../store/config-store";
 export const configShellResetCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
-  await resetShell();
+  const response = await writeConfigViaRunningHost("config.shell.reset", {
+    executableWriteGrant: null,
+  });
+  if (response === null) await resetShell();
   return {
     data: { reset: true },
     human: ctx.runtime.json
