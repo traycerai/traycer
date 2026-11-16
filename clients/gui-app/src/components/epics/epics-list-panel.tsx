@@ -31,6 +31,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
 import {
+  countTaskWorktrees,
   namesHostOutsideSurface,
   sweepOpeningHostId,
 } from "@/components/epics/sweep-host-model";
@@ -668,27 +669,29 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const sweepPreferredHostId = useMemo(() => {
     if (sweepEpicIds === null || surfaceWorktreesUnsettled) return null;
     const hostIds = new Set<string>();
-    let surfaceWorktreeCount = 0;
     for (const epicId of sweepEpicIds) {
       const chatHostIds =
         items.find((candidate) => candidate.epicId === epicId)?.chatHostIds ??
         null;
       if (chatHostIds === null) return null;
       for (const chatHostId of chatHostIds) hostIds.add(chatHostId);
-      surfaceWorktreeCount += (worktreesByEpicId.get(epicId) ?? EMPTY_WORKTREES)
-        .length;
     }
+    // Counted from the listing itself rather than the history map, which
+    // covers only the base page and misses optimistic activity rows.
     return sweepOpeningHostId({
       hostIds,
       surfaceHostId: hostId,
-      surfaceWorktreeCount,
+      surfaceWorktreeCount: countTaskWorktrees(
+        surfaceWorktreeIndex.worktrees,
+        new Set(sweepEpicIds),
+      ),
     });
   }, [
     hostId,
     items,
+    surfaceWorktreeIndex.worktrees,
     surfaceWorktreesUnsettled,
     sweepEpicIds,
-    worktreesByEpicId,
   ]);
   // A Task whose deletion is still in flight is not deletable AGAIN: the
   // dialog closes at kickoff, so its row renders with its controls back while
