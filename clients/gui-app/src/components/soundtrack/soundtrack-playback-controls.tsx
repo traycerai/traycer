@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { use, useId, type ReactNode } from "react";
 import {
   Pause,
   Play,
@@ -8,6 +8,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
+import { SoundtrackTitle } from "./soundtrack-title";
+import { SoundtrackPageControlsContext } from "./soundtrack-page-controls-context";
 import { StatusRowChromeBoundary } from "@/components/epic-canvas/panels/status-row-chrome-boundary";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import {
@@ -21,24 +24,46 @@ import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 
-/**
- * Previous, Pause or Play, and Next in a task's status row, for a person who
- * asked for them in Settings › Sounds. They are drawn before a launch's first
- * gesture too, when pressing one is what opens the session, and not while this
- * window waits for another window's session to end.
- *
- * Unlike the row's other items these read no host, but they are as optional, so
- * they fail the same way.
- */
-export function EpicPlaybackControls(): ReactNode {
+type PlaybackPlacement = "task" | "surface" | "settings-modal";
+
+/** Window-wide playback actions, wherever the current page presents them. */
+export function SoundtrackPlaybackControls(props: {
+  readonly placement: PlaybackPlacement;
+}): ReactNode {
   return (
     <StatusRowChromeBoundary label="playback controls">
-      <EpicPlaybackControlsBody />
+      <SoundtrackPlaybackControlsBody placement={props.placement} />
     </StatusRowChromeBoundary>
   );
 }
 
-function EpicPlaybackControlsBody(): ReactNode {
+function SoundtrackPlaybackControlsBody(props: {
+  readonly placement: PlaybackPlacement;
+}): ReactNode {
+  const pageControlsVisible = use(SoundtrackPageControlsContext);
+  const activity = useTabSurfaceActivity();
+  const availability = useSettingsAvailabilityContext();
+  const asked = useSettingsStore((state) => state.soundtrackPlaybackControls);
+  const waiting = useSoundtrackStore((state) => state.waitingForLock);
+  const ownsSlot =
+    props.placement === "settings-modal" ||
+    (pageControlsVisible && activity.visible && activity.focused);
+  if (
+    !isPlaybackControlsRowAvailable(availability) ||
+    !asked ||
+    waiting ||
+    !ownsSlot
+  ) {
+    return null;
+  }
+  return <PlaybackControlsContent placement={props.placement} />;
+}
+
+function PlaybackControlsContent(props: {
+  readonly placement: PlaybackPlacement;
+}): ReactNode {
+  const task = props.placement === "task";
+  const paused = useSettingsStore((state) => state.soundtrackPaused);
   const trackId = useId();
   const track = useSoundtrackStore((state) => state.soundingTrack);
   const trackTitle = track === null ? null : track.title.trim() || track.name;
@@ -46,58 +71,64 @@ function EpicPlaybackControlsBody(): ReactNode {
     track?.kind === "composed" ? "Composed" : "Generative variant";
   const trackDescription =
     track === null ? null : `${trackTitle} · ${trackKind}`;
-  const availability = useSettingsAvailabilityContext();
-  const asked = useSettingsStore((state) => state.soundtrackPlaybackControls);
-  const paused = useSettingsStore((state) => state.soundtrackPaused);
-  const waiting = useSoundtrackStore((state) => state.waitingForLock);
-  if (!isPlaybackControlsRowAvailable(availability) || !asked || waiting) {
-    return null;
-  }
+  const describedBy = trackDescription === null ? undefined : trackId;
   return (
     <div
       role="group"
       aria-label="Music playback"
-      className="flex min-w-0 max-w-1/2 items-center gap-1.5"
+      className={cn(
+        "flex min-w-0 items-center gap-1.5",
+        task
+          ? "max-w-1/2"
+          : "@container h-10 w-full shrink-0 justify-end px-3 max-md:hidden",
+      )}
     >
       {trackDescription === null ? null : (
         <span
           id={trackId}
           data-testid="epic-playback-track"
-          className="min-w-0 flex-1 text-xs leading-tight text-muted-foreground @max-[46rem]:sr-only"
+          className={cn(
+            "w-40 min-w-0 shrink text-xs leading-tight text-muted-foreground",
+            task && "@max-[46rem]:sr-only",
+          )}
         >
-          <span className="block truncate">{trackTitle}</span>
+          <SoundtrackTitle
+            key={track?.name}
+            title={trackTitle ?? ""}
+            paused={paused}
+          />
           <span className="sr-only"> · </span>
-          <span className="block">{trackKind}</span>
+          <span className="block truncate">{trackKind}</span>
         </span>
       )}
       <PlaybackButton
         trackDescription={trackDescription}
-        describedBy={trackDescription === null ? undefined : trackId}
+        describedBy={describedBy}
         label="Previous track"
         testId="epic-playback-previous"
         icon={SkipBack}
         onClick={previousTrack}
-        leavesShortRow
+        leavesShortRow={task}
       />
       <PlaybackButton
         trackDescription={trackDescription}
-        describedBy={trackDescription === null ? undefined : trackId}
+        describedBy={describedBy}
         label={paused ? "Play" : "Pause"}
         testId="epic-playback-toggle"
         icon={paused ? Play : Pause}
         onClick={paused ? playMusic : pauseMusic}
         // Play is the way back to the music, so it stays for as long as there is
         // a row.
-        leavesShortRow={!paused}
+        leavesShortRow={task ? !paused : false}
       />
       <PlaybackButton
         trackDescription={trackDescription}
-        describedBy={trackDescription === null ? undefined : trackId}
+        describedBy={describedBy}
         label="Next track"
         testId="epic-playback-next"
         icon={SkipForward}
         onClick={nextTrack}
-        leavesShortRow
+        leavesShortRow={task}
       />
     </div>
   );
