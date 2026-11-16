@@ -289,6 +289,7 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", async (importOriginal) => {
     >();
   return {
     ...actual,
+    TerminalXtermHost: () => null,
     useTerminalTileBootstrap: (input: {
       readonly adoptOnly?: boolean | undefined;
     }) => {
