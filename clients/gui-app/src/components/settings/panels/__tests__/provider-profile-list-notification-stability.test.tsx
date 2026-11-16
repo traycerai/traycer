@@ -242,9 +242,8 @@ function dialogCopy(): DialogCopy {
 async function expectSettledDialog(offers: Offers): Promise<void> {
   const heading =
     offers === true ? "Add a profile" : "Add new Claude Code profile";
-  const signInName = offers === true ? "Sign in" : "Link account";
   expect(await screen.findByRole("dialog", { name: heading })).toBeTruthy();
-  expect(screen.getByRole("button", { name: signInName })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
 }
 
 function emitChanged(): void {

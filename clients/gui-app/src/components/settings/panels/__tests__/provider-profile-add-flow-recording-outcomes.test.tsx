@@ -61,7 +61,7 @@ describe("Add a profile around one sign-in", () => {
       holdListRefresh: true,
       authService: auth.service,
     });
-    await pressAccount(true);
+    await pressAccount();
     await waitFor(() => expect(harness.listsAfterAwait()).toBe(1));
     expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
@@ -107,7 +107,7 @@ describe("Add a profile around one sign-in", () => {
       profilesAfter: [workProfile()],
       outcome: null,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expectNoSuccessSentence();
     expect(harness.created).not.toHaveBeenCalled();
@@ -132,7 +132,7 @@ describe("Add a profile around one sign-in", () => {
       ],
     });
     signInFetchFor(harness).enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
-    await pressAccount(true);
+    await pressAccount();
 
     expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
     const awaitRequests = harness.messenger.calls
@@ -165,7 +165,7 @@ describe("Add a profile around one sign-in", () => {
         awaitAnswers: [asksToRecordSignIn()],
       });
       signInFetchFor(harness).enqueue(reply);
-      await pressAccount(true);
+      await pressAccount();
 
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(
@@ -193,7 +193,7 @@ describe("Add a profile around one sign-in", () => {
     signInFetchFor(harness).enqueue(
       MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
     );
-    await pressAccount(true);
+    await pressAccount();
 
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expectNoSuccessSentence();
@@ -216,7 +216,7 @@ describe("Add a profile around one sign-in", () => {
       awaitAnswers: [asksToRecordSignIn(), asksToRecordSignIn()],
     });
     signInFetchFor(harness).enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
-    await pressAccount(true);
+    await pressAccount();
 
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
     expect(
@@ -237,7 +237,7 @@ describe("Add a profile around one sign-in", () => {
         profilesAfter: [workProfile()],
         outcome: { kind: "signed-in", profileId: PROFILE_ID },
       });
-      await pressAccount(offers);
+      await pressAccount();
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(screen.queryByText(SIGNED_IN)).toBeNull();
       expect(harness.created).not.toHaveBeenCalled();
@@ -248,7 +248,7 @@ describe("Add a profile around one sign-in", () => {
   );
 
   it.each([true, false, "absent"] as const)(
-    "renders the Add description according to offersSignIns (%s)",
+    "renders no Add description whatever offersSignIns is (%s)",
     async (offers) => {
       renderAddFlow({
         ...ADD_FLOW_DEFAULTS,
@@ -257,14 +257,9 @@ describe("Add a profile around one sign-in", () => {
         profilesAfter: [],
         outcome: null,
       });
-      await screen.findByRole("dialog");
-      const description =
-        "Name this Claude Code profile, choose its color, then link the account it should use.";
-      if (offers === true) {
-        expect(screen.queryByText(description)).toBeNull();
-        return;
-      }
-      expect(screen.getByText(description)).toBeTruthy();
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog.hasAttribute("aria-describedby")).toBe(false);
+      expect(screen.queryByText(/choose its color/u)).toBeNull();
     },
   );
 
@@ -285,8 +280,8 @@ describe("Add a profile around one sign-in", () => {
         seedCache: true,
         unknownProfileOutcome: unknown,
       });
-      await pressAccount(true);
-      expect(await screen.findByText("Account already linked")).toBeTruthy();
+      await pressAccount();
+      expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
       expect(
         screen.getByText(
           "Work already uses this account and organization. Sign in again and choose a different organization.",
@@ -339,7 +334,7 @@ describe("Add a profile around one sign-in", () => {
         echoedProfiles: [row],
         seedCache: true,
       });
-      await pressAccount(true);
+      await pressAccount();
       if (outcome.kind === "waiting-for-profile") {
         expect(await screen.findByText(WAITING)).toBeTruthy();
       } else if (outcome.kind === "signed-in") {
@@ -349,7 +344,7 @@ describe("Add a profile around one sign-in", () => {
       } else {
         expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       }
-      expect(screen.queryByText("Account already linked")).toBeNull();
+      expect(screen.queryByText(/already uses this account/u)).toBeNull();
       expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
         1,
       );

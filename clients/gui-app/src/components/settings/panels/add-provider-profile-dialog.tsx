@@ -9,7 +9,6 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
-  Link2,
   LogIn,
 } from "lucide-react";
 import type { ProfileRecordActionFailure } from "@traycer-clients/shared/host-client/profile-record-actions";
@@ -51,7 +50,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -154,7 +152,7 @@ export interface ProviderTargetLoginControls {
   readonly accentColor: ProviderProfileAccentColor;
 }
 
-/** Whether "Link account" is held off: any one reason is enough. */
+/** Whether "Sign in" is held off: any one reason is enough. */
 function linkHeldOff(reasons: {
   readonly labelEmpty: boolean;
   readonly busy: boolean;
@@ -420,7 +418,7 @@ function ProviderProfileSignInDialog({
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0 || credentialRefusal !== null) return;
     // A fresh attempt supersedes any previously reported failure - covers
-    // both the initial "Link account" and the failed-state Retry.
+    // both the initial "Sign in" and the failed-state Retry.
     onFailedAttempt(null);
     flow.start({
       label: trimmedLabel,
@@ -455,7 +453,7 @@ function ProviderProfileSignInDialog({
         onPointerDownOutside={(event) => {
           if (dismissalLocked) event.preventDefault();
         }}
-        {...dialogDescriptionProps(offersSignIns)}
+        aria-describedby={undefined}
       >
         <AddProfileDialogHeader
           offersSignIns={offersSignIns}
@@ -624,19 +622,6 @@ function addProfileDialogTitle(
     : `Add new ${PROVIDER_DISPLAY_NAMES[providerId]} profile`;
 }
 
-const NO_DIALOG_DESCRIPTION = { "aria-describedby": undefined } as const;
-
-/**
- * A computer that offers sign-ins draws no line under the header, so the
- * dialog says it has no description; any other keeps today's, which Radix
- * links by itself.
- */
-function dialogDescriptionProps(
-  offersSignIns: boolean,
-): typeof NO_DIALOG_DESCRIPTION | null {
-  return offersSignIns ? NO_DIALOG_DESCRIPTION : null;
-}
-
 function AddProfileDialogHeader({
   offersSignIns,
   providerId,
@@ -649,12 +634,6 @@ function AddProfileDialogHeader({
       <DialogTitle>
         {addProfileDialogTitle(offersSignIns, providerId)}
       </DialogTitle>
-      {offersSignIns ? null : (
-        <DialogDescription>
-          Name this {PROVIDER_DISPLAY_NAMES[providerId]} profile, choose its
-          color, then link the account it should use.
-        </DialogDescription>
-      )}
     </DialogHeader>
   );
 }
@@ -753,35 +732,12 @@ function AddProfileAccountSection({
           duplicateProfile === null &&
           naming === null &&
           finalizeError === null,
-        linkDisabled,
-        onLink,
       })
     : null;
   if (signInBody !== null) return signInBody;
 
   if (flowState.kind === "start") {
-    return (
-      <button
-        type="button"
-        aria-label="Link account"
-        className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={linkDisabled}
-        onClick={onLink}
-      >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
-          <Link2 className="size-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-ui-sm font-medium text-foreground">
-            Link account
-          </span>
-          <span className="block text-ui-xs text-muted-foreground">
-            Sign in to the account this profile should use.
-          </span>
-        </span>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-      </button>
-    );
+    return <SignInCard disabled={linkDisabled} onSignIn={onLink} />;
   }
 
   if (flowState.kind === "starting" || flowState.kind === "waiting") {
@@ -845,11 +801,7 @@ function AddProfileAccountSection({
     return (
       <AddProfileFailureStep
         providerId={providerId}
-        message={
-          offersSignIns
-            ? "The account was signed in, but the profile color could not be saved."
-            : "The account was linked, but the profile color could not be saved."
-        }
+        message="The account was signed in, but the profile color could not be saved."
         refusal={null}
         onCancel={onCancel}
         onRetry={onRetryFinalize}
@@ -860,34 +812,28 @@ function AddProfileAccountSection({
   return (
     <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
-      <span>{finalizing ? "Finishing profile setup" : "Account linked"}</span>
+      <span>{finalizing ? "Finishing profile setup" : "Signed in"}</span>
     </div>
   );
 }
 
 /**
  * What the account section shows on a computer that offers sign-ins by
- * itself, where that differs from any other computer, or null: the Sign in
- * card, the profile an existing account already has, the provider while the
- * list catches up, and a new profile's row while it is set up (`settingUp`:
- * no duplicate notice, naming step or failed recolor stands in front of it).
+ * itself, where that differs from any other computer, or null: the profile an
+ * existing account already has, the provider while the list catches up, and a
+ * new profile's row while it is set up (`settingUp`: no duplicate notice,
+ * naming step or failed recolor stands in front of it).
  */
 function signInAccountBody({
   providerId,
   flowState,
   settingUp,
-  linkDisabled,
-  onLink,
 }: {
   readonly providerId: ProviderCliState["providerId"];
   readonly flowState: ProviderProfileLoginFlowState;
   readonly settingUp: boolean;
-  readonly linkDisabled: boolean;
-  readonly onLink: () => void;
 }): ReactNode {
   switch (flowState.kind) {
-    case "start":
-      return <SignInCard disabled={linkDisabled} onSignIn={onLink} />;
     case "already-signed-in":
       return (
         <AlreadySignedInBody
@@ -914,7 +860,7 @@ function signInAccountBody({
   }
 }
 
-/** The account card of a computer that offers sign-ins by itself. */
+/** The account card the add dialog starts on. */
 function SignInCard({
   disabled,
   onSignIn,
@@ -1125,7 +1071,9 @@ export function DuplicateAccountNotice({
     <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning-foreground">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
-        <div className="text-ui-sm font-medium">Account already linked</div>
+        <div className="text-ui-sm font-medium">
+          {alreadySignedInAsText(profile.label)}
+        </div>
         <p className="mt-0.5 text-ui-xs leading-relaxed">
           {profile.label} already uses this account and organization. Sign in
           again and choose a different organization.

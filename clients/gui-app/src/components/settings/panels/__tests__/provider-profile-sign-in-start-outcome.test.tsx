@@ -676,7 +676,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
     renderAntigravityAddDialog(onFailedAttempt);
 
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.getByText(ANTIGRAVITY_REFUSAL.reason)).toBeTruthy();
@@ -700,7 +700,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: ANTIGRAVITY_REFUSAL,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Verify account" }),
@@ -726,7 +726,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: { reason: "This account cannot be used.", actionUrl: null },
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
@@ -743,7 +743,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: null,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(
       await screen.findByText(
@@ -826,7 +826,7 @@ describe.each(MOUNT_MODES)(
       expect(hostCallsFor("providers.ensurePack")).toBe(0);
     });
 
-    it("the add-profile dialog shows the sentence and its Link account control sends nothing", async () => {
+    it("the add-profile dialog shows the sentence and its Sign in control sends nothing", async () => {
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -861,7 +861,7 @@ describe.each(MOUNT_MODES)(
       );
 
       expect(await screen.findByText(MACOS_SENTENCE)).toBeTruthy();
-      const link = screen.getByRole("button", { name: /Link account/u });
+      const link = screen.getByRole("button", { name: "Sign in" });
       expect(link.hasAttribute("disabled")).toBe(true);
       fireEvent.click(link);
       expect(hostCallsFor("providers.startLogin")).toBe(0);

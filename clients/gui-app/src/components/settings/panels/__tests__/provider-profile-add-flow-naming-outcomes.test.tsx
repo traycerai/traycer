@@ -18,7 +18,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
 
 describe("Add a profile around one sign-in", () => {
-  it("keeps linked copy when the profile color save fails without sign-in offers", async () => {
+  it("says signed in when the profile color save fails without sign-in offers", async () => {
     const linked = mintedSignedInRow();
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
@@ -30,7 +30,7 @@ describe("Add a profile around one sign-in", () => {
       failRecolor: true,
       freshlyLinkedProfile: true,
     });
-    await pressAccount(false);
+    await pressAccount();
     await waitFor(() => {
       expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
         1,
@@ -45,14 +45,9 @@ describe("Add a profile around one sign-in", () => {
 
     expect(
       await screen.findByText(
-        "The account was linked, but the profile color could not be saved.",
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.queryByText(
         "The account was signed in, but the profile color could not be saved.",
       ),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
       1,
     );
@@ -84,7 +79,7 @@ describe("Add a profile around one sign-in", () => {
         echoedExistingProfileId: null,
         seedCache: true,
       });
-      await pressAccount(offers);
+      await pressAccount();
       expect(
         screen.queryByText(
           "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -129,7 +124,7 @@ describe("Add a profile around one sign-in", () => {
       });
       profileNameTransport.onAccepted = (name) =>
         harness.updateProfileName(MINTED_PROFILE_ID, name);
-      await pressAccount(offers);
+      await pressAccount();
       expect(
         await screen.findByText(
           "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -211,7 +206,7 @@ describe("Add a profile around one sign-in", () => {
       });
       profileNameTransport.onAccepted = (name) =>
         harness.updateProfileName(MINTED_PROFILE_ID, name);
-      await pressAccount(offers);
+      await pressAccount();
       await screen.findByText(
         "Terminal account already uses this email. Name this profile so you can tell them apart.",
       );
@@ -282,7 +277,7 @@ describe("Add a profile around one sign-in", () => {
       });
       profileNameTransport.onAccepted = (name) =>
         harness.updateProfileName(MINTED_PROFILE_ID, name);
-      await pressAccount(offers);
+      await pressAccount();
       expect(
         await screen.findByText(
           "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -369,7 +364,7 @@ describe("Add a profile around one sign-in", () => {
       seedCache: true,
       authService: auth.service,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(
       await screen.findByText(
         "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -424,7 +419,7 @@ describe("Add a profile around one sign-in", () => {
         authService: auth.service,
         recordEnvironment: true,
       });
-      await pressAccount(true);
+      await pressAccount();
       expect(
         await screen.findByText(
           "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -488,7 +483,7 @@ describe("Add a profile around one sign-in", () => {
       failRename: true,
       authService: auth.service,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(
       await screen.findByText(
         "Terminal account already uses this email. Name this profile so you can tell them apart.",

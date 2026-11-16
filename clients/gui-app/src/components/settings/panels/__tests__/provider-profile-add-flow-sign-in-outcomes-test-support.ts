@@ -748,9 +748,8 @@ export function startCreateProfile(
   };
 }
 
-export async function pressAccount(offers: Offers): Promise<void> {
-  const name = offers === true ? "Sign in" : "Link account";
-  fireEvent.click(await screen.findByRole("button", { name }));
+export async function pressAccount(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
 }
 
 export async function expectSignedInDecision(
@@ -782,7 +781,6 @@ export function expectNoSuccessSentence(): void {
   expect(screen.queryByText(SIGNED_IN)).toBeNull();
   expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
   expect(screen.queryByText(WAITING)).toBeNull();
-  expect(screen.queryByText("Account already linked")).toBeNull();
   expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
 }
 

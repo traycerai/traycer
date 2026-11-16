@@ -37,7 +37,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       authService: auth.service,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(WAITING)).toBeTruthy();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
@@ -66,7 +66,7 @@ describe("Add a profile around one sign-in", () => {
         echoedProfiles: [row],
         echoedExistingProfileId: PROFILE_ID,
       });
-      await pressAccount(offers);
+      await pressAccount();
       if (offers === true) {
         expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
         expect(harness.listsAfterAwait()).toBe(1);
@@ -87,8 +87,10 @@ describe("Add a profile around one sign-in", () => {
         expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
         expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
       } else {
-        expect(await screen.findByText("Account already linked")).toBeTruthy();
-        expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
+        expect(
+          await screen.findByText(/already uses this account/u),
+        ).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Use" })).toBeNull();
         expect(harness.created).not.toHaveBeenCalled();
         expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
         expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
@@ -125,7 +127,7 @@ describe("Add a profile around one sign-in", () => {
       profilesAfter: [row],
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
     fireEvent.click(
@@ -153,7 +155,7 @@ describe("Add a profile around one sign-in", () => {
       profilesAfter: [],
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(WAITING)).toBeTruthy();
     expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
     expect(screen.queryByRole("button", { name: "Use" })).toBeNull();
@@ -170,7 +172,7 @@ describe("Add a profile around one sign-in", () => {
         profilesAfter: [],
         outcome: { kind: "waiting-for-profile" },
       });
-      await pressAccount(true);
+      await pressAccount();
       expect(await screen.findByText(WAITING)).toBeTruthy();
       expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
       if (how === "Escape") {
@@ -197,7 +199,7 @@ describe("Add a profile around one sign-in", () => {
         outcome,
         ownership: true,
       });
-      await pressAccount(true);
+      await pressAccount();
       await expectAddDidNotFinish(harness);
     },
   );
@@ -215,7 +217,7 @@ describe("Add a profile around one sign-in", () => {
         echoedProfiles: [signedIn],
         ownership: true,
       });
-      await pressAccount(true);
+      await pressAccount();
       await expectAddDidNotFinish(harness);
     },
   );
@@ -229,7 +231,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       echoedProfiles: [workProfile()],
     });
-    await pressAccount(true);
+    await pressAccount();
     const decisionReads = await expectSignedInDecision(harness);
     expect(decisionReads).toBe(1);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
@@ -252,7 +254,7 @@ describe("Add a profile around one sign-in", () => {
       echoedProfiles: [workProfile()],
       authService: auth.service,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
@@ -273,7 +275,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       listFailuresAfterAwait: 1,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(UNREADABLE)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
@@ -299,7 +301,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       listFailuresAfterAwait: 1,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(UNREADABLE)).toBeTruthy();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
@@ -322,7 +324,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       listFailuresAfterAwait: 3,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(UNREADABLE)).toBeTruthy();
     expect(harness.listsAfterAwait()).toBe(1);
     const startsBeforeRetry = methodCount(
@@ -364,7 +366,7 @@ describe("Add a profile around one sign-in", () => {
         outcome: { kind: "signed-in", profileId: PROFILE_ID },
         listFailuresAfterAwait: 2,
       });
-      await pressAccount(true);
+      await pressAccount();
       expect(await screen.findByText(UNREADABLE)).toBeTruthy();
       expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
       expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
@@ -425,7 +427,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       echoedProfiles: [row],
     });
-    await pressAccount(true);
+    await pressAccount();
     const decisionReads = await expectSignedInDecision(harness);
     expect(decisionReads).toBe(1);
     expect(harness.queryClient.getQueryData(LIST_KEY)).toEqual(
@@ -459,7 +461,7 @@ describe("Add a profile around one sign-in", () => {
       seedCache: true,
       cacheSeed,
     });
-    await pressAccount(true);
+    await pressAccount();
     expect(await screen.findByText(UNREADABLE)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Add a profile" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();

@@ -15,7 +15,14 @@ import {
   chooseSignedIn,
   setEnabledActionDetails,
 } from "./provider-profile-add-flow-sign-in-outcomes-test-support";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { SIGN_IN_TEXT } from "@/components/providers/profile-sync-copy";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
@@ -33,14 +40,13 @@ describe("Add a profile around one sign-in", () => {
       await screen.findByRole("heading", { name: "Add a profile" }),
     ).toBeTruthy();
     const signIn = screen.getByRole("button", { name: "Sign in" });
-    expect(signIn.textContent).toContain("Sign in");
+    expect(within(signIn).getByText(SIGN_IN_TEXT)).toBeTruthy();
     expect(
       screen.queryByRole("heading", { name: "Add new Claude Code profile" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
   });
 
-  it("keeps today's title and Link account when offersSignIns is false", async () => {
+  it("keeps today's title and Sign in when offersSignIns is false", async () => {
     renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: false,
@@ -53,13 +59,12 @@ describe("Add a profile around one sign-in", () => {
         name: "Add new Claude Code profile",
       }),
     ).toBeTruthy();
-    const link = screen.getByRole("button", { name: "Link account" });
-    expect(link.textContent).toContain("Link account");
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(within(signIn).getByText(SIGN_IN_TEXT)).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
-  it("keeps today's title and Link account when offersSignIns is absent", async () => {
+  it("keeps today's title and Sign in when offersSignIns is absent", async () => {
     renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: "absent",
@@ -72,9 +77,8 @@ describe("Add a profile around one sign-in", () => {
         name: "Add new Claude Code profile",
       }),
     ).toBeTruthy();
-    const link = screen.getByRole("button", { name: "Link account" });
-    expect(link.textContent).toContain("Link account");
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(within(signIn).getByText(SIGN_IN_TEXT)).toBeTruthy();
   });
 
   it("keeps today's Add dialog on a computer negotiating providers.list 10.11", async () => {
@@ -90,10 +94,9 @@ describe("Add a profile around one sign-in", () => {
         name: "Add new Claude Code profile",
       }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Link account" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => {
       expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
     });
@@ -120,7 +123,7 @@ describe("Add a profile around one sign-in", () => {
         holdStart: true,
         holdAwait: true,
       });
-      await pressAccount(offers);
+      await pressAccount();
       expect(screen.queryByLabelText("Paste the code")).toBeNull();
       await waitFor(() => {
         expect(
@@ -174,7 +177,7 @@ describe("Add a profile around one sign-in", () => {
           outcome: null,
           holdAwait: true,
         });
-        await pressAccount(offers);
+        await pressAccount();
         const copyButton = await screen.findByRole("button", {
           name: /Copy sign-in link/,
         });
@@ -208,7 +211,7 @@ describe("Add a profile around one sign-in", () => {
         codePaste: true,
         holdAwait: true,
       });
-      await pressAccount(offers);
+      await pressAccount();
       const openButton = await screen.findByRole("button", {
         name: /Open browser/,
       });
@@ -245,7 +248,7 @@ describe("Add a profile around one sign-in", () => {
         submitOutcome: "noActiveLogin",
         holdAwait: true,
       });
-      await pressAccount(offers);
+      await pressAccount();
       const input = await screen.findByLabelText("Paste the code");
       fireEvent.paste(input, {
         clipboardData: { getData: () => "abcd#1234" },
@@ -277,7 +280,7 @@ describe("Add a profile around one sign-in", () => {
       profilesAfter: [row],
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
     });
-    await pressAccount(true);
+    await pressAccount();
     const decisionReads = await expectSignedInDecision(harness);
     await chooseSignedIn(harness, decisionReads);
   });
@@ -291,7 +294,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       seedCache: true,
     });
-    await pressAccount(true);
+    await pressAccount();
     const decisionReads = await expectSignedInDecision(harness);
     expect(decisionReads).toBe(1);
     await chooseSignedIn(harness, decisionReads);
@@ -311,7 +314,7 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "signed-in", profileId: PROFILE_ID },
       seedCache: true,
     });
-    await pressAccount(true);
+    await pressAccount();
     await waitFor(() => {
       expect(harness.created).toHaveBeenCalledWith(PROFILE_ID);
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -339,18 +342,13 @@ describe("Add a profile around one sign-in", () => {
       seedCache: true,
       failRecolor: true,
     });
-    await pressAccount(true);
+    await pressAccount();
 
     expect(
       await screen.findByText(
         "The account was signed in, but the profile color could not be saved.",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "The account was linked, but the profile color could not be saved.",
-      ),
-    ).toBeNull();
     expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
       1,
     );
@@ -374,7 +372,7 @@ describe("Add a profile around one sign-in", () => {
     });
     profileNameTransport.onAccepted = (name) =>
       harness.updateProfileName(MINTED_PROFILE_ID, name);
-    await pressAccount(true);
+    await pressAccount();
     expect(
       await screen.findByText(
         "Terminal account already uses this email. Name this profile so you can tell them apart.",
@@ -395,11 +393,6 @@ describe("Add a profile around one sign-in", () => {
         "The account was signed in, but the profile color could not be saved.",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "The account was linked, but the profile color could not be saved.",
-      ),
-    ).toBeNull();
     expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
       1,
     );

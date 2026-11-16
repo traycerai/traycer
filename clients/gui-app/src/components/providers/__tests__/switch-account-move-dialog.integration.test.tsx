@@ -928,7 +928,6 @@ describe("Switch account moves only previewed work", () => {
     expect(screen.getByText("Moved 1 to New account.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Add as a new profile" }),
     ).toBeNull();
@@ -979,7 +978,6 @@ describe("Switch account moves only previewed work", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Move 1" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
     expect(harness.startRequests).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
