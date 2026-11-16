@@ -135,6 +135,25 @@ export async function readReviewHolds(
   cloud: EnvironmentCloud,
   environmentId: string,
 ): Promise<readonly ReviewHeldEntry[]> {
+  return readProjectedReviewHolds(cloud, environmentId, ({ entry }) => entry);
+}
+
+/** Values exist only while a caller makes its validated, masked projection. */
+export interface ReviewHeldProjectionInput {
+  readonly entry: ReviewHeldEntry;
+  readonly proposed: unknown;
+  readonly current: {
+    readonly revision: number;
+    readonly value: unknown;
+  } | null;
+}
+
+/** One operation-view read, projected before its answer enters a query cache. */
+export async function readProjectedReviewHolds<Projection>(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  project: (input: ReviewHeldProjectionInput) => Projection,
+): Promise<readonly Projection[]> {
   const query = new URLSearchParams({ include: REVIEW_INCLUDE_OPERATION });
   const { review } = parseReview(
     await sendReview(
@@ -146,13 +165,13 @@ export async function readReviewHolds(
     ),
     authnOperationReviewResponseSchema,
   );
-  const holds: ReviewHeldEntry[] = [];
+  const holds: Projection[] = [];
   for (const entry of review?.needsYou ?? []) {
     // A sign-in that did not move is the dashboard's to show.
     if (entry.type !== "held") continue;
     const kind = environmentItemKindSchema.safeParse(entry.kind);
     if (!kind.success) continue;
-    holds.push({
+    const held: ReviewHeldEntry = {
       entryId: entry.heldId,
       reason: "executable_entry",
       kind: kind.data,
@@ -168,7 +187,10 @@ export async function readReviewHolds(
       op: entry.op,
       heldRevision: entry.revision,
       liveRevision: entry.live?.revision ?? null,
-    });
+    };
+    holds.push(
+      project({ entry: held, proposed: entry.value, current: entry.live }),
+    );
   }
   return holds;
 }
@@ -239,7 +261,7 @@ export async function applyHeldChange(
 export async function applyReviewChoice(
   cloud: EnvironmentCloud,
   environmentId: string,
-  entry: ReviewHeldEntry,
+  entry: Pick<ReviewHeldEntry, "entryId" | "heldRevision" | "liveRevision">,
   choice: "approve" | "discard",
 ): Promise<ReviewChoiceOutcome> {
   if (choice === "approve") {

@@ -424,6 +424,7 @@ function TeamRoutingReadOnly(props: {
     <section className="flex flex-col gap-3 text-ui-sm">
       <FallbackPolicySummary
         policy={props.policy}
+        tierLabels={null}
         accounts={
           <p>
             Accounts:{" "}
