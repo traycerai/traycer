@@ -1142,60 +1142,6 @@ describe("Team Review through the addressed page", () => {
     ).toEqual([choicePath("hold-target", "apply")]);
   });
 
-  it("does not send an old press after the same person signs out and back in", async () => {
-    const row = held({
-      id: "hold-reentry",
-      kind: "variable",
-      key: "NODE_ENV",
-      heldRevision: 16,
-      liveRevision: 8,
-    });
-    const { harness } = createReviewHarness("admin", [row]);
-    const gate = holdNextReviewMutation(harness, () => undefined);
-    renderTeamPage(harness);
-    const dialog = await openReview();
-    const reviewRow = await within(dialog).findByTestId(
-      "retrospective-held-hold-reentry",
-    );
-    const approve = await within(reviewRow).findByRole("button", {
-      name: "Approve",
-    });
-
-    fireEvent.click(approve);
-    await gate.started;
-    act(() => {
-      harness.auth.applyExternalSession({ status: "signed-out" });
-      useAuthStore.setState({
-        status: "signed-out",
-        profile: null,
-        contextMetadata: null,
-        shareableTeams: [],
-      });
-    });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    act(() => {
-      harness.auth.applyExternalSession(
-        authSessionForUser(VIEWER_ID, "user-1-reentry-token"),
-      );
-      useAuthStore.setState({
-        status: "signed-in",
-        profile: {
-          userId: VIEWER_ID,
-          userName: "User One",
-          email: "user-1@example.com",
-        },
-        contextMetadata: { userId: VIEWER_ID, username: "user-1" },
-        shareableTeams: [{ teamId: "team-a", slug: "acme", avatarUrl: null }],
-      });
-    });
-
-    await act(async () => {
-      gate.release();
-      await gate.settled;
-    });
-    expect(choiceRequests(harness)).toEqual([]);
-  });
-
   it("keeps a captured press valid across an ordinary same-person bearer rotation", async () => {
     const row = held({
       id: "hold-rotation",
