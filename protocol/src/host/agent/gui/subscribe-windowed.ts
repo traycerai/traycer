@@ -30,6 +30,10 @@ import {
   messageSchemaPreShellHost,
 } from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
+import type {
+  OpenChatEvent,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
   checkpointArtifactTagSchema,
   checkpointArtifactTagSchemaPreHtml,
@@ -1705,16 +1709,100 @@ export type ChatAccumulatedChangeChunk = z.infer<
  * What is measured is the snapshot; what has to FIT is the encoded frame around
  * it, so the envelope is reserved rather than assumed away - see
  * {@link WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES}.
+ *
+ * Takes the snapshot's EXACT encoded size, from
+ * {@link windowedSnapshotEncodedBytes}: the ceiling is a hard one, so the
+ * number it is compared with is never an estimate.
  */
 export function windowedSnapshotFitsFrame(
-  snapshot: unknown,
+  encodedBytes: number,
   maxBytes: number,
 ): boolean {
   return (
-    utf8ByteLength(JSON.stringify(snapshot)) +
-      WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES <
+    encodedBytes + WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES <
     Math.min(maxBytes, WINDOWED_SNAPSHOT_MAX_BYTES)
   );
+}
+
+/**
+ * The tail's record arrays as the snapshot carries them, with each record's
+ * exact encoded size.
+ *
+ * `recordBytes` must answer `utf8ByteLength(encodeRecord(record))` for the very
+ * object it is handed - a `RecordFingerprintMemo` lookup does, and so does
+ * `recordByteLength`.
+ */
+export interface WindowedSnapshotTailRecords {
+  readonly messages: readonly OpenMessage[];
+  readonly events: readonly OpenChatEvent[];
+  readonly recordBytes: (record: OpenMessage | OpenChatEvent) => number;
+}
+
+/**
+ * The UTF-8 byte length of `JSON.stringify(snapshot)`, exactly.
+ *
+ * With `tailRecords`, the tail's records are not encoded again. A producer
+ * that sheds tail rows measures one candidate per halving, every candidate
+ * carries records the producer has already encoded once (its memo holds their
+ * sizes), and those records are nearly all of a large snapshot's bytes. So only
+ * the rest of the snapshot is stringified, with `tail.messages` and
+ * `tail.events` emptied, and each record's size is added back.
+ *
+ * Exact, not an estimate, because a JSON array is encoded as `[`, its members'
+ * own encodings joined by `,`, then `]`: the members' bytes plus one comma
+ * between each pair is what the emptied `[]` stands in for. A record is an
+ * object, so no member encodes as `null` in place of `undefined`. Spreading
+ * keeps every key where it was, and the byte length of a concatenation is the
+ * sum of its parts because every join falls on an ASCII character.
+ *
+ * The record path is taken only when `snapshot.tail.messages` and
+ * `snapshot.tail.events` ARE the arrays `tailRecords` names. Anything else is
+ * measured whole, so a caller that names other arrays gets an exact answer
+ * slowly, never a wrong one quickly.
+ */
+export function windowedSnapshotEncodedBytes(
+  snapshot: unknown,
+  tailRecords: WindowedSnapshotTailRecords | null,
+): number {
+  if (
+    tailRecords === null ||
+    typeof snapshot !== "object" ||
+    snapshot === null ||
+    !("tail" in snapshot)
+  ) {
+    return utf8ByteLength(JSON.stringify(snapshot));
+  }
+  const tail = snapshot.tail;
+  if (
+    typeof tail !== "object" ||
+    tail === null ||
+    !("messages" in tail) ||
+    !("events" in tail) ||
+    tail.messages !== tailRecords.messages ||
+    tail.events !== tailRecords.events
+  ) {
+    return utf8ByteLength(JSON.stringify(snapshot));
+  }
+  const withoutRecords = {
+    ...snapshot,
+    tail: { ...tail, messages: [], events: [] },
+  };
+  return (
+    utf8ByteLength(JSON.stringify(withoutRecords)) +
+    arrayMemberBytes(tailRecords.messages, tailRecords.recordBytes) +
+    arrayMemberBytes(tailRecords.events, tailRecords.recordBytes)
+  );
+}
+
+/** What a non-empty array's members add to its `[]`: their bytes and commas. */
+function arrayMemberBytes<Item extends OpenMessage | OpenChatEvent>(
+  members: readonly Item[],
+  memberBytes: (member: Item) => number,
+): number {
+  if (members.length === 0) return 0;
+  let bytes = members.length - 1;
+  for (const member of members) bytes += memberBytes(member);
+  return bytes;
 }
 
 export const chatLoadRangeRequestSchema = lazySchema(() =>
