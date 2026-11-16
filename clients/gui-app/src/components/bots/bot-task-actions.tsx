@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { EllipsisVertical } from "lucide-react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
@@ -28,31 +29,11 @@ export function BotTaskControls(props: {
   readonly nameOf: (userId: string) => string;
 }): ReactNode {
   const { task, boundHere } = props;
-  if (task.state === "ended" && task.endedReason === "by-bot") {
-    return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Reporting actions"
-          >
-            <EllipsisVertical aria-hidden="true" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          className="w-[min(16rem,calc(100vw-2rem))]"
-        >
-          <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
-            Reporting has ended. The task and its agents can keep working.
-          </p>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
-  if (task.state !== "tracking" || task.cadence.kind !== "every" || !boundHere)
+  const ended = task.state === "ended" && task.endedReason === "by-bot";
+  if (
+    !ended &&
+    (task.state !== "tracking" || task.cadence.kind !== "every" || !boundHere)
+  )
     return null;
   return <TaskActionMenu {...props} />;
 }
@@ -64,6 +45,7 @@ function TaskActionMenu(props: {
   readonly nameOf: (userId: string) => string;
 }): ReactNode {
   const { botId, hostId, task, nameOf } = props;
+  const ended = task.state === "ended" && task.endedReason === "by-bot";
   const [confirmOpen, setConfirmOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const client = useTabHostClient();
@@ -73,79 +55,86 @@ function TaskActionMenu(props: {
   const runNow = useBotTaskRunNowMutation(client);
   const setPaused = useBotTaskSetPausedMutation(client);
   const stop = useBotTaskStopMutation(client);
-  if (!canRun && !canPause && !canStop) return null;
+  if (!ended && !canRun && !canPause && !canStop) return null;
+  const pending = runNow.isPending || setPaused.isPending;
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             ref={triggerRef}
+            disabled={pending}
             type="button"
             variant="ghost"
             size="icon-sm"
             aria-label="Reporting actions"
           >
-            <EllipsisVertical aria-hidden="true" />
+            {pending ? (
+              <span aria-hidden="true">
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              </span>
+            ) : (
+              <EllipsisVertical aria-hidden="true" />
+            )}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
           className="w-[min(16rem,calc(100vw-2rem))]"
         >
-          <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
-            These controls change reports only. The task and its agents can keep
-            working.
-          </p>
-          {task.pause === null ? null : (
+          {ended ? (
             <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
-              Paused by {nameOf(task.pause.byUserId)} since{" "}
-              {formatAbsoluteDateTime(task.pause.since)}
+              Reporting has ended. The task and its agents can keep working.
             </p>
-          )}
-          {task.runRequest === null ? null : (
-            <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
-              {task.runRequest.state === "running"
-                ? "Runs now"
-                : "Requested; runs when the task next reports"}
-              {task.pause === null ? null : ", then stays paused"}
-            </p>
-          )}
-          <DropdownMenuSeparator />
-          {canRun ? (
-            <DropdownMenuItem
-              data-testid="bot-task-run-now"
-              disabled={runNow.isPending || task.runRequest !== null}
-              onSelect={() => runNow.mutate({ botId, taskId: task.taskId })}
-            >
-              Check in now
-            </DropdownMenuItem>
-          ) : null}
-          {canPause ? (
-            <DropdownMenuItem
-              data-testid="bot-task-pause"
-              disabled={setPaused.isPending}
-              onSelect={() =>
-                setPaused.mutate({
-                  botId,
-                  taskId: task.taskId,
-                  paused: task.pause === null,
-                })
-              }
-            >
-              {task.pause === null ? "Pause reports" : "Resume reports"}
-            </DropdownMenuItem>
-          ) : null}
-          {canStop ? (
+          ) : (
             <>
+              <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+                These controls change reports only. The task and its agents can
+                keep working.
+              </p>
+              <ReportingMetadata task={task} nameOf={nameOf} />
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                data-testid="bot-task-stop"
-                onSelect={() => setConfirmOpen(true)}
-              >
-                End reporting…
-              </DropdownMenuItem>
+              {canRun ? (
+                <DropdownMenuItem
+                  data-testid="bot-task-run-now"
+                  disabled={runNow.isPending || task.runRequest !== null}
+                  onSelect={() => runNow.mutate({ botId, taskId: task.taskId })}
+                >
+                  Check in now
+                </DropdownMenuItem>
+              ) : null}
+              {canPause ? (
+                <DropdownMenuItem
+                  data-testid="bot-task-pause"
+                  disabled={setPaused.isPending}
+                  onSelect={() =>
+                    setPaused.mutate({
+                      botId,
+                      taskId: task.taskId,
+                      paused: task.pause === null,
+                    })
+                  }
+                >
+                  {task.pause === null ? "Pause reports" : "Resume reports"}
+                </DropdownMenuItem>
+              ) : null}
+              {canStop ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    data-testid="bot-task-stop"
+                    onSelect={() => setConfirmOpen(true)}
+                  >
+                    End reporting…
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </>
-          ) : null}
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <ConfirmDestructiveDialog
@@ -169,6 +158,31 @@ function TaskActionMenu(props: {
           )
         }
       />
+    </>
+  );
+}
+
+function ReportingMetadata(props: {
+  readonly task: BotTaskEntry;
+  readonly nameOf: (userId: string) => string;
+}): ReactNode {
+  const { task, nameOf } = props;
+  return (
+    <>
+      {task.pause === null ? null : (
+        <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+          Paused by {nameOf(task.pause.byUserId)} since{" "}
+          {formatAbsoluteDateTime(task.pause.since)}
+        </p>
+      )}
+      {task.runRequest === null ? null : (
+        <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">
+          {task.runRequest.state === "running"
+            ? "Runs now"
+            : "Requested; runs when the task next reports"}
+          {task.pause === null ? null : ", then stays paused"}
+        </p>
+      )}
     </>
   );
 }

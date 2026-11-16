@@ -110,6 +110,9 @@ const mocks = vi.hoisted(() => {
       hold: false,
       settle: null as ((outcome: "success" | "failure") => void) | null,
     },
+    /** Check in now and pause/resume: answered at once, or held until `settle`. */
+    runNow: { hold: false, settle: null as (() => void) | null },
+    setPaused: { hold: false, settle: null as (() => void) | null },
     asked,
     /** `hostId`'s `host.notifications.indicatorState` answer for a request. */
     answerIndicators(
@@ -187,16 +190,24 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 // The member actions' writes: each records the method and what it was sent.
 vi.mock("@/hooks/bots/use-bot-task-action-mutations", async () => {
   const { useState } = await import("react");
-  const recording = (method: string) => () => ({
-    mutate: (variables: unknown) => {
-      mocks.actions.push({ method, variables });
-    },
-    isPending: false,
-    variables: undefined,
-  });
+  const held =
+    (method: string, control: { hold: boolean; settle: (() => void) | null }) =>
+    () => {
+      const [isPending, setPending] = useState(false);
+      return {
+        mutate: (variables: unknown) => {
+          mocks.actions.push({ method, variables });
+          if (!control.hold) return;
+          setPending(true);
+          control.settle = () => setPending(false);
+        },
+        isPending,
+        variables: undefined,
+      };
+    };
   return {
-    useBotTaskRunNowMutation: recording("bot.task.runNow"),
-    useBotTaskSetPausedMutation: recording("bot.task.setPaused"),
+    useBotTaskRunNowMutation: held("bot.task.runNow", mocks.runNow),
+    useBotTaskSetPausedMutation: held("bot.task.setPaused", mocks.setPaused),
     useBotTaskStopMutation: () => {
       const [isPending, setPending] = useState(false);
       return {
@@ -594,6 +605,10 @@ beforeEach(() => {
   mocks.actions.length = 0;
   mocks.stop.hold = false;
   mocks.stop.settle = null;
+  mocks.runNow.hold = false;
+  mocks.runNow.settle = null;
+  mocks.setPaused.hold = false;
+  mocks.setPaused.settle = null;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
   // Every case starts with the fleet vouched, so a quiet seen row can leave.
@@ -2719,20 +2734,13 @@ describe("<BotActivityPage /> watched-task reporting controls", () => {
     expect(text).not.toContain("next check-in");
   });
 
-  it("holds Check in now, Pause reports and End reporting in the overflow, and says the menu changes reports only", async () => {
+  it("says the overflow menu changes reports only", async () => {
     const user = userEvent.setup();
     mocks.state.supported = new Set(REPORT_METHODS);
     mount([periodic("t-every", {})], { boundHere: true });
 
     await openReportingMenu(user, "t-every");
 
-    expect(screen.getByRole("menuitem", { name: "Check in now" })).toBeTruthy();
-    expect(
-      screen.getByRole("menuitem", { name: "Pause reports" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("menuitem", { name: "End reporting…" }),
-    ).toBeTruthy();
     expect(
       screen.getByText(
         "These controls change reports only. The task and its agents can keep working.",
@@ -2943,6 +2951,110 @@ async function openEndReportingByKeyboard(
   expect(screen.getByText("End reporting?")).toBeTruthy();
   return trigger;
 }
+
+/** Whether the spinner's braille glyph is drawn inside `element`. */
+const showsSpinner = (element: HTMLElement): boolean =>
+  /[\u2800-\u28FF]/.test(element.textContent);
+
+describe("<BotActivityPage /> a held check-in or pause", () => {
+  it.each([
+    ["Check in now", "bot.task.runNow", "runNow"],
+    ["Pause reports", "bot.task.setPaused", "setPaused"],
+  ] as const)(
+    "after %s the menu closes and the unchanged Reporting actions trigger shows the spinner until the answer arrives, with one dispatch",
+    async (item, method, key) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks[key].hold = true;
+      mount([periodic("t-every", {})], { boundHere: true });
+      const trigger = within(row("t-every")).getByRole("button", {
+        name: "Reporting actions",
+      });
+      expect(showsSpinner(trigger)).toBe(false);
+
+      await openReportingMenu(user, "t-every");
+      await user.click(screen.getByRole("menuitem", { name: item }));
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(
+        within(row("t-every")).getByRole("button", {
+          name: "Reporting actions",
+        }),
+      ).toBe(trigger);
+      expect(showsSpinner(trigger)).toBe(true);
+      expect(mocks.actions.map((action) => action.method)).toEqual([method]);
+
+      act(() => mocks[key].settle?.());
+
+      expect(showsSpinner(trigger)).toBe(false);
+      expect(mocks.actions).toHaveLength(1);
+    },
+  );
+});
+
+describe("<BotActivityPage /> a task whose reporting ends while its confirmation closes", () => {
+  const endedByBot = (): BotTaskEntry =>
+    task("t-every", {
+      cadence: { kind: "none" },
+      state: "ended",
+      endedReason: "by-bot",
+      inputNeeded: [],
+    });
+
+  it.each([
+    ["the stop answers first, then the snapshot ends the task", true],
+    ["the snapshot ends the task first, then the stop answers", false],
+  ] as const)(
+    "the same Reporting actions trigger stays mounted and holds focus when %s",
+    async (_order, stopAnswersFirst) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      mocks.stop.hold = true;
+      const view = render(
+        <Harness
+          threads={[]}
+          tasks={[periodic("t-every", {})]}
+          boundHere
+          notificationSubscriptions={null}
+        />,
+      );
+      const trigger = await openEndReportingByKeyboard(user);
+      await user.click(screen.getByRole("button", { name: "End reporting" }));
+      const endTask = (): void =>
+        view.rerender(
+          <Harness
+            threads={[]}
+            tasks={[endedByBot()]}
+            boundHere
+            notificationSubscriptions={null}
+          />,
+        );
+      const answerStop = async (): Promise<void> => {
+        const back = focusReturns(trigger);
+        act(() => mocks.stop.settle?.("success"));
+        await back;
+      };
+
+      if (stopAnswersFirst) {
+        await answerStop();
+        endTask();
+      } else {
+        endTask();
+        await answerStop();
+      }
+
+      expect(trigger.isConnected).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+      expect(
+        within(endedRowFor("t-every")).getByRole("button", {
+          name: "Reporting actions",
+        }),
+      ).toBe(trigger);
+      expect(mocks.actions).toHaveLength(1);
+    },
+    5_000,
+  );
+});
 
 describe("<BotActivityPage /> ending reporting from the keyboard", () => {
   it.each([
