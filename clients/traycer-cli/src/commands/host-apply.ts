@@ -1,3 +1,8 @@
+import {
+  credentialProvisionForResult,
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
 import type { ApplyHostOutcome } from "../installer/apply";
 import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import {
@@ -133,14 +138,25 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
         outcome: reported.outcome,
         activation,
       });
+      const credentialProvision =
+        activation === "requested" && args.attemptAdoption === null
+          ? await maybeProvisionCredential(ctx, "start", null)
+          : null;
+      const note = formatCredentialProvisionNote(credentialProvision);
+      const human = humanSummary(reported);
       return {
         // Additive sibling on the existing payload: every field callers already
         // read is untouched, and `activation` collapses the three fields that
         // answer "what happened to the service after the swap?" into one - the
         // question exit 0 does NOT answer here. See the success-contract note
         // above, and `activationOf` for why it is not called "converged".
-        data: { ...reported, activation },
-        human: humanSummary(reported),
+        data: {
+          ...reported,
+          activation,
+          credentialProvision:
+            credentialProvisionForResult(credentialProvision),
+        },
+        human: note === null ? human : `${human}; ${note}`,
         exitCode: 0,
       };
     } catch (err) {

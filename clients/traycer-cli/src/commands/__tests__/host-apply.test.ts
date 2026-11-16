@@ -15,7 +15,23 @@ const mocks = vi.hoisted(() => ({
   readHostInstallRecordMock: vi.fn(),
   isVersionYankedMock: vi.fn(),
   createRegistryYankLookupMock: vi.fn(),
+  credentialProvisionMock: vi.fn(),
+  lockEvents: [] as string[],
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: (
+      ...args: Parameters<typeof actual.maybeProvisionCredential>
+    ) => {
+      mocks.lockEvents.push("credential-probe");
+      return mocks.credentialProvisionMock(...args);
+    },
+  };
+});
 
 vi.mock("../../installer/apply", () => ({
   applyHost: async (options: { readonly onWillDisruptHost: () => void }) => {
@@ -31,8 +47,17 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/cli-lock")>();
   return {
     ...actual,
-    withCliLock: async <T>(_opts: unknown, fn: () => Promise<T>): Promise<T> =>
-      fn(),
+    withCliLock: async <T>(
+      _opts: unknown,
+      fn: () => Promise<T>,
+    ): Promise<T> => {
+      mocks.lockEvents.push("lock-enter");
+      try {
+        return await fn();
+      } finally {
+        mocks.lockEvents.push("lock-exit");
+      }
+    },
   };
 });
 
@@ -139,6 +164,7 @@ function runApply(
   overrides: {
     readonly respectHold?: boolean;
     readonly lifecycleOrigin?: "desktop" | "terminal";
+    readonly attemptAdoption?: string | null;
   },
 ): Promise<{
   readonly data: unknown;
@@ -151,7 +177,7 @@ function runApply(
     noService: false,
     expectedStageFingerprint: null,
     respectHold: overrides.respectHold ?? false,
-    attemptAdoption: null,
+    attemptAdoption: overrides.attemptAdoption ?? null,
     lifecycleOrigin: overrides.lifecycleOrigin ?? "terminal",
     acceptStoreFormatLoss: false,
   })(fakeCtx());
@@ -170,6 +196,11 @@ beforeEach(async () => {
   // describe block below (which overrides this per case) reaches its
   // outcome without a real network fetch.
   mocks.isVersionYankedMock.mockReset().mockResolvedValue(false);
+  mocks.lockEvents = [];
+  mocks.credentialProvisionMock.mockReset().mockResolvedValue({
+    kind: "active",
+    minted: true,
+  });
 });
 
 describe("host apply - activation", () => {
@@ -199,8 +230,48 @@ describe("host apply - activation", () => {
     expect(result.data).toMatchObject({
       outcome: "applied",
       activation: "requested",
+      credentialProvision: { kind: "active" },
     });
+    expect(result.data).toHaveProperty("credentialProvision", {
+      kind: "active",
+    });
+    expect(result.human).toContain("host authorized");
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
+    );
+    expect(mocks.lockEvents).toContain("lock-exit");
+    expect(mocks.lockEvents.indexOf("lock-exit")).toBeLessThan(
+      mocks.lockEvents.indexOf("credential-probe"),
+    );
     expect(result.exitCode).toBe(0);
+  });
+
+  it("does not probe a borrowed apply while its parent owns the lifecycle attempt", async () => {
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "stopped",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+        postSwapWarning: null,
+      },
+      { attemptAdoption: "parent-attempt" },
+    );
+
+    expect(result.data).toMatchObject({
+      activation: "requested",
+      credentialProvision: null,
+    });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
   });
 
   // The whole reason this command stays exit 0: a post-swap service failure is
@@ -270,7 +341,9 @@ describe("host apply - activation", () => {
     expect(result.data).toMatchObject({
       outcome: "applied",
       activation: "not-attempted",
+      credentialProvision: null,
     });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(result.exitCode).toBe(0);
     // Same rule: no start ran, which says nothing about what is serving. A
     // bytes-only swap under a host nobody stopped leaves that host alive.
@@ -292,6 +365,7 @@ describe("host apply - activation", () => {
     );
 
     expect(result.data).toMatchObject({ outcome: "no-op", activation: null });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(result.exitCode).toBe(0);
   });
 
@@ -310,6 +384,7 @@ describe("host apply - activation", () => {
       outcome: "stage-fingerprint-mismatch",
       activation: null,
     });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
   });
 });
 
@@ -340,6 +415,7 @@ describe("host apply - respectHold", () => {
       installedVersion: "1.2.0",
     });
     expect(mocks.applyHostCalls).toBe(0);
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
   });
 

@@ -47,7 +47,37 @@ const mocks = vi.hoisted(() => ({
   // command-level wiring and never publishes.
   crossSpawnEdge: false,
   publishedOrigins: [] as string[],
+  credentialProvisionMock: vi.fn(),
+  platform: null as NodeJS.Platform | null,
+  finalizeOutcome: null as
+    | import("../cli-upgrade").FinalizePendingCliUpgradeOutcome
+    | null,
+  scheduleOutcome: null as
+    | import("../../upgrade/finalize-helper").ScheduleHelperResult
+    | null,
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: mocks.credentialProvisionMock,
+  };
+});
+
+vi.mock("../cli-upgrade", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli-upgrade")>();
+  return {
+    ...actual,
+    finalizePendingCliUpgrade: (
+      ...args: Parameters<typeof actual.finalizePendingCliUpgrade>
+    ) =>
+      mocks.finalizeOutcome === null
+        ? actual.finalizePendingCliUpgrade(...args)
+        : Promise.resolve(mocks.finalizeOutcome),
+  };
+});
 
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
@@ -165,6 +195,12 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
     await importOriginal<typeof import("../../upgrade/finalize-helper")>();
   return {
     ...actual,
+    scheduleFinalizationHelper: (
+      ...args: Parameters<typeof actual.scheduleFinalizationHelper>
+    ) =>
+      mocks.scheduleOutcome === null
+        ? actual.scheduleFinalizationHelper(...args)
+        : Promise.resolve(mocks.scheduleOutcome),
     reconcilePostFinalizeMarker: async (
       ...callArgs: Parameters<typeof actual.reconcilePostFinalizeMarker>
     ) => {
@@ -181,7 +217,11 @@ import type { CommandContext, CommandFn } from "../../runner/runner";
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
-  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+  return {
+    ...actual,
+    homedir: () => osHome.current || actual.tmpdir(),
+    platform: () => mocks.platform ?? actual.platform(),
+  };
 });
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -271,6 +311,13 @@ describe("buildHostRestartCommand", () => {
     mocks.launches = 0;
     mocks.realController = null;
     mocks.spawnWaitFor = null;
+    mocks.credentialProvisionMock.mockReset().mockResolvedValue({
+      kind: "active",
+      minted: true,
+    });
+    mocks.platform = null;
+    mocks.finalizeOutcome = null;
+    mocks.scheduleOutcome = null;
   });
 
   afterEach(() => {
@@ -338,7 +385,7 @@ describe("buildHostRestartCommand", () => {
     })(fakeCtx());
 
     expect(result.human).toBe(
-      "requested restart for service 'ai.traycer.host.agent'",
+      "requested restart for service 'ai.traycer.host.agent'; host authorized",
     );
     expect(result.data).toMatchObject({ label: "ai.traycer.host" });
     const jobs = launchctl.map((call) => call.split("/").at(-1));
@@ -414,6 +461,75 @@ describe("buildHostRestartCommand", () => {
       runtimeWasNull: true,
       installGeneration: expect.stringContaining("restart-attestation-install"),
     });
+  });
+
+  it("reports a completed restart's real provisioning outcome after the lifecycle lock", async () => {
+    mocks.credentialProvisionMock.mockImplementation(() => {
+      mocks.lockEvents.push("credential-probe");
+      return Promise.resolve({ kind: "active", minted: true });
+    });
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const result = await buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      expectedHost: null,
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      restarted: true,
+      credentialProvision: { kind: "active" },
+    });
+    expect(result.data).toHaveProperty("credentialProvision", {
+      kind: "active",
+    });
+    expect(result.human).toContain("host authorized");
+    expect(mocks.lockEvents).toContain("lock released");
+    expect(mocks.lockEvents.indexOf("lock released")).toBeLessThan(
+      mocks.lockEvents.indexOf("credential-probe"),
+    );
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
+    );
+  });
+
+  it("leaves an armed Windows finalize helper as the sole owner of its service start", async () => {
+    mocks.platform = "win32";
+    mocks.finalizeOutcome = {
+      status: "still-locked",
+      stagedBinaryPath: join(workHome, "traycer-1.5.0"),
+      livePath: join(workHome, "traycer"),
+      errorMessage: "binary still held",
+    };
+    mocks.scheduleOutcome = {
+      status: "armed",
+      platform: "win32",
+      scriptPath: null,
+      armedPath: null,
+      markerPath: join(workHome, "post-finalize.json"),
+      helperPid: 99001,
+      errorMessage: null,
+    };
+
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const result = await buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      expectedHost: null,
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      restarted: true,
+      helper: { status: "armed", helperPid: 99001 },
+      credentialProvision: null,
+    });
+    expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
+    expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
   });
 
   it("--if-idle probes busy (inside the lock) before stop, and proceeds when idle", async () => {

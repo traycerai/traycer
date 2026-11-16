@@ -199,7 +199,9 @@ describe.skipIf(process.platform === "win32")(
         expect(result.data).toEqual({
           status: "no-pending",
           serviceStartError: null,
+          credentialProvision: null,
         });
+        expect(mocks.controllerCalls).toEqual(["start"]);
       } finally {
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
