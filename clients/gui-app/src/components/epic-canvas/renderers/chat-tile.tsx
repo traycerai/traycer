@@ -32,6 +32,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import {
@@ -82,6 +83,8 @@ import {
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
 import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
+import { useChatLoadFocusHold } from "@/components/chat/chat-load-focus-hold";
+import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -710,6 +713,20 @@ function ChatTileForChat(props: ChatTileProps) {
     hasReadySession,
     sandboxAvailability.explainsLoad,
   );
+  const snapshotLoaded = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        handle === null ? () => undefined : handle.store.subscribe(onChange),
+      [handle],
+    ),
+    () => handle?.store.getState().snapshotLoaded ?? false,
+  );
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const loadFocusHold = useChatLoadFocusHold({
+    loaded: snapshotLoaded,
+    active: isActive,
+    surface: surfaceRef,
+  });
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
@@ -790,6 +807,7 @@ function ChatTileForChat(props: ChatTileProps) {
   if (handle === null) {
     return (
       <div
+        ref={surfaceRef}
         data-testid="chat-tile"
         data-node-id={node.id}
         className="flex h-full min-h-0 flex-col"
@@ -812,7 +830,11 @@ function ChatTileForChat(props: ChatTileProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+    <div
+      ref={surfaceRef}
+      className="flex h-full min-h-0 flex-col"
+      data-node-id={node.id}
+    >
       {deadTileBanner}
       <ChatTileCatchingUpBanner
         chat={servingKey}
@@ -830,19 +852,21 @@ function ChatTileForChat(props: ChatTileProps) {
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
           <ChatStateLineContext value={stateLine}>
-            <ChatTileSessionView
-              handle={handle}
-              node={node}
-              viewTabId={viewTabId}
-              tileId={props.tileId}
-              isActive={isActive}
-              currentEpicId={epicId}
-              restingSandbox={wakeOf(sandbox)}
-              evictedSend={evictedSend}
-              readOnlyNotice={sandboxAvailability.readOnlyNotice}
-              isLiveSession
-              preContent={preContentFrame}
-            />
+            <PaneActivationFocusIntentContext value={loadFocusHold}>
+              <ChatTileSessionView
+                handle={handle}
+                node={node}
+                viewTabId={viewTabId}
+                tileId={props.tileId}
+                isActive={isActive}
+                currentEpicId={epicId}
+                restingSandbox={wakeOf(sandbox)}
+                evictedSend={evictedSend}
+                readOnlyNotice={sandboxAvailability.readOnlyNotice}
+                isLiveSession
+                preContent={preContentFrame}
+              />
+            </PaneActivationFocusIntentContext>
           </ChatStateLineContext>
         </ChatSandboxLineContext>
       </TombstonedProfileProvider>
