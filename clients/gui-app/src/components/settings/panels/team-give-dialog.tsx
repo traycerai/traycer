@@ -94,10 +94,7 @@ export function TeamGiveDialog(props: {
     props.hostId,
     team.environmentId,
   );
-  const { given, ended, reread } = useGiveAttempt(
-    originAttempt?.press.client ?? props.client,
-    originAttempt,
-  );
+  const { given, ended, reread } = useGiveAttempt(props.client, originAttempt);
   const ownership = useGiveOwnership(attempt, originAttempt, given);
 
   const settle = (
@@ -355,7 +352,7 @@ function useGiveAttempt(
 ): { readonly given: boolean; readonly ended: boolean; reread: () => void } {
   const status = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
-    client,
+    client: attempt?.press.client ?? client,
     method: "environment.status",
     params: {},
     options: { enabled: attempt !== null, poll: true },
