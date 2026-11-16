@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSessionObservedFromHookCommand } from "../agent-session-observed-from-hook";
-import { callHostRpcFastFail } from "../../internal/host-rpc";
+import { callAgentHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
@@ -34,11 +34,11 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpcFastFail: vi.fn(),
+    callAgentHostRpcFastFail: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpcFastFail);
+const rpcMock = vi.mocked(callAgentHostRpcFastFail);
 
 beforeEach(() => {
   vi.clearAllMocks();

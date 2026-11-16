@@ -15,6 +15,13 @@ import {
   PLAIN_DISPATCH,
   toAgentCliError,
 } from "../host-rpc";
+import { buildAgentSendCommand } from "../../commands/agent-send";
+import { buildAgentTitleFromHookCommand } from "../../commands/agent-title-from-hook";
+import {
+  makeCtx,
+  restoreStdin,
+  stubStdin,
+} from "../../commands/__tests__/hook-test-helpers";
 import { resolveHostAuth } from "../host-auth";
 import { hostTokenFailureCliError } from "../host-door-words";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -34,6 +41,9 @@ import {
   hostTokensPath,
 } from "@traycer-clients/shared/auth/host-token-file";
 import type { HostRequestOptions } from "../../../../shared/host-transport/host-messenger";
+import { createOutput } from "../../runner/output";
+import type { CommandContext } from "../../runner/runner";
+import { resolveRuntimeContext } from "../../runner/runtime";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -96,6 +106,7 @@ const {
   testHome,
   fetchMock,
   openCliHostSessionMock,
+  agentEnvironment,
 } = vi.hoisted(() => ({
   requestMock: vi.fn(),
   rpcClientConstructorMock: vi.fn(),
@@ -103,8 +114,27 @@ const {
   testHome: { path: null as string | null },
   fetchMock: vi.fn(),
   openCliHostSessionMock: vi.fn(),
+  agentEnvironment: {
+    capability: undefined as string | undefined,
+    agentId: undefined as string | undefined,
+    names: [] as string[],
+  },
 }));
 const presentedHostTokens = vi.hoisted(() => [] as string[]);
+
+vi.mock("../agent-session-capability", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agent-session-capability")>();
+  return {
+    ...actual,
+    PROCESS_AGENT_ENVIRONMENT: (name: string) => {
+      agentEnvironment.names.push(name);
+      if (name === "TRAYCER_AGENT_SESSION_CAPABILITY")
+        return agentEnvironment.capability;
+      return name === "TRAYCER_AGENT_ID" ? agentEnvironment.agentId : undefined;
+    },
+  };
+});
 
 vi.mock("../cli-host-tokens", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli-host-tokens")>();
@@ -137,6 +167,7 @@ vi.mock("../../logger", () => ({
   createCliLogger: () => loggerMock,
   errorFromUnknown: (value: unknown) =>
     value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
 }));
 
 vi.mock(
@@ -224,6 +255,41 @@ const fakeStore: CredentialsMutationStore = {
 
 const METHOD = "agent.list";
 
+function agentSendCommand(): Promise<unknown> {
+  const runtime = resolveRuntimeContext(
+    { json: false, quiet: false, noProgress: false, noBootstrap: false },
+    {},
+  );
+  const output = createOutput(runtime);
+  const context: CommandContext = {
+    runtime,
+    output,
+    progress: (info) => output.progress(info),
+  };
+  return buildAgentSendCommand({
+    epicId: "epic-1",
+    senderAgentId: "agent-1",
+    to: "agent-2",
+    message: "capability probe",
+    expectReply: false,
+    responseId: null,
+    workspace: null,
+  })(context);
+}
+
+function agentTitleHookCommand(): Promise<unknown> {
+  stubStdin({
+    isTTY: false,
+    chunks: [JSON.stringify({ prompt: "prompt from a provider hook" })],
+  });
+  return buildAgentTitleFromHookCommand({
+    provider: "claude",
+    epicId: "epic-1",
+    agentId: "agent-1",
+    harnessSessionId: null,
+  })(makeCtx());
+}
+
 function fatalDoorError(args: {
   readonly code: "UNAUTHORIZED" | "FORBIDDEN";
   readonly doorReason: HostDoorReason;
@@ -251,6 +317,9 @@ beforeEach(async () => {
   fetchMock.mockReset();
   rotateMock.mockReset();
   presentedHostTokens.length = 0;
+  agentEnvironment.capability = undefined;
+  agentEnvironment.agentId = undefined;
+  agentEnvironment.names.length = 0;
   openCliHostSessionMock.mockReset();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-host-rpc-"));
   fetchMock.mockImplementation(
@@ -288,9 +357,132 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  restoreStdin();
   const home = testHome.path;
   testHome.path = null;
   if (home !== null) await rm(home, { recursive: true, force: true });
+});
+
+describe("agent command capability", () => {
+  it("sends the supplied capability through a unary command without normal auth", async () => {
+    const capability = "00000000-0000-4000-8000-000000000011";
+    agentEnvironment.capability = capability;
+    requestMock.mockResolvedValue({ responseId: null });
+
+    const result = await agentSendCommand();
+
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(presentedHostTokens).toEqual([capability]);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const loggerCalls = [
+      ...loggerMock.debug.mock.calls,
+      ...loggerMock.info.mock.calls,
+      ...loggerMock.warn.mock.calls,
+      ...loggerMock.error.mock.calls,
+    ];
+    expect(JSON.stringify(loggerCalls)).not.toContain(capability);
+  });
+
+  it("presents the supplied capability from a provider hook", async () => {
+    const capability = "00000000-0000-4000-8000-000000000013";
+    agentEnvironment.capability = capability;
+    requestMock.mockResolvedValue({ accepted: true });
+
+    const result = await agentTitleHookCommand();
+
+    expect(result).toMatchObject({
+      data: { accepted: true, reason: null },
+      exitCode: 0,
+    });
+    expect(requestMock).toHaveBeenCalledWith(
+      "agent.tui.generateTitle",
+      expect.objectContaining({
+        epicId: "epic-1",
+        tuiAgentId: "agent-1",
+        harnessId: "claude",
+        promptText: "prompt from a provider hook",
+      }),
+      expect.anything(),
+    );
+    expect(presentedHostTokens).toEqual([capability]);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a capabilityless agent before resolving the host or minting credentials", async () => {
+    agentEnvironment.agentId = "agent-from-fake-environment";
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+      "TRAYCER_AGENT_ID",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(pidMock).not.toHaveBeenCalled();
+    expect(rpcClientConstructorMock).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a capability refusal terminal without reading a replacement credential", async () => {
+    const capability = "00000000-0000-4000-8000-000000000012";
+    agentEnvironment.capability = capability;
+    requestMock.mockRejectedValue(
+      fatalDoorError({
+        code: "UNAUTHORIZED",
+        doorReason: "not_admitted",
+        message: "The agent session is not admitted.",
+        method: "agent.sendMessage",
+      }),
+    );
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message: "The agent session is not admitted.",
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(presentedHostTokens).toEqual([capability]);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rotateMock).not.toHaveBeenCalled();
+  });
+
+  it("uses ordinary sign-in auth for the same command outside an agent session", async () => {
+    requestMock.mockResolvedValue({ responseId: null });
+
+    const result = await agentSendCommand();
+
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+      "TRAYCER_AGENT_ID",
+    ]);
+    expect(resolveAuthMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(openCliHostSessionMock).toHaveBeenCalledTimes(1);
+    expect(presentedHostTokens).toEqual(["host-token-1"]);
+  });
 });
 
 describe("callHostRpc", () => {
