@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 export function TeamReviewValueReadout(props: {
   readonly entry: ReviewHeldEntry;
   readonly value: TeamReviewValue | null;
+  readonly profileNeedsLinkLabel: string | null;
   readonly onRetry: () => void;
 }): ReactNode {
   const id = useId();
@@ -89,18 +90,20 @@ export function TeamReviewValueReadout(props: {
           {value.accountIdentity === null ? null : (
             <p>{value.accountIdentity}</p>
           )}
-          <label
-            htmlFor={`${id}-needs-link`}
-            className="flex items-center gap-2 text-ui-sm"
-          >
-            Needs a sign-in
-            <Switch
-              id={`${id}-needs-link`}
-              aria-label="Needs a sign-in"
-              checked={value.needsLink}
-              disabled
-            />
-          </label>
+          {value.needsLink && props.profileNeedsLinkLabel !== null ? (
+            <label
+              htmlFor={`${id}-needs-link`}
+              className="flex items-center gap-2 text-ui-sm"
+            >
+              {props.profileNeedsLinkLabel}
+              <Switch
+                id={`${id}-needs-link`}
+                aria-label={props.profileNeedsLinkLabel}
+                checked={value.needsLink}
+                disabled
+              />
+            </label>
+          ) : null}
         </div>
       );
     case "mcp":
