@@ -16,7 +16,10 @@ import {
   parseConcreteProfileSelection,
   parseCreateProfileSelection,
 } from "../../internal/profile-selection";
-import { callAgentHostRpc, callAgentHostRpcWithDispatch } from "../../internal/host-rpc";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";

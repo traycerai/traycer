@@ -261,11 +261,14 @@ describe("agent role relinquish command function", () => {
       claimId: CLAIM_ID,
     })(makeCtx());
 
-    expect(callAgentHostRpcMock).toHaveBeenCalledWith("agent.roles.relinquish", {
-      epicId: "epic-1",
-      claimantAgentId: "agent-1",
-      claimId: CLAIM_ID,
-    });
+    expect(callAgentHostRpcMock).toHaveBeenCalledWith(
+      "agent.roles.relinquish",
+      {
+        epicId: "epic-1",
+        claimantAgentId: "agent-1",
+        claimId: CLAIM_ID,
+      },
+    );
     expect(result.human).toBe(
       formatRelinquishRoleResponseV11(RELINQUISH_RESPONSE),
     );

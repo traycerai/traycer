@@ -3,7 +3,10 @@ import { buildAgentListHarnessesCommand } from "../agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "../agent-list-harness-models";
 import { AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { buildProgram } from "../../index";
-import { callAgentHostRpc, callAgentHostRpcWithDispatch } from "../../internal/host-rpc";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";

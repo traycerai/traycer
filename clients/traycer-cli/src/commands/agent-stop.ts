@@ -38,7 +38,9 @@ export function buildAgentStopCommand(opts: {
       agentId: opts.agentId,
       cascade: opts.cascade,
     });
-    const result = await toAgentCliError(callAgentHostRpc("agent.stop", request));
+    const result = await toAgentCliError(
+      callAgentHostRpc("agent.stop", request),
+    );
     const { stoppedAgentIds } = parseCanonicalHostResponse(
       "agent.stop",
       stopAgentResponseSchema,
