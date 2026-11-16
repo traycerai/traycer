@@ -42,6 +42,13 @@ import {
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
+import {
+  fetchTeamChatAutoArchiveViaHttp,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveReadResult,
+  type TeamChatAutoArchiveSetRequest,
+  type TeamChatAutoArchiveWriteResult,
+} from "../team-chat-auto-archive";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
@@ -763,6 +770,34 @@ export class MockRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       fetchEnvironmentTransport,
+    );
+  }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return fetchTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+    );
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return putTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+      request,
     );
   }
 
