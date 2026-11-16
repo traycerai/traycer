@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import { Button } from "@/components/ui/button";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import {
   canSwitchViewingHost,
   useTeamViewingHost,
@@ -51,7 +52,7 @@ export function TeamContentNeedsHost(props: {
 }): ReactNode {
   const scope = useTeamViewingHost();
   const personal = useConfigurationIsPersonal();
-  const hosts = scope.hosts.data?.hosts ?? [];
+  const hosts = environmentReadData(scope.hosts)?.hosts ?? [];
   // An inventory with no answer is not an empty one either, whether a read is
   // in flight or the read is disabled and never asked: until it answers, the
   // card has nothing true to say about where the configuration runs, so it

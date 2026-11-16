@@ -14,7 +14,10 @@ export type AgentMemoryWriteProgress =
 
 /** Absence is never acceptance; a saved write needs its own revision and value. */
 export function agentMemoryWriteProgress(input: {
-  readonly answer: ConfigAgentMemoriesSetResponse;
+  readonly answer: Exclude<
+    ConfigAgentMemoriesSetResponse,
+    { state: "local_only" }
+  >;
   readonly asked: boolean;
   readonly read: ConfigAgentMemoriesResponse;
   readonly queue: EnvironmentStatusResponseV11 | undefined;

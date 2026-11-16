@@ -178,7 +178,7 @@ describe("team host member identity in a rendered comment", () => {
     ).toBe("https://images.example.test/team-member.png");
     await waitFor(() => {
       expect(harness.memberRequests).toEqual([
-        { environmentId: TEAM_ENVIRONMENT_ID, cursor: null },
+        { environmentId: TEAM_ENVIRONMENT_ID },
       ]);
     });
     expect(harness.memberRequests[0]?.environmentId).not.toBe(TEAM_ID);
@@ -213,7 +213,7 @@ describe("team host member identity in a rendered comment", () => {
     expect(identityName(MEMBER_USER_ID)).toBe("Team Member");
   });
 
-  it("does not ask a host that did not advertise environment.members", async () => {
+  it("reads nothing for a team whose host did not advertise environment.members", async () => {
     harness.dispose();
     harness = await createTeamPeopleHarness({ methods: ["environment.list"] });
 
@@ -335,7 +335,7 @@ describe("former members on a team host", () => {
 
     expect(await screen.findByText("Team Member")).toBeTruthy();
     expect(harness.memberRequests).toEqual([
-      { environmentId: TEAM_ENVIRONMENT_ID, cursor: null },
+      { environmentId: TEAM_ENVIRONMENT_ID },
     ]);
     expect(harness.personReads).toEqual([]);
     expect(identityName("system")).toBe("");
@@ -359,9 +359,7 @@ describe("team environment resolution", () => {
     render(wrapHarness(<IdentityProbe userId={FORMER_USER_ID} />));
 
     expect(await screen.findByText("Former Member")).toBeTruthy();
-    expect(harness.memberRequests).toEqual([
-      { environmentId: "env-9", cursor: null },
-    ]);
+    expect(harness.memberRequests).toEqual([{ environmentId: "env-9" }]);
     expect(harness.personReads[0]).toContain("/environments/env-9/people/");
     expect(harness.personReads[0]).not.toContain("/environments/team-1/");
   });

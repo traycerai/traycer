@@ -56,6 +56,8 @@ vi.mock("@/components/settings/personal/page-chip", () => ({
   PageChip: () => null,
 }));
 
+import { useAuthStore } from "@/stores/auth/auth-store";
+
 import { StoragePolicySection } from "@/components/settings/panels/storage-policy-section";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -175,6 +177,11 @@ function renderSection(ui: ReactNode): void {
       host.put === null
         ? Promise.resolve({ outcome: "saved", revision: 1 })
         : host.put(),
+  });
+  useAuthStore.setState({
+    shareableTeams: [
+      { teamId: "team-1", slug: "handle-acme", avatarUrl: null },
+    ],
   });
   render(
     <>
@@ -1416,21 +1423,21 @@ describe("<StoragePolicySection />", () => {
     },
   );
 
-  it("renders nothing on a host that does not advertise the item write", async () => {
+  it("keeps saving the policy when the host does not advertise item writes", async () => {
     renderSection(PERSONAL_SECTION);
-    await chatsSwitch();
+    await settled();
 
-    // The same host, renegotiated without the write: the section goes, so its
-    // absence is the gate's answer and not a read still in flight.
     act(() => {
-      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
-        "environment.list",
-        "environment.configuration.items",
-      ]);
+      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, []);
     });
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
-      expect(within(document.body).queryByTestId("storage-policy")).toBeNull();
+      expectPut(
+        PERSONAL_ENV,
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        null,
+      );
     });
   });
 

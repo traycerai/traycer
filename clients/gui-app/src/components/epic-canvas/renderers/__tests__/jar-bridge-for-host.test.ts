@@ -2,14 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { LOCAL_OWNER_JAR_CASES } from "@traycer-clients/shared/test-fixtures/local-owner-jar-cases";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import { jarBridgeForHost } from "../use-browser-sessions";
-
-/**
- * The desktop bridge routes a host's `browser.sessions` stream through main,
- * which carries the desktop's whole cookie jar on it. A sandbox or a team
- * host must never receive that, so its stream takes the jar-free path.
- */
 
 function remoteEntry(
   kind: "personal" | "sandbox" | "team",
@@ -52,18 +47,38 @@ const LOCAL: HostDirectoryEntry = {
 describe("jarBridgeForHost", () => {
   const bridge = new FakeBrowserViewBridge({});
 
+  it.each(LOCAL_OWNER_JAR_CASES)(
+    "uses the local owner's jar lane when $name",
+    ({ owner, omitOwner, previousOwner, admitted }) => {
+      const entryFor = (currentOwner: typeof owner): HostDirectoryEntry =>
+        omitOwner ? LOCAL : { ...LOCAL, owner: currentOwner };
+
+      if (previousOwner !== undefined) {
+        expect(
+          jarBridgeForHost(bridge, { ...LOCAL, owner: previousOwner }),
+        ).toBe(bridge);
+      }
+
+      expect(jarBridgeForHost(bridge, entryFor(owner))).toBe(
+        admitted ? bridge : null,
+      );
+    },
+  );
+
   it("withholds the jar bridge from a sandbox host", () => {
     expect(jarBridgeForHost(bridge, remoteEntry("sandbox"))).toBeNull();
   });
 
-  it("withholds the jar bridge from a physical team host", () => {
+  it("hands the bridge on for a personal remote host", () => {
+    expect(jarBridgeForHost(bridge, remoteEntry("personal"))).toBe(bridge);
+  });
+
+  it("withholds the jar bridge from a remote team host", () => {
     expect(remoteEntry("team")).toMatchObject({ sandbox: null });
     expect(jarBridgeForHost(bridge, remoteEntry("team"))).toBeNull();
   });
 
-  it("hands the bridge on for a personal remote host, this machine's host, and a host the directory has not answered for", () => {
-    expect(jarBridgeForHost(bridge, remoteEntry("personal"))).toBe(bridge);
-    expect(jarBridgeForHost(bridge, LOCAL)).toBe(bridge);
+  it("keeps the bridge available when the directory has no entry", () => {
     expect(jarBridgeForHost(bridge, null)).toBe(bridge);
   });
 

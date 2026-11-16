@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -256,8 +257,12 @@ export function EnvOverrideEditor(props: {
     } catch (error) {
       submittingRef.current = false;
       setPending(null);
+      const failure = reportedSaveFailure(error);
+      if (failure === null) return;
       setWriteError(
-        error instanceof Error ? error.message : "Couldn't save this variable.",
+        failure instanceof Error
+          ? failure.message
+          : "Couldn't save this variable.",
       );
     }
   }

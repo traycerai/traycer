@@ -64,7 +64,6 @@ import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -365,14 +364,7 @@ function ThreadCard(props: {
 }): ReactNode {
   const { hostId, entry, scroller, unreadCount } = props;
   const { bot, thread } = entry;
-  const client = useTabHostClient();
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
-  const directory = useEnvironmentMemberDirectory(
-    client,
-    bot.environmentId,
-    membersSupported,
-  );
+  const directory = useEnvironmentMemberDirectory(bot.environmentId, true);
   const [card, setCard] = useState<HTMLElement | null>(null);
   const near = useCardNear(card, scroller);
   const anchor = thread.anchor;
@@ -956,7 +948,7 @@ function ThreadCardScope(props: {
 }): ReactNode {
   const { bot, hostId, tasks, surfaceActions, members, resolveMember } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (candidate) => candidate.environmentId === bot.environmentId,

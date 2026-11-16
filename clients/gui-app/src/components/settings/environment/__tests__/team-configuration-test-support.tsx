@@ -1,9 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { vi } from "vitest";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
-import { createHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   mockLocalHostEntry,
@@ -30,10 +29,34 @@ import {
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransport,
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  environmentDescriptorSchemaV11,
+  environmentListUpgradeV10ToV11,
+  type EnvironmentDescriptorV11,
+  type EnvironmentListResponse,
+} from "@traycer/protocol/host/environment/contracts";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
+import { ENVIRONMENT_CLOUD_QUERY_SCOPE } from "@/hooks/environment/use-environment-cloud";
+import {
+  createFakeEnvironmentCloudServices,
+  createFakeEnvironmentCloudTransport,
+} from "../../../../../__tests__/create-fake-runner-host";
+import {
+  createTeamEnvironmentCloudHandlers,
+  type TeamEnvironmentCloudResponses,
+} from "./team-environment-cloud-handlers";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { AuthService } from "@/lib/auth/auth-service";
+import { AuthService, type ExternalSession } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
-import type { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -311,7 +334,11 @@ export function teamProfileRecordReadCount(): number {
  */
 export const teamHostBoundary: {
   client: HostClient<HostRpcRegistry> | null;
-} = { client: null };
+  auth: AuthService | null;
+  runtime: HostRuntime<HostRpcRegistry> | null;
+  directory: HostDirectoryService | null;
+  binding: HostRuntimeBinding<HostRpcRegistry> | null;
+} = { client: null, auth: null, runtime: null, directory: null, binding: null };
 
 /**
  * The client of a second host (`mockRemoteHostEntry`) over the same messenger:
@@ -328,6 +355,14 @@ export const viewingHostBoundary: {
  * `windowHostScopeMock`; `null` is a window with no host of its own.
  */
 export const windowHostBoundary: { hostId: string | null } = { hostId: null };
+
+let environmentCloudOverride: EnvironmentCloud | null = null;
+
+export function setTeamEnvironmentCloudOverride(
+  cloud: EnvironmentCloud | null,
+): void {
+  environmentCloudOverride = cloud;
+}
 
 export function windowHostScopeMock(): { hostId: string | null } {
   return { hostId: windowHostBoundary.hostId };
@@ -347,6 +382,23 @@ export function requireTeamHostClient(): HostClient<HostRpcRegistry> {
   return teamHostBoundary.client;
 }
 
+export function requireTeamCloudAuth(): AuthService {
+  if (teamHostBoundary.auth === null) {
+    throw new Error("no team cloud auth mounted");
+  }
+  return teamHostBoundary.auth;
+}
+
+export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  if (teamHostBoundary.binding === null) {
+    throw new Error("no team host binding mounted");
+  }
+  return teamHostBoundary.binding;
+}
+
+export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  return requireTeamHostBinding();
+}
 /**
  * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
  * the source it yields holds none, exactly as an inventory row naming it
@@ -391,14 +443,94 @@ export function configurationItem(
   };
 }
 
+export function authSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
+    },
+  };
+}
+
 export interface TeamPageHarness {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly auth: AuthService;
-  readonly runnerHost: MockRunnerHost;
+  readonly runnerHost: IRunnerHost;
+  readonly cloudRequests: readonly EnvironmentTransportRequest[];
+  readonly cloudResponses: TeamEnvironmentCloudResponses;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
+}
+
+export function rejectNextTeamEnvironmentItemPut(
+  harness: TeamPageHarness,
+  kind: string,
+): EnvironmentTransportRequest[] {
+  const cloud = harness.auth.environmentCloud();
+  const rejectedRequests: EnvironmentTransportRequest[] = [];
+  let rejectNextPut = true;
+  harness.auth.environmentCloud = () => ({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        rejectNextPut &&
+        request.method === "PUT" &&
+        new URL(request.url).pathname.endsWith(`/items/${kind}`)
+      ) {
+        rejectNextPut = false;
+        rejectedRequests.push(request);
+        throw new Error("The transport did not answer.");
+      }
+      return cloud.transport(request);
+    },
+  });
+  return rejectedRequests;
 }
 
 export type TeamPageRole = "owner" | "admin" | "editor" | "viewer";
@@ -458,6 +590,12 @@ const activeTeamAuthRuntimes: TeamAuthRuntime[] = [];
 let teamWindowRegistered = false;
 let restoreTeamFetch: (() => void) | null = null;
 let teamIntentsFetch: typeof fetch | null = null;
+let verifiedSettingsTransport: EnvironmentTransport | null = null;
+const activeTeamPageRuntimes: Array<{
+  readonly runtime: HostRuntime<HostRpcRegistry>;
+  readonly directory: HostDirectoryService;
+  readonly auth: AuthService | null;
+}> = [];
 
 function installTeamFetch(): void {
   if (restoreTeamFetch !== null) return;
@@ -504,9 +642,30 @@ function teamFetch(
   ) {
     return teamIntentsFetch(input, init);
   }
-  return (
-    teamAuthnResponse(url) ??
-    Promise.resolve(new Response(null, { status: 500 }))
+  const profileResponse = teamAuthnResponse(url);
+  if (profileResponse !== null) return profileResponse;
+  if (
+    verifiedSettingsTransport === null ||
+    (method !== "GET" &&
+      method !== "POST" &&
+      method !== "PUT" &&
+      method !== "DELETE" &&
+      method !== "PATCH")
+  )
+    return Promise.resolve(new Response(null, { status: 500 }));
+  const body: unknown = rawBody === null ? null : JSON.parse(rawBody);
+  return verifiedSettingsTransport({
+    url: url.toString(),
+    method,
+    headers: Object.fromEntries(headers.entries()),
+    body,
+    signal: init?.signal ?? new AbortController().signal,
+  }).then(
+    (answer) =>
+      new Response(answer.text, {
+        status: answer.status,
+        headers: { "Content-Type": "application/json" },
+      }),
   );
 }
 
@@ -866,7 +1025,7 @@ export function mountTeamPageThroughBoundary(
     rereadEnvironmentList: async () => {
       await harness.queryClient.refetchQueries({
         queryKey: hostQueryKeys.methodScope(
-          mockLocalHostEntry.hostId,
+          ENVIRONMENT_CLOUD_QUERY_SCOPE,
           "environment.list",
         ),
       });
@@ -1066,35 +1225,157 @@ interface TeamPageAssembly {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly auth: AuthService;
-  readonly runnerHost: MockRunnerHost;
+  readonly runnerHost: IRunnerHost;
+  readonly cloudRequests: readonly EnvironmentTransportRequest[];
+  readonly cloudResponses: TeamEnvironmentCloudResponses;
   readonly paramsOf: (method: string) => unknown[];
   readonly binding: HostRuntimeBinding<HostRpcRegistry>;
 }
 
 function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
+  if (options.source === null)
+    throw new Error("Legacy team page requires a configuration source");
   teamProviderKeyResponseArm = "s3-key-action";
-  const queryClient = createTeamPageQueryClient();
-  useAuthStore.setState({ status: "signed-in" });
   teamWindowRegistered = false;
-  const authHarness = buildTeamAuthRuntime(queryClient);
-  const assembly = assembleTeamPage(
-    { ...options, pinBoundaryWindowHost: true },
-    queryClient,
-    authHarness,
+  return buildLegacyTeamPage(
+    options.source,
+    options.handlers,
+    options.negotiated,
+    options.withPool,
   );
-  return createTeamPageHarness(assembly, (props) => (
-    <HostRuntimeContext.Provider value={assembly.binding}>
+}
+
+function buildLegacyTeamPage(
+  source: ConfigurationSource,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  negotiated: Readonly<Record<string, { major: number; minor: number }>> | null,
+  withPool: boolean,
+): TeamPageHarness {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { queryKeyHashFn: hashAppQueryKey, retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  const fallbackRows: EnvironmentDescriptorV11[] =
+    source.kind === "pool"
+      ? [
+          {
+            environmentId: source.environmentId,
+            ownerKind:
+              source.configuration === "personal" ? "user" : "organization",
+            ownerId: source.configuration === "personal" ? "user-me" : "team-a",
+            roomId: source.roomId,
+            label: source.configuration === "personal" ? "Personal" : "Acme",
+            effectiveRole:
+              source.configuration === "personal"
+                ? "owner"
+                : (source.effectiveRole ?? "viewer"),
+            kind: source.configuration,
+            hostCount: 1,
+            providerHandle: source.providerHandle,
+          },
+        ]
+      : [];
+  let currentRows: EnvironmentDescriptorV11[] = [...fallbackRows];
+  const cloudHandlers = createTeamEnvironmentCloudHandlers(handlers, source);
+  const { auth, runnerHost } = createFakeEnvironmentCloudServices({
+    listEnvironments: async () => {
+      const response = await cloudHandlers.listEnvironments();
+      if (response?.kind === "ok") {
+        currentRows = response.list.environments.map(
+          descriptorFromEnvironmentList,
+        );
+        useAuthStore.setState({
+          shareableTeams: shareableTeamsFor(currentRows),
+        });
+      }
+      return response ?? { kind: "no_response" };
+    },
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => currentRows,
+      onRequest: cloudHandlers.onRequest,
+    }),
+    runnerHostOverrides: {},
+  });
+  const baseEnvironmentCloud = auth.environmentCloud.bind(auth);
+  auth.environmentCloud = () =>
+    environmentCloudOverride ?? baseEnvironmentCloud();
+  let requestCounter = 0;
+  const messengerOptions = {
+    registry: hostRpcRegistry,
+    requestId: () => {
+      requestCounter += 1;
+      return `req-team-${String(requestCounter)}`;
+    },
+    handlers,
+  };
+  const messenger =
+    negotiated === null
+      ? new MockHostMessenger<HostRpcRegistry>(messengerOptions)
+      : new FloorEnforcingMessenger(messengerOptions, negotiated);
+  const directory = new TeamPageHostDirectory(runnerHost, withPool);
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    registry: hostRpcRegistry,
+    messenger,
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    connectionRegistry: null,
+    selectedHostId: () => null,
+    onHostTokenRenewal: () => undefined,
+  });
+  const spine = runtime.hostClient;
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
+  teamHostBoundary.auth = auth;
+  teamHostBoundary.runtime = runtime;
+  teamHostBoundary.directory = directory;
+  const authBinding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
+    hostClient: spine,
+    directory,
+    auth,
+    hostId: null,
+  };
+  teamHostBoundary.binding = authBinding;
+  viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
+  useAuthStore.setState({
+    status: "signed-in",
+    shareableTeams: shareableTeamsFor(currentRows),
+  });
+  activeTeamPageRuntimes.push({ runtime, directory, auth });
+  return {
+    runnerHost,
+    messenger,
+    queryClient,
+    auth,
+    cloudRequests: cloudHandlers.requests,
+    cloudResponses: cloudHandlers.responses,
+    paramsOf: (method) => [
+      ...messenger.calls
+        .filter((call) => call.method === method)
+        .map((call) => call.params),
+      ...cloudHandlers.calls
+        .filter((call) => call.method === method)
+        .map((call) => call.params),
+    ],
+    Wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
-        {options.source === null ? (
-          props.children
-        ) : (
-          <ConfigurationSourceContext.Provider value={options.source}>
+        <HostRuntimeContext.Provider value={authBinding}>
+          <ConfigurationSourceContext.Provider value={source}>
             {props.children}
           </ConfigurationSourceContext.Provider>
-        )}
+        </HostRuntimeContext.Provider>
       </QueryClientProvider>
-    </HostRuntimeContext.Provider>
-  ));
+    ),
+  };
 }
 
 function buildVerifiedTeamProvidersPage(
@@ -1104,7 +1385,7 @@ function buildVerifiedTeamProvidersPage(
   teamProviderKeyResponseArm = providerKeyResponseArm;
   installTeamFetch();
   const queryClient = createTeamPageQueryClient();
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
   teamWindowRegistered = false;
   const authHarness = buildTeamAuthRuntime(queryClient);
   void startVerifiedTeamAuth(authHarness);
@@ -1123,7 +1404,7 @@ function buildVerifiedTeamProvidersPage(
 function createTeamPageQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
+      queries: { queryKeyHashFn: hashAppQueryKey, retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   });
@@ -1138,6 +1419,8 @@ function createTeamPageHarness(
     queryClient: assembly.queryClient,
     auth: assembly.auth,
     runnerHost: assembly.runnerHost,
+    cloudRequests: assembly.cloudRequests,
+    cloudResponses: assembly.cloudResponses,
     paramsOf: assembly.paramsOf,
     Wrapper,
   };
@@ -1185,51 +1468,112 @@ function assembleTeamPage(
     negotiated === null
       ? new MockHostMessenger<HostRpcRegistry>(messengerOptions)
       : new FloorEnforcingMessenger(messengerOptions, negotiated);
-  const spine = new HostClient<HostRpcRegistry>({
+  const directory = new TeamPageHostDirectory(authHarness.runnerHost, withPool);
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost: authHarness.runnerHost,
     registry: hostRpcRegistry,
+    messenger,
+    requestContextProvider: authHarness.auth.getRequestContextProvider(),
+    directory,
     invalidator: createHostQueryInvalidator(queryClient),
     schedulingPolicy: hostRpcSchedulingPolicy,
-    findHostById: (hostId) => {
-      if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
-      if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
-      return withPool && hostId === poolEntry.hostId ? poolEntry : null;
-    },
-    messenger,
-    ...(withPool
-      ? {
-          routing: {
-            plan: createHostRpcTierPlan(poolEntry),
-            selectedHostId: () => null,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    connectionRegistry: null,
+    selectedHostId: () => null,
+    onHostTokenRenewal: () => undefined,
+  });
+  activeTeamPageRuntimes.push({ runtime, directory, auth: null });
+  const spine = runtime.hostClient;
+  const source = options.source ?? poolSource("viewer");
+  const cloudHandlers = createTeamEnvironmentCloudHandlers(handlers, source);
+  let currentRows: readonly EnvironmentDescriptorV11[] =
+    source.kind === "pool"
+      ? [
+          {
+            environmentId: source.environmentId,
+            ownerKind:
+              source.configuration === "personal" ? "user" : "organization",
+            ownerId:
+              source.configuration === "personal" ? "team-test-user" : "team-a",
+            roomId: source.roomId,
+            label: source.configuration === "personal" ? "Personal" : "Acme",
+            effectiveRole:
+              source.configuration === "personal"
+                ? "owner"
+                : (source.effectiveRole ?? "viewer"),
+            kind: source.configuration,
+            hostCount: 1,
+            providerHandle: source.providerHandle,
           },
-        }
-      : {}),
+        ]
+      : [];
+  authHarness.auth.listEnvironments = async () => {
+    const answer = await cloudHandlers.listEnvironments();
+    if (answer?.kind === "ok") {
+      currentRows = answer.list.environments.map(descriptorFromEnvironmentList);
+      useAuthStore.setState({ shareableTeams: shareableTeamsFor(currentRows) });
+    }
+    return answer ?? { kind: "no_response" };
+  };
+  verifiedSettingsTransport = createFakeEnvironmentCloudTransport({
+    environments: () => currentRows,
+    onRequest: cloudHandlers.onRequest,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
+  const authBinding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
+    hostClient: spine,
+    directory,
+    auth: authHarness.auth,
+    hostId: null,
+  };
   const binding = pinBoundaryWindowHost
     ? {
-        ...authHarness.binding,
+        ...authBinding,
         hostClient: teamHostBoundary.client,
         hostId: mockLocalHostEntry.hostId,
       }
-    : authHarness.binding;
+    : authBinding;
+  teamHostBoundary.auth = authHarness.auth;
+  teamHostBoundary.runtime = runtime;
+  teamHostBoundary.directory = directory;
+  teamHostBoundary.binding = binding;
   return {
     messenger,
     queryClient,
     auth: authHarness.auth,
     runnerHost: authHarness.runnerHost,
-    paramsOf: (method) =>
-      messenger.calls
+    cloudRequests: cloudHandlers.requests,
+    cloudResponses: cloudHandlers.responses,
+    paramsOf: (method) => [
+      ...messenger.calls
         .filter((call) => call.method === method)
         .map((call) => call.params),
+      ...cloudHandlers.calls
+        .filter((call) => call.method === method)
+        .map((call) => call.params),
+    ],
     binding,
   };
 }
 
 export function resetTeamPageHarness(): void {
+  for (const mounted of activeTeamPageRuntimes.splice(0)) {
+    mounted.runtime.dispose();
+    mounted.directory.dispose();
+    mounted.auth?.dispose();
+  }
+  environmentCloudOverride = null;
+  verifiedSettingsTransport = null;
+  teamHostBoundary.auth = null;
+  teamHostBoundary.runtime = null;
+  teamHostBoundary.directory = null;
+  teamHostBoundary.binding = null;
   for (const harness of activeTeamAuthRuntimes.splice(0)) {
     harness.runtime.dispose();
     harness.directory.dispose();
@@ -1242,7 +1586,7 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
   teamWindowRegistered = false;
   teamProfileRecordHttpBoundary.list = {
     status: 200,
@@ -1294,4 +1638,89 @@ export function resetTeamPageHarness(): void {
   teamProviderKeyHttpBoundary.status = 200;
   teamProviderKeyHttpBoundary.matchesKey = () => false;
   teamProviderKeyHttpBoundary.calls.length = 0;
+}
+
+class TeamPageHostDirectory extends HostDirectoryService {
+  constructor(runnerHost: IRunnerHost, withPool: boolean) {
+    super({
+      runnerHost,
+      remoteFetcher: null,
+      onRegistryPollTick: null,
+      authContextId: null,
+      credentialGeneration: null,
+      localHostIdSeeder: null,
+    });
+    this.withPool = withPool;
+  }
+
+  private readonly withPool: boolean;
+
+  override list(): Promise<readonly HostDirectoryEntry[]> {
+    return Promise.resolve([mockLocalHostEntry, mockRemoteHostEntry]);
+  }
+
+  override findById(hostId: string): HostDirectoryEntry | null {
+    if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+    if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
+    if (this.withPool && hostId === poolEntry.hostId) return poolEntry;
+    return null;
+  }
+}
+
+export function authnAnswer(
+  status: number,
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status, text: JSON.stringify(body) };
+}
+
+/**
+ * What authn answers the team's host list read for `environmentId` from now
+ * on; `null` is no answer at all, as when the transport fails.
+ */
+export function answerTeamHostList(
+  harness: TeamPageHarness,
+  environmentId: string,
+  answer: EnvironmentTransportAnswer | null,
+): void {
+  harness.cloudResponses.set(
+    `GET /api/v3/environments/${encodeURIComponent(environmentId)}/hosts`,
+    () => {
+      if (answer === null) throw new Error("The transport did not answer.");
+      return answer;
+    },
+  );
+}
+
+function shareableTeamsFor(
+  environments: readonly EnvironmentDescriptorV11[],
+): { teamId: string; slug: string; avatarUrl: null }[] {
+  return environments.flatMap((environment) =>
+    environment.ownerKind === "organization" &&
+    environment.providerHandle !== null
+      ? [
+          {
+            teamId: environment.ownerId,
+            slug: environment.providerHandle,
+            avatarUrl: null,
+          },
+        ]
+      : [],
+  );
+}
+
+function descriptorFromEnvironmentList(
+  environment: EnvironmentListResponse["environments"][number],
+): EnvironmentDescriptorV11 {
+  const parsed = environmentDescriptorSchemaV11.safeParse(environment);
+  if (parsed.success) return parsed.data;
+  const upgraded = environmentListUpgradeV10ToV11
+    .upgradeResponse({
+      environments: [environment],
+    })
+    .environments.at(0);
+  if (upgraded === undefined) {
+    throw new Error("the environment list upgrade returned no row");
+  }
+  return upgraded;
 }

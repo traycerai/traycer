@@ -251,7 +251,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.taskReads.homePending = false;
   mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
-  mocks.state.membersSupport = true;
+  mocks.state.membersReadAvailable = true;
   mocks.state.snapshot = snapshot();
   mocks.state.deleted = false;
   mocks.state.error = null;

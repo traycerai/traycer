@@ -7,7 +7,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useSecretVersionActions } from "@/components/settings/secrets/use-secret-version-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -196,22 +196,12 @@ export function SecretVersionsList(props: {
   readonly onChanged: () => void;
 }): ReactNode {
   const { environmentId, resolved } = useAddressedEnvironment();
-  const versions = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.versions"
-  >({
-    cacheKeyIdentity: undefined,
+  const versions = useSecretsRead({
     client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: props.secret.secretId, environmentId },
-    requiredHostMethodVersion: () =>
-      environmentId === null
-        ? null
-        : {
-            method: "environment.secrets.versions",
-            version: { major: 1, minor: 1 },
-          },
-    options: { enabled: resolved },
+    enabled: resolved,
+    poll: false,
   });
   if (versions.isError) {
     return (
