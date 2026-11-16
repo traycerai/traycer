@@ -1012,7 +1012,7 @@ describe("TeamProviders cloud API keys", () => {
           "error",
         );
       });
-      expect(await screen.findByText(/Couldn't read .* keys\\./u)).toBeTruthy();
+      expect(await screen.findByText(/Couldn't read .* keys\./u)).toBeTruthy();
       expect(screen.queryByText("Key set")).toBeNull();
       expect(screen.queryByText("Not set")).toBeNull();
       const rail = screen.getByRole("navigation", { name: "Providers" });
