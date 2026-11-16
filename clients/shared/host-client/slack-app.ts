@@ -190,9 +190,7 @@ async function post<T>(
       abort.signal,
     );
     status = answer.status;
-    parsedBody = isRedirectAnswer(status)
-      ? null
-      : parseJsonOrNull(answer.text);
+    parsedBody = isRedirectAnswer(status) ? null : parseJsonOrNull(answer.text);
   } catch (error: unknown) {
     return {
       kind: "network-error",
