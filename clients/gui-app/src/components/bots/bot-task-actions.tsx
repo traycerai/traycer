@@ -19,6 +19,7 @@ import {
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
+import { TaskFocusBoundary } from "@/components/bots/task-focus-boundary";
 
 /** Reporting controls stay bound to the host and methods that can perform them. */
 export function BotTaskControls(props: {
@@ -27,6 +28,7 @@ export function BotTaskControls(props: {
   readonly task: BotTaskEntry;
   readonly boundHere: boolean;
   readonly nameOf: (userId: string) => string;
+  readonly onBeforeTaskChange: () => void;
   readonly onReportingRemoved: () => void;
 }): ReactNode {
   const { task, boundHere } = props;
@@ -44,11 +46,15 @@ function TaskActionMenu(props: {
   readonly hostId: string;
   readonly task: BotTaskEntry;
   readonly nameOf: (userId: string) => string;
+  readonly onBeforeTaskChange: () => void;
   readonly onReportingRemoved: () => void;
 }): ReactNode {
   const { botId, hostId, task, nameOf } = props;
   const ended = task.state === "ended" && task.endedReason === "by-bot";
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const [focusedAction, setFocusedAction] = useState<
+    "run" | "pause" | "stop" | null
+  >(null);
   const client = useTabHostClient();
   const canRun = useHostMethodSupport(hostId, "bot.task.runNow") === true;
   const canPause = useHostMethodSupport(hostId, "bot.task.setPaused") === true;
@@ -57,18 +63,36 @@ function TaskActionMenu(props: {
   const setPaused = useBotTaskSetPausedMutation(client);
   const stop = useBotTaskStopMutation(client);
   const supported = canRun || canPause || canStop;
+  const focusedAvailable = focusedActionAvailable(
+    focusedAction,
+    canRun,
+    canPause,
+    canStop,
+  );
   const { confirmOpen, setConfirmOpen, menuOpen, setMenuOpen, visible } =
-    useReportingSurfaceState(ended, supported, canStop, stop.isPending);
+    useReportingSurfaceState({
+      ended,
+      supported,
+      canStop,
+      stopPending: stop.isPending,
+      focusedAvailable,
+    });
   useLayoutEffect(() => {
     props.onReportingRemoved();
   });
   if (!visible) return null;
   const pending = runNow.isPending || setPaused.isPending;
   return (
-    <>
+    <TaskFocusBoundary
+      beforeChange={props.onBeforeTaskChange}
+      afterChange={props.onReportingRemoved}
+    >
       <DropdownMenu
         open={menuOpen}
-        onOpenChange={(open) => setMenuOpen(pending ? false : open)}
+        onOpenChange={(open) => {
+          setMenuOpen(pending ? false : open);
+          setFocusedAction(null);
+        }}
       >
         <DropdownMenuTrigger asChild>
           <Button
@@ -84,6 +108,15 @@ function TaskActionMenu(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
+          onCloseAutoFocus={(event) => {
+            if (
+              document.activeElement === document.body &&
+              triggerRef.current !== null
+            ) {
+              event.preventDefault();
+              triggerRef.current.focus();
+            }
+          }}
           align="end"
           className="w-[min(16rem,calc(100vw-2rem))]"
         >
@@ -102,6 +135,7 @@ function TaskActionMenu(props: {
               {canRun ? (
                 <DropdownMenuItem
                   data-testid="bot-task-run-now"
+                  onFocus={() => setFocusedAction("run")}
                   disabled={runNow.isPending || task.runRequest !== null}
                   onSelect={() => runNow.mutate({ botId, taskId: task.taskId })}
                 >
@@ -111,6 +145,7 @@ function TaskActionMenu(props: {
               {canPause ? (
                 <DropdownMenuItem
                   data-testid="bot-task-pause"
+                  onFocus={() => setFocusedAction("pause")}
                   disabled={setPaused.isPending}
                   onSelect={() =>
                     setPaused.mutate({
@@ -128,6 +163,7 @@ function TaskActionMenu(props: {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     data-testid="bot-task-stop"
+                    onFocus={() => setFocusedAction("stop")}
                     onSelect={() => setConfirmOpen(true)}
                   >
                     End reporting…
@@ -159,16 +195,35 @@ function TaskActionMenu(props: {
           )
         }
       />
-    </>
+    </TaskFocusBoundary>
   );
 }
 
-function useReportingSurfaceState(
-  ended: boolean,
-  supported: boolean,
+function focusedActionAvailable(
+  focusedAction: "run" | "pause" | "stop" | null,
+  canRun: boolean,
+  canPause: boolean,
   canStop: boolean,
-  stopPending: boolean,
-): {
+): boolean {
+  if (focusedAction === "run") return canRun;
+  if (focusedAction === "pause") return canPause;
+  if (focusedAction === "stop") return canStop;
+  return true;
+}
+
+function useReportingSurfaceState({
+  ended,
+  supported,
+  canStop,
+  stopPending,
+  focusedAvailable,
+}: {
+  ended: boolean;
+  supported: boolean;
+  canStop: boolean;
+  stopPending: boolean;
+  focusedAvailable: boolean;
+}): {
   confirmOpen: boolean;
   setConfirmOpen: (open: boolean) => void;
   menuOpen: boolean;
@@ -183,7 +238,8 @@ function useReportingSurfaceState(
     if (ended && menuOpen) setMenuOpen(false);
   }
   if ((ended || !canStop) && confirmOpen && !stopPending) setConfirmOpen(false);
-  if (!ended && !supported && menuOpen) setMenuOpen(false);
+  if (menuOpen && (!focusedAvailable || (!ended && !supported)))
+    setMenuOpen(false);
   return {
     confirmOpen,
     setConfirmOpen,

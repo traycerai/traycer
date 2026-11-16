@@ -3739,17 +3739,29 @@ describe("<BotActivityPage /> reporting controls and the real negotiated manifes
       recordNegotiatedHostMethods(HOST_ID, ["host.status", ...methods]),
     );
   };
-  const ui = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode => (
+  const uiFor = (
+    tasks: ReadonlyArray<BotTaskEntry>,
+    boundHere: boolean,
+  ): ReactNode => (
     <>
       <input aria-label="Outside" />
       <Harness
         threads={[]}
         tasks={[...tasks, periodic("t-other", {})]}
-        boundHere
+        boundHere={boundHere}
         notificationSubscriptions={null}
       />
     </>
   );
+  const ui = (tasks: ReadonlyArray<BotTaskEntry>): ReactNode =>
+    uiFor(tasks, true);
+  const rowOf = (taskId: string): HTMLElement => {
+    const found = screen
+      .getByTestId("bot-activity-page")
+      .querySelector<HTMLElement>(`[data-task-id="${taskId}"]`);
+    if (found === null) throw new Error(`no row for ${taskId}`);
+    return found;
+  };
   const mountReal = (): RenderResult => {
     mocks.state.realManifest = true;
     offer(REPORT_METHODS);
@@ -3788,6 +3800,156 @@ describe("<BotActivityPage /> reporting controls and the real negotiated manifes
     expect(document.activeElement).toBe(openButton());
     expect(mocks.actions).toHaveLength(0);
   });
+
+  it.each([
+    ["Check in now", "bot.task.runNow"],
+    ["Pause reports", "bot.task.setPaused"],
+    ["End reporting…", "bot.task.stop"],
+  ] as const)(
+    "closes the menu and returns focus to the same trigger when only the focused %s action is lost, sends nothing, and a restore does not reopen it",
+    async (item, lost) => {
+      const user = userEvent.setup();
+      mountReal();
+      const reporting = trigger();
+      await focusMenuItem(user, item);
+      const refocused = new Promise<void>((resolve) => {
+        reporting.addEventListener("focus", () => resolve(), { once: true });
+      });
+
+      offer(REPORT_METHODS.filter((method) => method !== lost));
+      await refocused;
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(reporting);
+      expect(mocks.actions).toHaveLength(0);
+      offer(REPORT_METHODS);
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(reporting);
+      expect(mocks.actions).toHaveLength(0);
+    },
+    5_000,
+  );
+
+  it.each([
+    ["Check in now", "bot.task.runNow", "Pause reports"],
+    ["Pause reports", "bot.task.setPaused", "Check in now"],
+    ["End reporting…", "bot.task.stop", "Check in now"],
+  ] as const)(
+    "when only the %s action is lost while focus is on the %s item of the same menu, the menu stays open without it, focus stays on that item, nothing is sent, and a restore moves no focus",
+    async (lostItem, lost, focusedItem) => {
+      const user = userEvent.setup();
+      mountReal();
+      await focusMenuItem(user, focusedItem);
+      const focused = screen.getByRole("menuitem", { name: focusedItem });
+
+      offer(REPORT_METHODS.filter((method) => method !== lost));
+
+      expect(screen.getByRole("menu")).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: lostItem })).toBeNull();
+      expect(document.activeElement).toBe(focused);
+      expect(mocks.actions).toHaveLength(0);
+      offer(REPORT_METHODS);
+      expect(document.activeElement).toBe(focused);
+      expect(mocks.actions).toHaveLength(0);
+    },
+    5_000,
+  );
+
+  it("keeps focus on the body after a direct blur from the trigger when a lost manifest then removes the controls", () => {
+    mountReal();
+    trigger().focus();
+    trigger().blur();
+    expect(document.activeElement).toBe(document.body);
+
+    offer([]);
+
+    expect(document.activeElement).toBe(document.body);
+    offer(REPORT_METHODS);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it.each([
+    ["the trigger", () => trigger()],
+    ["the row open button", () => openButton()],
+  ] as const)(
+    "keeps focus on the body after a direct blur from %s when the row then leaves the list",
+    (_name, target) => {
+      const view = mountReal();
+      target().focus();
+      target().blur();
+      expect(document.activeElement).toBe(document.body);
+
+      view.rerender(ui([]));
+
+      expect(document.activeElement).toBe(document.body);
+    },
+  );
+
+  it.each(
+    [
+      {
+        name: "a non-every cadence",
+        tasks: (): ReadonlyArray<BotTaskEntry> => [
+          task("t-every", { inputNeeded: [] }),
+        ],
+        boundHere: true,
+      },
+      {
+        name: "an unbound tab",
+        tasks: (): ReadonlyArray<BotTaskEntry> => [periodic("t-every", {})],
+        boundHere: false,
+      },
+      {
+        name: "a task that ended but not by the bot",
+        tasks: (): ReadonlyArray<BotTaskEntry> => [completed("t-every", {})],
+        boundHere: true,
+      },
+      {
+        name: "a row whose reporting trigger is present",
+        tasks: (): ReadonlyArray<BotTaskEntry> => [periodic("t-every", {})],
+        boundHere: true,
+      },
+    ].map((row) => ({
+      ...row,
+      how: "is removed",
+      // Archiving an agent is not covered: through the task store alone the
+      // archived agent's control stays in the page, so nothing was removed.
+      after: (agents: ReadonlyArray<WarmAgent>): ReadonlyArray<WarmAgent> =>
+        agents.slice(1),
+    })),
+  )(
+    "moves focus from a focused agent of $name that $how, through the task store alone, to the row open button",
+    async (scenario) => {
+      const user = userEvent.setup();
+      mocks.state.supported = new Set(REPORT_METHODS);
+      const agents: ReadonlyArray<WarmAgent> = [
+        { id: "a-one", parentId: null, title: "First", archivedAt: null },
+        { id: "a-two", parentId: null, title: "Second", archivedAt: null },
+      ];
+      warmTask("t-every", agents);
+      render(uiFor(scenario.tasks(), scenario.boundHere));
+      await user.click(
+        within(rowOf("t-every")).getByTestId("bot-activity-task-chevron"),
+      );
+      const found = rowOf("t-every").querySelector('[data-agent-id="a-one"]');
+      const control =
+        found instanceof HTMLButtonElement
+          ? found
+          : found?.querySelector("button");
+      if (!(control instanceof HTMLButtonElement))
+        throw new Error("the first agent has no button");
+      control.focus();
+      expect(document.activeElement).toBe(control);
+
+      act(() => warmTask("t-every", scenario.after(agents)));
+
+      expect(control.isConnected).toBe(false);
+      expect(document.activeElement).toBe(
+        within(rowOf("t-every")).getByTestId("bot-activity-task-open"),
+      );
+    },
+    5_000,
+  );
 
   it("keeps a sent stop's modal until it settles, then lands on the row open button, and a restore does not revive it", async () => {
     const user = userEvent.setup();
@@ -3901,6 +4063,60 @@ describe("<BotActivityPage /> reporting controls and the real negotiated manifes
     expect(control.isConnected).toBe(false);
     expect(trigger().isConnected).toBe(true);
     expect(document.activeElement).toBe(openButton());
+  });
+});
+
+describe("<BotActivityPage /> a row that leaves through the activity store alone", () => {
+  // The rows are computed by the page's parent from the tasks and the activity
+  // plane, so the parent renders itself again when only the store changes; the
+  // case drives nothing but the store.
+  // A tracking task that neither checks in on a schedule nor waits for its
+  // completion stays listed only while something in it is going on, so the
+  // activity plane alone takes it off the list, once both sources are proved.
+  const mountListed = (): void => {
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([]);
+    working({ "t-working": { working: ["a-1"], turn: ["a-1"] } });
+    render(
+      <Harness
+        threads={[]}
+        tasks={[
+          task("t-working", {
+            cadence: { kind: "none" },
+            inputNeeded: [],
+            lastCheckinAt: NOW,
+          }),
+        ]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(rowIds()).toEqual(["t-working"]);
+  };
+
+  it("hands focus from the row's open button to the Activity section", () => {
+    mountListed();
+    within(row("t-working")).getByTestId("bot-activity-task-open").focus();
+
+    act(() => working({}));
+
+    expect(rowIds()).toEqual([]);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("bot-activity-page"),
+    );
+  });
+
+  it("leaves focus on the body after a direct blur from the row's open button", () => {
+    mountListed();
+    const open = within(row("t-working")).getByTestId("bot-activity-task-open");
+    open.focus();
+    open.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => working({}));
+
+    expect(rowIds()).toEqual([]);
+    expect(document.activeElement).toBe(document.body);
   });
 });
 

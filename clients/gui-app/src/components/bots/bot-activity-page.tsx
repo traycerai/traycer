@@ -32,6 +32,7 @@ import {
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
+import { TaskFocusBoundary } from "@/components/bots/task-focus-boundary";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import {
@@ -148,6 +149,15 @@ export function BotActivityPage(props: {
     document.addEventListener("focusin", clearFocusOwner, true);
     return () => document.removeEventListener("focusin", clearFocusOwner, true);
   }, []);
+  const captureTaskFocus = useCallback((): void => {
+    const owner = lastTaskFocus.current;
+    if (
+      owner !== null &&
+      owner.target.isConnected &&
+      document.activeElement !== owner.target
+    )
+      lastTaskFocus.current = null;
+  }, []);
   const restoreTaskFocus = useCallback((): void => {
     const previous = lastTaskFocus.current;
     const activity = activityRef.current;
@@ -255,6 +265,7 @@ export function BotActivityPage(props: {
                 nameOf={nameOf}
                 entry={entry}
                 onTaskFocus={rememberTaskFocus}
+                onBeforeTaskChange={captureTaskFocus}
                 onReportingRemoved={restoreTaskFocus}
                 indicator={active.indicatorOf(entry.task.taskId)}
                 title={
@@ -494,6 +505,7 @@ type ActiveTaskRowProps = {
   readonly nameOf: (userId: string) => string;
   readonly entry: BotActiveTask;
   readonly onTaskFocus: (taskId: string, target: EventTarget) => void;
+  readonly onBeforeTaskChange: () => void;
   readonly onReportingRemoved: () => void;
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
@@ -535,7 +547,12 @@ function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
       scopes={scopes}
       chatEpicIds={chatEpicIds}
     >
-      <ActiveTaskRowBody {...props} agents={agents} />
+      <TaskFocusBoundary
+        beforeChange={props.onBeforeTaskChange}
+        afterChange={props.onReportingRemoved}
+      >
+        <ActiveTaskRowBody {...props} agents={agents} />
+      </TaskFocusBoundary>
     </ChatIndicatorHostScopes>
   );
 }
@@ -635,6 +652,7 @@ function ActiveTaskRowBody(
           task={task}
           boundHere={boundHere}
           nameOf={nameOf}
+          onBeforeTaskChange={props.onBeforeTaskChange}
           onReportingRemoved={props.onReportingRemoved}
         />
       </div>

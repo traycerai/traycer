@@ -18,9 +18,11 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { usePanePortalHostPresentation } from "@/components/epic-tabs/pane-visibility-context";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,10 +35,13 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { __setAgentActivityPlaneAnsweringForTests } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
@@ -71,6 +76,10 @@ useSettingsStore
   .getState()
   .setTheme(params.get("theme") === "dark" ? "dark" : "light");
 const empty = params.get("empty") === "1";
+// `?working=1` lists one more task, kept in the list only by a working agent.
+const withWorking = params.get("working") === "1";
+// `?pane=1` seats the tab in a pane host that `hidePane()` stops presenting.
+const withPane = params.get("pane") === "1";
 
 const localHost = {
   hostId: HOST_ID,
@@ -153,6 +162,17 @@ const tasks: ReadonlyArray<BotTaskEntry> = empty
         endedReason: "completed",
         lastCheckinAt: NOW - 3 * 60 * MINUTE,
       }),
+      ...(withWorking
+        ? [
+            entry("task-working", {
+              // Tracking with no schedule and no completion to wait for: only
+              // the working agent keeps it listed.
+              cadence: { kind: "none" },
+              inputNeeded: [],
+              lastCheckinAt: NOW - 3 * MINUTE,
+            }),
+          ]
+        : []),
     ];
 
 const TITLES: Readonly<Record<string, string>> = {
@@ -161,6 +181,7 @@ const TITLES: Readonly<Record<string, string>> = {
   "task-ipad": "iPad switcher scroller layer fix",
   "task-weekly": "Weekly dependency sweep",
   "task-quiet": "Slack uninstall copy",
+  "task-working": "Working-only task",
 };
 
 function taskLight(id: string): ListTaskLight {
@@ -285,18 +306,39 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
 
 // The activity plane: two agents working in the roster task (one in a
 // turn, one in the background) and the release task's reader in a turn.
-publishAgentActivity([
-  {
-    hostId: HOST_ID,
-    byEpic: {
-      "task-roster": {
-        working: ["agent-shard-a", "agent-shard-b"],
-        turn: ["agent-shard-a"],
+function publishActivity(includeWorkingTask: boolean): void {
+  publishAgentActivity([
+    {
+      hostId: HOST_ID,
+      byEpic: {
+        "task-roster": {
+          working: ["agent-shard-a", "agent-shard-b"],
+          turn: ["agent-shard-a"],
+        },
+        "task-release": { working: ["agent-reader"], turn: ["agent-reader"] },
+        ...(includeWorkingTask
+          ? { "task-working": { working: ["agent-w"], turn: ["agent-w"] } }
+          : {}),
       },
-      "task-release": { working: ["agent-reader"], turn: ["agent-reader"] },
     },
-  },
-]);
+  ]);
+}
+publishActivity(withWorking);
+
+// `?working=1` also puts the activity plane in its answering state and serves
+// the cloud notification feed, connected with its snapshot: with the host's
+// indicators answering too, every source vouches for a quiet task, so a row
+// whose agents finish may leave on that store write alone.
+if (withWorking) {
+  __setAgentActivityPlaneAnsweringForTests();
+  useCloudNotificationsStore.setState({ accountId: "fixture-account" });
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows: [],
+    version: 1,
+    summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+  });
+  useCloudNotificationsStore.getState().setConnectionState("connected");
+}
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -307,36 +349,63 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/** The release task's open session: a lead agent and the two it started. */
-function openReleaseSession(): void {
-  const agents: ReadonlyArray<{
-    readonly id: string;
-    readonly title: string;
-    readonly parentId: string | null;
-    readonly updatedAt: number;
-  }> = [
-    {
-      id: "agent-lead",
-      title: "Release notes lead",
-      parentId: null,
-      updatedAt: NOW - 30 * MINUTE,
-    },
-    {
-      id: "agent-writer",
-      title: "Draft writer",
-      parentId: "agent-lead",
-      updatedAt: NOW - 2 * MINUTE,
-    },
-    {
-      id: "agent-reader",
-      title: "Changelog reader",
-      parentId: "agent-lead",
-      updatedAt: NOW - 11 * MINUTE,
-    },
-  ];
-  const handle = __getOpenEpicRegistryForTests().acquire("task-release", () =>
+type SessionAgent = {
+  readonly id: string;
+  readonly title: string;
+  readonly parentId: string | null;
+  readonly updatedAt: number;
+};
+
+const RELEASE_AGENTS: ReadonlyArray<SessionAgent> = [
+  {
+    id: "agent-lead",
+    title: "Release notes lead",
+    parentId: null,
+    updatedAt: NOW - 30 * MINUTE,
+  },
+  {
+    id: "agent-writer",
+    title: "Draft writer",
+    parentId: "agent-lead",
+    updatedAt: NOW - 2 * MINUTE,
+  },
+  {
+    id: "agent-reader",
+    title: "Changelog reader",
+    parentId: "agent-lead",
+    updatedAt: NOW - 11 * MINUTE,
+  },
+];
+
+const ROSTER_AGENTS: ReadonlyArray<SessionAgent> = [
+  {
+    id: "agent-shard-a",
+    title: "Shard A",
+    parentId: null,
+    updatedAt: NOW - 4 * MINUTE,
+  },
+  {
+    id: "agent-shard-b",
+    title: "Shard B",
+    parentId: null,
+    updatedAt: NOW - 6 * MINUTE,
+  },
+];
+
+/**
+ * A task's open session: its agents in a real open-epic store, and a window
+ * hook that drops one agent with the store's own update, so a spec can remove
+ * an agent while the person's focus is on it. The page is not rendered again
+ * by that call.
+ */
+function openSession(
+  epicId: string,
+  agents: ReadonlyArray<SessionAgent>,
+  removeHook: string,
+): void {
+  const handle = __getOpenEpicRegistryForTests().acquire(epicId, () =>
     openStoreForTest({
-      epicId: "task-release",
+      epicId,
       userId: null,
       factories: {
         streamClientFactory: noopStreamClientFactory,
@@ -380,11 +449,64 @@ function openReleaseSession(): void {
     }
   }
   handle.store.setState({
-    tree: { rootIds: ["agent-lead"], childrenByParent, nodeById },
+    tree: {
+      rootIds: agents
+        .filter((agent) => agent.parentId === null)
+        .map((agent) => agent.id),
+      childrenByParent,
+      nodeById,
+    },
     chats: { allIds: agents.map((agent) => agent.id), byId },
   });
+  // The task store's own update, for a spec that drops an agent while the
+  // person's focus is on it: the page is not rendered again by this call.
+  Object.defineProperty(window, removeHook, {
+    value: (agentId: string): void => {
+      const state = handle.store.getState();
+      handle.store.setState({
+        tree: {
+          ...state.tree,
+          nodeById: Object.fromEntries(
+            Object.entries(state.tree.nodeById).filter(
+              ([id]) => id !== agentId,
+            ),
+          ),
+          childrenByParent: Object.fromEntries(
+            Object.entries(state.tree.childrenByParent).map(
+              ([parent, children]) => [
+                parent,
+                children.filter((id) => id !== agentId),
+              ],
+            ),
+          ),
+        },
+        chats: {
+          ...state.chats,
+          allIds: state.chats.allIds.filter((id) => id !== agentId),
+          byId: Object.fromEntries(
+            Object.entries(state.chats.byId).filter(([id]) => id !== agentId),
+          ),
+        },
+      });
+    },
+  });
 }
-if (!empty) openReleaseSession();
+if (!empty) {
+  openSession("task-release", RELEASE_AGENTS, "removeReleaseAgent");
+  openSession("task-roster", ROSTER_AGENTS, "removeRosterAgent");
+}
+// What a spec drives from the page: the host's negotiated methods, which gate
+// the reporting controls, and the activity plane that keeps one task listed.
+Object.defineProperty(window, "offerBotTaskMethods", {
+  value: (methods: ReadonlyArray<string>): void => {
+    recordNegotiatedHostMethods(HOST_ID, ["host.status", ...methods]);
+  },
+});
+Object.defineProperty(window, "endWorkingRow", {
+  value: (): void => {
+    publishActivity(false);
+  },
+});
 
 export function SignedInFixture(props: {
   readonly children: ReactNode;
@@ -474,6 +596,27 @@ const runnerHost = new MockRunnerHost({
   traycerCli: new MockTraycerCli(),
 });
 
+/** What a pane does to its tab: the real host presentation, hidden on request. */
+function PaneHost(props: { readonly children: ReactNode }): ReactElement {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  const [presented, setPresented] = useState(true);
+  const presentation = usePanePortalHostPresentation(host, {
+    visible: presented,
+    focused: presented,
+  });
+  useEffect(() => {
+    Object.defineProperty(window, "hidePane", {
+      configurable: true,
+      value: (): void => setPresented(false),
+    });
+  }, []);
+  return (
+    <div ref={setHost} {...presentation}>
+      {props.children}
+    </div>
+  );
+}
+
 function buildRouter() {
   const rootRoute = createRootRoute({
     component: () => (
@@ -494,7 +637,17 @@ function buildRouter() {
                 <SignedInFixture>
                   <RequestContext>
                     <TabHostContext.Provider value={HOST_ID}>
-                      <ActivityTab />
+                      <NotificationFeedModeContext.Provider
+                        value={withWorking ? "cloud" : "local"}
+                      >
+                        {withPane ? (
+                          <PaneHost>
+                            <ActivityTab />
+                          </PaneHost>
+                        ) : (
+                          <ActivityTab />
+                        )}
+                      </NotificationFeedModeContext.Provider>
                     </TabHostContext.Provider>
                   </RequestContext>
                 </SignedInFixture>
