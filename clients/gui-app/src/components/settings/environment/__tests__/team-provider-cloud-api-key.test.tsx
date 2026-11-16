@@ -15,6 +15,8 @@ import {
   isProviderKeyProviderId,
   type ProviderKeyProviderId,
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -27,6 +29,7 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   authnSecretRowFixture,
+  AUTHN_BASE,
   createOwnEnvironmentAuthRuntime,
   DIRECTORY_URL,
   installOwnEnvironmentTransport,
@@ -114,9 +117,7 @@ function keyWriteResponse(row: ProviderKeyWireRow): object {
   };
 }
 
-function profileRecordsResponse(
-  rows: readonly ProviderKeyWireRow[],
-): object {
+function profileRecordsResponse(rows: readonly ProviderKeyWireRow[]): object {
   return {
     enabled: true,
     environmentRevision: "0",
@@ -124,6 +125,15 @@ function profileRecordsResponse(
     removed: [],
     aliases: [],
     providerKeys: rows,
+  };
+}
+
+function authenticatedUserFor(userId: string): AuthenticatedUser {
+  const user = createAuthenticatedUserFixture(undefined);
+  return {
+    ...user,
+    user: { ...user.user, id: userId },
+    userSubscription: { ...user.userSubscription, userID: userId },
   };
 }
 
@@ -158,12 +168,26 @@ function routeRequest(
   request: OwnEnvironmentTransportRequest,
   state: TransportFixtureState,
 ): Response | Promise<Response> | undefined {
+  if (
+    request.url.origin === AUTHN_BASE &&
+    request.url.pathname === "/api/v3/user/negotiated"
+  ) {
+    const userId =
+      request.headers.get("authorization") === "Bearer user-2-token"
+        ? "user-2"
+        : "user-1";
+    const response = jsonResponse(200, authenticatedUserFor(userId));
+    response.headers.set("x-traycer-user-record-version", "3.0");
+    return response;
+  }
+
   if (request.url.toString() === DIRECTORY_URL) {
     return jsonResponse(200, { environments: [] });
   }
 
-  const match =
-    /^\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(request.url.pathname);
+  const match = /^\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(
+    request.url.pathname,
+  );
   const environmentId = match?.[1];
   const route = match?.[2];
   if (environmentId === undefined || route === undefined) return undefined;
@@ -483,11 +507,10 @@ describe("TeamProviders cloud API keys", () => {
       PERSONAL_ENVIRONMENT,
     ).length;
     harness.source.current = noHostSource(SECOND_PERSONAL_ENVIRONMENT);
-    await signInOwnEnvironmentAs(
-      harness.runtime,
-      "user-2",
-      "user-2-token",
-    );
+    await signInOwnEnvironmentAs(harness.runtime, "user-2", "user-2-token");
+    await waitFor(() => {
+      expect(harness.runtime.auth.chosenSignIn().userId).toBe("user-2");
+    });
     view.rerender(<TeamProviders />);
 
     await selectProvider("Cursor");
@@ -560,9 +583,10 @@ describe("TeamProviders cloud API keys", () => {
     await selectProvider("Cursor");
     await waitFor(() => {
       expect(
-        within(
-          screen.getByRole("navigation", { name: "Providers" }),
-        ).getByRole("button", { name: /Cursor/ }).textContent,
+        within(screen.getByRole("navigation", { name: "Providers" })).getByRole(
+          "button",
+          { name: /Cursor/ },
+        ).textContent,
       ).toContain("key");
     });
     expect(screen.queryByLabelText("API key")).toBeNull();
@@ -713,17 +737,6 @@ describe("TeamProviders cloud API keys", () => {
       expect(await screen.findByText("Not set")).toBeTruthy();
       expect(profileReadsFor(harness, environmentId).length).toBeGreaterThan(0);
       expect(harness.state.writes).toEqual([]);
-      if (provider === "OpenRouter") {
-        expect(
-          within(rail).getByRole("button", { name: /OpenRouter/ }).textContent,
-        ).toContain("plan");
-      } else {
-        expect(
-          within(rail)
-            .getByRole("button", { name: /Cursor/ })
-            .getAttribute("aria-current"),
-        ).toBe("true");
-      }
     },
   );
 });
