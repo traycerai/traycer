@@ -14,12 +14,12 @@ import {
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import {
   BotMascotFrame,
   type IdentityAvatarSize,
 } from "@/components/bots/bot-mascot-frame";
 import {
-  DEFAULT_MASCOT,
   MASCOT_AT_REST,
   MASCOT_WORKING_BEATS,
   type MascotExpression,
@@ -230,38 +230,12 @@ export function BotMascotPreview(props: {
 
 /**
  * The bot's picture: the surface's bot (`BotIdentityContext`) by its id, or
- * the default mascot outside one.
+ * the Tracy glyph outside one.
  */
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
 }): ReactElement {
   return <ExpressiveBotAvatar size={props.size} expression="idle" />;
-}
-
-/**
- * The default mascot, whatever surface it is drawn on: what stands for bots
- * as a kind, where no one bot is meant.
- */
-export function PlainBotAvatar(props: {
-  readonly size: IdentityAvatarSize;
-}): ReactElement {
-  return <DefaultMascotAvatar size={props.size} expression="idle" />;
-}
-
-function DefaultMascotAvatar(props: {
-  readonly size: IdentityAvatarSize;
-  readonly expression: MascotExpression;
-}): ReactElement {
-  const { size, expression } = props;
-  const beat = useWorkingBeat(expression === "working");
-  return (
-    <BotMascotFrame
-      mascot={DEFAULT_MASCOT}
-      pose={{ expression, beat }}
-      size={size}
-      testId="bot-avatar"
-    />
-  );
 }
 
 /**
@@ -274,9 +248,7 @@ export function ExpressiveBotAvatar(props: {
 }): ReactElement {
   const identity = useBotIdentity();
   if (identity === null) {
-    return (
-      <DefaultMascotAvatar size={props.size} expression={props.expression} />
-    );
+    return <TracyGlyph size={props.size} className={undefined} />;
   }
   return (
     <IdentityAvatar

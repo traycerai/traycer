@@ -29,7 +29,8 @@ import type {
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
-import { NamedBotAvatar, PlainBotAvatar } from "@/components/bots/bot-avatars";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 
 /**
  * Row-display mapping for @mention suggestion entries: the picker's
@@ -315,9 +316,9 @@ export function terminalCategoryIcon(): ReactElement {
   return categoryNodeIcon("terminal");
 }
 
-/** Icon for the **Tracy** mention category: the default mascot, no one bot's. */
+/** Icon for the **Tracy** mention category: Tracy as a kind, no one bot's. */
 export function botCategoryIcon(): ReactElement {
-  return <PlainBotAvatar size="xs" />;
+  return <TracyGlyph size="xs" className="text-muted-foreground" />;
 }
 
 /** Icon for the **Browser** mention category itself (not its rows, which favicon). */

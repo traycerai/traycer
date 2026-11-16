@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { TracyEntryPicture } from "@/components/bots/tracy-entry-picture";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -34,7 +34,7 @@ export function TracyEntryIcon(props: {
   return (
     <span className={cn("relative inline-flex shrink-0", props.className)}>
       <span className="inline-flex" data-testid="tracy-entry-icon">
-        <TracyEntryPicture />
+        <TracyGlyph size="xs" className={undefined} />
       </span>
       {props.muted ? (
         <BotMutedGlyph

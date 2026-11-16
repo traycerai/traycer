@@ -15,6 +15,10 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  BotIdentityContext,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -100,18 +104,43 @@ function channelPresentation(
   };
 }
 
+/** The bot the channel's surface draws, as `bot-tab-surface` provides it. */
+const SURFACE_BOT: BotIdentity = {
+  botId: "bot_0YVZD4PHYFAZS1MCR0D9GABAGV",
+  title: "Release bot",
+  owner: null,
+};
+
 function renderRow(
   message: ChatMessageModel,
   presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, null);
+}
+
+/** A row under a bot's surface, whose name opens the bot's popover. */
+function renderRowInBotSurface(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, SURFACE_BOT);
+}
+
+function renderRowAs(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+  identity: BotIdentity | null,
 ): void {
   function Providers(props: { readonly children: ReactNode }) {
     return (
       <StrictMode>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <ChatBotPresentationContext.Provider value={presentation}>
-              {props.children}
-            </ChatBotPresentationContext.Provider>
+            <BotIdentityContext.Provider value={identity}>
+              <ChatBotPresentationContext.Provider value={presentation}>
+                {props.children}
+              </ChatBotPresentationContext.Provider>
+            </BotIdentityContext.Provider>
           </ChatExpansionTestProviders>
         </TooltipProvider>
       </StrictMode>
@@ -411,7 +440,7 @@ describe("<ChatMessage /> in a bot channel", () => {
   });
 
   it("stacks who is in the thread: the post's writer as a circle, the bot as a squircle", () => {
-    renderRow(
+    renderRowInBotSurface(
       memberPost(undefined),
       channelPresentation(
         () => ({
@@ -959,7 +988,7 @@ describe("<ChatMessage /> bot rows", () => {
   });
 
   it("draws a bot's picture one size under a person's, inside the same 40px box", () => {
-    renderRow(botRow(undefined), presentation);
+    renderRowInBotSurface(botRow(undefined), presentation);
     renderRow(memberPost(undefined), presentation);
 
     const botAvatar = within(screen.getByTestId("bot-reply-row")).getByTestId(

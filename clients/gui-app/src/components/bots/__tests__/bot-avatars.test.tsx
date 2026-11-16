@@ -43,8 +43,10 @@ import {
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import {
-  defaultMascotDrawing,
+  drawsColouredMascot,
+  expectedTracyGlyph,
   mascotPathsAt,
+  renderedTracyGlyphs,
 } from "@/components/bots/__tests__/mascot-drawing";
 import {
   EMPTY_DIRECTORY_STATE,
@@ -190,20 +192,29 @@ describe("a bot's picture", () => {
     },
   );
 
-  it("draws the default mascot outside any bot's surface, and the surface's own bot inside one", () => {
-    render(<BotAvatar size="sm" />);
-    const outside = drawn()[0];
-    cleanup();
-    render(
+  it("draws the Tracy glyph outside any bot's surface, and the surface's own coloured bot inside one", () => {
+    const { container, unmount } = render(<BotAvatar size="sm" />);
+
+    expect(renderedTracyGlyphs(container)).toEqual([expectedTracyGlyph(24)]);
+    expect(drawsColouredMascot(container)).toBe(false);
+    unmount();
+    const inside = render(
       <InBotContext title="Team Tracy">
         <BotAvatar size="sm" />
       </InBotContext>,
     );
-    const inside = drawn()[0];
 
-    expect(outside).toEqual(defaultMascotDrawing(24));
-    expect(inside.paths).toEqual(mascotPathsAt(TEAM_S_MAIN_BOT_ID, false, 24));
-    expect(inside.paths).not.toEqual(outside.paths);
+    expect(drawn()[0].paths).toEqual(
+      mascotPathsAt(TEAM_S_MAIN_BOT_ID, false, 24),
+    );
+    expect(renderedTracyGlyphs(inside.container)).toEqual([]);
+  });
+
+  it("draws the Tracy glyph at 40px on its larger grid for a large picture outside any bot's surface", () => {
+    const { container } = render(<BotAvatar size="lg" />);
+
+    expect(renderedTracyGlyphs(container)).toEqual([expectedTracyGlyph(40)]);
+    expect(drawsColouredMascot(container)).toBe(false);
   });
 
   it("draws a bot's mascot with nothing behind or over it, which a person's picture has", () => {

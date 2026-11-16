@@ -32,9 +32,10 @@ import type {
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import {
-  defaultMascotDrawing,
+  drawsColouredMascot,
   drawsRobotGlyph,
-  renderedMascotDrawing,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
 } from "@/components/bots/__tests__/mascot-drawing";
 
 /** What a scripted `bot.onboarding.read` answers for one environment. */
@@ -395,12 +396,13 @@ describe("HomeBotsSection capability gate", () => {
     );
   });
 
-  it("draws the notice's picture as the default 24px mascot, not the robot glyph", () => {
+  it("draws the notice's picture as the 24px Tracy glyph, not the robot glyph", () => {
     mocks.state.support = false;
     mountSection();
 
     const notice = screen.getByTestId("home-bots-unavailable");
-    expect(renderedMascotDrawing(notice)).toEqual(defaultMascotDrawing(24));
+    expect(renderedTracyGlyphs(notice)).toEqual([expectedTracyGlyph(24)]);
+    expect(drawsColouredMascot(notice)).toBe(false);
     expect(drawsRobotGlyph(notice)).toBe(false);
   });
 

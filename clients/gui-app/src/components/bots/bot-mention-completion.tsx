@@ -17,11 +17,8 @@ import {
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Layers, Users } from "lucide-react";
-import {
-  NamedBotAvatar,
-  PersonAvatar,
-  PlainBotAvatar,
-} from "@/components/bots/bot-avatars";
+import { NamedBotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import {
   useBotIdentity,
   type BotIdentity,
@@ -110,7 +107,7 @@ const CATEGORIES: ReadonlyArray<BotMentionCategory> = [
     providerId: "bots",
     label: "Bots",
     description: "Other bots",
-    icon: () => <PlainBotAvatar size="xs" />,
+    icon: () => <TracyGlyph size="xs" className="text-muted-foreground" />,
   },
   {
     kind: "task",

@@ -34,11 +34,11 @@ import {
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
-  defaultMascotDrawing,
+  drawsColouredMascot,
   drawsRobotGlyph,
-  mascotPathsAt,
-  renderedMascotDrawing,
+  expectedTracyGlyph,
   renderedMascotPaths,
+  renderedTracyGlyphs,
 } from "@/components/bots/__tests__/mascot-drawing";
 
 /** What the box hands the send mutation for its send. */
@@ -960,17 +960,22 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     expect(menuHeader()).toBe("Mentions");
   });
 
-  it("draws the Bots category as the default 16px mascot, not the channel bot's own and not the robot glyph", async () => {
+  it("draws the Bots category as the 16px Tracy glyph, not a bot's coloured mascot and not the robot glyph, while the bots it lists keep their own", async () => {
+    const user = userEvent.setup();
     mountWith(TEAM, DIRECTORY, null);
 
     await typeBox("@");
 
     const row = menuRow("Bots");
-    expect(renderedMascotDrawing(row)).toEqual(defaultMascotDrawing(16));
-    expect(renderedMascotPaths(row)).not.toEqual(
-      mascotPathsAt(OWN_BOT, false, 16),
-    );
+    expect(renderedTracyGlyphs(row)).toEqual([expectedTracyGlyph(16)]);
+    expect(drawsColouredMascot(row)).toBe(false);
     expect(drawsRobotGlyph(row)).toBe(false);
+
+    await user.click(row);
+
+    const triage = menuRow("Triage");
+    expect(renderedMascotPaths(triage)).not.toEqual([]);
+    expect(renderedTracyGlyphs(triage)).toEqual([]);
   });
 
   it("shows Bots and Tasks after @ for a personal bot, which has no one else to name", async () => {
