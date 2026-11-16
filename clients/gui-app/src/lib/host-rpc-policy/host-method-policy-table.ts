@@ -3079,6 +3079,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
 } satisfies Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>;
 
 const hostMethodPolicyTable: Partial<HostMethodPolicyTable> =

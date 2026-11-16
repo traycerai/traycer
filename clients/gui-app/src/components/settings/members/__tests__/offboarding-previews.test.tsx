@@ -172,7 +172,7 @@ describe("DemotionPreviewDialog", () => {
     const describedBy = dialog.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
     expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
   });
 
@@ -193,6 +193,27 @@ describe("DemotionPreviewDialog", () => {
     expect(confirm.disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
+  });
+
+  it("asks the Viewer question with what the editor loses and enables Change to viewer", () => {
+    renderDemotion({
+      currentRole: "editor",
+      nextRole: "viewer",
+      busy: false,
+      blockedReason: null,
+    });
+
+    expect(
+      screen.getByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Change to viewer",
+      }).disabled,
+    ).toBe(false);
   });
 
   it("keeps the confirm off and shows progress while the change is in flight", () => {

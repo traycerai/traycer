@@ -1465,7 +1465,7 @@ describe("<StoragePolicySection />", () => {
     });
   });
 
-  it("disables every control after a retired viewer role is decoded, even with a loaded policy", async () => {
+  it("gives a Viewer disabled controls and sends no write, even with a loaded policy", async () => {
     host.teamRole = "viewer";
     host.teamItems = [
       storageItem({ chats: false, idleTaskDays: 14, archivedChatHours: 24 }, 3),
@@ -1488,38 +1488,45 @@ describe("<StoragePolicySection />", () => {
     expect(harness?.paramsOf(PUT)).toEqual([]);
   });
 
-  it("reads and writes the picked team's environment, not Personal's", async () => {
-    host.items = [
-      storageItem(
-        { chats: false, idleTaskDays: null, archivedChatHours: 720 },
-        9,
-      ),
-    ];
-    host.teamItems = [
-      storageItem({ chats: true, idleTaskDays: 7, archivedChatHours: null }, 2),
-      snapshotItem({ quietChatDays: 30 }, 6),
-    ];
-    const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
-    renderSection(<StoragePolicySection pick={pick} />);
-    await settled();
-    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+  it.each(["admin", "editor"] as const)(
+    "reads and writes the picked team's environment for a team %s, not Personal's",
+    async (role) => {
+      host.teamRole = role;
+      host.items = [
+        storageItem(
+          { chats: false, idleTaskDays: null, archivedChatHours: 720 },
+          9,
+        ),
+      ];
+      host.teamItems = [
+        storageItem(
+          { chats: true, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        ),
+        snapshotItem({ quietChatDays: 30 }, 6),
+      ];
+      const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
+      renderSection(<StoragePolicySection pick={pick} />);
+      await settled();
+      expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
 
-    await userEvent.click(await chatsSwitch());
+      await userEvent.click(await chatsSwitch());
 
-    await waitFor(() => {
-      expectPut(
-        TEAM_ENV,
-        { chats: false, idleTaskDays: 7, archivedChatHours: null },
-        2,
-      );
-    });
+      await waitFor(() => {
+        expectPut(
+          TEAM_ENV,
+          { chats: false, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        );
+      });
 
-    expect(snapshotsSelect().textContent).toContain("After 30 days");
-    pickOption(snapshotsSelect(), "Never");
-    await waitFor(() => {
-      expectSnapshotPut(TEAM_ENV, { quietChatDays: null }, 6);
-    });
-  });
+      expect(snapshotsSelect().textContent).toContain("After 30 days");
+      pickOption(snapshotsSelect(), "Never");
+      await waitFor(() => {
+        expectSnapshotPut(TEAM_ENV, { quietChatDays: null }, 6);
+      });
+    },
+  );
 });
 
 describe("<StorageSettingsPanel />", () => {
