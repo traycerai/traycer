@@ -186,12 +186,14 @@ import {
   listCloudChatPayloadsResponseSchema,
   listCloudChatsRequestSchema,
   listCloudChatsResponseSchema,
+  listCloudChatsResponseV10Schema,
   readCloudChatPartRequestSchema,
   readCloudChatPartResponseSchema,
   readCloudChatPayloadRequestSchema,
   readCloudChatPayloadResponseSchema,
   resolveCloudChatHeadRequestSchema,
   resolveCloudChatHeadResponseSchema,
+  resolveCloudChatHeadResponseV10Schema,
   setChatSharingDefaultRequestSchema,
   setChatSharingDefaultResponseSchema,
   setCloudChatVisibilityRequestSchema,
@@ -1857,14 +1859,48 @@ export const epicListCloudChatsV10 = defineRpcContract({
   method: "epic.listCloudChats",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listCloudChatsRequestSchema,
+  responseSchema: listCloudChatsResponseV10Schema,
+});
+
+export const epicListCloudChatsV11 = defineRpcContract({
+  method: "epic.listCloudChats",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listCloudChatsRequestSchema,
   responseSchema: listCloudChatsResponseSchema,
+});
+
+export const epicListCloudChatsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListCloudChatsV10,
+  typeof epicListCloudChatsV11
+>({
+  from: epicListCloudChatsV10.schemaVersion,
+  to: epicListCloudChatsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicResolveCloudChatHeadV10 = defineRpcContract({
   method: "epic.resolveCloudChatHead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveCloudChatHeadRequestSchema,
+  responseSchema: resolveCloudChatHeadResponseV10Schema,
+});
+
+export const epicResolveCloudChatHeadV11 = defineRpcContract({
+  method: "epic.resolveCloudChatHead",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: resolveCloudChatHeadRequestSchema,
   responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+export const epicResolveCloudChatHeadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicResolveCloudChatHeadV10,
+  typeof epicResolveCloudChatHeadV11
+>({
+  from: epicResolveCloudChatHeadV10.schemaVersion,
+  to: epicResolveCloudChatHeadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // The title a reference to a chat is drawn with, read by task and chat id.

@@ -146,6 +146,10 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(8);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
+    // @1.1 adds optional creator attribution to environment-owned chat rows.
+    expect(
+      hostStreamRpcRegistry["environment.chats.subscribe"][1].latestMinor,
+    ).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       3,
