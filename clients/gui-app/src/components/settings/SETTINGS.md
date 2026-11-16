@@ -1317,6 +1317,12 @@ evidence, historical upload sheet and actions are unchanged. Skills, the guide
 and shared notes have no review workflow. Mount, window focus and this app's
 own settlement refresh review; no new poll or proposal push is promised.
 
+The stored profile `needsLink` field stays in both projected values and is
+read by the list. Save or Apply can normalize it even when the app preserves
+the baseline field. Its one label slot remains null under the owner's
+disposition, so no label, placeholder or switch is rendered for it. This is
+not live sign-in standing. Owner-approved wording is a separate copy forward.
+
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
 Under a Personal page's status line, for the item
 kinds the page edits: each convergence notice from `environment.notices`
