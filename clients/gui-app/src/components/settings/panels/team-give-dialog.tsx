@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMoveOutcomeAnswer } from "@traycer/protocol/host/environment/move-contracts";
@@ -72,7 +77,6 @@ export function TeamGiveDialog(props: {
     environmentId: team.environmentId,
     teamId: team.ownerId,
   } as const;
-  const queryClient = useQueryClient();
   const runtime = useHostBinding();
   const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
     cacheKeyIdentity: undefined,
@@ -85,79 +89,16 @@ export function TeamGiveDialog(props: {
   const start = useEnvironmentMoveStartMutation(props.client, null);
   const [attempt, setAttempt] = useState<GiveAttempt | null>(null);
   const [notFinished, setNotFinished] = useState(false);
-  const originAttempt =
-    attempt !== null &&
-    attempt.press.hostId === props.hostId &&
-    attempt.press.team.environmentId === team.environmentId &&
-    attempt.press.operation.onOriginSignIn()
-      ? attempt
-      : null;
+  const originAttempt = shownGiveAttempt(
+    attempt,
+    props.hostId,
+    team.environmentId,
+  );
   const { given, ended, reread } = useGiveAttempt(
     originAttempt?.press.client ?? props.client,
     originAttempt,
   );
-  const ownership = useQuery<GiveOwnership>({
-    queryKey: authQueryKeys.hostOwnershipAfterMove(
-      attempt?.press.runtime.auth ?? null,
-      attempt?.press.userId ?? null,
-      attempt?.press.hostId ?? null,
-      attempt?.attemptId ?? null,
-    ),
-    queryFn: async () => {
-      if (attempt === null) return "sign_in_changed";
-      const { press } = attempt;
-      if (!press.operation.onOriginSignIn()) return "sign_in_changed";
-      const era = press.runtime.auth.currentAuthEra();
-      if (era.identity !== press.userId) return "sign_in_changed";
-      try {
-        const result = await press.runtime.auth.readHostOwnership(
-          press.hostId,
-          era,
-        );
-        if (!press.operation.onOriginSignIn()) return "sign_in_changed";
-        return result.kind === "ok" &&
-          result.host.hostId === press.hostId &&
-          result.host.owner.kind === "team" &&
-          result.host.owner.id === press.team.ownerId
-          ? "confirmed"
-          : "not_confirmed";
-      } catch {
-        return press.operation.onOriginSignIn()
-          ? "not_confirmed"
-          : "sign_in_changed";
-      }
-    },
-    // One read for this attempt, never an earlier Overview read or a poll.
-    enabled: (query) =>
-      given &&
-      attempt !== null &&
-      attempt.press.operation.onOriginSignIn() &&
-      query.state.data === undefined,
-    retry: false,
-    staleTime: Infinity,
-    gcTime: 0,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-  });
-  const givenOnce = useRef(false);
-  useEffect(() => {
-    if (
-      !given ||
-      ownership.data !== "confirmed" ||
-      givenOnce.current ||
-      attempt === null ||
-      originAttempt === null ||
-      !attempt.press.operation.onOriginSignIn()
-    )
-      return;
-    givenOnce.current = true;
-    void queryClient.invalidateQueries({
-      queryKey: authQueryKeys.hostOwnershipAll(),
-    });
-    void attempt.press.runtime.directory.refresh();
-    attempt.press.onGiven(attempt.press.team);
-  }, [attempt, given, originAttempt, ownership.data, queryClient]);
+  const ownership = useGiveOwnership(attempt, originAttempt, given);
 
   const settle = (
     answer: EnvironmentMoveOutcomeAnswer,
@@ -218,6 +159,9 @@ export function TeamGiveDialog(props: {
     start.isPending ||
     (originAttempt !== null && !given && !ended) ||
     (originAttempt !== null && ownership.isFetching);
+  const startError = start.isError ? start.error.message : null;
+  const ownershipNotConfirmed =
+    originAttempt !== null && ownership.data === "not_confirmed";
   const versionDiffers =
     plan.data !== undefined &&
     plan.data.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
@@ -255,11 +199,7 @@ export function TeamGiveDialog(props: {
           onRetryPlan={() => void plan.refetch().catch(ignoreError)}
           notFinished={notFinished || ended}
           startError={
-            originAttempt !== null && ownership.data === "not_confirmed"
-              ? TEAM_TRANSFER_NOT_CONFIRMED
-              : start.isError
-                ? start.error.message
-                : null
+            ownershipNotConfirmed ? TEAM_TRANSFER_NOT_CONFIRMED : startError
           }
         />
         <div className="flex flex-wrap justify-end gap-2">
@@ -312,6 +252,94 @@ interface GiveAttempt {
 }
 
 type GiveOwnership = "confirmed" | "not_confirmed" | "sign_in_changed";
+
+function shownGiveAttempt(
+  attempt: GiveAttempt | null,
+  hostId: string,
+  environmentId: string,
+): GiveAttempt | null {
+  return attempt !== null &&
+    attempt.press.hostId === hostId &&
+    attempt.press.team.environmentId === environmentId &&
+    attempt.press.operation.onOriginSignIn()
+    ? attempt
+    : null;
+}
+
+function useGiveOwnership(
+  attempt: GiveAttempt | null,
+  originAttempt: GiveAttempt | null,
+  given: boolean,
+): UseQueryResult<GiveOwnership> {
+  const queryClient = useQueryClient();
+  const ownership = useQuery(
+    // The immutable attempt id owns its private press capture, not cache data.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps
+    queryOptions<GiveOwnership>({
+      queryKey: authQueryKeys.hostOwnershipAfterMove(
+        attempt?.press.runtime.auth ?? null,
+        attempt?.press.userId ?? null,
+        attempt?.press.hostId ?? null,
+        attempt?.attemptId ?? null,
+      ),
+      queryFn: async () => {
+        if (attempt === null) return "sign_in_changed";
+        const { press } = attempt;
+        if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+        const era = press.runtime.auth.currentAuthEra();
+        if (era.identity !== press.userId) return "sign_in_changed";
+        try {
+          const result = await press.runtime.auth.readHostOwnership(
+            press.hostId,
+            era,
+          );
+          if (!press.operation.onOriginSignIn()) return "sign_in_changed";
+          return result.kind === "ok" &&
+            result.host.hostId === press.hostId &&
+            result.host.owner.kind === "team" &&
+            result.host.owner.id === press.team.ownerId
+            ? "confirmed"
+            : "not_confirmed";
+        } catch {
+          return press.operation.onOriginSignIn()
+            ? "not_confirmed"
+            : "sign_in_changed";
+        }
+      },
+      // One read for this attempt, never an earlier Overview read or a poll.
+      enabled: (query) =>
+        given &&
+        attempt !== null &&
+        attempt.press.operation.onOriginSignIn() &&
+        query.state.data === undefined,
+      retry: false,
+      staleTime: Infinity,
+      gcTime: 0,
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false,
+    }),
+  );
+  const givenOnce = useRef(false);
+  useEffect(() => {
+    if (
+      !given ||
+      ownership.data !== "confirmed" ||
+      givenOnce.current ||
+      attempt === null ||
+      originAttempt === null ||
+      !attempt.press.operation.onOriginSignIn()
+    )
+      return;
+    givenOnce.current = true;
+    void queryClient.invalidateQueries({
+      queryKey: authQueryKeys.hostOwnershipAll(),
+    });
+    void attempt.press.runtime.directory.refresh();
+    attempt.press.onGiven(attempt.press.team);
+  }, [attempt, given, originAttempt, ownership.data, queryClient]);
+  return ownership;
+}
 
 /**
  * Where the started give stands, from `environment.status`'s `move` on that
