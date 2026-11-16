@@ -88,7 +88,7 @@ function Channel(): ReactNode {
  * memory: the bot's name opens its card, whose memory row opens the
  * memory over the rail the way the tab's opener does (`memoryRailOver`).
  */
-function KnowingChannel(): ReactNode {
+export function KnowingChannel(): ReactNode {
   const rail = useBotRail(BOT_ID);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const memory = useMemo(

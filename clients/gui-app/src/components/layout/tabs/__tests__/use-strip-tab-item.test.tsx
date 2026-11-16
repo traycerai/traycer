@@ -390,6 +390,63 @@ describe("useStripTabItem through a bare presentation", () => {
     expect(navigation.calls).toHaveLength(2);
   });
 
+  it("closes through onClose on a middle click, and not on a left click", async () => {
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    await renderInApp(
+      <BareRow input={{ ...makeInput(), onClose }} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = screen.getByTestId(`tab-epic-${EPIC_TAB.id}`);
+
+    fireEvent(row, new MouseEvent("auxclick", { bubbles: true, button: 0 }));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent(row, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith(EPIC_TAB);
+  });
+
+  it("ignores a middle click on a tab that cannot close", async () => {
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    await renderInApp(
+      <BareRow
+        input={{
+          ...makeInput(),
+          tab: { ...EPIC_TAB, canClose: false },
+          onClose,
+        }}
+      />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+
+    fireEvent(
+      screen.getByTestId(`tab-epic-${EPIC_TAB.id}`),
+      new MouseEvent("auxclick", { bubbles: true, button: 1 }),
+    );
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("ignores a middle click while the inline title rename is open", async () => {
+    registerEditableEpic([]);
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    await renderInApp(
+      <BareRow input={{ ...makeInput(), onClose }} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByText("Edit Title"));
+    await screen.findByTestId(`tab-title-input-epic-${EPIC_TAB.id}`);
+
+    fireEvent(row, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("activates the tab the moment a drag picks it up, before any release", async () => {
     await renderInApp(
       <BareRow input={makeInput()} />,

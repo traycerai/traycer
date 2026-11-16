@@ -8,6 +8,7 @@ import {
   canvasPageItems,
   canvasToolForKey,
   createCursorThrottle,
+  canvasDevice,
   liveBoardSlotBudget,
   selectLiveBoards,
   type CursorThrottle,
@@ -387,30 +388,75 @@ describe("liveBoardSlotBudget", () => {
         : `traycer-sandbox://artifact-${artifactId}`,
   };
 
-  it("keeps 48 boards live where the shell serves the canvas from one site, so its boards share a renderer", () => {
-    expect(liveCount(liveBoardSlotBudget(desktop, "canvas-art"))).toBe(48);
-  });
+  const computerScreen = { width: 1920, height: 1080 };
+  const tabletScreen = { width: 1024, height: 768 };
+  const phoneScreen = { width: 390, height: 844 };
+  const live = (
+    bridge: typeof desktop | null,
+    artifactId: string,
+    coarsePointer: boolean,
+    screen: { readonly width: number; readonly height: number },
+  ): number =>
+    liveCount(
+      liveBoardSlotBudget(
+        bridge,
+        artifactId,
+        canvasDevice(coarsePointer, screen),
+      ),
+    );
 
-  it.each<[string, string]>([
-    ["iOS", "traycer-artifact://artifact-canvas-art--"],
-    ["Android", "https://artifact-canvas-art--"],
+  it.each<[string, boolean, { width: number; height: number }]>([
+    ["a computer", false, computerScreen],
+    ["a tablet", true, tabletScreen],
+    ["a phone", true, phoneScreen],
   ])(
-    "keeps 24 on %s, whose origin names the mount: the boards live in the app's own content process",
-    (_label, prefix) => {
-      const suffix = prefix.startsWith("https")
-        ? ".traycer-artifact.invalid"
-        : "";
-      const bridge = {
-        artifactOrigin: ({ mountId }: { readonly mountId: string }): string =>
-          `${prefix}${mountId}${suffix}`,
-      };
-      expect(liveCount(liveBoardSlotBudget(bridge, "canvas-art"))).toBe(24);
+    "keeps 48 boards live on %s where the shell serves the canvas from one site, so its boards share a renderer",
+    (_label, coarsePointer, screen) => {
+      expect(live(desktop, "canvas-art", coarsePointer, screen)).toBe(48);
     },
   );
 
+  describe.each<[string, string]>([
+    ["iOS", "traycer-artifact://artifact-canvas-art--"],
+    ["Android", "https://artifact-canvas-art--"],
+  ])("on %s, whose origin names the mount", (_label, prefix) => {
+    // The boards live in the app's own content process.
+    const suffix = prefix.startsWith("https")
+      ? ".traycer-artifact.invalid"
+      : "";
+    const bridge = {
+      artifactOrigin: ({ mountId }: { readonly mountId: string }): string =>
+        `${prefix}${mountId}${suffix}`,
+    };
+
+    it("keeps 24 on a fine pointer", () => {
+      expect(live(bridge, "canvas-art", false, computerScreen)).toBe(24);
+    });
+    it("keeps 12 on a coarse pointer with a tablet-sized screen", () => {
+      expect(live(bridge, "canvas-art", true, tabletScreen)).toBe(12);
+    });
+    it("keeps 8 on a coarse pointer with a phone-sized screen", () => {
+      expect(live(bridge, "canvas-art", true, phoneScreen)).toBe(8);
+    });
+  });
+
+  it("tells a phone from a tablet by the screen's short side, whichever way it is turned", () => {
+    expect(live(null, "canvas-art", true, { width: 844, height: 390 })).toBe(8);
+    expect(live(null, "canvas-art", true, { width: 599, height: 1200 })).toBe(
+      8,
+    );
+    expect(live(null, "canvas-art", true, { width: 600, height: 1200 })).toBe(
+      12,
+    );
+  });
+
   it("keeps 24 for a desktop artifact whose id forces a site per mount, and where no shell serves artifacts", () => {
-    expect(liveCount(liveBoardSlotBudget(desktop, "canvas--art"))).toBe(24);
-    expect(liveCount(liveBoardSlotBudget(null, "canvas-art"))).toBe(24);
+    expect(live(desktop, "canvas--art", false, computerScreen)).toBe(24);
+    expect(live(null, "canvas-art", false, computerScreen)).toBe(24);
+  });
+
+  it("ignores the screen size on a fine pointer, as a small laptop window is still a computer", () => {
+    expect(live(null, "canvas-art", false, phoneScreen)).toBe(24);
   });
 });
 

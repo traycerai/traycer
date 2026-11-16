@@ -595,7 +595,9 @@ function BotRow(props: {
           onChoose={presentation.chooseOption}
         />
       )}
-      {receipt === null ? null : <TurnReceiptLine receipt={receipt} />}
+      {presentation.replyReceipt === null ? null : (
+        <TurnReceiptSlot receipt={receipt} />
+      )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -1288,6 +1290,30 @@ function TurnReceiptLine(props: {
       </span>
       <ChevronRight aria-hidden="true" className="size-3 shrink-0" />
     </button>
+  );
+}
+
+/**
+ * The line a bot's row keeps for its receipt wherever the surface draws
+ * receipts. The turn behind a row is named by the host after the row has
+ * drawn, so the row holds the line's height from its first paint and the
+ * receipt fills it without moving the rows under it. A row no turn wrote
+ * keeps the line empty.
+ */
+function TurnReceiptSlot(props: {
+  readonly receipt: ChatBotTurnReceipt | null;
+}): ReactElement {
+  if (props.receipt !== null) {
+    return <TurnReceiptLine receipt={props.receipt} />;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="bot-turn-receipt-slot"
+      className="py-0.5 text-ui-xs"
+    >
+      {"\u00A0"}
+    </div>
   );
 }
 
