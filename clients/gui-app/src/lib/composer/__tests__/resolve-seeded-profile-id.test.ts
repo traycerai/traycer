@@ -87,6 +87,14 @@ describe("resolveSeededProfileId", () => {
     );
   });
 
+  it("leaves an id that one row has and an earlier row advertises as an alias unresolved", () => {
+    const profiles = [
+      { ...profile("another-profile", "managed"), aliases: ["work-uuid"] },
+      profile("work-uuid", "managed"),
+    ];
+    expect(resolveSeededProfileId("work-uuid", profiles, [], true)).toBeNull();
+  });
+
   it("normalizes an alias of the ambient row to the ambient commit id", () => {
     const profiles = [
       { ...profile("ambient", "ambient"), aliases: ["terminal-copy"] },
