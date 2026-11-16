@@ -205,7 +205,7 @@ describe("buildServiceStartCommand", () => {
     })(fakeCtx());
 
     expect(result.human).toBe(
-      "requested start for service 'ai.traycer.host.agent'; a host is now serving (pid 4242)",
+      "requested start for service 'ai.traycer.host.agent'; a host is now serving (pid 4242); host authorized",
     );
     expect(result.data).toMatchObject({ label: "ai.traycer.host" });
   });

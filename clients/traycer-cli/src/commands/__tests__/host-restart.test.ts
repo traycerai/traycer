@@ -385,7 +385,7 @@ describe("buildHostRestartCommand", () => {
     })(fakeCtx());
 
     expect(result.human).toBe(
-      "requested restart for service 'ai.traycer.host.agent'",
+      "requested restart for service 'ai.traycer.host.agent'; host authorized",
     );
     expect(result.data).toMatchObject({ label: "ai.traycer.host" });
     const jobs = launchctl.map((call) => call.split("/").at(-1));
