@@ -199,35 +199,35 @@ function TeamPlanUnlink(props: {
     );
   const counted = countedPlanWork(workNow);
   return (
-      <PlanUnlinkPreview
-        teamName={props.teamName}
-        plan={props.plan}
-        activeTurns={counted === null ? null : counted.activeTurns}
-        activeHostName={
-          counted === null
-            ? null
-            : (environmentReadData(scope.hosts)?.hosts.find(
-                (host) => host.hostId === counted.hostId,
-              )?.hostLabel ?? "the serving host")
-        }
-        remainingAccess={preview.data.keepsWorking}
-        isPending={unlink.isPending}
-        onClose={props.onClose}
-        onConfirm={() => {
-          if (source.kind !== "pool") return;
-          unlink.mutate(
-            {
-              environmentId: source.environmentId,
-              profileId: props.plan.id,
-              expectedBindingVersion: props.plan.bindingVersion ?? null,
+    <PlanUnlinkPreview
+      teamName={props.teamName}
+      plan={props.plan}
+      activeTurns={counted === null ? null : counted.activeTurns}
+      activeHostName={
+        counted === null
+          ? null
+          : (environmentReadData(scope.hosts)?.hosts.find(
+              (host) => host.hostId === counted.hostId,
+            )?.hostLabel ?? "the serving host")
+      }
+      remainingAccess={preview.data.keepsWorking}
+      isPending={unlink.isPending}
+      onClose={props.onClose}
+      onConfirm={() => {
+        if (source.kind !== "pool") return;
+        unlink.mutate(
+          {
+            environmentId: source.environmentId,
+            profileId: props.plan.id,
+            expectedBindingVersion: props.plan.bindingVersion ?? null,
+          },
+          {
+            onSuccess: (result) => {
+              if (result.outcome !== "forbidden") props.onClose();
             },
-            {
-              onSuccess: (result) => {
-                if (result.outcome !== "forbidden") props.onClose();
-              },
-            },
-          );
-        }}
-      />
+          },
+        );
+      }}
+    />
   );
 }
