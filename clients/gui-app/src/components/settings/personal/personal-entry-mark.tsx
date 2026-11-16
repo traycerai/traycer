@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from "react";
+import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { addToConfigurationLabel } from "@/components/settings/environment/mcp-skills-copy";
 import {
   usePersonalEntryApplied,
   usePersonalHostName,
@@ -11,6 +13,7 @@ import {
 } from "@/components/settings/personal/personal-page-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useMayChangeServedEnvironment } from "@/hooks/environment/use-served-environment-row";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useProvidersPromoteToPersonal } from "@/hooks/providers/use-providers-promote-to-personal-mutation";
 import { useHostClient } from "@/lib/host";
@@ -22,18 +25,25 @@ export interface PersonalMarkTarget {
   readonly scope: ProviderNativeScope;
 }
 
+/** The name of the environment this host serves: its team's, or "Personal". */
+function servedEnvironmentName(status: EnvironmentStatusResponse): string {
+  return status.principal?.kind === "team"
+    ? status.principal.teamName
+    : "Personal";
+}
+
 /**
- * Whether an MCP server or skill on this host is one of the person's
- * settings, and if not, the one way to make it one.
+ * Whether an MCP server or skill on this host is one of the settings of the
+ * environment it serves, and if not, the one way to make it one.
  *
- * - Personal: the host applied one of the person's items as this entry
+ * - In the environment: the host applied one of its items as this entry
  *   (`environment.status` `appliedAs`; a client cannot compose a skill's
- *   item key, so the host's word is the only mark).
- * - Otherwise, at global scope: "On <host> only" with "Add to Personal",
+ *   item key, so the host's word is the only mark), badged with its name.
+ * - Otherwise, at global scope: "On <host> only" with "Add to <name>",
  *   which a CLI- or agent-added entry needs before it goes anywhere else.
  * - Project scope: nothing. A project's entries stay with the project.
  *
- * Nothing on a host that is not set up for the person's settings.
+ * Nothing on a host that is not set up for an environment's settings.
  */
 export function PersonalEntryMark(props: {
   readonly target: PersonalMarkTarget;
@@ -41,16 +51,17 @@ export function PersonalEntryMark(props: {
 }): ReactNode {
   const state = usePersonalHostState();
   const hostName = usePersonalHostName();
-  const personal = usePersonalEntryApplied(
+  const applied = usePersonalEntryApplied(
     props.target.entryKind,
     props.name,
     props.target.scope,
   );
   if (props.target.scope !== "global" || state?.kind !== "ready") return null;
-  if (personal) {
+  const environmentName = servedEnvironmentName(state.status);
+  if (applied) {
     return (
       <Badge variant="secondary" data-testid="personal-entry-mark">
-        Personal
+        {environmentName}
       </Badge>
     );
   }
@@ -64,28 +75,30 @@ export function PersonalEntryMark(props: {
         entryKind={props.target.entryKind}
         providerId={props.target.providerId}
         name={props.name}
-        label="Add to Personal"
+        environmentName={environmentName}
       />
     </span>
   );
 }
 
 /**
- * Shown only where the host takes `promoteToPersonal`
- * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.3). A host on
- * 1.2 or older refuses it.
+ * "Add to <name>", for the environment this host serves. Shown only where the
+ * host takes `promoteToPersonal` (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`,
+ * nativeMutate 1.3), and only to someone who may change that environment. A
+ * host on 1.2 or older refuses it.
  */
 export function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";
   readonly providerId: ProviderId;
   readonly name: string;
-  readonly label: string;
+  readonly environmentName: string;
 }): ReactNode {
   const version = useHostNegotiatedMethodVersion(
     useHostClient(),
     "providers.nativeMutate",
   );
-  const promote = useProvidersPromoteToPersonal();
+  const promote = useProvidersPromoteToPersonal(props.environmentName);
+  const mayChange = useMayChangeServedEnvironment();
   const [refusal, setRefusal] = useState<string | null>(null);
   const supported =
     version !== null &&
@@ -94,10 +107,9 @@ export function AddToPersonalButton(props: {
       version,
       PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
     );
-  if (!supported) return null;
+  if (!supported || !mayChange) return null;
   return (
     <>
-      {/* A refusal the host words reads beside the button, as it reads. */}
       {refusal === null ? null : (
         <span role="status" className="text-ui-xs text-muted-foreground">
           {refusal}
@@ -114,25 +126,21 @@ export function AddToPersonalButton(props: {
           promote.mutate(
             {
               providerId: props.providerId,
-              mutation: {
-                kind: "promoteToPersonal",
-                entryKind: props.entryKind,
-                scope: "global",
-                workspaceRoot: null,
-                name: props.name,
-              },
-              executableWriteGrant: null,
+              entryKind: props.entryKind,
+              scope: "global",
+              workspaceRoot: null,
+              name: props.name,
               expectedEnvironmentId: null,
             },
             {
-              onSuccess: (data) => {
-                if (!data.result.ok) setRefusal(data.result.detail);
+              onSuccess: (outcome) => {
+                if (outcome.kind === "refused") setRefusal(outcome.text);
               },
             },
           );
         }}
       >
-        {props.label}
+        {addToConfigurationLabel(props.environmentName)}
         {promote.isPending ? (
           <AgentSpinningDots
             className={undefined}

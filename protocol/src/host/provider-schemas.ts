@@ -80,7 +80,7 @@ import {
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
-import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
+import { releasedExecutableWriteGrantSchema } from "@traycer/protocol/host/released-executable-write-grant";
 
 export {
   providerIdSchema,
@@ -4070,19 +4070,13 @@ export type ProvidersSetEnvOverrideRequestV21 = z.infer<
   typeof providersSetEnvOverrideRequestSchemaV21
 >;
 
-/**
- * `providers.setEnvOverride@2.2` request: a launch-sensitive
- * override selects what a harness starts, so the write carries the
- * executable-write grant; whether a given key reaches a sink is the host's
- * decision. Older callers are upgraded with `null`.
- */
+/** `providers.setEnvOverride@2.2`: sets or unsets a provider variable. */
 export const providersSetEnvOverrideRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     key: z.string().min(1),
     // null = explicit unset; a string sets the value.
     value: z.string().nullable(),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export const providersSetEnvOverrideRequestSchemaV10 = lazySchema(() =>
@@ -4896,16 +4890,15 @@ export type ProvidersNativeMutateRequestV11 = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.3` request: the `promoteToPersonal` arm, and the
- * executable-write grant, since an MCP add or update installs a command and a
- * skill import or update installs content an agent runs. A v1.2 caller's
- * request is upgraded with a `null` grant.
+ * Released @1.3/@1.4 requests retain their inert grant carrier so a nonnull
+ * legacy body reaches the historical refusal. @1.5 keeps that field for
+ * additive minor negotiation; current callers send null and no host reads it.
  */
 export const providersNativeMutateRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     mutation: nativeMutationSchemaV12,
-    executableWriteGrant: executableWriteGrantSchema,
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export const providersNativeMutateRequestSchemaV10Preimage = lazySchema(() =>

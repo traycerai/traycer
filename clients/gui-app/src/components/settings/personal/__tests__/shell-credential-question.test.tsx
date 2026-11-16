@@ -479,7 +479,6 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "debug",
-      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -782,7 +781,6 @@ describe("a variable this computer keeps its own value for", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
-      executableWriteGrant: null,
     });
     expect(clear).not.toHaveBeenCalled();
 

@@ -209,7 +209,6 @@ import type {
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
-import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -418,10 +417,6 @@ export interface DesktopPreloadBridge {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
@@ -1619,13 +1614,6 @@ export class DesktopRunnerHost implements IRunnerHost {
       requestId,
       decision,
     );
-  }
-
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    return this.bridge.mintExecutableWriteGrant(bearerToken, hostId);
   }
 
   beginAuthAttempt(): void {

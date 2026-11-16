@@ -11,7 +11,6 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
@@ -61,9 +60,6 @@ export function useProvidersSkillsMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant; the host
-  // no longer reads it on a remove, which is sent without.
-  const grant = useExecutableWriteGrant();
   return useMutation<
     SkillsMutateData,
     HostRpcError,
@@ -75,22 +71,20 @@ export function useProvidersSkillsMutate(): UseMutationResult<
       const environmentId = variables.environmentId ?? null;
       if (environmentId !== null)
         cloudVerdictPreflight("providers.nativeMutate")();
-      const unsent: RequestOfMethod<HostRpcRegistry, "providers.nativeMutate"> =
-        {
-          providerId: variables.providerId,
-          executableWriteGrant: null,
-          expectedEnvironmentId: environmentId,
-          mutation: {
-            kind: "skills",
-            scope: variables.scope,
-            workspaceRoot: variables.workspaceRoot,
-            mutation: variables.mutation,
-          },
-        };
-      const request =
-        variables.mutation.action === "remove"
-          ? unsent
-          : await grant(unsent, client);
+      const request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.nativeMutate"
+      > = {
+        providerId: variables.providerId,
+        executableWriteGrant: null,
+        expectedEnvironmentId: environmentId,
+        mutation: {
+          kind: "skills",
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+          mutation: variables.mutation,
+        },
+      };
       const response =
         environmentId === null
           ? await client.request("providers.nativeMutate", request)

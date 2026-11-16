@@ -85,7 +85,6 @@ import {
   updateBotReplyModeViaHttp,
   updateBotRunSettingsViaHttp,
 } from "@traycer-clients/shared/host-client/bot-setup";
-import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
   DesktopAuthSessionSetResult,
@@ -850,19 +849,6 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         parseRequiredId(environmentId, "getEnvironmentProviders.environmentId"),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.mintExecutableWriteGrant,
-    async (_event, bearerToken: unknown, hostId: unknown) => {
-      assertString(bearerToken, "mintExecutableWriteGrant.bearerToken");
-      assertString(hostId, "mintExecutableWriteGrant.hostId");
-      return mintExecutableWriteGrantViaHttp(
-        bridge.options.authnBaseUrl,
-        bearerToken,
-        hostId,
       );
     },
   );

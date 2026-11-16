@@ -230,7 +230,6 @@ function shellSave(
         request: {
           path: "/bin/zsh",
           args: ["-l"],
-          executableWriteGrant: null,
           selection,
         },
       };
@@ -239,7 +238,6 @@ function shellSave(
         method,
         request: {
           path: "/bin/zsh",
-          executableWriteGrant: null,
           selection,
         },
       };
@@ -248,7 +246,6 @@ function shellSave(
         method,
         request: {
           path: "/bin/zsh",
-          executableWriteGrant: null,
           selection,
         },
       };
@@ -257,7 +254,6 @@ function shellSave(
         method,
         request: {
           path: "/bin/zsh",
-          executableWriteGrant: null,
           selection,
         },
       };
@@ -267,7 +263,7 @@ function shellSave(
 function shellReset(): SettingsSave {
   return {
     method: "config.shell.reset",
-    request: { executableWriteGrant: null },
+    request: {},
   };
 }
 
@@ -451,7 +447,6 @@ function envSet(value: string | null): SettingsSave {
     request: {
       key: "DOCS_TOKEN",
       value,
-      executableWriteGrant: null,
     },
   };
 }
@@ -498,7 +493,6 @@ function overrideSet(value: string | null): SettingsSave {
       providerId: "claude-code",
       key: "DOCS_TOKEN",
       value,
-      executableWriteGrant: null,
     },
   };
 }
@@ -1010,7 +1004,6 @@ describe("settingsSaveItemEdit", () => {
               os: "linux",
               text: "echo setup",
               expectedRevision: null,
-              executableWriteGrant: null,
             },
           },
           EMPTY,
@@ -1037,7 +1030,6 @@ describe("settingsSaveItemEdit", () => {
               name: "reviewer",
               text: "Review the change.",
               expectedRevision: null,
-              executableWriteGrant: null,
             },
           },
           EMPTY,
@@ -1398,18 +1390,17 @@ describe("version bridges", () => {
     const set = {
       path: "/bin/zsh",
       args: ["-l"],
-      executableWriteGrant: null,
     };
     const setUpgraded = configShellSetUpgradeV11ToV12.upgradeRequest(set);
     expect(setUpgraded).toEqual({ ...set, selection: { kind: "not_stated" } });
     expect(configShellSetRequestSchema.parse(setUpgraded)).toEqual(set);
 
-    const add = { path: "/bin/zsh", executableWriteGrant: null };
+    const add = { path: "/bin/zsh" };
     const addUpgraded = configShellAddUpgradeV11ToV12.upgradeRequest(add);
     expect(addUpgraded).toEqual({ ...add, selection: { kind: "not_stated" } });
     expect(configShellAddRequestSchema.parse(addUpgraded)).toEqual(add);
 
-    const remove = { path: "/bin/zsh", executableWriteGrant: null };
+    const remove = { path: "/bin/zsh" };
     const removeUpgraded =
       configShellRemoveUpgradeV11ToV12.upgradeRequest(remove);
     expect(removeUpgraded).toEqual({
@@ -1420,7 +1411,7 @@ describe("version bridges", () => {
       remove,
     );
 
-    const revert = { path: "/bin/zsh", executableWriteGrant: null };
+    const revert = { path: "/bin/zsh" };
     const revertUpgraded =
       configShellRevertArgsUpgradeV11ToV12.upgradeRequest(revert);
     expect(revertUpgraded).toEqual({
@@ -1733,7 +1724,6 @@ describe("stated-item contracts", () => {
     ).toEqual({
       path: "/bin/zsh",
       args: ["-l"],
-      executableWriteGrant: null,
       selection: { kind: "not_stated" },
     });
   });

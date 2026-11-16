@@ -129,7 +129,6 @@ export {
   type HostStreamRpcRegistry,
 } from "./registry";
 export * from "./environment-schemas";
-export * from "./executable-write-grant";
 
 export {
   diskWorktreeEntrySchema,

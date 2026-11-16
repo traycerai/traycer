@@ -4,7 +4,6 @@ import {
   type EnvironmentChangedBy,
 } from "@traycer/protocol/framework/environment-stale-write";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import {
   SANDBOX_ROUTE_PROTOCOLS,
@@ -443,13 +442,11 @@ export type EnvironmentNoticesResponse = z.infer<
 
 /**
  * `environment.undo@1.0`: writes a notice's displaced value back as a new
- * revision (source `undo`). The displaced value can be executable content (an
- * MCP server, a setup script), so the call carries the grant.
+ * revision (source `undo`).
  */
 export const environmentUndoRequestSchema = lazySchema(() =>
   z.object({
     noticeId: z.string().min(1),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type EnvironmentUndoRequest = z.infer<
@@ -668,14 +665,11 @@ export type EnvironmentLocalOverridesResponse = z.infer<
 
 /**
  * `config.env.localOverride.set@1.0`: a value that applies on this host only.
- * It can select what starts (a launch-sensitive name), so it carries the
- * grant.
  */
 export const configEnvLocalOverrideSetRequestSchema = lazySchema(() =>
   z.object({
     target: localOverrideTargetSchema,
     value: z.string(),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigEnvLocalOverrideSetRequest = z.infer<
@@ -893,15 +887,13 @@ export type EnvironmentAgentDefinitionsListResponse = z.infer<
 
 /**
  * `environment.agentDefinitions.put@1.0`: a live edit, compare-and-set on
- * `expectedRevision` (`null` for a new name). An agent definition is content
- * an agent runs, so the call carries the grant.
+ * `expectedRevision` (`null` for a new name).
  */
 export const environmentAgentDefinitionsPutRequestSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
     text: z.string(),
     expectedRevision: z.number().int().nullable(),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type EnvironmentAgentDefinitionsPutRequest = z.infer<
@@ -942,13 +934,12 @@ export type EnvironmentSetupGetResponse = z.infer<
   typeof environmentSetupGetResponseSchema
 >;
 
-/** `environment.setup.put@1.0`: one OS's script; it runs, so it carries the grant. */
+/** `environment.setup.put@1.0`: one OS's script. */
 export const environmentSetupPutRequestSchema = lazySchema(() =>
   z.object({
     os: environmentOsSchema,
     text: z.string(),
     expectedRevision: z.number().int().nullable(),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type EnvironmentSetupPutRequest = z.infer<

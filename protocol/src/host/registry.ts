@@ -5441,10 +5441,9 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
 /**
  * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
  * `intentOperationId`, and the result gains the seven codes only that arm
- * answers (`providerNativeMutateErrorCodeSchemaV15`). Defined and not
- * registered: it registers with the app's click that sends it, and its entry
- * then declares `responseGrowthProjectionGated`, since the host never answers
- * the seven to a `@1.4` caller. A `@1.5` request to a `@1.4` host is
+ * answers (`providerNativeMutateErrorCodeSchemaV15`). Its entry declares
+ * `responseGrowthProjectionGated`, since the host never answers the seven to
+ * a `@1.4` caller. A `@1.5` request to a `@1.4` host is
  * re-parsed onto `@1.4`, whose non-strict arm strips the key.
  */
 export const providersNativeMutateV15 = defineRpcContract({
@@ -6474,11 +6473,7 @@ export const providersSetEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-/**
- * `providers.setEnvOverride@2.2`: the executable-write grant. 2.1
- * is released, so the field opens a minor; a 2.2 request to a 2.x host below
- * it is re-parsed onto that line's non-strict request, which strips the key.
- */
+/** `providers.setEnvOverride@2.2` retains its installed request line. */
 export const providersSetEnvOverrideV22 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 2, minor: 2 } as const,
@@ -6492,22 +6487,18 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 2, minor: 2 },
-  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
-/**
- * The cross-major downgrade from the head to the strict 1.0 line. The grant
- * is dropped before the parse: a 1.0 host checks none, and its
- * `z.strictObject` request would otherwise refuse the key.
- */
+/** Projects the current provider variable request onto the strict 1.0 line. */
 export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnvOverrideV22,
   typeof providersSetEnvOverrideV10
 >({
   from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: ({ executableWriteGrant: _grant, ...request }) =>
+  downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
       providersSetEnvOverrideRequestSchemaV10,
       request,
@@ -13810,7 +13801,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: providersNativeMutateV10,
@@ -13834,6 +13825,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         4: {
           contract: providersNativeMutateV14,
           upgradeFromPreviousVersion: providersNativeMutateUpgradeV13ToV14,
+          responseGrowthProjectionGated: true,
+        },
+        // The promote arm's seven codes are codes `@1.4` cannot carry: the
+        // host never answers them to a `@1.4` caller.
+        5: {
+          contract: providersNativeMutateV15,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV14ToV15,
           responseGrowthProjectionGated: true,
         },
       },

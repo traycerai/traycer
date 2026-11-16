@@ -137,7 +137,6 @@ export function ProviderEnvOverridesSection(props: {
       await setOverride.mutateAsync({
         providerId,
         ...entry,
-        executableWriteGrant: null,
       });
       await clearOwnValue.mutateAsync({
         target: { kind: "env_override", providerId, key: entry.key },
@@ -154,7 +153,6 @@ export function ProviderEnvOverridesSection(props: {
         providerId,
         key: entry.newKey,
         value: entry.value,
-        executableWriteGrant: null,
       });
       if (entry.oldKey.length > 0 && entry.oldKey !== entry.newKey) {
         await deleteOverride.mutateAsync({ providerId, key: entry.oldKey });

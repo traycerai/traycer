@@ -1,3 +1,7 @@
+import type {
+  ProviderNativeMutateErrorCode,
+  ProviderNativeMutateErrorCodeV15,
+} from "@traycer/protocol/host/provider-native-schemas";
 import { formatCount } from "@/lib/format-count";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
@@ -354,6 +358,53 @@ export function onHostScopePhrase(
 
 export function addToConfigurationLabel(name: string): string {
   return `Add to ${name}`;
+}
+
+/** An "Add to <name>" that did not land, for any reason the person cannot act on. */
+export function addToConfigurationFailure(name: string): string {
+  return `Couldn't add it to ${name}.`;
+}
+
+/** The refusals only the promote arm answers, coded and with no host words. */
+type PromoteRefusalCode = Exclude<
+  ProviderNativeMutateErrorCodeV15,
+  ProviderNativeMutateErrorCode
+>;
+
+/** What each coded promote refusal reads, with the environment's name. */
+const PROMOTE_REFUSALS: Readonly<
+  Record<PromoteRefusalCode, (name: string) => string>
+> = {
+  needs_connection: (name) => `Connect to add this to ${name}.`,
+  upload_refused: addToConfigurationFailure,
+  needs_grant: (name) => `Adding this to ${name} needs your approval.`,
+  environment_not_served: (name) =>
+    `Add to ${name} is not available on this host.`,
+  not_global_scope: (name) =>
+    `Only entries in your global settings can be added to ${name}.`,
+  bound_to_this_computer: () =>
+    "This server's settings only work on this computer.",
+  invalid_entry: (name) => `This entry cannot be added to ${name}.`,
+};
+
+function isPromoteRefusalCode(
+  code: ProviderNativeMutateErrorCodeV15,
+): code is PromoteRefusalCode {
+  return Object.hasOwn(PROMOTE_REFUSALS, code);
+}
+
+/**
+ * A promote refusal's words: the app's own for a coded one, the host's text
+ * for the arm's uncoded refusals (an entry gone, a skill not ready, the
+ * editor role, a name taken), and the failure line when there is neither.
+ */
+export function promoteRefusalText(
+  code: ProviderNativeMutateErrorCodeV15,
+  detail: string | null,
+  name: string,
+): string {
+  if (isPromoteRefusalCode(code)) return PROMOTE_REFUSALS[code](name);
+  return detail ?? addToConfigurationFailure(name);
 }
 
 export function emptyServersTabLine(name: string): string {

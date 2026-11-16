@@ -249,10 +249,6 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    mintExecutableWriteGrant: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {

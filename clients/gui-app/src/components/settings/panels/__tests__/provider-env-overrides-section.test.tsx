@@ -757,7 +757,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "claude-code",
       key: "ANTHROPIC_BASE_URL",
       value: OWN_URL,
-      executableWriteGrant: null,
     });
     // The clear RPC follows the save's resolved promise.
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));

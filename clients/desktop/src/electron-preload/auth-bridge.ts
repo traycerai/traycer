@@ -41,7 +41,6 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   SandboxAutomationFetchResult,
-  ExecutableWriteGrantFetchResult,
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
@@ -312,10 +311,6 @@ export interface AuthBridgeSurface {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 
@@ -646,13 +641,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         environmentId,
       ) as Promise<EnvironmentProvidersFetchResult>,
-
-    mintExecutableWriteGrant: (bearerToken, hostId) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.mintExecutableWriteGrant,
-        bearerToken,
-        hostId,
-      ) as Promise<ExecutableWriteGrantFetchResult>,
 
     decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
       ipcRenderer.invoke(
