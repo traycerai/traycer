@@ -2,7 +2,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   userSubscription,
@@ -171,6 +171,7 @@ function personalHost(hostId: string): RunningHost {
 
 function renderHomeSection() {
   const harness = mountTeamPage(personalPoolSource(), {
+    "environment.host.list": () => ({ hosts: [] }),
     "environment.list": () => ({
       environments: [
         {
@@ -262,17 +263,19 @@ describe("HomeGettingStartedSection", () => {
     });
   });
 
-  it("hides the section once every visible step is done", () => {
+  it("hides the section once every visible step is done", async () => {
     mocks.providers = [storedKeyProvider()];
     mocks.tasks = [{ id: "task-1" }];
     mocks.secrets = [secret()];
     mocks.hosts = [personalHost("a"), personalHost("b")];
     renderHomeSection();
 
-    expect(screen.queryByTestId("home-getting-started")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("home-getting-started")).toBeNull();
+    });
   });
 
-  it("stays visible when a staged sandbox still needs credits", () => {
+  it("stays visible when a staged sandbox still needs credits", async () => {
     mocks.providers = [storedKeyProvider()];
     mocks.tasks = [{ id: "task-1" }];
     mocks.secrets = [secret()];
@@ -281,7 +284,9 @@ describe("HomeGettingStartedSection", () => {
     renderHomeSection();
 
     expect(screen.getByTestId("home-getting-started")).toBeTruthy();
-    expect(screen.getByText("4 of 5 complete")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("4 of 5 complete")).toBeTruthy();
+    });
     expect(
       screen.getByRole("button", { name: "Add credits, Not started" }),
     ).toBeTruthy();
