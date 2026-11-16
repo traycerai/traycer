@@ -599,8 +599,11 @@ describe("TeamProviders cloud API keys", () => {
     expect(await screen.findByText("Not set")).toBeTruthy();
   });
 
-  it("abandons A's save paused in onMutate after B takes over", async () => {
+  it("abandons A's clear paused in onMutate after B takes over", async () => {
     const harness = createHarness(noHostSource(PERSONAL_ENVIRONMENT));
+    harness.state.keysByEnvironment.set(PERSONAL_ENVIRONMENT, [
+      keyWireRow(PERSONAL_ENVIRONMENT, "cursor", "live", 1),
+    ]);
     await signInOwnEnvironment(harness.runtime);
     const onMutateStarted = Promise.withResolvers<void>();
     const releaseOnMutate = Promise.withResolvers<void>();
@@ -621,9 +624,17 @@ describe("TeamProviders cloud API keys", () => {
     const view = render(<TeamProviders />, { wrapper: harness.wrapper });
 
     await selectProvider("Cursor");
-    await userEvent.type(await screen.findByLabelText("API key"), TEST_KEY);
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Key set")).toBeTruthy();
+    const clear = screen.getByRole("button", { name: "Clear" });
+    expect(clear.getAttribute("disabled")).toBeNull();
+    await userEvent.click(clear);
     await onMutateStarted.promise;
+    expect(
+      harness.queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => mutation.state.variables),
+    ).toEqual([{ action: "clear" }]);
     expect(harness.state.writes).toEqual([]);
 
     const rail = screen.getByRole("navigation", { name: "Providers" });
