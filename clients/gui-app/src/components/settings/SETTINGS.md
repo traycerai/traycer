@@ -1303,6 +1303,20 @@ the app's own call to authn on the person's sign-in. Stop using Personal opens t
 every needs-choice row has Keep locally, Remove from this computer, or
 Resolve.
 
+**Team ▸ Review** (`move/team-environment-review-session.tsx`).
+The named team's page lists held changes for the page's item kinds; Secrets
+can open the complete review. Review addresses that environment on the
+person's sign-in, even with no computer connected. Admins and Editors may
+Approve or Discard; Viewers may read, and an unknown or failed role grants no
+verbs. Apply sends the hold and displayed live revisions; Discard sends the
+hold revision. The list displays both the proposed and current validated,
+masked value, and a removal when the current item is absent. A conflict
+requires a successful reread and a fresh explicit press before applying the
+newer revision. No shown value is sent back as a write. Personal's host-owned
+evidence, historical upload sheet and actions are unchanged. Skills, the guide
+and shared notes have no review workflow. Mount, window focus and this app's
+own settlement refresh review; no new poll or proposal push is promised.
+
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
 Under a Personal page's status line, for the item
 kinds the page edits: each convergence notice from `environment.notices`
