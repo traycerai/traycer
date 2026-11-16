@@ -3,6 +3,7 @@ import { appLogger } from "@/lib/logger";
 import { useAuthService } from "@/lib/host";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { authSessionRefusedToast } from "@/lib/toast/channels";
+import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
 import type {
   DesktopAuthSessionRefusalReason,
@@ -35,6 +36,13 @@ import type {
  * The component renders its `children` so it can sit transparently inside
  * the host-runtime children tree.
  */
+/**
+ * How often, while main holds this window's session as the local computer
+ * only, the window hands it over again. Main fetches its signing keys at most
+ * once a minute, so a shorter interval only meets its cooldown.
+ */
+const LOCAL_HOLD_RESEND_MS = 60_000;
+
 export interface WindowsBridgeAuthSessionBridgeProps {
   readonly children: ReactNode;
 }
@@ -53,13 +61,40 @@ export function WindowsBridgeAuthSessionBridge(
     let projectingInbound = false;
     let lastWrittenSerialized: string | null = null;
     let lastLocalRestoreSerialized: string | null = null;
+    // The session main refused for want of its signing keys (no network) and
+    // now holds as the local computer only, and the one whose local restore
+    // is in flight. One restore per held session.
+    let heldLocally: string | null = null;
+    let restoringLocally: string | null = null;
+    // Numbers each local restore the fallback starts, and moves on a release,
+    // so an earlier restore's answer never settles a later one's state.
+    let localRestoreAttempt = 0;
+    let localHoldResendTimer: number | null = null;
+    // The held session main has since judged bad: told once and, for the
+    // verdicts authn can settle, asked about once - not once per tick.
+    let judgedHeld: string | null = null;
 
-    const restoreLocal = (snapshot: AuthSessionSnapshot): void => {
+    const releaseLocalHold = (): void => {
+      heldLocally = null;
+      restoringLocally = null;
+      localRestoreAttempt += 1;
+      judgedHeld = null;
+      if (localHoldResendTimer !== null) {
+        window.clearInterval(localHoldResendTimer);
+        localHoldResendTimer = null;
+      }
+    };
+
+    const restoreLocal = (
+      snapshot: AuthSessionSnapshot,
+      onSettled: ((restored: boolean) => void) | null,
+    ): void => {
       if (
         bridge.authSession.restoreLocal === undefined ||
         snapshot.token === null ||
         snapshot.profile === null
       ) {
+        onSettled?.(false);
         return;
       }
       const expected = {
@@ -67,10 +102,14 @@ export function WindowsBridgeAuthSessionBridge(
         token: snapshot.token,
       };
       const serialized = JSON.stringify(expected);
-      if (lastLocalRestoreSerialized === serialized) return;
+      // A caller that waits on the answer (the fallback) keys itself, and a
+      // skipped restore would never answer it.
+      if (onSettled === null && lastLocalRestoreSerialized === serialized)
+        return;
       lastLocalRestoreSerialized = serialized;
       void bridge.authSession.restoreLocal(expected).then(
         (result) => {
+          onSettled?.(result === "restored");
           if (result === "restored") return;
           if (lastLocalRestoreSerialized === serialized) {
             lastLocalRestoreSerialized = null;
@@ -82,6 +121,7 @@ export function WindowsBridgeAuthSessionBridge(
           }
         },
         () => {
+          onSettled?.(false);
           if (lastLocalRestoreSerialized === serialized) {
             lastLocalRestoreSerialized = null;
           }
@@ -98,13 +138,17 @@ export function WindowsBridgeAuthSessionBridge(
 
     const writeOutbound = (snapshot: AuthSessionSnapshot): void => {
       if (projectingInbound) return;
+      // Only a signed-in session is held: a sign-out, a sign-in starting or a
+      // session demoted to unverified (which restores locally on its own)
+      // ends the hold and its timer.
+      if (snapshot.status !== "signed-in") releaseLocalHold();
       if (snapshot.status === "unverified") {
         // Main needs a local identity to select the already-running host.
         // It reads that identity from disk rather than trusting this profile;
         // siblings still derive their own offline session independently.
         // Clear the verified echo latch so a same-token promotion is published.
         lastWrittenSerialized = null;
-        restoreLocal(snapshot);
+        restoreLocal(snapshot, null);
         return;
       }
       lastLocalRestoreSerialized = null;
@@ -113,17 +157,76 @@ export function WindowsBridgeAuthSessionBridge(
       if (serialized === lastWrittenSerialized) {
         return;
       }
+      // A different session (a rotated token, another sign-in) is not the one
+      // held: it is handed over afresh and takes its own fallback if it must.
+      if (heldLocally !== null && heldLocally !== serialized)
+        releaseLocalHold();
       lastWrittenSerialized = serialized;
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
-          if (result.outcome !== "refused") return;
+          if (result.outcome !== "refused") {
+            releaseLocalHold();
+            return;
+          }
           // The latch is an echo suppressor, not a record of what the bridge
           // holds: a refused write left nothing there, so keeping it latched
           // makes the very next projection of the SAME snapshot a no-op and
           // the window never re-attempts. Cleared only while the latch is
           // still this write's - a newer projection has already superseded it.
-          if (lastWrittenSerialized === serialized)
-            lastWrittenSerialized = null;
+          const current = lastWrittenSerialized === serialized;
+          if (current) lastWrittenSerialized = null;
+          // Main could not reach its signing keys (no network), so it lists
+          // no computer at all. The local computer needs no cloud verdict:
+          // restore it as an unverified session would, and hand this session
+          // over again until main verifies it. No toast: the app works, and a
+          // failed restore says so itself. Every other refusal is a statement
+          // about the token and adopts nothing.
+          if (result.reason === "key-source-unavailable") {
+            // A superseded write's answer decides nothing: the current
+            // write's own answer takes the fallback, silently.
+            if (!current) return;
+            if (heldLocally === serialized || restoringLocally === serialized)
+              return;
+            restoringLocally = serialized;
+            localRestoreAttempt += 1;
+            const attempt = localRestoreAttempt;
+            restoreLocal(snapshot, (restored) => {
+              if (attempt !== localRestoreAttempt) return;
+              restoringLocally = null;
+              if (!restored) return;
+              heldLocally = serialized;
+              localHoldResendTimer ??= window.setInterval(
+                resendWhileHeldLocally,
+                LOCAL_HOLD_RESEND_MS,
+              );
+            });
+            return;
+          }
+          if (heldLocally !== null && current) {
+            // A held session main now judges bad (its keys came back): told
+            // once per judged session, never on every tick. For a verdict
+            // authn can settle, ask it at once, as the start's own validation
+            // would: a refresh is handed over; a rejection demotes the session
+            // to unverified, the local computer only (signed out only when the
+            // stored session moved to another account, was deleted or was
+            // tombstoned, or the token store could not be used, which signs
+            // this window out and schedules recovery); an acceptance is handed
+            // over on the next tick; and an unreachable authn leaves the hold
+            // as it is.
+            if (judgedHeld === serialized) return;
+            judgedHeld = serialized;
+            if (
+              result.reason === "bad-signature" ||
+              result.reason === "unknown-signing-key" ||
+              result.reason === "expired"
+            ) {
+              void auth.revalidateCurrentContext().catch((cause: unknown) => {
+                appLogger.warn("[auth] could not revalidate a held session", {
+                  cause: cause instanceof Error ? cause.message : String(cause),
+                });
+              });
+            }
+          }
           authSessionRefusedToast.warning(
             describeAuthSessionRefusalReason(result.reason),
           );
@@ -143,10 +246,20 @@ export function WindowsBridgeAuthSessionBridge(
       );
     };
 
+    // The way back from a local hold: hand the same session over again so main
+    // can verify it. A hand-over still in flight holds the latch, so an
+    // attempt never overlaps another.
+    const resendWhileHeldLocally = (): void => {
+      if (heldLocally === null) return;
+      writeOutbound(auth.getCurrentSessionSnapshot());
+    };
+
     const ingestInbound = (snapshot: DesktopAuthSessionSnapshot): void => {
       // Main's local selection identity is neither a cloud verdict nor a
       // sign-out. Each window restores it through its own AuthService.
       if (snapshot.status === "unverified") return;
+      // A signed-in session from main is one it verified: no local hold left.
+      if (snapshot.status === "signed-in") releaseLocalHold();
       const serialized = serializeDesktopSnapshot(snapshot);
       if (serialized === lastWrittenSerialized) {
         return;
@@ -210,7 +323,11 @@ export function WindowsBridgeAuthSessionBridge(
     // Listen first so subsequent cross-window transitions remain observable.
     const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
+    const disposeWake = onWakeReconnect(resendWhileHeldLocally);
+
     return () => {
+      disposeWake();
+      releaseLocalHold();
       sessionSubscription.dispose();
       inboundSubscription.dispose();
       revokeSubscription.dispose();

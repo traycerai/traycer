@@ -25,6 +25,22 @@ import {
 // isolation on its own - a read/parse failure here calls `createCliLogger`,
 // which resolves `cliLogPath` (and therefore `homedir()`) for real unless
 // `node:os.homedir()` itself is redirected first.
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  debug: vi.fn(),
+}));
+vi.mock("../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger")>();
+  return {
+    ...actual,
+    createCliLogger: () => ({
+      ...actual.noopLogger,
+      warn: loggerMocks.warn,
+      debug: loggerMocks.debug,
+    }),
+  };
+});
+
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -79,6 +95,8 @@ describe("readHostPidMetadataEvidence", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "traycer-pid-metadata-"));
     PATHS.recordPath = join(dir, "pid.json");
+    loggerMocks.warn.mockReset();
+    loggerMocks.debug.mockReset();
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -91,14 +109,25 @@ describe("readHostPidMetadataEvidence", () => {
     await expect(readHostPidMetadata("staging")).resolves.toBeNull();
   });
 
-  it("reads a torn or non-JSON record as unreadable, not absent", async () => {
-    await writeFile(PATHS.recordPath, '{"pid": 42', "utf8");
+  it("keeps malformed-record diagnostics at debug level for both readers", async () => {
+    const diagnostic = "pid-json-marker";
+    await writeFile(PATHS.recordPath, diagnostic, "utf8");
     await expect(readHostPidMetadataEvidence("staging")).resolves.toEqual({
       kind: "unreadable",
       cause: "not valid JSON",
     });
     // Discovery callers keep the fold: unreadable is still `null` for them.
     await expect(readHostPidMetadata("staging")).resolves.toBeNull();
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "Host pid metadata JSON parse failed",
+      { kind: "error" },
+    );
+    expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(
+      diagnostic,
+    );
+    expect(JSON.stringify(loggerMocks.debug.mock.calls)).toContain(diagnostic);
   });
 
   it("reads a JSON scalar and a record missing required fields as unreadable with distinct causes", async () => {

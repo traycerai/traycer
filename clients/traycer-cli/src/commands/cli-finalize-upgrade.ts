@@ -1,3 +1,8 @@
+import {
+  credentialProvisionForResult,
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
@@ -18,6 +23,10 @@ import type { UpdateMutationCapability } from "@traycer-clients/shared/host-upda
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 
+interface FinalizeStartObservation {
+  started: boolean;
+}
+
 // `traycer cli finalize-upgrade` - hidden, internal-only command the
 // Windows/POSIX detached finalize-helper script invokes (via the
 // STAGED CLI binary, once the parent CLI process has exited) to
@@ -36,8 +45,6 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
   const environment = ctx.runtime.environment;
-  // ONE options value for acquisition and for every in-attempt revalidation:
-  // two literals that must stay identical are how admission policies drift.
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment,
     reason: "cli-finalize-upgrade",
@@ -45,42 +52,46 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
     pollIntervalMs: 100,
     admission: "service-maintenance",
   };
+  const start: FinalizeStartObservation = { started: false };
+  let outcome: FinalizeSwapOutcome;
   try {
-    const outcome = await withCliUpdateContender(
-      contenderOptions,
-      (capability) =>
-        runFinalizeUpgradeSwapWithAttempt(
-          { environment },
-          capability,
-          contenderOptions,
-        ),
+    outcome = await withCliUpdateContender(contenderOptions, (capability) =>
+      runFinalizeUpgradeSwapWithAttempt(
+        { environment },
+        capability,
+        contenderOptions,
+        start,
+      ),
     );
-    return {
-      data: outcome,
-      human: humanForOutcome(outcome),
-      exitCode: 0,
-    };
   } catch (err) {
-    // Both refusals defer the same way: no marker is written, so
-    // `pendingUpgrade` stays populated and the next `host restart` retries.
-    // An active durable attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE from the
-    // nonterminal-attempt admission verdict) is a scheduling refusal exactly
-    // like a busy cli-lock, not a finalization failure.
+    // Admission refusals leave the swap pending. Only the existing recovery
+    // start can owe a credential probe, after its own lock is released.
     if (
       err instanceof CliError &&
       (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
         err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
     ) {
-      // Only the attempt's refusal: it is raised at admission, before any
-      // swap, and a busy lock may be the very restart this completes.
       if (err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) {
-        await startBesideUpdateAttempt(environment);
+        await startBesideUpdateAttempt(environment, start);
       }
-      const outcome: FinalizeSwapOutcome = { status: "lock-timeout" };
-      return { data: outcome, human: humanForOutcome(outcome), exitCode: 0 };
+      outcome = { status: "lock-timeout" };
+    } else {
+      throw err;
     }
-    throw err;
   }
+  const credentialProvision = start.started
+    ? await maybeProvisionCredential(ctx, "start", null)
+    : null;
+  const note = formatCredentialProvisionNote(credentialProvision);
+  const human = humanForOutcome(outcome);
+  return {
+    data: {
+      ...outcome,
+      credentialProvision: credentialProvisionForResult(credentialProvision),
+    },
+    human: note === null ? human : `${human}; ${note}`,
+    exitCode: 0,
+  };
 };
 
 export type FinalizeSwapOutcome =
@@ -143,9 +154,10 @@ async function runFinalizeUpgradeSwapWithAttempt(
   opts: { readonly environment: Environment },
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  start: FinalizeStartObservation,
 ): Promise<FinalizeSwapOutcome> {
   return runFinalizeUpgradeSwapWithStart(opts, () =>
-    startHostWithAttempt(opts.environment, capability, contenderOptions),
+    startHostWithAttempt(opts.environment, capability, contenderOptions, start),
   );
 }
 
@@ -153,6 +165,7 @@ async function startHostWithAttempt(
   environment: Environment,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  start: FinalizeStartObservation,
 ): Promise<void> {
   const outcome = await startHostServiceWithAttempt(
     capability,
@@ -163,6 +176,7 @@ async function startHostWithAttempt(
     createServiceController(),
     serviceLabelFor(environment),
   );
+  if (outcome.kind === "started") start.started = true;
   // Not expected here: the stop that released the binary ended the old
   // supervisor, and it removed its records. A live one means something
   // else brought the service back first, and its supervisor hands the host
@@ -209,10 +223,11 @@ async function startHostWithAttempt(
  */
 async function startBesideUpdateAttempt(
   environment: Environment,
+  start: FinalizeStartObservation,
 ): Promise<void> {
   const logger = createCliLogger(environment);
   try {
-    await startAsSupervisorRelaunch(environment, logger);
+    await startAsSupervisorRelaunch(environment, logger, start);
     return;
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
@@ -223,7 +238,7 @@ async function startBesideUpdateAttempt(
     if (err.code !== CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) throw err;
   }
   try {
-    await startAsRestartCompletion(environment, logger);
+    await startAsRestartCompletion(environment, logger, start);
   } catch (err) {
     if (
       err instanceof CliError &&
@@ -240,6 +255,7 @@ async function startBesideUpdateAttempt(
 async function startAsSupervisorRelaunch(
   environment: Environment,
   logger: ILogger,
+  start: FinalizeStartObservation,
 ): Promise<void> {
   const relaunchOptions: WithCliUpdateContenderOptions = {
     environment,
@@ -261,7 +277,13 @@ async function startAsSupervisorRelaunch(
           },
         );
         await startServiceBestEffort(
-          () => startHostWithAttempt(environment, capability, relaunchOptions),
+          () =>
+            startHostWithAttempt(
+              environment,
+              capability,
+              relaunchOptions,
+              start,
+            ),
           environment,
           logger,
         );
@@ -272,6 +294,7 @@ async function startAsSupervisorRelaunch(
 async function startAsRestartCompletion(
   environment: Environment,
   logger: ILogger,
+  start: FinalizeStartObservation,
 ): Promise<void> {
   const recoveryOptions: WithCliUpdateContenderOptions = {
     environment,
@@ -301,7 +324,13 @@ async function startAsRestartCompletion(
           attempt,
         );
         await startServiceBestEffort(
-          () => startHostWithAttempt(environment, capability, recoveryOptions),
+          () =>
+            startHostWithAttempt(
+              environment,
+              capability,
+              recoveryOptions,
+              start,
+            ),
           environment,
           logger,
         );

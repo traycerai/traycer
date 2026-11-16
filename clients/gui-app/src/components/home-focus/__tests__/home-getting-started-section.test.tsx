@@ -2,7 +2,13 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   userSubscription,
@@ -13,6 +19,11 @@ import {
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -39,7 +50,11 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: { secrets: mocks.secrets } }),
+  useHostQuery: () => ({
+    data: { principal: { kind: "personal" } },
+    isError: false,
+    refetch: () => Promise.resolve(),
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -96,14 +111,12 @@ vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
-  return {
-    ...actual,
-    useOptionalHostClient: () => ({}),
-    useHostBinding: () => null,
-  };
-});
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ signInUrl: "https://traycer.ai/sign-in" }),
@@ -162,6 +175,36 @@ function personalHost(hostId: string): RunningHost {
   };
 }
 
+function renderHomeSection() {
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.host.list": () => ({ hosts: [] }),
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "environment.secrets.list": () => ({
+      secrets: mocks.secrets,
+      removed: [],
+    }),
+  });
+  return render(
+    <harness.Wrapper>
+      <HomeGettingStartedSection />
+    </harness.Wrapper>,
+  );
+}
+
 describe("HomeGettingStartedSection", () => {
   beforeEach(() => {
     mocks.providers = [];
@@ -187,10 +230,11 @@ describe("HomeGettingStartedSection", () => {
 
   afterEach(() => {
     cleanup();
+    resetTeamPageHarness();
   });
 
   it("renders open with the heading, the count, and the cards as buttons while steps are incomplete", () => {
-    render(<HomeGettingStartedSection />);
+    renderHomeSection();
 
     expect(
       screen.getByRole("heading", { name: "Getting started" }),
@@ -205,13 +249,13 @@ describe("HomeGettingStartedSection", () => {
   });
 
   it("carries no settings-only markers on the home cards", () => {
-    const { container } = render(<HomeGettingStartedSection />);
+    const { container } = renderHomeSection();
 
     expect(container.querySelector("[data-settings-anchor]")).toBeNull();
   });
 
   it("opens Providers from the provider card", () => {
-    render(<HomeGettingStartedSection />);
+    renderHomeSection();
 
     fireEvent.click(screen.getByTestId("getting-started-card-provider"));
 
@@ -225,26 +269,30 @@ describe("HomeGettingStartedSection", () => {
     });
   });
 
-  it("hides the section once every visible step is done", () => {
+  it("hides the section once every visible step is done", async () => {
     mocks.providers = [storedKeyProvider()];
     mocks.tasks = [{ id: "task-1" }];
     mocks.secrets = [secret()];
     mocks.hosts = [personalHost("a"), personalHost("b")];
-    render(<HomeGettingStartedSection />);
+    renderHomeSection();
 
-    expect(screen.queryByTestId("home-getting-started")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("home-getting-started")).toBeNull();
+    });
   });
 
-  it("stays visible when a staged sandbox still needs credits", () => {
+  it("stays visible when a staged sandbox still needs credits", async () => {
     mocks.providers = [storedKeyProvider()];
     mocks.tasks = [{ id: "task-1" }];
     mocks.secrets = [secret()];
     mocks.hosts = [personalHost("a"), personalHost("b")];
     mocks.staged = { target: { kind: "new" } };
-    render(<HomeGettingStartedSection />);
+    renderHomeSection();
 
     expect(screen.getByTestId("home-getting-started")).toBeTruthy();
-    expect(screen.getByText("4 of 5 complete")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("4 of 5 complete")).toBeTruthy();
+    });
     expect(
       screen.getByRole("button", { name: "Add credits, Not started" }),
     ).toBeTruthy();

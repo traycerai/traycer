@@ -1058,11 +1058,13 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   }, 10_000);
 
-  it("reports mint-unavailable when the mint flow throws (a rejected promise)", async () => {
+  it("reports mint-unavailable and keeps a rejected mint diagnostic at debug level", async () => {
     const hostId = "host-1";
-    mocks.mintFlowMock.mockRejectedValueOnce(
-      new Error("mint transport blew up"),
-    );
+    const diagnostic =
+      "mint-flow-marker path=/private/test/credentials body=distinctive";
+    const warn = vi.fn();
+    const debug = vi.fn();
+    mocks.mintFlowMock.mockRejectedValueOnce(new Error(diagnostic));
     mocks.onSessionCreated = (): void => {
       setTimeout(() => {
         const options = capturedClientOptions();
@@ -1075,12 +1077,22 @@ describe("provisionInstalledHostCredential", () => {
     };
 
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+      makeOptions({
+        deadlineMs: 2_000,
+        progress: vi.fn(),
+        logger: { ...noopLogger, warn, debug },
+      }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "mint-unavailable",
     });
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential provisioning mint flow threw",
+      { kind: "error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
     expect(mocks.sessions.length).toBeGreaterThan(1);
     for (const session of mocks.sessions) {
       expect(session.close).toHaveBeenCalledTimes(1);
@@ -1088,11 +1100,20 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("reports unreachable when the host never acks and the connection never opens before the deadline", async () => {
+  it("keeps endpoint-poll diagnostics at debug level while the probe settles unreachable", async () => {
     // No `onSessionCreated` hook: nothing ever arrives on the session, so
     // the lap's own bound timeout is what resolves it.
+    const diagnostic =
+      "endpoint-poll-marker path=/private/test/credentials body=distinctive";
+    const warn = vi.fn();
+    const debug = vi.fn();
+    mocks.readHostPidMetadataMock.mockRejectedValueOnce(new Error(diagnostic));
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 300, progress: vi.fn() }),
+      makeOptions({
+        deadlineMs: 300,
+        progress: vi.fn(),
+        logger: { ...noopLogger, warn, debug },
+      }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
@@ -1102,6 +1123,12 @@ describe("provisionInstalledHostCredential", () => {
       "host authorization not confirmed (the host did not respond in time) - run `traycer host doctor` to see how to fix it",
     );
     expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential provisioning endpoint poll failed",
+      { kind: "error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
     expect(mocks.sessions).toHaveLength(1);
     expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
@@ -1783,19 +1810,33 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("resolves to an error outcome instead of rejecting on an unexpected throw", async () => {
+  it("resolves to an error outcome and keeps an unexpected diagnostic at debug level", async () => {
+    const diagnostic =
+      "unexpected-probe-marker path=/private/test/credentials body=distinctive";
+    const warn = vi.fn();
+    const debug = vi.fn();
     mocks.subscribeMock.mockImplementationOnce(() => {
-      throw new Error("simulated subscribe failure");
+      throw new Error(diagnostic);
     });
 
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+      makeOptions({
+        deadlineMs: 2_000,
+        progress: vi.fn(),
+        logger: { ...noopLogger, warn, debug },
+      }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "error",
-      message: "simulated subscribe failure",
+      message: diagnostic,
     });
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential provisioning failed unexpectedly",
+      { kind: "error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(diagnostic);
+    expect(JSON.stringify(debug.mock.calls)).toContain(diagnostic);
     // The finally block runs on the error path too.
     expectCleanTeardown();
   });
