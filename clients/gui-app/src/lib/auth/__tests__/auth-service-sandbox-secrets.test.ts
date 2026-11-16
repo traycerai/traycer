@@ -688,7 +688,7 @@ describe("AuthService cloud calls", () => {
         service.readProfileRecords(environmentId, callerSignal),
       ).resolves.toEqual({
         kind: "ok",
-        list: { profileSyncEnabled: false, providers: [] },
+        list: { profileSyncEnabled: false, providers: [], providerKeys: [] },
       });
       await expect(
         service.signOutProfileRecord(
