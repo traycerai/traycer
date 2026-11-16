@@ -11,14 +11,20 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentSecretRemoval,
+  EnvironmentSecretV12,
+} from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  SECRET_REVOKED_LABEL,
+  SECRETS_EMPTY_TEXT,
+} from "@/lib/sandboxes/secrets-page-copy";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -133,6 +139,9 @@ let releaseFirstDirectory: (() => void) | null;
 let activePersonalEnvironment: string;
 let directoryForCurrentSignIn: unknown;
 let hostSecretCalls: string[];
+let secretListFails: boolean;
+let versionsRemoval: EnvironmentSecretRemoval | null;
+let createRefusal: { readonly status: number; readonly body: unknown } | null;
 
 function PageWithRevisionRead(props: { readonly client: EnvironmentClient }) {
   useEnvironmentStatusRead(props.client, WINDOW_HOST, true);
@@ -241,6 +250,7 @@ function ownEnvironmentSecretReadRoute(
   if (request.method !== "GET") return undefined;
   const path = request.url.pathname;
   if (path === activeEnvironmentPath("secrets")) {
+    if (secretListFails) return jsonResponse(503, {});
     return jsonResponse(200, {
       secrets: [
         activePersonalEnvironment === SECOND_ACCOUNT_ENVIRONMENT
@@ -271,7 +281,7 @@ function ownEnvironmentSecretReadRoute(
           rotationState: null,
         },
       ],
-      removal: null,
+      removal: versionsRemoval,
     });
   }
   if (path === activeEnvironmentPath("secrets/" + SECRET_ID + "/rotation")) {
@@ -286,6 +296,11 @@ function ownEnvironmentSecretWriteRoute(
   const path = request.url.pathname;
   if (request.method === "POST" && path.endsWith("/secrets/verify")) {
     return jsonResponse(200, { evidence: "probe_accepted" });
+  }
+  if (request.method === "POST" && path.endsWith("/secrets")) {
+    return createRefusal === null
+      ? jsonResponse(500, {})
+      : jsonResponse(createRefusal.status, createRefusal.body);
   }
   if (
     request.method === "POST" &&
@@ -321,6 +336,9 @@ beforeEach(async () => {
   directoryForCurrentSignIn = PERSONAL_DIRECTORY;
   reportedRevision = 1;
   hostSecretCalls = [];
+  secretListFails = false;
+  versionsRemoval = null;
+  createRefusal = null;
   authRuntime = createOwnEnvironmentAuthRuntime();
   authnTransport = installOwnEnvironmentTransport(
     ownEnvironmentRoute,
@@ -357,6 +375,51 @@ function authnSecretPaths(): string[] {
     .map((request) => request.url.pathname);
 }
 
+function secretRequestCount(path: string, method: string): number {
+  return authnTransport.requests.filter(
+    (request) =>
+      request.url.pathname === path && request.method === method,
+  ).length;
+}
+
+async function fillNewApiKeyForm(): Promise<void> {
+  fireEvent.click(await screen.findByTestId("secrets-add"));
+  await screen.findByTestId("secret-kind-picker");
+  fireEvent.click(screen.getByTestId("secret-kind-option-api_key"));
+  fireEvent.change(await screen.findByTestId("secret-form-name"), {
+    target: { value: "NEW_API_KEY" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-hosts"), {
+    target: { value: "api.example.test" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-value"), {
+    target: { value: "test-secret-value" },
+  });
+}
+
+async function saveNewApiKey(): Promise<void> {
+  await fillNewApiKeyForm();
+  fireEvent.click(screen.getByTestId("secret-form-continue"));
+  fireEvent.click(await screen.findByTestId("secret-save"));
+}
+
+function revokedRemovalFixture(): EnvironmentSecretRemoval {
+  return {
+    outcome: "revoked",
+    revokedAt: 3,
+    destroyedAt: null,
+    targets: [
+      {
+        target: "host",
+        hostId: "host-other",
+        hostName: "other computer",
+        state: "confirmed",
+        at: 3,
+      },
+    ],
+  };
+}
+
 describe("Secrets page reads on the window host's own environment", () => {
   it("reads Local pick list, versions, and rotation through authn with the named Personal environment", async () => {
     mountSecretsPage();
@@ -384,6 +447,41 @@ describe("Secrets page reads on the window host's own environment", () => {
           "/rotation",
       );
     });
+    expect(hostSecretCalls).toEqual([]);
+  });
+
+  it("keeps a cached live row revoked when a newer versions answer reports removal", async () => {
+    mountSecretsPage();
+
+    const row = await screen.findByTestId("secret-row");
+    expect(row.textContent).not.toContain(SECRET_REVOKED_LABEL);
+    fireEvent.click(within(row).getByRole("button", { name: "Details" }));
+    const controls = await screen.findByTestId("secret-details-controls");
+    await within(controls).findByTestId("secret-versions");
+
+    const listPath = activeEnvironmentPath("secrets");
+    const versionsPath = activeEnvironmentPath(
+      "secrets/" + SECRET_ID + "/versions",
+    );
+    const listReadsBeforeRefresh = secretRequestCount(listPath, "GET");
+    const versionsReadsBeforeRefresh = secretRequestCount(versionsPath, "GET");
+    secretListFails = true;
+    versionsRemoval = revokedRemovalFixture();
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => {
+      expect(secretRequestCount(listPath, "GET")).toBeGreaterThan(
+        listReadsBeforeRefresh,
+      );
+      expect(secretRequestCount(versionsPath, "GET")).toBeGreaterThan(
+        versionsReadsBeforeRefresh,
+      );
+    });
+    expect(screen.getByTestId("secret-row")).toBeTruthy();
+    expect(row.textContent).toContain(SECRET_REVOKED_LABEL);
+    expect(
+      within(controls).queryByTestId("secret-row-verify"),
+    ).toBeNull();
     expect(hostSecretCalls).toEqual([]);
   });
 
@@ -480,17 +578,7 @@ describe("Secrets page reads on the window host's own environment", () => {
   it("sends candidate Verify and create through authn for the named environment", async () => {
     mountSecretsPage();
 
-    fireEvent.click(await screen.findByTestId("secrets-add"));
-    await screen.findByTestId("secret-kind-picker");
-    fireEvent.click(screen.getByTestId("secret-kind-option-api_key"));
-    const name = await screen.findByTestId("secret-form-name");
-    fireEvent.change(name, { target: { value: "NEW_API_KEY" } });
-    fireEvent.change(screen.getByTestId("secret-form-hosts"), {
-      target: { value: "api.example.test" },
-    });
-    fireEvent.change(screen.getByTestId("secret-form-value"), {
-      target: { value: "test-secret-value" },
-    });
+    await fillNewApiKeyForm();
     fireEvent.click(screen.getByTestId("secret-form-verify"));
     await waitFor(() => {
       expect(
@@ -517,6 +605,52 @@ describe("Secrets page reads on the window host's own environment", () => {
     expect(
       authnSecretPaths().every((path) =>
         path.startsWith("/api/v3/environments/" + PERSONAL_ENVIRONMENT + "/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows authn's provider key variable refusal through the create action", async () => {
+    createRefusal = {
+      status: 409,
+      body: { error: "Use its provider's key variable as the name." },
+    };
+    mountSecretsPage();
+
+    await saveNewApiKey();
+
+    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
+      "Use its provider's key variable as the name.",
+    );
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
+    expect(hostSecretCalls).toEqual([]);
+    expect(
+      authnTransport.requests.some(
+        (request) =>
+          request.method === "POST" &&
+          request.url.pathname === activeEnvironmentPath("secrets"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows the plain authn refusal when a code has no message", async () => {
+    createRefusal = {
+      status: 409,
+      body: { code: "a_code_from_a_newer_server" },
+    };
+    mountSecretsPage();
+
+    await saveNewApiKey();
+
+    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
+      "Your environment did not accept this change.",
+    );
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
+    expect(hostSecretCalls).toEqual([]);
+    expect(
+      authnTransport.requests.some(
+        (request) =>
+          request.method === "POST" &&
+          request.url.pathname === activeEnvironmentPath("secrets"),
       ),
     ).toBe(true);
   });
