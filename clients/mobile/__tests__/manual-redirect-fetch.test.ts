@@ -226,8 +226,16 @@ describe("manual redirect fetch on the phone", () => {
     await requested;
     const outcome = responsePromise.then(
       () => "resolved",
-      (error: unknown) =>
-        error instanceof DOMException ? error.name : "other error",
+      (error: unknown) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "name" in error
+        ) {
+          return String(error.name);
+        }
+        return "other error";
+      },
     );
     const deadline = new Promise<string>((resolve) => {
       setTimeout(() => resolve("still pending"), 10);

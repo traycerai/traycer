@@ -50,7 +50,7 @@ vi.mock("@traycer-clients/shared/auth/push-token-fetcher", () => ({
   registerDevicePushTokenViaHttp: vi.fn(),
   removeDevicePushTokenViaHttp: vi.fn(),
 }));
-vi.mock("../src/native-keyboard-bridge", () => ({
+vi.mock("../src/web/native-keyboard-bridge", () => ({
   startNativeKeyboardBridge: vi.fn(),
 }));
 vi.mock("../src/web/dev-host-discovery", () => ({
