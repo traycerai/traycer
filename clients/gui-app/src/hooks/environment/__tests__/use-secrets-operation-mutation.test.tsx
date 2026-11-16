@@ -359,7 +359,7 @@ describe("the Secrets operation mutation wrapper", () => {
     });
     const { result } = renderHook(
       () =>
-        useSecretsOperationMutation({
+        useSecretsOperationMutation<unknown, MutationInput>({
           mutationKey: ["secrets-operation-capture-error"],
           mutationFn: (input, send) => {
             mutationVariables.push(input);
@@ -416,7 +416,7 @@ describe("the Secrets operation mutation wrapper", () => {
     const perCallSettled: MutationInput[] = [];
     const { result, unmount } = renderHook(
       () =>
-        useSecretsOperationMutation({
+        useSecretsOperationMutation<unknown, MutationInput>({
           mutationKey: ["secrets-operation-unmount"],
           mutationFn: (_input, send) =>
             send("environment.secrets.verify", VERIFY_REQUEST),
