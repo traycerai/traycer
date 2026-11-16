@@ -160,6 +160,30 @@ function mcpValue(key: string, value: unknown): TeamReviewValue {
   };
 }
 
+function factsValue(
+  kind: string,
+  key: string,
+  value: unknown,
+): TeamReviewValue {
+  if (kind === "shell" && !configurationShellValueSchema.safeParse(value).success)
+    return UNREADABLE;
+  if (kind === "setup_script" && !textValueSchema.safeParse(value).success)
+    return UNREADABLE;
+  if (
+    (kind === "variable" || kind === "env_override") &&
+    !configurationTextValueSchema.safeParse(value).success
+  )
+    return UNREADABLE;
+  const facts = heldFactsOf({ kind, key, value });
+  return {
+    kind: "facts",
+    facts: {
+      ...facts,
+      harness: facts.harness === null ? null : maskedText(facts.harness),
+    },
+  };
+}
+
 function reviewValue(
   kind: string,
   key: string,
@@ -213,23 +237,8 @@ function reviewValue(
     case "shell":
     case "variable":
     case "env_override":
-    case "setup_script": {
-      const parsed =
-        kind === "shell"
-          ? configurationShellValueSchema.safeParse(value)
-          : kind === "setup_script"
-            ? textValueSchema.safeParse(value)
-            : configurationTextValueSchema.safeParse(value);
-      if (!parsed.success) return UNREADABLE;
-      const facts = heldFactsOf({ kind, key, value });
-      return {
-        kind: "facts",
-        facts: {
-          ...facts,
-          harness: facts.harness === null ? null : maskedText(facts.harness),
-        },
-      };
-    }
+    case "setup_script":
+      return factsValue(kind, key, value);
     default:
       return UNREADABLE;
   }
