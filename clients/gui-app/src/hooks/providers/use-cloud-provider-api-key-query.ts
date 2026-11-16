@@ -2,7 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import {
-  mayChangeConfiguration,
+  useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { useAuthService } from "@/lib/host";
@@ -21,6 +21,7 @@ export interface CloudProviderKeyScope {
 
 export function useCloudProviderKeyScope(): CloudProviderKeyScope {
   const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
   const auth = useAuthService();
   const viewerId = useAuthStore((state) => state.contextMetadata?.userId ?? "");
   const authorized = useAuthStore((state) =>
@@ -30,10 +31,7 @@ export function useCloudProviderKeyScope(): CloudProviderKeyScope {
     viewerId,
     identityGeneration: auth.getIdentityGeneration(),
     environmentId: source.kind === "pool" ? source.environmentId : "",
-    canEdit:
-      authorized &&
-      source.kind === "pool" &&
-      mayChangeConfiguration(source.effectiveRole),
+    canEdit: authorized && source.kind === "pool" && canEdit,
   };
 }
 
