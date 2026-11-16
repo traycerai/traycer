@@ -654,6 +654,7 @@ describe("HostEnvironmentSection", () => {
       const ownershipReads: { hostId: string; era: AuthEra }[] = [];
       mocks.auth.readHostOwnership.mockImplementation((hostId, era) => {
         ownershipReads.push({ hostId, era });
+        if (ownershipReads.length > 1) events.push("ownership-readback");
         return Promise.resolve(
           ownershipReads.length === 1
             ? ownershipResult(PERSON_OWNER)

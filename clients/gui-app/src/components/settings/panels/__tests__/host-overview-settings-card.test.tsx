@@ -456,6 +456,20 @@ beforeEach(() => {
   });
   hostBindingMock.current = {
     auth: {
+      currentAuthEra: () => ({
+        identity: "user-a",
+        credentialGeneration: 1,
+      }),
+      readHostOwnership: (hostId: string) =>
+        Promise.resolve({
+          kind: "ok",
+          host: {
+            hostId,
+            owner: { kind: "team", id: GIVE_TEAM_ID, name: "Admin team" },
+            kind: "personal",
+            remoteAccess: false,
+          },
+        }),
       environmentCloud: () => authnFixture.cloud,
       listEnvironments: () => {
         directoryReadCount += 1;
