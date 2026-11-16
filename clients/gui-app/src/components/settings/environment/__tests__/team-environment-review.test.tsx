@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import type { EnvironmentTransportAnswer } from "@traycer-clients/shared/environment/environment-cloud";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import {
@@ -526,6 +527,71 @@ describe("Team Review through the addressed page", () => {
       },
     ]);
   });
+
+  it.each([
+    ["gone", 404],
+    ["forbidden", 403],
+  ] as const)(
+    "keeps the Team row until the server answers with %s",
+    async (outcome, status) => {
+      const holdId = `hold-${outcome}`;
+      const row = held({
+        id: holdId,
+        kind: "variable",
+        key: "NODE_ENV",
+        heldRevision: 13,
+        liveRevision: 5,
+      });
+      const scenario = createReviewHarness("admin", [row]);
+      let resolveChoiceAnswer:
+        | ((answer: EnvironmentTransportAnswer) => void)
+        | null = null;
+      const answer = new Promise<EnvironmentTransportAnswer>((resolve) => {
+        resolveChoiceAnswer = resolve;
+      });
+      scenario.harness.cloudResponses.set(
+        `POST ${choicePath(holdId, "apply")}`,
+        () => answer,
+      );
+      renderTeamPage(scenario.harness);
+      const dialog = await openReview();
+      const rowTestId = `retrospective-held-${holdId}`;
+      await within(dialog).findByTestId(`${rowTestId}-approve`);
+      const readsBeforeChoice = operationReads(scenario.harness).length;
+
+      fireEvent.click(within(dialog).getByTestId(`${rowTestId}-approve`));
+      await waitFor(() =>
+        expect(choiceRequests(scenario.harness)).toHaveLength(1),
+      );
+      expect(within(dialog).getByTestId(rowTestId)).toBeTruthy();
+
+      await act(async () => {
+        if (resolveChoiceAnswer === null) {
+          throw new Error("the review answer was not held");
+        }
+        if (outcome === "gone") scenario.setRows([]);
+        resolveChoiceAnswer(authnAnswer(status, { error: outcome }));
+      });
+      await waitFor(() => {
+        expect(operationReads(scenario.harness).length).toBeGreaterThan(
+          readsBeforeChoice,
+        );
+      });
+
+      if (outcome === "gone") {
+        await waitFor(() =>
+          expect(within(dialog).queryByTestId(rowTestId)).toBeNull(),
+        );
+      } else {
+        expect(
+          await within(dialog).findByText(
+            "You no longer have access to change these settings.",
+          ),
+        ).toBeTruthy();
+        expect(within(dialog).getByTestId(rowTestId)).toBeTruthy();
+      }
+    },
+  );
 
   it("keeps the pressed choice when onMutate changes the public variables before dispatch", async () => {
     const row = held({
