@@ -63,6 +63,7 @@ import {
 } from "./pending-sandbox-send-fixture";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { providerProfile } from "@/components/chat/fallback/__tests__/fallback-fixtures";
 
 import {
   createMessageSessionHarness,
@@ -71,6 +72,7 @@ import {
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 import {
   recordNegotiatedHostManifest,
@@ -504,6 +506,66 @@ describe("the empty task canvas while its first sandbox send waits", () => {
 });
 
 describe("a send waiting for the requested agent on its sandbox", () => {
+  it("keeps the selected provider's folded account on a pending sandbox send", async () => {
+    const foldedProfileId = "folded-profile";
+    const canonicalProfileId = "codex-canonical";
+    const otherProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "claude-canonical",
+        kind: "managed",
+        label: "Other provider",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
+    const selectedProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: canonicalProfileId,
+        kind: "managed",
+        label: "Selected account",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
+    const profilesForHost = (ready: boolean): HostAnswers => ({
+      harnesses: [harnessRow("codex", { available: ready })],
+      providers: [
+        {
+          ...providerRow("claude-code", { status: "installed" }),
+          profiles: [otherProfile],
+        },
+        {
+          ...providerRow(
+            "codex",
+            ready
+              ? { status: "installed" }
+              : { status: "downloading", percent: 40 },
+          ),
+          profiles: [selectedProfile],
+        },
+      ],
+    });
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, profileId: foldedProfileId } },
+    });
+    answerHost(SANDBOX_HOST, profilesForHost(false));
+    mount();
+    expect(createChatCalls()).toEqual([]);
+
+    answerHost(SANDBOX_HOST, profilesForHost(true));
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0]).toMatchObject({
+      clientHostId: SANDBOX_HOST,
+      input: {
+        hostId: SANDBOX_HOST,
+        settings: { ...PICKED_SETTINGS, profileId: canonicalProfileId },
+        initialMessage: { content: MESSAGE_CONTENT },
+      },
+    });
+  });
+
   it.each(["chat", "fork"] as const)(
     "waits for Traycer's Managed 2 engine before a %s, then creates on that exact line",
     async (kind) => {

@@ -11,10 +11,13 @@ import {
 } from "@/hooks/environment/team/use-policy-query";
 import {
   useConfigurationSource,
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
-import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
+import {
+  canChangeSentence,
+  useConfigurationCanChangeNames,
+} from "@/hooks/environment/team/can-change-names";
 import { ConfigurationConflict } from "./configuration-conflict";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { useConfigurationName } from "./team-pick-label";
@@ -64,8 +67,8 @@ function TeamPolicyEditor(props: {
   const personal = useConfigurationIsPersonal();
   const teamName = useConfigurationName();
   const source = useConfigurationSource();
-  const canAdminister = useCanAdministerConfiguration();
-  const members = useConfigurationAdminNames();
+  const canEdit = useCanEditConfiguration();
+  const namesThatCanChange = useConfigurationCanChangeNames();
   const mutation = useConfigurationPolicyMutation();
   const [body, setBody] = useState(props.body);
   const [confirm, setConfirm] = useState(false);
@@ -95,13 +98,13 @@ function TeamPolicyEditor(props: {
       <MarkdownEditPreview
         value={body}
         onChange={setBody}
-        readOnly={!canAdminister || mutation.isPending}
+        readOnly={!canEdit || mutation.isPending}
         placeholder={undefined}
         ariaLabel="Approval policy"
         testId="team-approval-policy"
-        showPreview={canAdminister}
+        showPreview={canEdit}
       />
-      {canAdminister ? (
+      {canEdit ? (
         <div className="flex justify-end gap-2">
           <Button
             type="button"
@@ -123,10 +126,7 @@ function TeamPolicyEditor(props: {
         </div>
       ) : (
         <p className="text-ui-xs text-muted-foreground">
-          Admins change this
-          {members.adminNames.length === 0
-            ? "."
-            : `: ${members.adminNames.join(", ")}.`}
+          {canChangeSentence(namesThatCanChange, "this")}
         </p>
       )}
       {mutation.data?.outcome === "forbidden" ? (

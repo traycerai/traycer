@@ -68,6 +68,31 @@ describe("resolveSeededProfileId", () => {
     );
   });
 
+  it("keeps the canonical id even when an earlier row advertises it as an alias", () => {
+    const profiles = [
+      { ...profile("another-profile", "managed"), aliases: ["work-uuid"] },
+      profile("work-uuid", "managed"),
+    ];
+    expect(resolveSeededProfileId("work-uuid", profiles, true)).toBe(
+      "work-uuid",
+    );
+  });
+
+  it("normalizes an alias of the ambient row to the ambient commit id", () => {
+    const profiles = [
+      { ...profile("ambient", "ambient"), aliases: ["terminal-copy"] },
+    ];
+    expect(resolveSeededProfileId("terminal-copy", profiles, true)).toBeNull();
+  });
+
+  it("does not select either account when two rows advertise the same alias", () => {
+    const profiles = [
+      { ...profile("one", "managed"), aliases: ["old"] },
+      { ...profile("two", "managed"), aliases: ["old"] },
+    ];
+    expect(resolveSeededProfileId("old", profiles, true)).toBeNull();
+  });
+
   it("resolves a tombstoned/removed profile id to null when settled with a non-empty but non-matching profiles array (ambient-only, flag-on host - unchanged behavior)", () => {
     const profiles = [profile("ambient", "ambient")];
     expect(resolveSeededProfileId("work-uuid", profiles, true)).toBeNull();

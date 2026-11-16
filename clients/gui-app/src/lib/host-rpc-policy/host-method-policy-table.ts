@@ -3085,6 +3085,28 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  "providers.commitProfileMove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

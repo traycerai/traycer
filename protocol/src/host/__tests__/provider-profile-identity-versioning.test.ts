@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  providersListResponseSchema as liveProvidersListResponseSchema,
+  providersListResponseSchemaV1012Preimage,
+} from "@traycer/protocol/host/provider-schemas";
 
 const providersList = hostRpcRegistry["providers.list"][10];
 // The 10.9 line's response row. A frozen line of its own since 10.10 opened
@@ -430,7 +434,13 @@ describe("providers.list@10.9 additive response projection", () => {
   });
 
   it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
-    expect(providersList.latestMinor).toBe(10);
+    expect(providersList.latestMinor).toBe(13);
+    expect(providersList.versions[12].contract.responseSchema).toBe(
+      providersListResponseSchemaV1012Preimage,
+    );
+    expect(providersList.versions[13].contract.responseSchema).toBe(
+      liveProvidersListResponseSchema,
+    );
     const usageReporting = { ...provider, usageReporting: true };
     const carried = providersListResponseSchema.parse({
       providers: [usageReporting],
@@ -440,7 +450,7 @@ describe("providers.list@10.9 additive response projection", () => {
     // And on the LIVE line, not only the frozen 10.9 one: every other check
     // here reads a frozen row, so dropping the field from the live row would
     // otherwise pass this suite.
-    const live = providersList.versions[10].contract.responseSchema;
+    const live = providersList.versions[13].contract.responseSchema;
     const onLive = live.parse({ providers: [usageReporting] });
     expect(onLive.providers[0]).toHaveProperty("usageReporting", true);
 

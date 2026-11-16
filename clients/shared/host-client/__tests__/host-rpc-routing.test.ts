@@ -80,6 +80,7 @@ const EXPECTED_POOL_ONLY = [
   "environment.binding.read",
   "environment.communicationGraph.subscribe",
   "environment.list",
+  "epic.getChatTitle",
   "epic.listTasks",
   "environment.plainTerminals.subscribe",
   "host.notifications.cloudFeed.clear",

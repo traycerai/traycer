@@ -2306,7 +2306,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 42 as chatSubscribeV142", () => {
+  it("registers chat.subscribe major 1 with latestMinor 45", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2398,7 +2398,7 @@ describe("chat.subscribe registry membership", () => {
     // the delivery's `worktreeIntent`, stripped for every `<=1.41` peer, and
     // `43` the `slack` user message, degraded to a plain user row for every
     // `<=1.42` peer.
-    expect(entry[1].latestMinor).toBe(44);
+    expect(entry[1].latestMinor).toBe(45);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
