@@ -6,7 +6,6 @@ import type {
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostClient } from "@/lib/host";
 import {
   isProviderNativeRpcError,
@@ -50,8 +49,6 @@ export function useProvidersPluginsMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant.
-  const grant = useExecutableWriteGrant();
   return useMutation<
     PluginsMutateData,
     HostRpcError,
@@ -60,23 +57,17 @@ export function useProvidersPluginsMutate(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.pluginsMutate(),
     mutationFn: async (variables) => {
-      const response = await client.request(
-        "providers.nativeMutate",
-        await grant(
-          {
-            providerId: variables.providerId,
-            executableWriteGrant: null,
-            expectedEnvironmentId: null,
-            mutation: {
-              kind: "plugins",
-              scope: variables.scope,
-              workspaceRoot: variables.workspaceRoot,
-              mutation: variables.mutation,
-            },
-          },
-          client,
-        ),
-      );
+      const response = await client.request("providers.nativeMutate", {
+        providerId: variables.providerId,
+        executableWriteGrant: null,
+        expectedEnvironmentId: null,
+        mutation: {
+          kind: "plugins",
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+          mutation: variables.mutation,
+        },
+      });
       return mapNativeMutateToPluginsMutate({ response });
     },
     onMutate: (variables) => ({

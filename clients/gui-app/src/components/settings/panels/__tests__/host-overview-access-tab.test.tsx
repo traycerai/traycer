@@ -1,5 +1,4 @@
-// The grant minter a write carries is read from the host binding. Mocked at
-// that boundary, as the other Personal suites do; the client itself is a REAL
+// The page's authn reads use the host binding. The client is a real
 // `HostClient` over an in-memory messenger (`buildAccessHost`), so every
 // request travels the path the app uses and only the host is faked.
 const hostMock = vi.hoisted(
@@ -715,19 +714,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
     expect(screen.queryByTestId("local-values-section")).toBeNull();
   });
 
-  it("Edit then Save sends the target and the new value, with the grant", async () => {
-    hostMock.binding = {
-      directory: null,
-      auth: {
-        mintExecutableWriteGrant: () =>
-          Promise.resolve({
-            kind: "ok" as const,
-            grant: "grant-1",
-            expiresInSeconds: 600,
-          }),
-        getCredentialGeneration: () => 0,
-      },
-    };
+  it("Edit then Save sends the target and the new value", async () => {
     const host = hostWith(
       {},
       { overrides: [variableOverride("LOG_LEVEL", "debug")] },
@@ -752,7 +739,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
         {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "info",
-          executableWriteGrant: "grant-1",
+          executableWriteGrant: null,
         },
       ]);
     });
