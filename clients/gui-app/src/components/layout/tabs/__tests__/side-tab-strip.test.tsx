@@ -991,9 +991,7 @@ describe("<SideTabStrip />", () => {
     expect(within(beta).queryByTestId("tab-close-epic-e-beta")).toBeNull();
 
     fireEvent.contextMenu(beta);
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: /^Close Tab/ }),
-    );
+    fireEvent.click(await screen.findByTestId("tab-close-epic-e-beta-menu"));
     await flushNav();
 
     expect(screen.queryByTestId("tab-epic-e-beta")).toBeNull();
