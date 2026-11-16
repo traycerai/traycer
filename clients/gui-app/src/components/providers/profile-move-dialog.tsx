@@ -11,7 +11,6 @@ import {
 import { useEffect, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  ProvidersCommitProfileMoveRequest,
   ProvidersCommitProfileMoveResponse,
   ProvidersPreviewProfileMoveRequest,
   ProvidersPreviewProfileMoveResponse,
@@ -38,6 +37,8 @@ import { useProfileMoveComputerNames } from "@/hooks/providers/use-profile-move-
 import {
   useProvidersPreviewProfileMove,
   useProvidersCommitProfileMove,
+  createProfileMoveCommitPlan,
+  type ProfileMoveCommitPlan,
 } from "@/hooks/providers/use-profile-move";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ProfileMoveResults } from "./profile-move-results";
@@ -77,8 +78,7 @@ export function ProfileMoveDialog({
   );
   const commit = useProvidersCommitProfileMove(session.client);
   const [destinationId, setDestinationId] = useState("");
-  const [request, setRequest] =
-    useState<ProvidersCommitProfileMoveRequest | null>(null);
+  const [request, setRequest] = useState<ProfileMoveCommitPlan | null>(null);
   const [destinationLabel, setDestinationLabel] = useState("");
   const computerName = useProfileMoveComputerNames();
   const destinations = profiles.filter(
@@ -116,18 +116,16 @@ export function ProfileMoveDialog({
       data.targets.length === 0
     )
       return;
-    const next: ProvidersCommitProfileMoveRequest = {
-      operationId: crypto.randomUUID(),
-      extent: "fleet",
-      mode: "waiting",
-      source: session.source,
-      destinationProfileId: destination.profileId,
-      targets: data.targets.map((target) =>
-        target.kind === "agent"
-          ? { kind: "agent", epicId: target.epicId, agentId: target.agentId }
-          : { kind: "bot", botId: target.botId },
-      ),
-    };
+    const next = createProfileMoveCommitPlan(
+      {
+        operationId: crypto.randomUUID(),
+        mode: "waiting",
+        source: session.source,
+        destinationProfileId: destination.profileId,
+      },
+      data.targets,
+      session.hostId,
+    );
     setRequest(next);
     setDestinationLabel(profileDisplayLabel(destination));
     commit.mutate(next);
