@@ -74,6 +74,7 @@ let ownership: HostOwnership = {
 };
 let ownershipStatus = 200;
 let releaseStatus = 204;
+let releaseBody: unknown = {};
 let questionAnswer = "y";
 let localFacts: () => Promise<unknown> = noTeamWork;
 let savedStdinIsTTY: PropertyDescriptor | undefined;
@@ -135,7 +136,7 @@ beforeEach(() => {
         if (releaseStatus === 409) {
           return jsonResponse(409, { code: "host_return_not_computer" });
         }
-        return jsonResponse(releaseStatus, {});
+        return jsonResponse(releaseStatus, releaseBody);
       }
       return jsonResponse(404, {});
     }),
@@ -174,6 +175,7 @@ beforeEach(() => {
   };
   ownershipStatus = 200;
   releaseStatus = 204;
+  releaseBody = {};
   questionAnswer = "y";
   localFacts = noTeamWork;
   requests = [];
@@ -399,7 +401,31 @@ describe("buildHostClaimCommand", () => {
   );
 
   it.each([
+    { yes: false, asked: true },
+    { yes: true, asked: false },
+  ])(
+    "tells a Viewer of the team who can claim the computer (--yes: $yes)",
+    async ({ yes, asked }) => {
+      setStdinIsTTY(true);
+      releaseStatus = 403;
+      releaseBody = { code: "host_return_seat_read_only" };
+
+      await expect(makeClaimCommand(yes)(fakeCtx(false))).rejects.toMatchObject(
+        {
+          code: CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
+          message:
+            "Only admins and editors of this team can claim this computer.",
+          exitCode: 1,
+        },
+      );
+      expect(mocks.questionMock).toHaveBeenCalledTimes(asked ? 1 : 0);
+      expect(events).toEqual(["ownership", "release"]);
+    },
+  );
+
+  it.each([
     [404, "This computer is no longer available to claim."],
+    [401, "Sign in as a member of this team to claim this computer."],
     [403, "Sign in as a member of this team to claim this computer."],
     [500, "Could not claim this computer. Try again."],
     [409, "A sandbox cannot be claimed as a computer."],

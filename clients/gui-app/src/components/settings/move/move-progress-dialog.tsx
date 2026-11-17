@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
@@ -9,6 +10,7 @@ import {
 } from "@/components/settings/move/move-progress-line";
 import {
   hostSettingsCardState,
+  moveItemCounts,
   moveProgressText,
   moveStoppedText,
 } from "@/components/settings/panels/host-overview-settings-card-model";
@@ -24,16 +26,21 @@ import {
 } from "@/components/ui/dialog";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostQueryEntryHash } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveProgressDialogStore } from "@/stores/settings/move-progress-dialog-store";
 import type { MoveSheetTarget } from "@/stores/settings/move-sheet-store";
 
 const MOVE_DONE_CLOSE_DELAY_MS = 4000;
+const MOVE_DONE_REREAD_MS = 500;
+/** No re-read starts later than this after the finish, so none at or after the close. */
+const MOVE_DONE_LAST_REREAD_MS = MOVE_DONE_CLOSE_DELAY_MS - MOVE_DONE_REREAD_MS;
 
 /**
  * The accepted move's progress, from the moment the computer took the
- * acceptance: items applied while it runs; once the computer runs Personal,
- * that it does, and the dialog closes itself; on a stop, today's stopped line
+ * acceptance: that it runs, with no count; once the computer runs Personal,
+ * that it does, with its count only once every item is applied, and the
+ * dialog closes itself; on a stop, today's stopped line
  * with Retry and Export diagnostics, open until the person closes it. Read
  * from the computer's own `environment.status`, the read the Overview card
  * and the Local row show the move from. Closing it does not stop the move.
@@ -69,16 +76,65 @@ function MoveProgressDialogBody(props: {
   const data = status.data;
   const state = data === null ? null : hostSettingsCardState(data);
   const moved = state?.kind === "moved";
+  const finishedAt = useRef<number | null>(null);
   // Opened only after the accept, on a computer that had not moved: `moved`
   // turning true is this move finishing. A close before the timer fires
   // unmounts this body, which clears it.
   useEffect(() => {
     if (!moved) return;
+    finishedAt.current ??= Date.now();
     const timer = setTimeout(onClose, MOVE_DONE_CLOSE_DELAY_MS);
     return () => {
       clearTimeout(timer);
     };
   }, [moved, onClose]);
+  const counts = moved && data !== null ? moveItemCounts(data) : null;
+  const allApplied =
+    counts !== null && counts.applied === counts.total && counts.total > 0
+      ? counts.total
+      : null;
+  const awaitingCount = moved && allApplied === null;
+  // While the finished view waits on its count, this host's status is asked
+  // again, until MOVE_DONE_LAST_REREAD_MS after the finish, and never over a
+  // read in flight.
+  const queryClient = useQueryClient();
+  const statusHash = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.status"
+  >({
+    client,
+    method: "environment.status",
+    params: {},
+    cacheKeyIdentity: undefined,
+  });
+  const rereadInFlight = useRef(false);
+  useEffect(() => {
+    if (!awaitingCount) return;
+    const interval = setInterval(() => {
+      const finished = finishedAt.current;
+      if (
+        finished === null ||
+        Date.now() - finished > MOVE_DONE_LAST_REREAD_MS
+      ) {
+        clearInterval(interval);
+        return;
+      }
+      const query = queryClient.getQueryCache().get(statusHash);
+      if (rereadInFlight.current || query?.state.fetchStatus === "fetching")
+        return;
+      rereadInFlight.current = true;
+      void queryClient
+        .invalidateQueries({
+          predicate: (entry) => entry.queryHash === statusHash,
+        })
+        .finally(() => {
+          rereadInFlight.current = false;
+        });
+    }, MOVE_DONE_REREAD_MS);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [awaitingCount, queryClient, statusHash]);
   // Once the status has shown this move past the accept, a computer read back
   // as Local (asked again, given to a team, or a plane still local) has no
   // move here to show: the dialog closes rather than wait on a bar that never
@@ -103,7 +159,13 @@ function MoveProgressDialogBody(props: {
         };
   let view: ReactNode;
   if (moved) {
-    view = <MoveDoneView hostName={target.hostName} onDone={onClose} />;
+    view = (
+      <MoveDoneView
+        hostName={target.hostName}
+        allApplied={allApplied}
+        onDone={onClose}
+      />
+    );
   } else if (state?.kind === "move_stopped") {
     view = (
       <MoveStoppedView
@@ -115,14 +177,7 @@ function MoveProgressDialogBody(props: {
       />
     );
   } else {
-    view = (
-      <MovingView
-        hostName={target.hostName}
-        applied={state?.kind === "moving" ? state.applied : 0}
-        total={state?.kind === "moving" ? state.total : 0}
-        lineProps={lineProps}
-      />
-    );
+    view = <MovingView hostName={target.hostName} lineProps={lineProps} />;
   }
   return (
     <DialogContent
@@ -138,11 +193,8 @@ function MoveProgressDialogBody(props: {
 /** Also before the status shows the move under way: the accept was taken. */
 function MovingView(props: {
   readonly hostName: string;
-  readonly applied: number;
-  readonly total: number;
   readonly lineProps: OverviewCardLineProps | null;
 }): ReactNode {
-  const { applied, total } = props;
   const title = `Moving ${props.hostName} to Personal`;
   return (
     <>
@@ -150,13 +202,9 @@ function MovingView(props: {
         <DialogTitle>{title}</DialogTitle>
       </DialogHeader>
       <p data-testid="move-progress-dialog-progress">
-        {moveProgressText(applied, total)}
+        {moveProgressText(0, 0)}
       </p>
-      <UpdateProgressBar
-        percent={total === 0 ? null : (applied / total) * 100}
-        label={title}
-        className={undefined}
-      />
+      <UpdateProgressBar percent={null} label={title} className={undefined} />
       <DialogDescription>
         This computer keeps its own settings until the move finishes.
       </DialogDescription>
@@ -172,14 +220,21 @@ function MovingView(props: {
 
 function MoveDoneView(props: {
   readonly hostName: string;
+  readonly allApplied: number | null;
   readonly onDone: () => void;
 }): ReactNode {
+  const { allApplied } = props;
   const title = `${props.hostName} is on Personal`;
   return (
     <>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
       </DialogHeader>
+      {allApplied === null ? null : (
+        <p data-testid="move-progress-dialog-done-count">
+          {`${String(allApplied)} of ${String(allApplied)} items applied`}
+        </p>
+      )}
       <UpdateProgressBar percent={100} label={title} className={undefined} />
       <DialogDescription>
         {"It uses Personal's settings from now. This closes by itself."}

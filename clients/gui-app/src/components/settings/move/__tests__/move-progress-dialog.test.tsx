@@ -33,6 +33,7 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
   itemStatusFixture,
+  pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -206,6 +207,16 @@ function itemStatusesOf(
   );
 }
 
+/** The finished move with every reported item applied and one upload still pending. */
+function movedStatusWithPendingUpload(): EnvironmentStatusResponseV13 {
+  return {
+    ...movedStatusOf(itemStatusesOf(3, 3)),
+    pendingUploads: [
+      pendingUploadFixture({ kind: "variable", key: "PENDING" }),
+    ],
+  };
+}
+
 /** The finished move with all three items applied. */
 function movedStatus(): EnvironmentStatusResponseV13 {
   return movedStatusOf(["applied", "applied", "applied"]);
@@ -220,10 +231,17 @@ function localStatus(): EnvironmentStatusResponseV13 {
 interface StatusFeed {
   answer: EnvironmentStatusResponseV13;
   attempts: readonly SetupAttempt[];
+  /** While set, a status request waits on it before the computer answers. */
+  hold: Promise<void> | null;
 }
 
 interface Harness {
   readonly feed: StatusFeed;
+  readonly queryClient: QueryClient;
+  /** How many times the dialog has asked the computer for its status. */
+  readonly statusReads: () => number;
+  /** The fake clock's time at each status request, in order. */
+  readonly statusReadTimes: () => readonly number[];
   /** The params of every request the dialog sent for `method`. */
   readonly requests: (method: string) => readonly unknown[];
   /** Every method the dialog asked the computer, in order. */
@@ -232,11 +250,17 @@ interface Harness {
 
 /** The dialog over a computer that answers `answer`, closed until {@link openDialog}. */
 function mount(answer: EnvironmentStatusResponseV13): Harness {
-  const feed: StatusFeed = { answer, attempts: [] };
+  const feed: StatusFeed = { answer, attempts: [], hold: null };
+  const statusReadTimes: number[] = [];
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.status": () => feed.answer,
+      "environment.status": () => {
+        statusReadTimes.push(Date.now());
+        return feed.hold === null
+          ? feed.answer
+          : feed.hold.then(() => feed.answer);
+      },
       "environment.setup.retry": () => ({ attemptId: "retry-1" }),
       "environment.setup.attempts": () => ({ attempts: [...feed.attempts] }),
     },
@@ -267,22 +291,24 @@ function mount(answer: EnvironmentStatusResponseV13): Harness {
     "environment.setup.retry": { major: 1, minor: 0 },
     "environment.setup.attempts": { major: 1, minor: 0 },
   });
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
   render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-          },
-        })
-      }
-    >
+    <QueryClientProvider client={queryClient}>
       <MoveProgressDialog />
     </QueryClientProvider>,
   );
   return {
     feed,
+    queryClient,
+    statusReads: () =>
+      messenger.calls.filter((call) => call.method === "environment.status")
+        .length,
+    statusReadTimes: () => statusReadTimes,
     requests: (method) =>
       messenger.calls
         .filter((call) => call.method === method)
@@ -301,6 +327,13 @@ function openDialog(): void {
 
 async function advance(ms: number): Promise<void> {
   await advanceLegendListTime(ms);
+}
+
+/** Advances in 100 ms steps, so each read settles before the next tick. */
+async function advanceInSteps(ms: number): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+    await advance(100);
+  }
 }
 
 /**
@@ -419,37 +452,38 @@ describe("<MoveProgressDialog />", () => {
     ).toBeTruthy();
   });
 
-  it("shows the items applied and a bar at their share, and follows the computer as it applies more", async () => {
+  it("shows an unmeasured bar and never counts the items in words, as the computer applies more", async () => {
     const harness = mount(movingStatus(1, 3));
     openDialog();
     await settle();
 
     expect(
-      screen
-        .getByTestId("move-progress-dialog-progress")
-        .textContent.replace(/\s+/g, " "),
-    ).toBe(
-      "Moving this computer's settings to Personal · 1 of 3 items applied",
-    );
-    expect(
-      Number(screen.getByRole("progressbar").getAttribute("aria-valuenow")),
-    ).toBeCloseTo(33.3, 1);
+      screen.getByTestId("move-progress-dialog-progress").textContent,
+    ).toBe("Moving this computer's settings to Personal");
+    expect(screen.queryByText(/items applied/)).toBeNull();
+    expect(screen.getByTestId("update-progress-indeterminate")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
 
     harness.feed.answer = movingStatus(3, 3);
     await deliverNextStatusRead();
 
+    expect(screen.queryByText(/items applied/)).toBeNull();
+    expect(screen.getByTestId("update-progress-indeterminate")).toBeTruthy();
+  });
+
+  it("says nothing of items while the move runs, after the switch lists Personal's items", async () => {
+    const harness = mount(movingStatus(1, 3));
+    openDialog();
+    await settle();
+
+    harness.feed.answer = movingStatus(23, 45);
+    await deliverNextStatusRead();
+
     expect(
-      screen
-        .getByTestId("move-progress-dialog-progress")
-        .textContent.replace(/\s+/g, " "),
-    ).toBe(
-      "Moving this computer's settings to Personal · 3 of 3 items applied",
-    );
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
-      "100",
-    );
+      screen.getByTestId("move-progress-dialog-progress").textContent,
+    ).toBe("Moving this computer's settings to Personal");
+    expect(screen.queryByText(/items applied/)).toBeNull();
   });
 
   it("closes on Close while the move runs and asks the computer nothing about the move", async () => {
@@ -499,7 +533,7 @@ describe("<MoveProgressDialog />", () => {
   });
 
   describe("when the move finishes", () => {
-    it("turns to the done view, with Done, once the computer reads as moved", async () => {
+    it("turns to the done view, with Done, and no count while Personal lists more items than are applied", async () => {
       const harness = mount(movingStatus(2, 3));
       openDialog();
       await settle();
@@ -510,7 +544,6 @@ describe("<MoveProgressDialog />", () => {
 
       expect(screen.getByText("Old laptop is on Personal")).toBeTruthy();
       expect(screen.queryByTestId("move-progress-dialog-progress")).toBeNull();
-      // After the switch the status lists Personal's items, not this move's.
       expect(screen.queryByText(/items applied/)).toBeNull();
       expect(
         screen.getByRole("progressbar").getAttribute("aria-valuenow"),
@@ -524,18 +557,153 @@ describe("<MoveProgressDialog />", () => {
       expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
     });
 
-    it("closes itself after four seconds", async () => {
-      mount(movedStatus());
+    it("counts every item at once when all of them are applied at the first read", async () => {
+      mount(movedStatusOf(itemStatusesOf(45, 45)));
       openDialog();
       await settle();
-      expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
 
-      await advance(3_900);
-      expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
+      expect(
+        screen.getByTestId("move-progress-dialog-done-count").textContent,
+      ).toBe("45 of 45 items applied");
+    });
+
+    it.each([
+      ["a computer with no items", movedStatusOf([])],
+      ["an upload still pending", movedStatusWithPendingUpload()],
+    ] as const)("shows no count for %s", async (_name, status) => {
+      mount(status);
+      openDialog();
+      await settle();
+
+      expect(screen.getByText("Old laptop is on Personal")).toBeTruthy();
+      expect(screen.queryByText(/items applied/)).toBeNull();
+    });
+
+    it("reads again at about half a second and shows the count once every item is applied, then reads no more", async () => {
+      const harness = mount(movedStatusOf(itemStatusesOf(23, 45)));
+      openDialog();
+      await settle();
+      expect(screen.queryByText(/items applied/)).toBeNull();
+
+      harness.feed.answer = movedStatusOf(itemStatusesOf(45, 45));
+      const before = harness.statusReads();
+      await advance(400);
+      expect(harness.statusReads()).toBe(before);
+      expect(screen.queryByText(/items applied/)).toBeNull();
 
       await advance(200);
-      expect(dialogIsGone()).toBe(true);
+      expect(
+        screen.getByTestId("move-progress-dialog-done-count").textContent,
+      ).toBe("45 of 45 items applied");
+
+      const shown = harness.statusReads();
+      await advance(2_000);
+      expect(harness.statusReads()).toBe(shown);
     });
+
+    it("never has two status reads in flight: it waits for an unanswered one", async () => {
+      const harness = mount(movedStatusOf(itemStatusesOf(23, 45)));
+      openDialog();
+      await settle();
+
+      let release: () => void = () => undefined;
+      harness.feed.hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const before = harness.statusReads();
+      await advance(600);
+      expect(harness.statusReads()).toBe(before + 1);
+
+      await advance(2_000);
+      expect(harness.statusReads()).toBe(before + 1);
+
+      harness.feed.hold = null;
+      release();
+      await advance(600);
+      expect(harness.statusReads()).toBeGreaterThan(before + 1);
+    });
+
+    it("reads seven more times while the count stays short, the last at three and a half seconds, and none after it closes", async () => {
+      const harness = mount(movedStatusOf(itemStatusesOf(23, 45)));
+      openDialog();
+      await settle();
+      const before = harness.statusReads();
+
+      await advanceInSteps(3_400);
+      expect(dialogIsGone()).toBe(false);
+      expect(harness.statusReads()).toBe(before + 6);
+
+      await advanceInSteps(200);
+      expect(dialogIsGone()).toBe(false);
+      expect(harness.statusReads()).toBe(before + 7);
+
+      await advanceInSteps(600);
+      expect(dialogIsGone()).toBe(true);
+      expect(harness.statusReads()).toBe(before + 7);
+
+      await advance(10_000);
+      expect(harness.statusReads()).toBe(before + 7);
+    });
+
+    it("starts no read later than three and a half seconds after the finish when the count line hides again", async () => {
+      const harness = mount(movedStatusOf(itemStatusesOf(23, 45)));
+      openDialog();
+      await settle();
+
+      // The line shows at 1.5 s, which stops the re-reads.
+      await advanceInSteps(1_200);
+      harness.feed.answer = movedStatusOf(itemStatusesOf(45, 45));
+      await advanceInSteps(750);
+      expect(
+        screen.getByTestId("move-progress-dialog-done-count"),
+      ).toBeTruthy();
+
+      // A read of the computer's own at 3.25 s hides it, so the re-reads
+      // start again at 3.75 s, off their grid and before the close.
+      await advanceInSteps(1_250);
+      harness.feed.answer = movedStatusOf(itemStatusesOf(23, 45));
+      void harness.queryClient.invalidateQueries();
+      await advanceInSteps(100);
+      expect(screen.queryByText(/items applied/)).toBeNull();
+      await advanceInSteps(500);
+
+      expect(dialogIsGone()).toBe(false);
+      const [finishedAt, ...later] = harness.statusReadTimes();
+      expect(Math.max(...later) - finishedAt).toBeLessThanOrEqual(3_500);
+    });
+
+    it("reads no more once the view has closed itself", async () => {
+      const harness = mount(movedStatusOf(itemStatusesOf(23, 45)));
+      openDialog();
+      await settle();
+      expect(harness.statusReads()).toBeGreaterThan(0);
+
+      await advance(4_200);
+      expect(dialogIsGone()).toBe(true);
+      const atClose = harness.statusReads();
+
+      await advance(10_000);
+      expect(harness.statusReads()).toBe(atClose);
+    });
+
+    it.each([
+      ["with the count line", movedStatusOf(itemStatusesOf(45, 45))],
+      ["without it", movedStatusOf(itemStatusesOf(23, 45))],
+    ] as const)(
+      "closes itself after four seconds %s",
+      async (_name, status) => {
+        mount(status);
+        openDialog();
+        await settle();
+        expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
+
+        await advance(3_800);
+        expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
+
+        await advance(400);
+        expect(dialogIsGone()).toBe(true);
+      },
+    );
 
     it.each([
       [
