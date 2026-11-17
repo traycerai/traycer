@@ -439,10 +439,7 @@ function isSandboxFrozenRefusal(bodyText: string): boolean {
 /**
  * The fatal a frozen sandbox's refused mint ends the session on: the same
  * typed `SANDBOX_FROZEN` refusal the host itself answers a frozen sandbox's
- * calls with. Every surface prints its reason as it is, so the reason is
- * worded here for its reader: "your credits" only on a sandbox the person's
- * host directory names as their own, and the line with no remedy on a team's
- * sandbox, on a row with no owner, and where there is no directory to read.
+ * calls with. Every surface prints the reason verbatim, so it is worded for its reader.
  */
 function sandboxFrozenFatal(hostId: string): FatalErrorDetails {
   return {
