@@ -1421,6 +1421,69 @@ describe("useEpicRouteSynchronization", () => {
     expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a canvas the person emptied empty when the route names its pane", async () => {
+    const { useEpicCanvasStore: realCanvasStore } = await vi.importActual<
+      typeof import("@/stores/epics/canvas/store")
+    >("@/stores/epics/canvas/store");
+    let unmountHook: (() => void) | null = null;
+    try {
+      testState.nestedFocusEnabled = true;
+      testState.useRealCanvasStore = true;
+      testState.records = [{ id: "artifact-1" }];
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+      const realStore = realCanvasStore.getState();
+      const realTabId = realStore.openEpicTab(EPIC_ID, "Emptied canvas");
+      realStore.openTileInTab(
+        realTabId,
+        specTile("artifact-existing", "tile-existing", "Existing artifact"),
+      );
+      const populated = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (populated === undefined) throw new Error("Expected seeded canvas");
+      const paneId = populated.activePaneId;
+      if (paneId === null) throw new Error("Expected seeded active pane");
+      const intent: EpicRouteFocusIntent = {
+        epicId: EPIC_ID,
+        tabId: realTabId,
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "tile-existing",
+      };
+      const hook = renderHook(
+        (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+        { initialProps: intent },
+      );
+      unmountHook = hook.unmount;
+
+      act(() => {
+        realCanvasStore
+          .getState()
+          .closeCanvasTab(realTabId, paneId, "tile-existing");
+      });
+      const emptied = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (emptied === undefined) throw new Error("Expected emptied canvas");
+      const emptiedPaneId = emptied.activePaneId;
+      if (emptiedPaneId === null) throw new Error("Expected emptied pane");
+      expect(emptied.tilesByInstanceId).toEqual({});
+
+      hook.rerender({
+        ...intent,
+        focusPaneId: emptiedPaneId,
+        focusTileInstanceId: undefined,
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    } finally {
+      unmountHook?.();
+      testState.useRealCanvasStore = false;
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+    }
+  });
+
   it("leaves a canvas that already shows a tile alone when the records arrive", async () => {
     testState.records = [];
     setSinglePaneCanvas(

@@ -493,6 +493,26 @@ export function useEpicRouteSynchronization(
   const lastAutoOpenKey = useRef<string | null>(null);
   /** The most recent return this effect has already released a key for. */
   const honouredReturnSeq = useRef(0);
+  /**
+   * Whether this surface loaded its snapshot onto a canvas with no tiles and
+   * no records: a task this machine has not opened before, whose chat records
+   * come later from the polled record list. Only that landing is still
+   * unanswered. A canvas the person emptied belongs to a task whose records
+   * are already here, so it never sets this, and the first tile to appear
+   * clears it for the life of the surface.
+   */
+  const landingAwaitsFirstRecords = useRef(false);
+  const hasRecords = records.length > 0;
+  // Declared above the effect that reads it: effects run in order, so the
+  // landing below sees this commit's answer.
+  useEffect(() => {
+    if (!snapshotLoaded) return;
+    if (canvasHoldsTiles) {
+      landingAwaitsFirstRecords.current = false;
+    } else if (!hasRecords) {
+      landingAwaitsFirstRecords.current = true;
+    }
+  }, [snapshotLoaded, canvasHoldsTiles, hasRecords]);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (
@@ -502,7 +522,7 @@ export function useEpicRouteSynchronization(
         focusArtifactId,
         recordCount: records.length,
         requestOutrunsNestedRoute: focusRequestOutrunsNestedRoute,
-        canvasHoldsTiles,
+        landingAwaitsFirstRecords: landingAwaitsFirstRecords.current,
       })
     ) {
       return;
@@ -990,14 +1010,14 @@ function shouldSuppressLegacyAutoOpen(args: {
    */
   readonly requestOutrunsNestedRoute: boolean;
   /**
-   * Whether the canvas shows anything. A nested target on a canvas with no
-   * tiles can only name the empty opener pane, and the route gets one without
-   * anyone choosing it: the opener is seeded while the records are still on
-   * their way, and the nested-route effect writes the active pane into the
-   * URL. That target governs nothing a landing could override, so it does not
-   * stand a landing down. An explicit request keeps the precedence above.
+   * Whether the landing is still waiting for the task's first records. While
+   * it waits, the canvas seeds its empty opener pane and the nested-route
+   * effect writes that pane into the URL, so the route names a target nobody
+   * chose. That target does not stand the landing down. Every other empty
+   * pane in a route is one the person left empty, and governs as before, as
+   * does any target once an explicit request is present.
    */
-  readonly canvasHoldsTiles: boolean;
+  readonly landingAwaitsFirstRecords: boolean;
 }): boolean {
   const {
     nestedFocusEnabled,
@@ -1005,15 +1025,15 @@ function shouldSuppressLegacyAutoOpen(args: {
     focusArtifactId,
     recordCount,
     requestOutrunsNestedRoute,
-    canvasHoldsTiles,
+    landingAwaitsFirstRecords,
   } = args;
-  const landingOnEmptyCanvas =
-    focusArtifactId === undefined && !canvasHoldsTiles;
+  const unansweredLanding =
+    focusArtifactId === undefined && landingAwaitsFirstRecords;
   if (
     nestedFocusEnabled &&
     nestedRouteTarget !== null &&
     !requestOutrunsNestedRoute &&
-    !landingOnEmptyCanvas
+    !unansweredLanding
   ) {
     return true;
   }
