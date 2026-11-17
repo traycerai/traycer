@@ -181,7 +181,7 @@ function LoginFlowHarness(props: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }): ReactNode {
   const startLogin: StartLoginMutation = useMutation<
     StartLoginResponse,
@@ -283,8 +283,8 @@ function renderFlow(options: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
-}): { readonly onFailed: Mock<(message: string) => void> } {
-  const onFailed = vi.fn<(message: string) => void>();
+}): { readonly onFailed: Mock<(message: string, hostSentence: boolean) => void> } {
+  const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
   render(<LoginFlowHarness {...options} onFailed={onFailed} />, {
     wrapper: queryClientWrapper(),
   });
@@ -434,7 +434,7 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
 
     await waitFor(() => expect(flowState()).toBe("failed"));
     expect(screen.getByTestId("flow-message").textContent).toBe(NOT_FINISHED);
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 
@@ -454,7 +454,7 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
     });
 
     await waitFor(() => expect(flowState()).toBe("failed"));
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 
@@ -473,7 +473,7 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
     });
 
     await waitFor(() => expect(flowState()).toBe("failed"));
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 });

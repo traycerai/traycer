@@ -68,7 +68,7 @@ function Harness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly hostBlock: ProviderHostBlock | null;
   readonly autoStart: boolean;
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }): ReactNode {
   const startLogin = useMutation<
     StartLoginResponse,
@@ -195,7 +195,7 @@ afterEach(() => {
 
 describe("useProviderProfileLoginFlow - macOS host block", () => {
   it("refuses a click before startLogin or ensurePack and lands on failed with the sentence", async () => {
-    const onFailed = vi.fn<(message: string) => void>();
+    const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
     mount(
       { mode: "create", hostBlock: MACOS_BLOCK, autoStart: false, onFailed },
       false,
@@ -210,7 +210,7 @@ describe("useProviderProfileLoginFlow - macOS host block", () => {
       expect(screen.getByTestId("state").textContent).toBe("failed"),
     );
     expect(screen.getByTestId("message").textContent).toBe(MACOS_13_SENTENCE);
-    expect(onFailed).toHaveBeenCalledWith(MACOS_13_SENTENCE);
+    expect(onFailed).toHaveBeenCalledWith(MACOS_13_SENTENCE, false);
     expect(spies.startLogin).not.toHaveBeenCalled();
     expect(spies.ensurePack).not.toHaveBeenCalled();
   });
