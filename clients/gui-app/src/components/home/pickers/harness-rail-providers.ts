@@ -7,7 +7,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   isHarnessRowSignedOut,
-  soleSignedInProfileForSignedOutTerminal,
+  soleSignedInProfileFromRows,
 } from "@/lib/providers/provider-ambient-auth";
 import {
   profileAccentDotInput,
@@ -21,22 +21,6 @@ import {
   providerPackBlocksExecution,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
-
-/**
- * The profile a provider's tab lands on while its Terminal login is signed
- * out and exactly one enabled managed profile is signed in, else `null`: the
- * same rule a new chat's default account follows
- * (`soleSignedInProfileForSignedOutTerminal`), read from the profile rows'
- * own verdicts.
- */
-function soleProfileForSignedOutTerminal(
-  profiles: ReadonlyArray<ProviderProfile>,
-): string | null {
-  return soleSignedInProfileForSignedOutTerminal({
-    auth: { status: "unknown" },
-    profiles,
-  });
-}
 
 /** Shared empty map for a computer that reports no removed accounts. */
 export const EMPTY_REMOVED_PROFILES_BY_HARNESS_ID: ReadonlyMap<
@@ -136,7 +120,7 @@ export function resolveActiveProfileForHarness(input: {
   ) {
     return selectedProfileId;
   }
-  const sole = soleProfileForSignedOutTerminal(profiles);
+  const sole = soleSignedInProfileFromRows(profiles);
   if (sole !== null) return sole;
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
@@ -402,7 +386,7 @@ export function railHarnessDegraded(
 /**
  * Whether a rail entry is dimmed: the Terminal login's signed-out verdict
  * (`railHarnessDegraded`), except for a provider whose tab lands on its one
- * signed-in managed profile (`soleProfileForSignedOutTerminal`), which can run
+ * signed-in managed profile (`soleSignedInProfileFromRows`), which can run
  * a turn and so is not dimmed for the Terminal login's sake.
  */
 export function railEntryDegraded(
@@ -411,7 +395,7 @@ export function railEntryDegraded(
   profiles: ReadonlyArray<ProviderProfile>,
 ): boolean {
   if (!harness.enabled) return false;
-  if (soleProfileForSignedOutTerminal(profiles) !== null) {
+  if (soleSignedInProfileFromRows(profiles) !== null) {
     return !harness.available && harness.requiresApiKey;
   }
   return railHarnessDegraded(harness, degradedHarnessIds);
