@@ -62,7 +62,6 @@ export const environmentMutationKeys = {
   providersRemove: () => ["auth", "profile-record-remove"] as const,
   providersRename: () => ["auth", "profile-record-name"] as const,
   providersReplaceKey: () => ["environment.providers.replaceKey"] as const,
-  plansUnlink: () => ["environment.plans.unlink"] as const,
   configurationGuideSet: () => ["environment.configuration.guide.set"] as const,
   configurationGuideReset: () =>
     ["environment.configuration.guide.reset"] as const,

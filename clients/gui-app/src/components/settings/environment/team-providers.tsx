@@ -53,7 +53,6 @@ import { TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { ConfigurationProfiles } from "./team-configuration-profiles";
-import { TeamPlans } from "./team-plans";
 import {
   TeamProviderRecordsContext,
   useTeamProviderRecordsRead,
@@ -279,7 +278,6 @@ function TeamProvidersView(props: {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
-                <TeamPlans providerId={providerId} />
                 {source.kind === "pool" && source.configuration === "team" ? (
                   <TeamSyncedProviderProfiles
                     providerId={providerId}
