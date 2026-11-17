@@ -215,3 +215,17 @@ export function soleSignedInProfileForSignedOutTerminal(
   );
   return signedIn.length === 1 ? signedIn[0].profileId : null;
 }
+
+/**
+ * {@link soleSignedInProfileForSignedOutTerminal} read from a provider's
+ * profile rows alone, where only the Terminal row's own verdict is at hand
+ * (a harness catalog row carries no `providers.list` state).
+ */
+export function soleSignedInProfileFromRows(
+  profiles: DefaultAccountSources["profiles"],
+): string | null {
+  return soleSignedInProfileForSignedOutTerminal({
+    auth: { status: "unknown" },
+    profiles,
+  });
+}

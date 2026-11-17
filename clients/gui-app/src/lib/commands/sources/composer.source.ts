@@ -26,7 +26,15 @@ import {
   useGuiHarnessCatalogForClientLine,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
-import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  isHarnessRowSignedOut,
+  soleSignedInProfileFromRows,
+} from "@/lib/providers/provider-ambient-auth";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   hiddenModelProvidersForHarness,
   modelProviderHidden,
@@ -350,12 +358,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
  * probe that never consults auth, so a provider whose account is signed out
  * was offered here indistinguishably from a live one.
  *
- * The picker surfaces answer this by joining against `providers.list`, but the
- * palette has no such query - it holds a catalog and nothing else. So this is
- * the site the row-carried `authStatus` exists for: the same definitive-only
- * verdict the rail reads, taken straight off the row being listed. On a host
- * below `agent.gui.listHarnesses@7.1` the field is absent, the predicate is
- * false for every row, and both subpages look exactly as they do today.
+ * The signed-out verdict is the row-carried `authStatus`: the same
+ * definitive-only verdict the rail reads, taken straight off the row being
+ * listed. On a host below `agent.gui.listHarnesses@7.1` the field is absent,
+ * the predicate is false for every row, and both subpages look exactly as
+ * they do today. Only the exception to it, one signed-in managed profile
+ * (see {@link providerSignedOutInPalette}), reads `providers.list`.
  */
 function providerOfferableInPalette(provider: HarnessOption): boolean {
   return provider.available;
@@ -380,8 +388,16 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * a user learns. This is a searched list with no positional memory to break,
  * so it may additionally group the unusable rows last.
  */
-function providerSignedOutInPalette(provider: HarnessOption): boolean {
-  return isHarnessRowSignedOut(provider);
+function providerSignedOutInPalette(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): boolean {
+  // The one signed-in managed profile a new chat runs on while the Terminal
+  // login is signed out makes the provider runnable, as the rail reads it.
+  return (
+    isHarnessRowSignedOut(provider) &&
+    soleSignedInProfileFromRows(profiles) === null
+  );
 }
 
 /**
@@ -394,24 +410,47 @@ function providerSignedOutInPalette(provider: HarnessOption): boolean {
  */
 function paletteProviderOrder<T extends HarnessOption>(
   harnesses: ReadonlyArray<T>,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
 ): ReadonlyArray<T> {
   return harnesses
     .filter((provider) => providerOfferableInPalette(provider))
     .toSorted(
       (left, right) =>
-        Number(providerSignedOutInPalette(left)) -
-        Number(providerSignedOutInPalette(right)),
+        Number(
+          providerSignedOutInPalette(left, profilesOfHarness(providers, left)),
+        ) -
+        Number(
+          providerSignedOutInPalette(
+            right,
+            profilesOfHarness(providers, right),
+          ),
+        ),
     );
+}
+
+/** The profile rows `providers.list` holds for a harness; none before it loads. */
+function profilesOfHarness(
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+  harness: HarnessOption,
+): ReadonlyArray<ProviderProfile> {
+  const state = providers?.find(
+    (provider) => providerIdToGuiHarnessId(provider.providerId) === harness.id,
+  );
+  return state?.profiles ?? [];
 }
 
 function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
+  const providers = useProvidersListForClient(useFocusedComposerClient(), {
+    enabled: true,
+    subscribed: true,
+  }).data?.providers;
   return useMemo(
     () =>
-      paletteProviderOrder(catalog.harnesses).map((provider) =>
-        buildProviderItem(provider),
+      paletteProviderOrder(catalog.harnesses, providers).map((provider) =>
+        buildProviderItem(provider, profilesOfHarness(providers, provider)),
       ),
-    [catalog.harnesses],
+    [catalog.harnesses, providers],
   );
 }
 
@@ -429,11 +468,12 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   }).data?.providers;
   return useMemo(
     () =>
-      paletteProviderOrder(catalog.harnesses).flatMap((provider) => {
+      paletteProviderOrder(catalog.harnesses, providers).flatMap((provider) => {
         const hidden = hiddenModelProvidersForHarness(providers, provider.id);
+        const profiles = profilesOfHarness(providers, provider);
         return provider.models
           .filter((model) => !modelProviderHidden(model, hidden))
-          .map((model) => buildModelItem(provider, model));
+          .map((model) => buildModelItem(provider, model, profiles));
       }),
     [catalog.harnesses, providers],
   );
@@ -444,13 +484,19 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
  * the non-actionable "reason" one. The row stays selectable on purpose: see
  * {@link providerSignedOutInPalette}.
  */
-function signedOutBadge(provider: HarnessOption): { statusBadge?: string } {
-  return providerSignedOutInPalette(provider)
+function signedOutBadge(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): { statusBadge?: string } {
+  return providerSignedOutInPalette(provider, profiles)
     ? { statusBadge: "Signed out" }
     : {};
 }
 
-function buildProviderItem(provider: HarnessOption): CommandItem {
+function buildProviderItem(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): CommandItem {
   return {
     id: `composer:provider:${provider.id}`,
     label: provider.label,
@@ -461,7 +507,7 @@ function buildProviderItem(provider: HarnessOption): CommandItem {
     shortcut: null,
     actionId: null,
     subpage: null,
-    ...signedOutBadge(provider),
+    ...signedOutBadge(provider, profiles),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
@@ -476,6 +522,7 @@ function buildProviderItem(provider: HarnessOption): CommandItem {
 function buildModelItem(
   provider: HarnessOption,
   model: ModelOption,
+  profiles: ReadonlyArray<ProviderProfile>,
 ): CommandItem {
   return {
     id: `composer:model:${provider.id}:${model.slug}`,
@@ -487,7 +534,7 @@ function buildModelItem(
     shortcut: null,
     actionId: null,
     subpage: null,
-    ...signedOutBadge(provider),
+    ...signedOutBadge(provider, profiles),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
