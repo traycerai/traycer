@@ -1569,6 +1569,87 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  it("leaves the seeded opener pane empty once it has shared the canvas with another pane", async () => {
+    await withRealCanvas("Shared canvas", async ({ store, tabId, mount }) => {
+      testState.records = [];
+      act(() => {
+        store.getState().ensureEmptyPaneInTab(tabId);
+      });
+      const seededPaneId = activePaneIdOf(store, tabId);
+      expect(store.getState().seededOpenerPaneIdByTabId[tabId]).toBe(
+        seededPaneId,
+      );
+      const hook = mount(routeIntent(tabId, seededPaneId, undefined));
+
+      const splitTarget = store
+        .getState()
+        .prepareSplitPaneEmptyFocusTarget(tabId, seededPaneId, "horizontal");
+      if (splitTarget === null) throw new Error("Expected a split pane");
+      const splitPaneId = splitTarget.paneId;
+      expect(store.getState().canvasByTabId[tabId]?.root?.kind).toBe("group");
+      hook.rerender(routeIntent(tabId, splitPaneId, undefined));
+
+      act(() => {
+        store.getState().prepareCloseCanvasPaneFocusTarget(tabId, splitPaneId);
+      });
+      const root = store.getState().canvasByTabId[tabId]?.root;
+      expect(root).toMatchObject({
+        kind: "pane",
+        id: seededPaneId,
+        tabInstanceIds: [],
+      });
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+
+      testState.records = [{ id: "artifact-1" }];
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(store.getState().seededOpenerPaneIdByTabId[tabId]).toBeUndefined();
+    });
+  });
+
+  it("opens the chat that arrives after a first batch the landing could not choose from", async () => {
+    await withRealCanvas("First task", async ({ store, tabId, mount }) => {
+      testState.records = [];
+      act(() => {
+        store.getState().ensureEmptyPaneInTab(tabId);
+      });
+      const seededPaneId = activePaneIdOf(store, tabId);
+      const hook = mount(routeIntent(tabId, seededPaneId, undefined));
+
+      testState.records = [{ id: "html-1" }];
+      testState.autoOpenTarget = null;
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+      testState.records = [{ id: "html-1" }, { id: "chat-1" }];
+      testState.autoOpenTarget = {
+        id: "chat-1",
+        type: "chat",
+        name: "First chat",
+      };
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+
+      await waitFor(() => {
+        expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            node: expect.objectContaining({
+              id: "chat-1",
+              type: "chat",
+            }) as EpicCanvasTileRef,
+          }),
+        );
+      });
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("leaves a canvas that already shows a tile alone when the records arrive", async () => {
     testState.records = [];
     setSinglePaneCanvas(

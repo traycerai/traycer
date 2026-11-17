@@ -575,9 +575,9 @@ export function useEpicRouteSynchronization(
       // of `openResolvedArtifact` only navigates once
       // `epic.resolveArtifactByPath` has confirmed one.
       //
-      // A LANDING still spends its key on a null resolve: it runs once per
-      // epic.
-      if (!hasExplicitFocus) {
+      // A LANDING still spends its key on a null resolve, with the one
+      // exception `nullResolveSpendsKey` names.
+      if (nullResolveSpendsKey(hasExplicitFocus, landingAwaitsFirstRecords)) {
         lastAutoOpenKey.current = key;
       }
       return;
@@ -917,6 +917,22 @@ function gateLegacyAutoOpen(args: {
   // records its key and chooses nothing. Empty seeded panes are still openers.
   if (canvasHoldsTiles) return "spend-key";
   return anyKeySpent ? "skip" : "resolve";
+}
+
+/**
+ * Whether a resolve that found nothing ends the wait for this key.
+ *
+ * A request never does: its record has not projected yet. A landing does,
+ * because it runs once per epic - except on the seeded opener pane, which is
+ * still waiting for a record it may choose. A first batch holding only kinds a
+ * landing never picks (html, canvas, file) must not close the door on the chat
+ * records that follow it.
+ */
+function nullResolveSpendsKey(
+  hasExplicitFocus: boolean,
+  landingAwaitsFirstRecords: boolean,
+): boolean {
+  return !hasExplicitFocus && !landingAwaitsFirstRecords;
 }
 
 interface FocusRequestBaseline {
