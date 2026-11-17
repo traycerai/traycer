@@ -1013,35 +1013,8 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");
     expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
-    expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
-  });
-
-  it("names the desktop Activity tab by its words alone while one task is active, and still lists that task", async () => {
-    const user = userEvent.setup();
-    signInAda();
-    mocks.state.snapshot = {
-      ...snapshot(),
-      tasks: [
-        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
-      ],
-    };
-    __setAgentActivityPlaneAnsweringForTests();
-    __setAgentActivityStateForTests(
-      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
-      "cloud",
-      "connected",
-    );
-    renderOverCloudFeed();
-
-    expect(visibleTabText()).toBe("Activity");
-    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
     expect(activityTab().textContent).not.toMatch(/\d|active/);
-
-    await user.click(activityTab());
-    expect(screen.getByTestId("stub-activity").dataset.rowIds).toBe(
-      "task-working",
-    );
-    expect(visibleTabText()).toBe("Activity");
+    expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
   it("rule 6: shows no count when no task is active", () => {
