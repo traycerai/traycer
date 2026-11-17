@@ -6,43 +6,54 @@ import type {
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  VoiceCallAuthority,
+  VoiceCallPrincipalChanged,
+} from "@/lib/auth/auth-service";
 import { useAuthService } from "@/lib/host";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
- * `POST /api/voice/sessions`: mints a voice session for the offer. The
- * route's refusals (dormant, credits, unavailable) come back as the result's
- * `kind`, not as errors: the controller ends the attempt with the matching
- * reason and the call says it, so nothing is toasted here.
+ * `POST /api/voice/sessions`: mints a voice session for the offer, under the
+ * account the call was started under. The route's refusals (dormant,
+ * credits, unavailable, voice-unavailable) and a changed account come back
+ * as the result's `kind`, not as errors: the controller ends the attempt
+ * with the matching reason and the call says it, so nothing is toasted here.
  */
 export function useVoiceSessionMintMutation(): UseMutationResult<
-  VoiceSessionMintFetchResult,
+  VoiceSessionMintFetchResult | VoiceCallPrincipalChanged,
   Error,
-  VoiceSessionMintRequest
+  {
+    readonly request: VoiceSessionMintRequest;
+    readonly authority: VoiceCallAuthority;
+  }
 > {
   const auth = useAuthService();
   return useMutation({
     mutationKey: voiceMutationKeys.mint(),
-    mutationFn: (request) => auth.mintVoiceSession(request),
+    mutationFn: ({ request, authority }) =>
+      auth.mintVoiceSession(request, authority),
   });
 }
 
 /**
  * `POST /api/voice/sessions/:id/end`: closes the server's row for a session
- * this window minted. Best effort from the controller's terminal latch; a
- * refusal is logged there, since the session is already over for the person.
+ * this window minted, under the account that minted it or not at all. Best
+ * effort from the controller's terminal latch; a refusal is logged there,
+ * since the session is already over for the person.
  */
 export function useVoiceSessionEndMutation(): UseMutationResult<
-  VoiceSessionEndFetchResult,
+  VoiceSessionEndFetchResult | VoiceCallPrincipalChanged,
   Error,
-  string
+  { readonly voiceSessionId: string; readonly authority: VoiceCallAuthority }
 > {
   const auth = useAuthService();
   return useMutation({
     mutationKey: voiceMutationKeys.end(),
-    mutationFn: (voiceSessionId) => auth.endVoiceSession(voiceSessionId),
+    mutationFn: ({ voiceSessionId, authority }) =>
+      auth.endVoiceSession(voiceSessionId, authority),
   });
 }
 

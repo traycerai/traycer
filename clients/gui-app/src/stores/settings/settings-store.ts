@@ -80,7 +80,7 @@ import {
   type RecordingLimitId,
   type RecordingQuality,
 } from "@/lib/soundtrack/recording";
-import { isCallVoiceName } from "@/lib/voice/call-voice";
+import { isVoiceName } from "@traycer-clients/shared/host-client/voice-sessions";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -900,7 +900,7 @@ export const useSettingsStore = create<SettingsState>()(
             typeof persisted.showRecentHistory === "boolean"
               ? persisted.showRecentHistory
               : true,
-          callVoice: isCallVoiceName(persisted.callVoice)
+          callVoice: isVoiceName(persisted.callVoice)
             ? persisted.callVoice
             : null,
           worktreeBranchPrefix:

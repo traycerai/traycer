@@ -174,10 +174,21 @@ const fake = vi.hoisted(() => {
     sendVersion,
     requestMicrophoneAccess: vi.fn<() => Promise<string>>(),
     getUserMedia: vi.fn<() => Promise<typeof stream>>(),
+    // The one authority a call captures; opaque to the controller.
+    authority: { opaque: "authority" },
     mint: vi.fn<
-      (request: { offerSdp: string; input: string }) => Promise<unknown>
+      (
+        request: {
+          offerSdp: string;
+          input: string;
+          voice: string | null;
+          voicePolicy: "fallback" | "exact" | null;
+        },
+        authority: object,
+      ) => Promise<unknown>
     >(),
-    endVoiceSession: vi.fn<(id: string) => Promise<unknown>>(),
+    endVoiceSession:
+      vi.fn<(id: string, authority: object) => Promise<unknown>>(),
     sendMock:
       vi.fn<
         (
@@ -205,6 +216,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
+    captureVoiceCallAuthority: () => fake.authority,
     mintVoiceSession: fake.mint,
     endVoiceSession: fake.endVoiceSession,
   }),
@@ -275,7 +287,9 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   readHostMethodSchemaVersion: () => fake.sendVersion.current,
 }));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
-  useVoiceAvailabilityQuery: () => ({ data: true }),
+  useVoiceAvailabilityQuery: () => ({
+    data: { available: true, voiceSelection: null },
+  }),
 }));
 vi.mock(
   "@/hooks/notifications/use-notification-mark-entity-read-mutation",
@@ -675,7 +689,12 @@ describe("the dial", () => {
     expect(fake.openMock.mock.calls).toEqual([[{ botId: BOT_ID }]]);
     expect(fake.requestMicrophoneAccess).toHaveBeenCalledTimes(1);
     expect(fake.getUserMedia).toHaveBeenCalledTimes(1);
-    expect(fake.mint.mock.calls).toEqual([[{ offerSdp: "offer", input: "" }]]);
+    expect(fake.mint.mock.calls).toEqual([
+      [
+        { offerSdp: "offer", input: "", voice: null, voicePolicy: null },
+        fake.authority,
+      ],
+    ]);
     expect(state.focus).toEqual({
       botId: BOT_ID,
       hostId: HOST_ID,
@@ -2079,7 +2098,7 @@ describe("ending the call", () => {
     await settle();
 
     expect(fake.order).toEqual(["mic.stop", "engine.close", "end-route"]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
 
     land(chat, [
@@ -2494,7 +2513,7 @@ describe("acknowledgement deltas across engines and calls", () => {
     voiceSays("Sure thing.");
     await settle();
     expect(sentTexts()).toEqual(["Cancel that."]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("does not carry a partial sentence or old mint lines into a second call", async () => {
@@ -2573,7 +2592,9 @@ describe("the mint's acknowledgement lines, through the HTTP parser", () => {
       expect(useVoiceSessionStore.getState().phase).toBe("idle");
       expect(useVoiceSessionStore.getState().refusal).toBe("unavailable");
       expect(fake.track.stop).toHaveBeenCalledOnce();
-      expect(fake.endVoiceSession.mock.calls).toEqual([["rejected-dial"]]);
+      expect(fake.endVoiceSession.mock.calls).toEqual([
+        ["rejected-dial", fake.authority],
+      ]);
     },
   );
 
@@ -2594,8 +2615,8 @@ describe("the mint's acknowledgement lines, through the HTTP parser", () => {
       expect(useVoiceSessionStore.getState().endReason).toBe("connection");
       expect(fake.track.stop).toHaveBeenCalledOnce();
       expect(fake.endVoiceSession.mock.calls).toEqual([
-        ["vs1"],
-        ["rejected-remint"],
+        ["vs1", fake.authority],
+        ["rejected-remint", fake.authority],
       ]);
     },
   );
@@ -2624,7 +2645,9 @@ describe("the mint's acknowledgement lines, through the HTTP parser", () => {
       }
       expect(useVoiceSessionStore.getState().phase).toBe("idle");
       expect(useVoiceSessionStore.getState().refusal).toBe("unavailable");
-      expect(fake.endVoiceSession.mock.calls).toEqual([["unusable"]]);
+      expect(fake.endVoiceSession.mock.calls).toEqual([
+        ["unusable", fake.authority],
+      ]);
     },
   );
 
@@ -2636,8 +2659,8 @@ describe("the mint's acknowledgement lines, through the HTTP parser", () => {
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(useVoiceSessionStore.getState().endReason).toBe("connection");
     expect(fake.endVoiceSession.mock.calls).toEqual([
-      ["vs1"],
-      ["unusable-remint"],
+      ["vs1", fake.authority],
+      ["unusable-remint", fake.authority],
     ]);
   });
 
@@ -2669,7 +2692,7 @@ describe("a lowercase acknowledgement after an unspaced cut-off, which no bounda
 
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(sentTexts()).toEqual(["Cancel that."]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("merges two utterances when the first was acknowledged in lowercase after an unspaced cut-off (a known limit)", async () => {
@@ -2702,7 +2725,7 @@ describe("a lowercase acknowledgement after an unspaced cut-off, which no bounda
 
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(sentTexts()).toEqual([]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 });
 
@@ -2774,7 +2797,7 @@ describe("what a call leaves unsent at its end", () => {
       "send",
       "end-route",
     ]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends nothing more than the acknowledged words when nothing is left open, and still ends the session", async () => {
@@ -2787,7 +2810,7 @@ describe("what a call leaves unsent at its end", () => {
 
     expect(sentTexts()).toEqual(["Hold the build."]);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("does not send an open span that is only an end phrase", async () => {
@@ -2799,7 +2822,7 @@ describe("what a call leaves unsent at its end", () => {
 
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends the open span when the vendor session closes with no time to re-mint", async () => {
@@ -2813,7 +2836,7 @@ describe("what a call leaves unsent at its end", () => {
     expect(state.phase).toBe("idle");
     expect(state.endReason).toBe("connection");
     expect(sentTexts()).toEqual(["Hold the build"]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends the waiting utterance and the open span, in that order, into the thread the call's first send opened", async () => {
@@ -2853,7 +2876,7 @@ describe("what a call leaves unsent at its end", () => {
     expect("origin" in second).toBe(false);
     expect(third.threadId).toBe("t-opened");
     expect("origin" in third).toBe(false);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("opens no thread for later last words when the first send was lost, and follows the one the next word opens", async () => {
@@ -2940,7 +2963,7 @@ describe("what a call leaves unsent at its end", () => {
       "Third, unfinished",
     ]);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
   it("sends an open thread's last words only after the send that is out, and ends after them", async () => {
     const first = deferredSend();
@@ -2957,7 +2980,7 @@ describe("what a call leaves unsent at its end", () => {
     await settle();
     expect(sentTexts()).toEqual(["First instruction.", "Final instruction."]);
     expect(fake.sendMock.mock.calls[1][0].threadId).toBe("t-open");
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("ends only after the send that is out when nothing is left unsaid", async () => {
@@ -2972,7 +2995,7 @@ describe("what a call leaves unsent at its end", () => {
     first.answer(WRITTEN);
     await settle();
     expect(sentTexts()).toEqual(["Only instruction."]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("opens a new call's own thread, never the one the previous call's send opens late", async () => {
@@ -3089,7 +3112,7 @@ describe("what a call leaves unsent at its end", () => {
     tail.answer(WRITTEN);
     await settle();
     expect(sentTexts()).toEqual(["One final instruction."]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("still opens a thread for the last words when the send that is out fails after the microphone is taken", async () => {
@@ -3111,7 +3134,7 @@ describe("what a call leaves unsent at its end", () => {
       threadId: null,
       origin: "call",
     });
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends the open words after capture stops when a re-mint is refused for credits", async () => {

@@ -46,6 +46,7 @@ import {
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import { CallVoiceNotice } from "@/components/layout/voice/call-voice-notice";
 import {
   ComposerCallButton,
   ComposerCallCaptions,
@@ -573,6 +574,7 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
+      {call.barShown ? <CallVoiceNotice /> : null}
       <ComposerCallCaptions shown={call.barShown} testId={testId} />
       <div
         ref={frameRef}

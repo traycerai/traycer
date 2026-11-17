@@ -97,7 +97,10 @@ const fake = vi.hoisted(() => {
     // The app's binding, which a call's send resolves its named host through.
     binding: ((): Binding => ({ current: null }))(),
     mint: vi.fn<() => Promise<unknown>>(),
-    endVoiceSession: vi.fn<(id: string) => Promise<unknown>>(),
+    // The one authority a call captures; opaque to the controller.
+    authority: { opaque: "authority" },
+    endVoiceSession:
+      vi.fn<(id: string, authority: object) => Promise<unknown>>(),
     send: vi.fn<
       (
         request: BotConversationSendRequest,
@@ -123,6 +126,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
+    captureVoiceCallAuthority: () => fake.authority,
     mintVoiceSession: fake.mint,
     endVoiceSession: fake.endVoiceSession,
   }),
@@ -183,7 +187,9 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   readHostMethodSchemaVersion: () => botConversationSendV13.schemaVersion,
 }));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
-  useVoiceAvailabilityQuery: () => ({ data: true }),
+  useVoiceAvailabilityQuery: () => ({
+    data: { available: true, voiceSelection: null },
+  }),
 }));
 vi.mock("@/lib/voice/audio-level", () => ({
   watchAudioLevel: () => ({ stop: () => undefined }),
@@ -460,6 +466,10 @@ describe("a call's sends leave only under the account the call started under", (
     act(() => end());
     await settle();
 
+    // The auth layer refuses a handle whose principal has gone.
+    fake.endVoiceSession.mockImplementation(() =>
+      Promise.resolve({ kind: "principal-changed" }),
+    );
     act(() => switchAccount("bob"));
     await settle();
 
@@ -472,7 +482,8 @@ describe("a call's sends leave only under the account the call started under", (
     ]);
     expect(messenger.calls[0].authority.abortSignal.aborted).toBe(true);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
-    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    // The end goes only under the call's own authority, never the new account's.
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 });
 
@@ -499,7 +510,7 @@ describe("a call's last words through the real send", () => {
       origin: "call",
       spoken: true,
     });
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("runs the end route after the only send that is out is rejected", async () => {
@@ -514,7 +525,7 @@ describe("a call's last words through the real send", () => {
     await settle();
 
     expect(sentTexts()).toEqual(["Only instruction."]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("refuses the last words when the call's host has gone, sending them to no other host, and still ends", async () => {
@@ -532,7 +543,7 @@ describe("a call's last words through the real send", () => {
     expect(dispatched()).toEqual([
       { text: "First on A.", bearer: "token-alice", hostId: HOST_A },
     ]);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends the last words under the call's account and floor, and makes only their host's thread list stale", async () => {
@@ -571,7 +582,7 @@ describe("a call's last words through the real send", () => {
         .some((query) => query.state.isInvalidated);
     expect(stale(HOST_A)).toBe(true);
     expect(stale(HOST_B)).toBe(false);
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1", fake.authority]]);
   });
 
   it("sends a call's last words to its own host after a call starts on another", async () => {
