@@ -6,9 +6,8 @@ import {
 } from "../internal/host-rpc";
 
 /**
- * The team work a claim stops, as the app's claim confirm shows it (board
- * C13). `unknown` is a failed read, a null answer or a host that answers
- * unsupported; it is never read as `none`.
+ * The chats a claim or a give stops. `unknown` is a failed read, a null
+ * answer or a host that answers unsupported; it is never read as `none`.
  */
 export type RunningChats =
   | { readonly kind: "none" }
@@ -16,9 +15,9 @@ export type RunningChats =
   | { readonly kind: "unknown" };
 
 /**
- * The team's chats with a turn running on this computer, from the computer
- * subject of `environment.previewLocalFacts`. `environmentId` is the team's
- * environment this computer is bound to.
+ * This computer's chats with a turn running, under the computer's own owner,
+ * from the `computer` subject of `environment.previewLocalFacts`. The host
+ * does not read `environmentId` for that subject.
  */
 export async function readRunningChatCount(
   endpoint: HostTransportEndpoint,

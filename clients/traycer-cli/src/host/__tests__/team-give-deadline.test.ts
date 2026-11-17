@@ -391,6 +391,8 @@ function answerHost(): void {
         });
       case "environment.host.read":
         return personalBinding;
+      case "environment.previewLocalFacts":
+        return { activeTurns: 0, terminals: 0 };
       default:
         throw new Error(`unexpected host call ${method}`);
     }
