@@ -4,6 +4,8 @@ export type TeamComputerReleaseResult =
   | { readonly kind: "ok" }
   | { readonly kind: "not-found" }
   | { readonly kind: "not-computer" }
+  /** A Viewer of the team that owns the computer. */
+  | { readonly kind: "read-only-seat" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
@@ -39,25 +41,42 @@ export async function releaseTeamComputerViaHttp(
       abort.signal,
     );
     if (response.status === 204) return { kind: "ok" };
-    if (response.status === 401 || response.status === 403)
-      return { kind: "unauthorized" };
+    if (response.status === 401) return { kind: "unauthorized" };
+    if (response.status === 403)
+      return (await refusalCode(response, abort.signal)) ===
+        "host_return_seat_read_only"
+        ? { kind: "read-only-seat" }
+        : { kind: "unauthorized" };
     if (response.status === 404) return { kind: "not-found" };
-    if (response.status === 409) {
-      const text = await untilAborted(response.text(), abort.signal);
-      const body: unknown = JSON.parse(text);
-      if (
-        typeof body === "object" &&
-        body !== null &&
-        "code" in body &&
-        body.code === "host_return_not_computer"
-      ) {
-        return { kind: "not-computer" };
-      }
-    }
+    if (
+      response.status === 409 &&
+      (await refusalCode(response, abort.signal)) === "host_return_not_computer"
+    )
+      return { kind: "not-computer" };
     return { kind: "network-error" };
   } catch {
     return { kind: "network-error" };
   } finally {
     abort.clear();
+  }
+}
+
+/** The refusal's `code`, or null when its body is unreadable or carries none. */
+async function refusalCode(
+  response: Response,
+  signal: AbortSignal,
+): Promise<string | null> {
+  try {
+    const body: unknown = JSON.parse(
+      await untilAborted(response.text(), signal),
+    );
+    return typeof body === "object" &&
+      body !== null &&
+      "code" in body &&
+      typeof body.code === "string"
+      ? body.code
+      : null;
+  } catch {
+    return null;
   }
 }

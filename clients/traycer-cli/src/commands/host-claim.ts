@@ -39,6 +39,7 @@ const CLAIM_WORDS = {
   cannotAsk: "Pass --yes to claim this computer without the question.",
   noLongerAvailable: "This computer is no longer available to claim.",
   notMember: "Sign in as a member of this team to claim this computer.",
+  readOnlySeat: "Only admins and editors of this team can claim this computer.",
   failed: "Could not claim this computer. Try again.",
 } as const;
 
@@ -129,6 +130,11 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         throw claimRefused(
           CLI_ERROR_CODES.INVALID_ARGUMENT,
           CLAIM_WORDS.noLongerAvailable,
+        );
+      case "read-only-seat":
+        throw claimRefused(
+          CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
+          CLAIM_WORDS.readOnlySeat,
         );
       case "unauthorized":
         throw claimRefused(
