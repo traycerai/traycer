@@ -2,6 +2,10 @@
 // so a field a newer authn adds still parses.
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import {
+  credentialVersionSchema,
+  spendScopeKeySchema,
+} from "@traycer/protocol/host/provider-credential-home-schemas";
 
 export const ITEM_OS_VALUES = ["any", "linux", "macos", "windows"] as const;
 
@@ -160,7 +164,29 @@ export const authnHarnessDisconnectResponseSchema = lazySchema(() =>
   z.object({ disconnected: z.boolean() }),
 );
 
-/** Without it a held delete is left out. */
+/**
+ * The capability a `managed_profile` item read names to carry the item's
+ * binding fields: `MANAGED_PROFILE_IDENTITY_CAPABILITY` in the internal
+ * repository's `packages/common/src/environments/managed-profile-projection.ts`.
+ */
+export const MANAGED_PROFILE_IDENTITY_CAPABILITY = "managed_profile_identity";
+
+/** The binding fields of a `managed_profile` item read with that capability. */
+export const authnManagedProfileBindingSchema = lazySchema(() =>
+  z.object({
+    bindingVersion: credentialVersionSchema.optional(),
+    spendScopeKey: spendScopeKeySchema.optional(),
+    custodianSignOutCause: z.literal("signed-out-by-person").optional(),
+    mergedInto: z.string().optional(),
+  }),
+);
+
+// ── review, notices, undo ───────────────────────────────────────────────────
+
+/**
+ * The `include` value of `GET …/review?include=operation`: the view whose
+ * holds carry put or delete. Without it a held delete is left out.
+ */
 export const REVIEW_INCLUDE_OPERATION = "operation";
 
 function heldChangeFields() {
