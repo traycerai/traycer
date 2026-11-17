@@ -1,6 +1,17 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
+import {
+  expectSteadyFrames,
+  groupFramesSince,
+  recordGroupFrames,
+} from "./support/music-group-frames.ts";
 
 // What a choice in the compact header's Channel actions menu hands focus to once
 // the menu has closed. Radix returns focus to the menu's trigger from a
@@ -28,6 +39,9 @@ declare global {
       readonly setPaneWidth: (px: number) => void;
       readonly holdSnapshots: (botId: string | null) => void;
       readonly selectBot: (botId: string) => void;
+      readonly showThreads: (shown: boolean) => void;
+      readonly showSession: (chatId: string | null) => void;
+      readonly soundTrack: (name: string) => void;
     };
   }
 }
@@ -135,81 +149,6 @@ async function paneFit(page: Page): Promise<PaneFit> {
   });
 }
 
-type GroupPlacement = "none" | "row" | "reserved" | "header" | "other";
-
-interface GroupFrame {
-  readonly placement: GroupPlacement;
-  /** How many Music playback groups the tab holds. */
-  readonly groups: number;
-  readonly groupTop: number;
-  /** Where what sits below the title row starts. */
-  readonly belowTop: number;
-}
-
-declare global {
-  interface Window {
-    __groupFrames?: GroupFrame[];
-  }
-}
-
-/** Records the group's place and the content's top on every frame from the first. */
-async function sampleFrames(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const GROUP = '[role="group"][aria-label="Music playback"]';
-    const frames: GroupFrame[] = [];
-    window.__groupFrames = frames;
-    const placementIn = (header: Element | null): GroupPlacement => {
-      if (header === null) return "row";
-      const id = header.getAttribute("data-testid");
-      if (id === "bot-channel-opening-header") return "reserved";
-      return id === "bot-channel-header" ? "header" : "other";
-    };
-    const sample = (): void => {
-      const group = document.querySelector(GROUP);
-      const groups = document.querySelectorAll(GROUP).length;
-      if (group === null) {
-        frames.push({ placement: "none", groups, groupTop: 0, belowTop: 0 });
-      } else {
-        const header = group.closest("header");
-        const below =
-          header === null ? group : (header.nextElementSibling ?? group);
-        frames.push({
-          placement: placementIn(header),
-          groups,
-          groupTop: group.getBoundingClientRect().top,
-          belowTop:
-            header === null
-              ? below.getBoundingClientRect().bottom
-              : below.getBoundingClientRect().top,
-        });
-      }
-      requestAnimationFrame(sample);
-    };
-    requestAnimationFrame(sample);
-  });
-}
-
-async function framesSince(page: Page, from: number): Promise<GroupFrame[]> {
-  return page.evaluate(
-    (start) => (window.__groupFrames ?? []).slice(start),
-    from,
-  );
-}
-
-/**
- * From the first frame with a group: exactly one group on every frame, never
- * in a row of its own, and the group's top and the top of what sits below the
- * title row are the same on every frame.
- */
-function expectSteady(frames: readonly GroupFrame[]): void {
-  const present = frames.slice(frames.findIndex((f) => f.groups > 0));
-  expect(present.length).toBeGreaterThan(0);
-  expect(present.filter((f) => f.groups !== 1)).toEqual([]);
-  expect(present.filter((f) => f.placement === "row")).toEqual([]);
-  expect([...new Set(present.map((f) => f.groupTop))]).toHaveLength(1);
-  expect([...new Set(present.map((f) => f.belowTop))]).toHaveLength(1);
-}
-
 test.describe("the music controls in the desktop channel header", () => {
   test.use({
     viewport: { width: 1280, height: 800 },
@@ -301,20 +240,20 @@ test.describe("the music controls in the desktop channel header", () => {
   test("a cold open never draws the row, and nothing under the group moves", async ({
     page,
   }) => {
-    await sampleFrames(page);
+    await recordGroupFrames(page);
     await page.goto(
       `${fixture("bot-compact-actions-menu")}?form=desktop&music=1`,
     );
     await expect(page.getByTestId("bot-channel-header")).toBeVisible();
     await nextFrames(page, 3);
 
-    expectSteady(await framesSince(page, 0));
+    expectSteadyFrames(await groupFramesSince(page, 0));
   });
 
   test("a cold open held at the connecting channel never draws the row, and nothing under the group moves", async ({
     page,
   }) => {
-    await sampleFrames(page);
+    await recordGroupFrames(page);
     await page.goto(
       `${fixture("bot-compact-actions-menu")}?form=desktop&music=1&snapshot=held`,
     );
@@ -324,15 +263,15 @@ test.describe("the music controls in the desktop channel header", () => {
     await expect(page.getByTestId("bot-channel-header")).toBeVisible();
     await nextFrames(page, 3);
 
-    const frames = await framesSince(page, 0);
+    const frames = await groupFramesSince(page, 0);
     expect(frames.some((f) => f.placement === "reserved")).toBe(true);
-    expectSteady(frames);
+    expectSteadyFrames(frames);
   });
 
   test("a switch to another channel never draws the row, and nothing under the group moves", async ({
     page,
   }) => {
-    await sampleFrames(page);
+    await recordGroupFrames(page);
     await page.goto(
       `${fixture("bot-compact-actions-menu")}?form=desktop&music=1&bots=2&snapshot=held`,
     );
@@ -343,7 +282,7 @@ test.describe("the music controls in the desktop channel header", () => {
     );
     await expect(page.getByTestId("bot-channel-header")).toBeVisible();
     await nextFrames(page, 3);
-    const opened = (await framesSince(page, 0)).length;
+    const opened = (await groupFramesSince(page, 0)).length;
 
     await page.evaluate(
       (botId) => window.__botChannelProbe?.selectBot(botId),
@@ -355,9 +294,9 @@ test.describe("the music controls in the desktop channel header", () => {
     await expect(page.getByTestId("bot-channel-header")).toBeVisible();
     await nextFrames(page, 3);
 
-    const frames = await framesSince(page, opened);
+    const frames = await groupFramesSince(page, opened);
     expect(frames.some((f) => f.placement === "reserved")).toBe(true);
-    expectSteady(frames);
+    expectSteadyFrames(frames);
   });
   test("holds the controls in the reserved title row, with the tab filling its pane, while the channel connects", async ({
     page,
@@ -396,5 +335,475 @@ test.describe("the music controls in the desktop channel header", () => {
             0,
         ),
     ).toBe(true);
+  });
+});
+
+interface Recorded {
+  readonly node: HTMLElement;
+  readonly time: number;
+  readonly label: string;
+  readonly playState: AnimationPlayState;
+  /** How many frames had been sampled when it was recorded. */
+  readonly frames: number;
+}
+
+interface TitleFrame {
+  /** The title's animation timeline on the frame; `null` with no animation. */
+  readonly time: number | null;
+  readonly paused: boolean;
+}
+
+declare global {
+  interface Window {
+    __recorded?: Recorded;
+    __titleFrames?: TitleFrame[];
+    __moveBeforeCalls?: number;
+  }
+}
+
+interface ContinuityReading {
+  readonly sameNode: boolean;
+  readonly active: string;
+  readonly label: string;
+  readonly time: number | null;
+  readonly playState: AnimationPlayState | null;
+  readonly before: number;
+  readonly moveBeforeCalls: number;
+  /** The title's frames from the one the move was made on. */
+  readonly frames: readonly TitleFrame[];
+}
+
+const TITLE = '[data-testid="epic-playback-track"] .soundtrack-title';
+
+interface Tracked {
+  readonly page: Page;
+  /** What the page threw or crashed with. */
+  readonly failures: string[];
+}
+
+/** Samples the title's animation on every frame and counts native moves, before the page loads. */
+async function trackTitle(page: Page): Promise<string[]> {
+  const failures: string[] = [];
+  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("crash", () => failures.push("the page crashed"));
+  await page.addInitScript((titleSelector) => {
+    window.__moveBeforeCalls = 0;
+    const move: unknown = Reflect.get(Element.prototype, "moveBefore");
+    if (typeof move === "function") {
+      Element.prototype.moveBefore = function (
+        node: Node,
+        child: Node | null,
+      ): void {
+        window.__moveBeforeCalls = (window.__moveBeforeCalls ?? 0) + 1;
+        Reflect.apply(move, this, [node, child]);
+      };
+    }
+    const frames: TitleFrame[] = [];
+    window.__titleFrames = frames;
+    const sample = (): void => {
+      const animation = document
+        .querySelector(titleSelector)
+        ?.getAnimations({ subtree: true })
+        .at(0);
+      frames.push(
+        animation === undefined
+          ? { time: null, paused: false }
+          : {
+              time: Number(animation.currentTime),
+              paused: animation.playState === "paused",
+            },
+      );
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, TITLE);
+  return failures;
+}
+
+async function openTracked(
+  context: BrowserContext,
+  query: string,
+): Promise<Tracked> {
+  const page = await context.newPage();
+  const failures = await trackTitle(page);
+  await page.goto(
+    `${fixture("bot-compact-actions-menu")}?form=desktop&music=long&${query}`,
+  );
+  await page.waitForFunction(() => window.__botChannelProbe !== undefined);
+  return { page, failures };
+}
+
+/** Records the node holding focus, the title's animation, and the frames so far. */
+async function recordContinuity(page: Page): Promise<void> {
+  await expect(page.locator(TITLE).first()).toHaveAttribute(
+    "data-scrolling",
+    "true",
+  );
+  await page.evaluate(async (titleSelector) => {
+    const node = document.activeElement;
+    const animation = document
+      .querySelector(titleSelector)
+      ?.getAnimations({ subtree: true })
+      .at(0);
+    if (!(node instanceof HTMLElement) || animation === undefined)
+      throw new Error("a control must hold focus beside a running title");
+    await animation.ready;
+    window.__recorded = {
+      node,
+      time: Number(animation.currentTime),
+      label: node.getAttribute("aria-label") ?? "",
+      playState: animation.playState,
+      frames: window.__titleFrames?.length ?? 0,
+    };
+  }, TITLE);
+}
+
+async function readContinuity(page: Page): Promise<ContinuityReading> {
+  return page.evaluate((titleSelector) => {
+    const recorded = window.__recorded;
+    if (recorded === undefined) throw new Error("nothing was recorded");
+    const animation = document
+      .querySelector(titleSelector)
+      ?.getAnimations({ subtree: true })
+      .at(0);
+    const active = document.activeElement;
+    return {
+      sameNode: active === recorded.node,
+      active: `${active?.tagName ?? "none"} ${active?.getAttribute("aria-label") ?? ""}`,
+      label: recorded.node.getAttribute("aria-label") ?? "",
+      time: animation === undefined ? null : Number(animation.currentTime),
+      playState: animation?.playState ?? null,
+      before: recorded.time,
+      moveBeforeCalls: window.__moveBeforeCalls ?? 0,
+      frames: (window.__titleFrames ?? []).slice(recorded.frames),
+    };
+  }, TITLE);
+}
+
+type Mode = "playing" | "paused";
+
+/**
+ * After a move the same node holds focus under the label it had, no native
+ * move was made, and the title's animation has not gone back: on every frame
+ * since the move was made it exists, and it has run on from where it was when
+ * playing, or stands where it was, paused, when paused.
+ */
+async function expectContinuous(
+  page: Page,
+  move: string,
+  mode: Mode,
+): Promise<void> {
+  const reading = await readContinuity(page);
+  const where = `${move}: ${JSON.stringify({ ...reading, frames: reading.frames.length })}`;
+  expect.soft(reading.moveBeforeCalls, `no native move, ${where}`).toBe(0);
+  expect.soft(reading.sameNode, `focus kept, ${where}`).toBe(true);
+  expect
+    .soft(reading.label, `label kept, ${where}`)
+    .toBe(mode === "playing" ? "Pause" : "Play");
+  const times = reading.frames.map((frame) => frame.time);
+  expect
+    .soft(times.length, `frames since the move, ${where}`)
+    .toBeGreaterThan(0);
+  expect
+    .soft(
+      times.filter((time) => time === null),
+      `a frame with no title, ${where}`,
+    )
+    .toEqual([]);
+  if (mode === "playing") {
+    expect
+      .soft(
+        times.filter((time) => time !== null && time < reading.before),
+        `a frame behind where it was, ${where}`,
+      )
+      .toEqual([]);
+    expect
+      .soft(reading.time ?? 0, `ran on, ${where}`)
+      .toBeGreaterThan(reading.before);
+  } else {
+    expect
+      .soft(
+        times.filter(
+          (time) => time === null || Math.abs(time - reading.before) > 1,
+        ),
+        `a frame off where it stood, ${where}`,
+      )
+      .toEqual([]);
+    expect.soft(reading.playState, `still paused, ${where}`).toBe("paused");
+    expect
+      .soft(
+        reading.frames.filter((frame) => !frame.paused),
+        `a frame that ran, ${where}`,
+      )
+      .toEqual([]);
+  }
+}
+
+async function focusToggle(page: Page, name: "Pause" | "Play"): Promise<void> {
+  await page
+    .getByRole("group", { name: "Music playback" })
+    .getByRole("button", { name })
+    .focus();
+}
+
+interface Move {
+  readonly name: string;
+  readonly query: string;
+  /** Runs once the channel's header shows, before the first move. */
+  readonly prepare: (page: Page) => Promise<void>;
+  /** Moves the tab off the channel's header and waits for where it goes. */
+  readonly out: (page: Page) => Promise<void>;
+  /** Moves it back to the channel's header and waits for it. */
+  readonly back: (page: Page) => Promise<void>;
+}
+
+const channelHeader = (page: Page): Locator =>
+  page.getByTestId("bot-channel-header");
+
+async function expectOneGroup(page: Page): Promise<void> {
+  await expect(page.getByRole("group", { name: "Music playback" })).toHaveCount(
+    1,
+  );
+}
+
+const SESSION: Move = {
+  name: "a session",
+  query: "bots=2",
+  prepare: () => Promise.resolve(),
+  out: async (page) => {
+    await page.evaluate(() =>
+      window.__botChannelProbe?.showSession("fixture-chat"),
+    );
+    await expect(page.getByTestId("bot-session-view")).toBeVisible();
+    await expectOneGroup(page);
+  },
+  back: async (page) => {
+    await page.evaluate(() => window.__botChannelProbe?.showSession(null));
+    await expect(channelHeader(page)).toBeVisible();
+  },
+};
+
+const OTHER_BOT: Move = {
+  name: "another bot, through the reserved row",
+  query: "bots=2&snapshot=held",
+  // Only a switch made while the other bot's snapshot is still held reaches
+  // the reserved row.
+  prepare: async (page) => {
+    await page.evaluate(
+      (botId) => window.__botChannelProbe?.holdSnapshots(botId),
+      SECOND_BOT_ID,
+    );
+  },
+  out: async (page) => {
+    await page.evaluate(
+      (botId) => window.__botChannelProbe?.selectBot(botId),
+      SECOND_BOT_ID,
+    );
+    await expect(page.getByTestId("bot-channel-opening-header")).toBeVisible();
+  },
+  back: async (page) => {
+    await page.evaluate(() => window.__botChannelProbe?.holdSnapshots(null));
+    await expect(channelHeader(page)).toBeVisible();
+  },
+};
+
+// Threads draws the controls in their own row, with its own title.
+const THREADS: Move = {
+  name: "Threads",
+  query: "bots=2",
+  prepare: () => Promise.resolve(),
+  out: async (page) => {
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(true));
+    await expect(page.getByTestId("bot-threads-view")).toBeVisible();
+    await expectOneGroup(page);
+  },
+  back: async (page) => {
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(false));
+    await expect(channelHeader(page)).toBeVisible();
+  },
+};
+
+/** Opens the page at the channel's header, with `name` focused when it is a control of the group. */
+async function openAtHeader(
+  context: BrowserContext,
+  move: Move,
+): Promise<Tracked> {
+  const tracked = await openTracked(context, move.query);
+  await move.prepare(tracked.page);
+  await expect(channelHeader(tracked.page)).toBeVisible();
+  return tracked;
+}
+
+/**
+ * Makes `move` out and back, checking each leg against what stood before it:
+ * the focused node and the title as `mode` says.
+ */
+async function moveOutAndBack(
+  page: Page,
+  move: Move,
+  mode: Mode,
+): Promise<void> {
+  await focusToggle(page, mode === "playing" ? "Pause" : "Play");
+  for (const leg of ["out", "back"] as const) {
+    await recordContinuity(page);
+    await move[leg](page);
+    await nextFrames(page, 3);
+    await expectContinuous(page, `${move.name} ${leg}`, mode);
+  }
+}
+
+test.describe("the playback controls across the Tracy tab's moves", () => {
+  test.use({
+    viewport: { width: 1280, height: 800 },
+    hasTouch: false,
+    isMobile: false,
+  });
+
+  for (const move of [SESSION, OTHER_BOT, THREADS]) {
+    test(`keep focus and their running title across ${move.name}`, async ({
+      context,
+    }) => {
+      const { page, failures } = await openAtHeader(context, move);
+      expect(
+        await page.evaluate(() => "moveBefore" in Element.prototype),
+        "the browser has the native move the scope does not use",
+      ).toBe(true);
+
+      await moveOutAndBack(page, move, "playing");
+
+      expect(failures).toEqual([]);
+    });
+  }
+
+  test("keep a paused title where it stood, still paused, across a session and Threads", async ({
+    context,
+  }) => {
+    const { page, failures } = await openAtHeader(context, SESSION);
+    await page.getByRole("button", { name: "Pause" }).click();
+    await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+
+    await moveOutAndBack(page, SESSION, "paused");
+    await moveOutAndBack(page, THREADS, "paused");
+
+    // Play still starts the title that was held still.
+    await page.getByRole("button", { name: "Play" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (titleSelector) =>
+            document
+              .querySelector(titleSelector)
+              ?.getAnimations({ subtree: true })
+              .at(0)?.playState,
+          TITLE,
+        ),
+      )
+      .toBe("running");
+
+    expect(failures).toEqual([]);
+  });
+
+  test("do not take focus from a control outside the group, or give it to one when none had it", async ({
+    context,
+  }) => {
+    const { page } = await openAtHeader(context, SESSION);
+    const outside = page.getByRole("button", { name: "Open menu" });
+    const holdsPlayback = (): Promise<boolean> =>
+      page.evaluate(
+        () =>
+          document.activeElement?.closest(
+            '[role="group"][aria-label="Music playback"]',
+          ) instanceof Element,
+      );
+
+    await outside.focus();
+    await SESSION.out(page);
+    await nextFrames(page, 3);
+    await expect(outside).toBeFocused();
+    await SESSION.back(page);
+    await nextFrames(page, 3);
+    await expect(outside).toBeFocused();
+
+    await outside.blur();
+    await SESSION.out(page);
+    await nextFrames(page, 3);
+    expect(await holdsPlayback()).toBe(false);
+    await SESSION.back(page);
+    await nextFrames(page, 3);
+    expect(await holdsPlayback()).toBe(false);
+  });
+
+  test("keep the tab order Previous, Pause, Next, Search after a session and back", async ({
+    context,
+  }) => {
+    const { page } = await openAtHeader(context, SESSION);
+    await SESSION.out(page);
+    await SESSION.back(page);
+    await nextFrames(page, 3);
+
+    await page.getByTestId("bot-tab-avatar").focus();
+    const order: string[] = [];
+    for (let step = 0; step < 6 && order.at(-1) !== "Search in Tracy"; step++) {
+      await page.keyboard.press("Tab");
+      order.push(
+        await page.evaluate(
+          () => document.activeElement?.getAttribute("aria-label") ?? "",
+        ),
+      );
+    }
+    expect(order.slice(-4)).toEqual([
+      "Previous track",
+      "Pause",
+      "Next track",
+      "Search in Tracy",
+    ]);
+  });
+
+  test("move without a title to carry under reduced motion, throwing nothing and keeping one group", async ({
+    context,
+  }) => {
+    const { page, failures } = await openAtHeader(context, THREADS);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(
+      page.getByRole("group", { name: "Music playback" }),
+    ).toHaveCount(1);
+
+    await THREADS.out(page);
+    await THREADS.back(page);
+    await nextFrames(page, 3);
+
+    await expectOneGroup(page);
+    expect(failures).toEqual([]);
+  });
+
+  test("start the title of another track from its own beginning when the track changes as the tab moves", async ({
+    context,
+  }) => {
+    const { page } = await openAtHeader(context, SESSION);
+    await focusToggle(page, "Pause");
+    await page.waitForFunction(
+      (titleSelector) =>
+        Number(
+          document
+            .querySelector(titleSelector)
+            ?.getAnimations({ subtree: true })
+            .at(0)?.currentTime,
+        ) > 1000,
+      TITLE,
+    );
+    await recordContinuity(page);
+    const before = (await readContinuity(page)).before;
+    expect(before).toBeGreaterThan(1000);
+
+    await page.evaluate(() => {
+      window.__botChannelProbe?.soundTrack("other-tide");
+      window.__botChannelProbe?.showSession("fixture-chat");
+    });
+    await expect(page.getByTestId("bot-session-view")).toBeVisible();
+    await nextFrames(page, 3);
+
+    const after = await readContinuity(page);
+    expect(after.time).not.toBeNull();
+    expect(after.time ?? before).toBeLessThan(before);
   });
 });

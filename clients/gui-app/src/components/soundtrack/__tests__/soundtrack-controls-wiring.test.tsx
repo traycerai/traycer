@@ -5,6 +5,7 @@
  * the surface bodies behind the controls are stubbed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { use, type ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import {
   createMemoryHistory,
@@ -17,12 +18,14 @@ import {
 import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
 import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { SystemTabModalSurface } from "@/components/layout/dialogs/system-tab-modal-host";
 import { LayoutOverrideContext } from "@/lib/layout-overrides";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
@@ -38,14 +41,34 @@ vi.mock("@/components/epics/history-modal-content", () => ({
   HistoryModalContent: () => <div data-testid="history-body-stub" />,
 }));
 
+// The Tracy body stands for the lazy surface: it suspends while a test holds
+// its promise, and once loaded draws a header with the title row's slot.
+const tracySurface = vi.hoisted(() => ({
+  held: null as Promise<void> | null,
+}));
+
+function TracyBodyStub(): ReactNode {
+  if (tracySurface.held !== null) use(tracySurface.held);
+  return (
+    <header data-testid="tracy-body-header">
+      <TracyPlaybackSlot />
+    </header>
+  );
+}
+
 // The bodies are what these tests are not about; the mount around them is.
 vi.mock("@/stores/tabs/registry", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/tabs/registry")>();
   return {
     ...actual,
-    tabSurfaceDescriptor: () => ({
-      render: () => <div data-testid="surface-body-stub" />,
+    tabSurfaceDescriptor: (kind: string) => ({
+      render: () =>
+        kind === "tracy" ? (
+          <TracyBodyStub />
+        ) : (
+          <div data-testid="surface-body-stub" />
+        ),
     }),
   };
 });
@@ -105,6 +128,7 @@ beforeEach(() => {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
   useLandingDraftStore.getState().createDraftWithId(DRAFT.id, null);
+  useTracySurfaceStore.getState().openSurface("tracy-host");
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
   useSettingsStore.setState({
     soundtrackEnabled: true,
@@ -113,9 +137,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  tracySurface.held = null;
+  vi.useRealTimers();
   cleanup();
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
   vi.restoreAllMocks();
 });
 
@@ -131,13 +158,47 @@ describe("the controls in the top-level surfaces", () => {
     expect(groups()).toHaveLength(1);
   });
 
-  it("draws none on Tracy, whose controls belong to the bot channel's header", () => {
+  it("draws one group on Tracy, in its surface's header once loaded", () => {
     const tracy: TabRef = { kind: "tracy", id: "tracy" };
     setItems([tracy], `tab:${tracy.kind}:${tracy.id}`, null);
 
     render(<TopLevelTabHost />);
 
-    expect(groups()).toHaveLength(0);
+    expect(groups()).toHaveLength(1);
+    expect(screen.getByTestId("tracy-body-header").contains(groups()[0])).toBe(
+      true,
+    );
+  });
+
+  it("draws one group on Tracy in the reserved title row while its surface is loading, and one in the surface's header after", async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => undefined;
+    tracySurface.held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tracy: TabRef = { kind: "tracy", id: "tracy" };
+    setItems([tracy], `tab:${tracy.kind}:${tracy.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(screen.queryByTestId("tracy-body-header")).toBeNull();
+    expect(groups()).toHaveLength(1);
+    expect(
+      screen.getByTestId("bot-channel-opening-header").contains(groups()[0]),
+    ).toBe(true);
+
+    await act(async () => {
+      release();
+      await tracySurface.held;
+      // React holds a fallback back for a moment before it reveals content.
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(screen.queryByTestId("bot-channel-opening-header")).toBeNull();
+    expect(groups()).toHaveLength(1);
+    expect(screen.getByTestId("tracy-body-header").contains(groups()[0])).toBe(
+      true,
+    );
   });
 
   it("draws none on History", () => {

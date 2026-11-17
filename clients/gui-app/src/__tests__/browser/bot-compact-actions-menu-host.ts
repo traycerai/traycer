@@ -1,18 +1,5 @@
-import {
-  useEffect,
-  useState,
-  useSyncExternalStore,
-  type ReactElement,
-  type ReactNode,
-} from "react";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
+import { QueryClient } from "@tanstack/react-query";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   BotRecord,
@@ -40,35 +27,16 @@ import type {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
-import {
-  HostRuntimeProvider,
-  hostRpcRegistry,
-  useHostBinding,
-  type HostRpcRegistry,
-  type MessengerFactory,
-} from "@/lib/host";
+import { type HostRpcRegistry, type MessengerFactory } from "@/lib/host";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
-import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
-import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
-import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
-import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
-import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import { playbackTrack } from "@/lib/soundtrack/__tests__/playback-track";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { tabItemId } from "@/stores/tabs/layout";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useTabsStore } from "@/stores/tabs/store";
-import "@/index.css";
 
 /**
  * THE COMPACT CHANNEL ACTIONS MENU, IN THE INSTALLED APP'S PHONE FORM.
@@ -96,7 +64,17 @@ import "@/index.css";
  * the snapshots of one bot (`null`: of none, which delivers every one held;
  * `?snapshot=held` holds every bot's), and `selectBot` changes the channel
  * the surface is asked for.
+ * `?music=long` sounds a title too long for its window, so it scrolls;
+ * `showThreads` and `showSession` (a chat id, `null` to leave) move the
+ * surface to Threads and to a session in place of the channel, and
+ * `soundTrack` (a track name) sounds another track under the same title.
  * `?bots=2` lists a second bot, `SECOND_BOT_ID`, for `selectBot` to switch to.
+ *
+ * `?hostMethods=held` leaves the host's handshake unanswered until
+ * `advertiseHostMethods` is called, and `hostGates` holds the lists' and
+ * `bot.open`'s answers until the promise in it settles (a cold open's gates,
+ * `tracy-tab-cold-open`). `window.__fixtureCommitted` is set by the first
+ * commit of the content under `FixtureApp`.
  *
  * The drafts bridge the app mounts above every tab
  * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
@@ -106,8 +84,11 @@ import "@/index.css";
 const QUERY = new URLSearchParams(window.location.search);
 const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
 const DESKTOP_FORM = QUERY.get("form") === "desktop";
-const MUSIC = QUERY.get("music") === "1";
+const MUSIC = QUERY.get("music") === "1" || QUERY.get("music") === "long";
+const LONG_TRACK_TITLE =
+  "A very long track title that cannot fit the window beside the buttons";
 const TWO_BOTS = QUERY.get("bots") === "2";
+const HOST_METHODS_HELD = QUERY.get("hostMethods") === "held";
 
 declare global {
   interface Window {
@@ -116,12 +97,17 @@ declare global {
       readonly setPaneWidth: (px: number) => void;
       readonly holdSnapshots: (botId: string | null) => void;
       readonly selectBot: (botId: string) => void;
+      readonly showThreads: (shown: boolean) => void;
+      readonly showSession: (chatId: string | null) => void;
+      readonly soundTrack: (name: string) => void;
     };
+    /** Set once the content under `FixtureApp` has committed. */
+    __fixtureCommitted?: boolean;
   }
 }
 
-const HOST_ID = "bot-compact-actions-menu-host";
-const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+export const HOST_ID = "bot-compact-actions-menu-host";
+export const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
 const SECOND_BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W9Z";
 const ENVIRONMENT_ID = "env-personal";
 const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
@@ -147,7 +133,10 @@ if (MUSIC) {
     soundtrackPlaybackControls: true,
   });
   useSoundtrackStore.setState({
-    soundingTrack: { ...playbackTrack("slow-tide", 60), title: "Slow Tide" },
+    soundingTrack: {
+      ...playbackTrack("slow-tide", 60),
+      title: QUERY.get("music") === "long" ? LONG_TRACK_TITLE : "Slow Tide",
+    },
   });
 }
 
@@ -185,28 +174,63 @@ window.__botChannelProbe = {
     selectedBotId = botId;
     for (const listener of selectionListeners) listener();
   },
+  showThreads: (shown) => {
+    const place = useTracyPlaceStore.getState();
+    if (shown) place.setSession(selectedBotId, null);
+    place.setThreadsShown(shown);
+  },
+  soundTrack: (name) => {
+    useSoundtrackStore.setState({
+      soundingTrack: { ...playbackTrack(name, 60), title: LONG_TRACK_TITLE },
+    });
+  },
+  showSession: (chatId) => {
+    useTracyPlaceStore
+      .getState()
+      .setSession(
+        selectedBotId,
+        chatId === null ? null : { chatId, threadId: null },
+      );
+  },
 };
+
+/** Holds an answer until its gate settles; a `null` gate answers at once. */
+function answerAfter<Answer>(
+  gate: Promise<void> | null,
+  answer: Answer,
+): Answer | Promise<Answer> {
+  return gate === null ? answer : gate.then(() => answer);
+}
+
+/** The answers a cold open holds: the lists', and `bot.open`'s. */
+export const hostGates: {
+  lists: Promise<void> | null;
+  open: Promise<void> | null;
+} = { lists: null, open: null };
 
 // The page offers only what the host advertised in its handshake; this
 // fixture's mock messenger makes none, so the methods are recorded here.
-recordNegotiatedHostManifest(HOST_ID, {
-  "bot.list": { major: 1, minor: 1 },
-  "bot.open": { major: 1, minor: 0 },
-  "bot.conversation.list": { major: 1, minor: 0 },
-  "bot.conversation.search": { major: 1, minor: 0 },
-  "bot.thread.list": { major: 1, minor: 2 },
-  "bot.threadFollow.read": { major: 1, minor: 0 },
-  "bot.readCursor.read": { major: 1, minor: 0 },
-  "bot.notificationLevel.read": { major: 1, minor: 0 },
-  "bot.turn.locate": { major: 1, minor: 0 },
-  "environment.list": { major: 1, minor: 1 },
-  "environment.members": { major: 1, minor: 2 },
-});
+export function advertiseHostMethods(): void {
+  recordNegotiatedHostManifest(HOST_ID, {
+    "bot.list": { major: 1, minor: 1 },
+    "bot.open": { major: 1, minor: 0 },
+    "bot.conversation.list": { major: 1, minor: 0 },
+    "bot.conversation.search": { major: 1, minor: 0 },
+    "bot.thread.list": { major: 1, minor: 2 },
+    "bot.threadFollow.read": { major: 1, minor: 0 },
+    "bot.readCursor.read": { major: 1, minor: 0 },
+    "bot.notificationLevel.read": { major: 1, minor: 0 },
+    "bot.turn.locate": { major: 1, minor: 0 },
+    "environment.list": { major: 1, minor: 1 },
+    "environment.members": { major: 1, minor: 2 },
+  });
+}
+if (!HOST_METHODS_HELD) advertiseHostMethods();
 
-const requestContext = createRendererContextFixture({
+export const requestContext = createRendererContextFixture({
   bearerToken: "fixture",
 });
-const USER_ID = requestContext.identity.userId;
+export const USER_ID = requestContext.identity.userId;
 
 const BOT: BotRecord = {
   botId: BOT_ID,
@@ -413,13 +437,15 @@ const localHost = {
   availability: "available",
 } as const;
 
-const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
-const queryClient = new QueryClient({
+export const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
+export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
 let requestCounter = 0;
-const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
+export const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
+  registry,
+}) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry,
     requestId: () => `bot-compact-actions-menu-${String(++requestCounter)}`,
@@ -448,37 +474,41 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
-      "bot.list": () => ({ bots: [...BOTS], mainBotIds: null }),
-      "bot.open": (request) => ({
-        bot: botOf(request.botId),
-        outcome: { kind: "serve-here", claimed: null },
-      }),
-      "bot.conversation.list": (request) => ({
-        conversations: [
-          {
-            conversationId: `channel-${request.botId}`,
-            botId: request.botId,
-            title: null,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        ],
-      }),
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: ENVIRONMENT_ID,
-            ownerKind: "user",
-            ownerId: USER_ID,
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner",
-            kind: "personal",
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
+      "bot.list": () =>
+        answerAfter(hostGates.lists, { bots: [...BOTS], mainBotIds: null }),
+      "bot.open": (request) =>
+        answerAfter(hostGates.open, {
+          bot: botOf(request.botId),
+          outcome: { kind: "serve-here", claimed: null },
+        }),
+      "bot.conversation.list": (request) =>
+        answerAfter(hostGates.lists, {
+          conversations: [
+            {
+              conversationId: `channel-${request.botId}`,
+              botId: request.botId,
+              title: null,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        }),
+      "environment.list": () =>
+        answerAfter(hostGates.lists, {
+          environments: [
+            {
+              environmentId: ENVIRONMENT_ID,
+              ownerKind: "user",
+              ownerId: USER_ID,
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner",
+              kind: "personal",
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
       "environment.members": () => ({
         members: [],
         nextCursor: null,
@@ -506,73 +536,18 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-/** Holds the page back until the host client has its request context. */
-function RequestContextGate(props: {
-  readonly children: ReactNode;
-}): ReactNode {
-  const binding = useHostBinding();
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (ready || binding === null) return;
-    const unsubscribe = binding.hostClient.onChange(() => setReady(true));
-    binding.hostClient.setRequestContext(requestContext);
-    return unsubscribe;
-  }, [binding, ready]);
-  return ready ? props.children : null;
-}
-
-function SignedIn(props: { readonly children: ReactNode }): ReactElement {
-  const authStatus = useAuthStore((state) => state.status);
-  useEffect(() => {
-    if (authStatus === "signed-in") return;
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: USER_ID,
-        userName: "Fixture User",
-        email: "compact-actions-menu@example.invalid",
-      },
-      { userId: USER_ID, username: "Fixture User" },
-      [],
-    );
-  }, [authStatus]);
-  return <>{props.children}</>;
-}
-
-function Page(): ReactElement {
-  const botId = useSyncExternalStore(
+/** The channel the surface is asked for, which `selectBot` changes. */
+export function useSelectedBotId(): string {
+  return useSyncExternalStore(
     (listener) => {
       selectionListeners.add(listener);
       return () => selectionListeners.delete(listener);
     },
     () => selectedBotId,
   );
-  return (
-    <ResolvedThemeContext.Provider
-      value={{ resolvedTheme: "light", themePreset: "neutral" }}
-    >
-      <MobileBotHeaderSlotProvider>
-        <div className="flex h-safe-dvh min-h-0 flex-col bg-background">
-          <MobileAppHeader />
-          <div className="flex min-h-0 flex-1">
-            <ChatOpenStoreScopeProvider value="compact-actions-menu">
-              <ActivityGroupOpenStoreProvider store={null}>
-                <A2AOpenStoreProvider store={null}>
-                  <ChatFindForceStoreProvider tileInstanceId="compact-actions-menu">
-                    <div className="h-full w-[var(--pane-width,100%)]">
-                      <BotTabSurface botId={botId} hostId={HOST_ID} />
-                    </div>
-                  </ChatFindForceStoreProvider>
-                </A2AOpenStoreProvider>
-              </ActivityGroupOpenStoreProvider>
-            </ChatOpenStoreScopeProvider>
-          </div>
-        </div>
-      </MobileBotHeaderSlotProvider>
-    </ResolvedThemeContext.Provider>
-  );
 }
 
-const runnerHost = new MockRunnerHost({
+export const runnerHost = new MockRunnerHost({
   signInUrl: `${AUTHN_BASE_URL}/sign-in`,
   authnBaseUrl: AUTHN_BASE_URL,
   localHost,
@@ -581,51 +556,3 @@ const runnerHost = new MockRunnerHost({
   hasLocalHost: undefined,
   traycerCli: new MockTraycerCli(),
 });
-
-function buildRouter() {
-  const rootRoute = createRootRoute({
-    component: () => (
-      <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <HostRuntimeProvider
-            registry={hostRpcRegistry}
-            messengerFactory={messengerFactory}
-            invalidator={null}
-            requestId={null}
-            remoteFetcher={() =>
-              Promise.resolve({ kind: "hosts", entries: [] })
-            }
-            fallback={<div data-testid="bot-compact-actions-menu-fallback" />}
-          >
-            <WindowsBridgeContext.Provider value={windowsBridgeValue}>
-              <TooltipProvider>
-                <SignedIn>
-                  <BotDraftsPersistLifecycleBridge>
-                    <RequestContextGate>
-                      <Page />
-                    </RequestContextGate>
-                  </BotDraftsPersistLifecycleBridge>
-                </SignedIn>
-              </TooltipProvider>
-            </WindowsBridgeContext.Provider>
-          </HostRuntimeProvider>
-        </RunnerHostProvider>
-      </QueryClientProvider>
-    ),
-  });
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
-    component: () => null,
-  });
-  return createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
-  });
-}
-
-const router = buildRouter();
-
-export function CompactActionsFixture(): ReactElement {
-  return <RouterProvider router={router} />;
-}

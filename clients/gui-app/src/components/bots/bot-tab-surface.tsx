@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  TracyOpening,
   TracyPlaybackScope,
   TracyPlaybackSlot,
 } from "@/components/bots/tracy-playback-slot";
@@ -220,7 +221,14 @@ function BotTabSurfaceBody(props: {
   // surface shows the update notice and no control that would call a method
   // the host lacks.
   const support = useHostMethodSupport(hostId, "bot.open");
-  if (support === null) return <BotTabConnecting />;
+  // Not known yet, or the drafts not yet admitted: on the way to a channel.
+  const level2 = useInstalledAppTileForm(1)?.level2 ?? null;
+  const onTheWay = (
+    <ChannelOpening botId={null} title={undefined} level2={level2}>
+      <BotTabConnecting />
+    </ChannelOpening>
+  );
+  if (support === null) return onTheWay;
   if (!support) {
     return (
       <div
@@ -241,7 +249,7 @@ function BotTabSurfaceBody(props: {
       {admitted ? (
         <TracySurfaceShell botId={botId} hostId={hostId} />
       ) : (
-        <BotTabConnecting />
+        onTheWay
       )}
     </TabHostProvider>
   );
@@ -1912,15 +1920,10 @@ function environmentBotsOf(
   return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
-/** The tab while anything about its host is unknown. */
 /**
  * A channel before its own header exists, selected or still being chosen:
- * the header's title row, with the bot's picture and listed name once both
- * are known and the place its playback controls take, over what the surface
- * shows meanwhile. The row is the one the open channel draws, so the
- * controls sit where they will stay and nothing under them moves when the
- * channel opens. Where the app's header carries the channel's title there is
- * no row here to hold.
+ * the reserved title row, with the bot's picture and listed name once both
+ * are known, over what the surface shows meanwhile.
  */
 function ChannelOpening(props: {
   /** The channel being opened; `null` while the default one is being chosen. */
@@ -1931,33 +1934,26 @@ function ChannelOpening(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { botId, title } = props;
-  if (props.level2 === "menu" || props.level2 === "bar") return props.children;
   return (
-    <div className="flex size-full min-h-0 min-w-0 flex-col">
-      <header
-        data-testid="bot-channel-opening-header"
-        className="@container/title-strip flex min-h-19 shrink-0 items-center gap-2 px-4 pt-3 pb-9"
-      >
-        {botId === null || title === undefined ? (
-          <span
-            aria-hidden="true"
-            className="h-4 w-32 max-w-1/3 rounded-sm bg-foreground/10"
-          />
-        ) : (
+    <TracyOpening
+      titled={props.level2 !== "menu" && props.level2 !== "bar"}
+      identity={
+        botId === null || title === undefined ? null : (
           <>
             <NamedBotAvatar botId={botId} size="sm" />
             <h1 className="min-w-0 truncate text-ui-md font-bold text-foreground">
               {title}
             </h1>
           </>
-        )}
-        <TracyPlaybackSlot />
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col">{props.children}</div>
-    </div>
+        )
+      }
+    >
+      {props.children}
+    </TracyOpening>
   );
 }
 
+/** The tab while anything about its host is unknown. */
 function BotTabConnecting(): ReactNode {
   return (
     <div

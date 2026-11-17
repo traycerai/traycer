@@ -2637,7 +2637,7 @@ describe("<BotTabSurface /> the one music group", () => {
       },
       channel: BOT_ID,
       shown: "bot-tab-connecting",
-      placement: "row",
+      placement: "reserved title row",
     },
     {
       state: "the host lacks bot.open",
@@ -2658,7 +2658,7 @@ describe("<BotTabSurface /> the one music group", () => {
       },
       channel: BOT_ID,
       shown: "bot-tab-connecting",
-      placement: "row",
+      placement: "reserved title row",
     },
     {
       state: "Threads shows in place of the channel",
