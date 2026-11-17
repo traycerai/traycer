@@ -125,7 +125,6 @@ export function useEnvironmentSecretsReplaceValueMutation(
       }),
     onMutate: () => ({ hostId: null }),
     onSuccess: (answer) => {
-      // Accepted, or changed elsewhere: either way the list moved.
       const outcome = replaceOutcome(answer);
       if (outcome.kind === "accepted" || outcome.reread) {
         void invalidateEnvironmentReads(queryClient, SECRET_READS);

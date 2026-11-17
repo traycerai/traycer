@@ -149,7 +149,6 @@ export function useSandboxDefaults(
 /** A configuration's environment as the account's list names it, with the reader's role. */
 export interface SandboxDefaultsEnvironment {
   readonly environmentId: string;
-  /** `configurationRoleOf`'s answer; read through `mayChangeConfiguration`. */
   readonly role: ConfigurationRole | null;
 }
 
@@ -172,8 +171,7 @@ export function useSandboxDefaultsEnvironments(
               descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
               {
                 environmentId: descriptor.environmentId,
-                // A failed re-read makes a team role not known, whatever an
-                // earlier answer said. Personal's is not read.
+                // A failed re-read makes a team role unknown, whatever an earlier answer said.
                 role:
                   listFailed && descriptor.ownerKind === "organization"
                     ? null

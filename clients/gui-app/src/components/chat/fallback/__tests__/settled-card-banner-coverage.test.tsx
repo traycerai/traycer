@@ -861,7 +861,7 @@ describe("two cards for one turn (two tiles of one chat)", () => {
 });
 
 describe("the card's Switch and the composer's advisory on a bot's own chat", () => {
-  /** The bot's own chat: the bot's id is the epic id, as the bot's tab draws it. */
+  // The bot's id is the epic id, as the bot's tab draws it.
   function onBotsChat(mayChange: boolean) {
     seedSettledCard();
     return render(

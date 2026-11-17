@@ -35,9 +35,6 @@ vi.mock("@/components/settings/panels/use-open-automation-terminal", () => ({
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
   async (importOriginal) => ({
-    // The real resolver runs; only the person's configurations are answered:
-    // every team has answered (there are none) and their own environment is
-    // named, so a row in it is theirs.
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-configurations")
     >()),
@@ -109,8 +106,6 @@ vi.mock("@/stores/auth/auth-store", () => ({
   useAuthStore: (selector: (state: { contextMetadata: null }) => unknown) =>
     selector({ contextMetadata: null }),
 }));
-// This file reads state words, not who may buy credits: the account's
-// environment list, and the auth store it reads, are not what it renders.
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined, isError: false }),
 }));

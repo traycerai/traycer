@@ -151,10 +151,6 @@ const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-/**
- * Serves the host's notices as the page reads them: from authn, on the person's
- * sign-in, which also lists Personal's id. Returns how many times authn was asked.
- */
 function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
   const log = { notices: 0 };
   hostMock.binding = {

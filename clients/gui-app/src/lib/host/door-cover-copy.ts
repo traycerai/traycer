@@ -10,10 +10,6 @@ export interface DoorCoverCopy {
   readonly description: string;
 }
 
-/**
- * Each door cover's words: the same title and line on the window cover and on
- * a tile whose computer is not the window's own.
- */
 const DOOR_COVER_COPY: Readonly<
   Record<Exclude<DoorStateCoverVariant["kind"], "host-claimed">, DoorCoverCopy>
 > = {
@@ -56,8 +52,6 @@ const DOOR_COVER_COPY: Readonly<
 };
 
 export function doorCoverCopy(variant: DoorStateCoverVariant): DoorCoverCopy {
-  // A claimed computer's lines are the claimed notice's own, with the names
-  // authn's claim gives.
   if (variant.kind === "host-claimed") {
     return {
       title: claimedComputerTitle(variant.claimantName),

@@ -145,21 +145,15 @@ export type ProviderProfileLoginFlowState =
       readonly refusal: ProviderLoginRefusal | null;
     }
   | { readonly kind: "cancelled" }
-  /** Add finished as an account that already has this profile. */
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
-  /** The sign-in finished and the account is not in the list yet. */
   | { readonly kind: "waiting-for-profile" }
-  /** Sign in again finished and the profile was left as it was. */
   | {
       readonly kind: "not-changed";
       readonly reason: "account-mismatch" | "account-unproven";
     }
-  /** The sign-in finished and named a profile the list could not be read
-   *  for; `retryListRead` reads the list again. */
   | { readonly kind: "list-unread" }
   | ProviderTargetLoginResult;
 
-/** A completed sign-in that names its profile, looked up before it is shown. */
 interface ListedOutcome {
   readonly kind: "signed-in" | "already-signed-in";
   readonly profileId: string;
@@ -173,15 +167,11 @@ type ProfileOutcomeResolution =
     }
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
   | { readonly kind: "waiting-for-profile" }
-  /** The named profile is in neither the answer's rows nor the list, and
-   *  the list's last read failed. */
   | { readonly kind: "list-unread"; readonly pending: ListedOutcome }
   | {
       readonly kind: "not-changed";
       readonly reason: "account-mismatch" | "account-unproven";
     }
-  /** A completed sign-in that changed nothing, reaching a dialog it does not
-   *  belong to: today's failed state, whatever the answer's other keys say. */
   | { readonly kind: "failed" };
 
 const NOTHING_CHANGED: ProfileOutcomeResolution = { kind: "failed" };
@@ -198,13 +188,7 @@ function profileRowIn(
   return pin.kind === "row" ? pin.profile : null;
 }
 
-/**
- * A named outcome's profile: first in the rows the answer itself echoes,
- * then in the list as cached after its one re-read. Absent from both after
- * a read that succeeded, the sign-in is complete and the account is not in
- * the list yet; after a read that failed, nothing is known yet, and the list
- * is what is retried. Never a name the rows do not give.
- */
+/** Never a name the rows do not give; after a failed read nothing is known and the list is retried. */
 function resolveListedOutcome(
   pending: ListedOutcome,
   echoedProfiles: () => readonly ProviderProfile[],
@@ -231,14 +215,8 @@ function resolveListedOutcome(
 const NO_ECHOED_PROFILES = (): readonly ProviderProfile[] => [];
 
 /**
- * What an outcome ends the attempt on, or null to read the answer's other
- * keys (`resolveListedOutcome` for one that names its profile).
- *
- * An outcome that says nothing changed and does not belong here (a mismatch
- * or an unproven account on Add, a refused target or a sign-in held for leave
- * on an untargeted sign-in) ends on the failed state and never as a success:
- * the answer's other keys are not read for it. An existing account reaching
- * Sign in again reads as no outcome.
+ * An outcome that does not belong here ends on the failed state, never a success,
+ * without reading the answer's other keys.
  */
 function resolveProfileOutcome(
   outcome: ProviderLoginProfileOutcome | null,
@@ -581,10 +559,8 @@ export interface ProviderProfileLoginFlow {
     readonly shareSkillsAndPlugins: boolean;
   }) => void;
   readonly cancel: () => void;
-  /** From `list-unread`: reads the list once more and decides again; never
-   *  starts a sign-in. */
+  /** Never starts a sign-in. */
   readonly retryListRead: () => void;
-  /** That read is in flight. */
   readonly listRereadPending: boolean;
   /** `providers.cancelLogin`'s own pending state, for the Cancel button's
    *  UX (gui-app AGENTS.md pending recipe: `disabled` + unchanged label +
@@ -640,12 +616,6 @@ export function useProviderProfileLoginFlow(
   return useProviderProfileOutcomeLoginFlow(input, null);
 }
 
-/**
- * The same flow, reading a completed sign-in's `profileOutcome` through
- * `profileOutcomes` first (null reads every answer as
- * `useProviderProfileLoginFlow` does): the add-profile dialog and the Settings
- * reauth panel, on a computer that offers sign-ins by itself.
- */
 export function useProviderProfileOutcomeLoginFlow(
   input: UseProviderProfileLoginFlowInput,
   profileOutcomes: CachedProviderProfilesReader | null,
@@ -796,8 +766,6 @@ export function useProviderDestinationLoginFlow(
   // re-run that effect and drain the owed releases mid-flow.
   const settleOwedReleasesRef = useRef<() => void>(() => {});
   const releaseLeaveOnUnmountRef = useRef<() => void>(() => {});
-  // The named outcome a `list-unread` attempt waits to show, and whether its
-  // list read is in flight: Retry reads the list again and nothing else.
   const listedOutcomeRef = useRef<ListedOutcome | null>(null);
   const [listRereadPending, setListRereadPending] = useState(false);
 
@@ -1124,11 +1092,8 @@ export function useProviderDestinationLoginFlow(
     ],
   );
 
-  // Where an outcome the flow reads ends the attempt. Every arm but `failed`
-  // releases nothing: there is no login left to hold, and a cancel would
-  // retire the answer the computer keeps for it. `failed`, an outcome that
-  // does not belong to this dialog, takes the ordinary failed state whole,
-  // release included.
+  // Every arm but `failed` releases nothing: a cancel would retire the answer the
+  // computer keeps for the sign-in.
   const settleProfileOutcome = useCallback(
     (thisAttemptId: number, outcome: ProfileOutcomeResolution): void => {
       if (attemptIdRef.current !== thisAttemptId) return;
@@ -1148,8 +1113,6 @@ export function useProviderDestinationLoginFlow(
         return;
       }
       if (outcome.kind === "failed") {
-        // Today's failed state, whole: its release retires only the answer
-        // the computer keeps for this sign-in, which undid nothing.
         fail(failureMessages.notFinished, "authentication", null);
         return;
       }
@@ -1310,8 +1273,6 @@ export function useProviderDestinationLoginFlow(
             return;
           }
           lastAnswerRef.current = data;
-          // A create or a destination needs the returned handle. Untargeted
-          // reauth may use null for the Terminal account.
           const targetRefusal =
             target === null ? null : (data.targetRefusal ?? null);
           if (targetRefusal !== null) {
@@ -1644,9 +1605,7 @@ export function useProviderDestinationLoginFlow(
     ],
   );
 
-  // One read of the list per press, never a sign-in. Its answer decides as
-  // the first did, without the answer's rows: a failure again leaves the
-  // attempt where it is.
+  // One list read per press, never a sign-in.
   const retryListRead = useCallback((): void => {
     const pending = listedOutcomeRef.current;
     if (

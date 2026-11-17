@@ -6,19 +6,12 @@ import {
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import { useAuthService } from "@/lib/host";
 
-/** Records a sign-in request an unfinished await answered with. */
 export type SignInRequestRecorder = (
   request: ProviderLoginSignInRequest,
   signal: AbortSignal,
 ) => Promise<SignInRecording>;
 
-/**
- * The recording step of the shared sign-in await (`useProvidersAwaitLogin`
- * and its variants), so every caller records: the request goes to authn on
- * the person's own session, through the app's auth service, each operation
- * id at most once for the caller's life. The caller stays in its pending
- * state while it runs.
- */
+/** Each operation id at most once for the caller's life; the caller stays pending meanwhile. */
 export function useProviderSignInRecording(): SignInRequestRecorder {
   const auth = useAuthService();
   const recordedRef = useRef<Set<string>>(new Set());

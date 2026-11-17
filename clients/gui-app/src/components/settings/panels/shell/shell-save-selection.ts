@@ -1,10 +1,5 @@
-/**
- * The `shell` item a shell save leaves, stated in the request (`selection`,
- * `config.shell.*@1.2`) from the computer's own `config.shell.get` read. The host
- * computes the item the same way, so a current read confirms the save without a
- * click; a difference waits in the review list. Before that read answers, a save
- * that needs it states nothing and expects no proposal.
- */
+// The host computes the item the same way, so a current read confirms the save
+// without a click. Before that read answers, a save that needs it states nothing.
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import type {
   ConfigShellEntry,
@@ -15,18 +10,12 @@ import type {
 
 const NOT_STATED: ConfigShellSelection = { kind: "not_stated" };
 
-/** The arguments a shell starts with: those it remembers, else its default. */
 function argsOf(path: string, entries: readonly ConfigShellEntry[]): string[] {
   const remembered = entries.find((entry) => entry.path === path)?.args;
   return [...(remembered ?? defaultShellArgs(path))];
 }
 
-/**
- * A switch to `path`, or new arguments for the current shell (`path: null`).
- * A switch that names no arguments takes the remembered ones. New arguments
- * while the computer follows the system default are saved on this computer
- * and propose nothing.
- */
+/** New arguments while following the system default are saved on this computer and propose nothing. */
 export function shellSetSelection(
   request: ConfigShellSetRequestV10,
   config: ConfigShellGetResponseV11 | undefined,
@@ -47,15 +36,11 @@ export function shellSetSelection(
   };
 }
 
-/** Add selects the shell it adds, with its default arguments. */
 export function shellAddSelection(path: string): ConfigShellSelection {
   return { kind: "shell", path, args: [...defaultShellArgs(path)] };
 }
 
-/**
- * Removing the current shell leaves the system default. Removing any other
- * is saved on this computer and proposes nothing.
- */
+/** Removing any shell but the current one is saved on this computer and proposes nothing. */
 export function shellRemoveSelection(
   path: string,
   config: ConfigShellGetResponseV11 | undefined,
@@ -66,10 +51,7 @@ export function shellRemoveSelection(
     : NOT_STATED;
 }
 
-/**
- * Reverting the current shell's arguments leaves its default. Reverting any
- * other's is saved on this computer and proposes nothing.
- */
+/** Reverting any shell but the current one is saved on this computer and proposes nothing. */
 export function shellRevertSelection(
   path: string,
   config: ConfigShellGetResponseV11 | undefined,

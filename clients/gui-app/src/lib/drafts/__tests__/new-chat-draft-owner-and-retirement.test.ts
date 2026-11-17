@@ -333,7 +333,6 @@ function acknowledgeNewChat(draftId: string, revision: number): void {
   newChatDraftRememberSynced(draftId, revision, patch.generation);
 }
 
-/** A clean Terminal patch whose own write was acknowledged at `ACK_REVISION`. */
 function acknowledgedTerminalPatch(): string {
   useNewConversationModalStore
     .getState()

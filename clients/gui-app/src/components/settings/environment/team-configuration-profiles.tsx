@@ -22,7 +22,6 @@ import {
   useConfigurationSource,
 } from "./configuration-source";
 
-/** A team's configuration lists no removed accounts. */
 const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 /** Configuration profiles have no live auth or usage standing. */
@@ -158,13 +157,9 @@ function ConfigurationProfileEditor(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const { put, remove } = useConfigurationItemMutations();
-  // The stored profile the fields show (`baseline`) and this person's edits
-  // over it are one snapshot: a save or remove names the baseline's revision,
-  // so an edit typed over a profile a teammate has since changed is refused,
-  // never written over a value the fields did not show. A newer read becomes
-  // the baseline while nothing is edited, or once a save is refused as out of
-  // date; an edit survives it only where the newer read left that field as it
-  // was. A picked color is never null, so null means untouched.
+  // The fields and this person's edits are one snapshot: a save names the baseline's
+  // revision, so an edit over a teammate's change is refused. A picked color is never
+  // null, so null means untouched.
   const [baseline, setBaseline] = useState(props.item);
   const [adoptNext, setAdoptNext] = useState(false);
   const [labelOverride, setLabel] = useState<string | null>(null);

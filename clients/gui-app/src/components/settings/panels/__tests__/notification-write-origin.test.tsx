@@ -194,8 +194,7 @@ function cloudFor(session: SignInFixture): EnvironmentCloud {
 function useSignIn(session: SignInFixture): void {
   originFixtures.cloud = cloudFor(session);
   useAuthStore.setState({ status: "signed-in" });
-  // The refresh helper is mocked at its boundary. The sentinel is only used
-  // to make a normally refresh-eligible save prove that stale saves skip it.
+  // The sentinel makes a normally refresh-eligible save prove that stale saves skip it.
   originFixtures.binding = Object.create(
     null,
   ) as HostRuntimeBinding<HostRpcRegistry>;

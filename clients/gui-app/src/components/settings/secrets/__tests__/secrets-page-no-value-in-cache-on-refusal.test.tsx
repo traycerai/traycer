@@ -160,7 +160,6 @@ function renderPage(host: SecretsHost): QueryClient {
 }
 
 beforeEach(async () => {
-  // Each case exercises the real authn write path on Personal.
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
     pick: null,

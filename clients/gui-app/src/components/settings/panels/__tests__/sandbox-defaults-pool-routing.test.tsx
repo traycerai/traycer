@@ -266,9 +266,8 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     const response = new Promise<EnvironmentMembersResponseV12>((resolve) => {
       finish = resolve;
     });
-    // The environment list reads the roster's first page for the viewer's
-    // role, and the page reads the roster only once that row is there: the
-    // first read answers the list, and the one held is the page's own.
+    // The list reads the roster's first page for the viewer's role and the page reads
+    // it only after: the first read answers the list, the held one is the page's.
     let reads = 0;
     mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),

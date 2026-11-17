@@ -13,7 +13,6 @@ type ProvidersListResponse = ResponseOfMethod<
 
 const NO_PROFILES: readonly ProviderProfile[] = [];
 
-/** The classic list entry `useProvidersListForClient` keeps for a host. */
 function providersListKey(hostId: string) {
   return hostQueryKeys.method<HostRpcRegistry, "providers.list">(
     hostId,
@@ -29,11 +28,8 @@ function activeHostId(
 }
 
 /**
- * The client's host's `providers.list` as its own poll last cached it, read
- * at render and never fetched. No observer is added: an observer would share
- * the list's cache entry and lend it its own options. A surface calling this
- * is drawn from that same list by a caller that observes it, so it is
- * re-rendered with every change of the entry and the read stays current.
+ * Read at render, never fetched; no observer, since it would lend the entry its
+ * options. The caller observes the list, so this re-renders with it.
  */
 export function useCachedProvidersList(
   client: HostClient<HostRpcRegistry> | null,
@@ -45,27 +41,17 @@ export function useCachedProvidersList(
     : queryClient.getQueryData<ProvidersListResponse>(providersListKey(hostId));
 }
 
-/** One provider's rows in the cached list, and whether its last read failed. */
 export interface CachedProviderProfilesRead {
   readonly profiles: readonly ProviderProfile[];
   readonly readFailed: boolean;
 }
 
 export interface CachedProviderProfilesReader {
-  /** The rows as cached at the moment of the call; reads nothing. */
   readonly listedProfiles: () => CachedProviderProfilesRead;
-  /** Reads the list once more and settles when that read has ended. */
   readonly rereadList: () => Promise<void>;
 }
 
-/**
- * A sign-in dialog's view of the cached `providers.list` of the client's
- * host. `listedProfiles` is called when `providers.awaitLogin` settles: that
- * mutation's own success handler re-reads the list and waits for it before
- * the dialog's handler runs, so what it returns then is that re-read.
- * `rereadList` is the dialog's Retry after that read failed: one read of the
- * list per call, nothing else.
- */
+/** `listedProfiles` is called when `awaitLogin` settles, after that mutation's own re-read. */
 export function useCachedProviderProfilesReader(
   client: HostClient<HostRpcRegistry> | null,
   providerId: string,

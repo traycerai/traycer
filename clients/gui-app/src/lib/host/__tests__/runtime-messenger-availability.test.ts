@@ -1496,7 +1496,6 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     await requestRemote();
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
-    // The same host, now carrying its sandbox facts: still the one transport.
     currentRemoteEntry = {
       ...remoteEntry,
       sandbox: {

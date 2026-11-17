@@ -41,9 +41,6 @@ const fixture = vi.hoisted(() => ({
   remainingProfiles: [] as ProviderProfile[],
 }));
 
-// The dialog's unrelated local-profile mutations remain stubbed. Record
-// actions run through the real consumer hook with fakes at the AuthService and
-// per-computer binding-query boundaries.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {

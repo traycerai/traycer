@@ -347,8 +347,7 @@ function HooksEditor(props: {
             error instanceof NotificationHooksAccountSaveError &&
             origin.kind === "editor"
           ) {
-            // This app wrote these exact hooks locally. A retry may quote
-            // that answered revision, but never a revision from a later read.
+            // A retry may quote this answered revision, never one from a later read.
             const saved: HookSnapshot = {
               hooks,
               configurationRevision: error.savedConfigurationRevision,

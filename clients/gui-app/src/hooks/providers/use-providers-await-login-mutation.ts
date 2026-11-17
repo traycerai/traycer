@@ -40,25 +40,12 @@ type AwaitLoginResponse = ResponseOfMethod<
 >;
 type AwaitLoginContext = { readonly hostId: string | null };
 
-/**
- * Why the recording step ended the sign-in, as `SignInRecording` names it:
- * `forbidden` (the record route answered 403), `unavailable` (404, any other
- * refusal, or no answer), `session-ended` (401), `already-recorded`
- * (the id names another request, or the computer asked again for an id
- * already recorded and sent back).
- */
 export type SignInRecordingEnd = Extract<
   SignInRecording,
   { readonly kind: "ended" }
 >["reason"];
 
-/**
- * The await's answer, plus how the recording step went. `signInRecordingEnded`
- * is null when there was nothing to record or the recording went through and
- * the answer is the computer's to the next await; otherwise the answer is the
- * unfinished one, which every caller reads as its own "did not finish", and a
- * team's dialog chooses its sentence by the reason. Never on the wire.
- */
+/** Never on the wire. `signInRecordingEnded` is null when nothing was recorded or the recording went through. */
 export type AwaitLoginAnswer = AwaitLoginResponse & {
   readonly signInRecordingEnded: SignInRecordingEnd | null;
 };
@@ -125,10 +112,7 @@ function withoutLoginCapability(
   };
 }
 
-/**
- * The sign-in request an answer asks the caller to record, or null. A final
- * `profileOutcome` is the answer whatever else it carries.
- */
+/** A final `profileOutcome` is the answer whatever else it carries. */
 function signInRequestToRecord(
   data: AwaitLoginResponse,
 ): ProviderLoginSignInRequest | null {
@@ -136,14 +120,6 @@ function signInRequestToRecord(
   return data.signInRequest ?? null;
 }
 
-/**
- * One wait, with the recording step every caller shares: an unfinished answer
- * that carries `signInRequest` is recorded at authn on the person's own
- * session, and the same handle is asked once more with `recordedOperationId`.
- * A recording that ends returns that unfinished answer with the reason, which
- * every caller reads as "the sign-in did not complete". A computer that never
- * asks for a recording is asked once.
- */
 async function awaitWithRecording(
   client: HostClient<HostRpcRegistry>,
   variables: AwaitLoginVariables,
@@ -312,10 +288,7 @@ export function useProvidersDestinationAwaitLoginForClient(
         if (targeted || context.hostId === null) return;
         const next = data.state;
         if (next === null) {
-          // A caller that reads outcomes looks a named profile up in the
-          // list, so for it alone the list is read again here first, whether
-          // or not the answer carries a state: this read is the one that
-          // lookup uses, and this handler finishes before the caller's own.
+          // This re-read is the one the caller's lookup uses, and it finishes before the caller's handler.
           if (!variables.readsProfileOutcome || !awaitAnswerNamesProfile(data))
             return;
           await queryClient.invalidateQueries({
@@ -331,9 +304,7 @@ export function useProvidersDestinationAwaitLoginForClient(
           hostId: context.hostId,
           update: (prev) => {
             if (prev === undefined) return prev;
-            // Every envelope key the echo does not replace (`offersSignIns`,
-            // `removedProfiles`, `native`, and any a later answer adds) is
-            // kept as cached.
+            // Every envelope key the echo does not replace is kept as cached.
             return {
               ...prev,
               providers: prev.providers.map((p) =>

@@ -22,12 +22,8 @@ import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-st
 const METHOD = "host.remoteAccess.set";
 
 /**
- * Asks the computer to read its own status now, once: one send and never a
- * second, on either path. This machine's host gets it through its own socket
- * on the single-attempt requester (no transport retry, no resend after a
- * credential recovery); a remote one only through a ready session this window
- * already has open, never a dial. Every failure is silent: the computer finds
- * out at its own two-minute status read.
+ * One send, never a second and never a dial: a remote host only through a session
+ * already ready. Failures are silent: the computer reads its status within two minutes.
  */
 async function refreshOverOpenConnection(
   entry: HostDirectoryEntry | null,
@@ -36,10 +32,7 @@ async function refreshOverOpenConnection(
   if (entry === null) return;
   try {
     if (entry.kind === "local" || entry.kind === "mock") {
-      // Sent once on the credential in hand, on the messenger below both
-      // resending layers (`host-runtime-provider.tsx`): neither a transport
-      // failure nor a refused sign-in is recovered and sent again. Any
-      // failure is dropped like the remote arm's.
+      // Below both resending layers: neither a transport failure nor a refused sign-in is sent again.
       await client?.requestSingleAttemptFor(entry, "host.status.refresh", {});
       return;
     }
@@ -64,19 +57,7 @@ interface PressedRemoteAccess {
   readonly entry: HostDirectoryEntry | null;
 }
 
-/**
- * Turns Remote access on for `hostId`: the app's own call to authn on the
- * person's sign-in. Once authn has said yes, the computer is asked once to
- * read its own status now (`host.status.refresh@1.0`, see
- * {@link refreshOverOpenConnection}); its answer carries nothing. The section
- * then reads `environment.status`, the one place that state is read. A yes
- * also answers the one-time question for that host on this desktop.
- *
- * The sign-in is the click's: it is taken before the first await, and once
- * authn answers, nothing further happens unless that is still the sign-in, so
- * a switch or a sign-out while authn is out reports nothing into the next
- * account's surface.
- */
+/** The sign-in is taken before the first await; once authn answers nothing more happens unless it is current. */
 export function useRemoteAccessTurnOnMutation(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,

@@ -102,10 +102,7 @@ export interface MemorySaveIo {
   readonly read: () => Promise<ConfigAgentMemoriesResponse | null>;
   /** `environment.status`; `null` when it fails. */
   readonly lookUp: () => Promise<UploadStatus | null>;
-  /**
-   * `config.agentMemories.set` turning it on; `null` when it fails, and
-   * `"unsent"` when it was abandoned before it was sent.
-   */
+  /** `null` when it fails; `"unsent"` when abandoned before it was sent. */
   readonly set: () => Promise<ConfigAgentMemoriesSetResponse | null | "unsent">;
   /** `providers.setNativeMemory` for one row; whether it landed. */
   readonly writeProvider: (row: OnboardingMemoryRow) => Promise<boolean>;
@@ -287,7 +284,6 @@ async function takeStep(
   }
   if (step.kind === "set") {
     const answer = await io.set();
-    // Nothing went out: nothing is filed, and the save ends here.
     if (answer === "unsent") return "unsent";
     if (answer === null) file(io, step.environmentId, { kind: "failed" });
     // Filed against the configuration the write was addressed to, which the

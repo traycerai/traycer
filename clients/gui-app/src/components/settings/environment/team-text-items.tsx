@@ -693,8 +693,7 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const removing =
     props.saving && props.pending !== null && props.pending.action === "remove";
-  // The sign-in the dirty text was typed on: an unmount's write goes only on
-  // it. Taken at the edit, kept while that sign-in lasts.
+  // An unmount's write goes only on the sign-in the text was typed on.
   const cloud = useEnvironmentCloud();
   const typedOn = useRef<EnvironmentCloud | null>(null);
   const changeValue = (next: string): void => {

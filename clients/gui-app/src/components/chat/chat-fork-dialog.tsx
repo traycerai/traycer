@@ -917,7 +917,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
-      // The sign-in the attachment goes out on, taken at the press.
+      // The sign-in taken at the press.
       const operation = takeOperation === null ? null : takeOperation();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
@@ -1019,7 +1019,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
-    // The sign-in an attachment goes out on, taken at the press.
+    // The sign-in taken at the press.
     const operation = takeOperation === null ? null : takeOperation();
     // A staged sandbox: the fork is handed to the task, which creates the
     // sandbox, waits for the agent there and forks onto it, through a reload.
@@ -1572,8 +1572,6 @@ function canSubmitFork(input: {
   readonly hostClientResolved: boolean;
   /** The selected host is a team sandbox that does not offer the harness. */
   readonly teamSandboxHarnessBlocked: boolean;
-  /** The picked account was removed by a person: the picker says so, and
-   *  Fork waits for another pick. */
   readonly forkProfileRemoved: boolean;
   /**
    * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It

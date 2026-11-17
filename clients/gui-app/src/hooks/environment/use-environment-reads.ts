@@ -37,11 +37,6 @@ import {
 } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 
-/**
- * Personal's reads that a new revision on the host running it moves: what a
- * move of the configuration's revision re-reads (a secret's rotation
- * included) and what focus re-reads.
- */
 const PERSONAL_REVISION_READS = [
   ...REVISION_MOVED_READS,
   ...CONFIGURATION_READS,
@@ -87,7 +82,6 @@ export function useEnvironmentStatusRead(
   return { supported, data: query.data ?? null, isError: query.isError };
 }
 
-/** An app-made read of a {@link DELTA_FED_READS} method whose params name `hostId`. */
 function aboutThisHost(
   queryKey: readonly unknown[],
   hostId: string | null,
@@ -159,7 +153,6 @@ function useRereadOnRevision(
             personalEnvironmentId,
             PERSONAL_REVISION_READS,
           )) ||
-        // The secrets reads, which the app makes itself from authn.
         SECRET_READS.some((method) =>
           hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, method),
         ) ||
@@ -173,10 +166,6 @@ function useRereadOnRevision(
   }, [hostId, revision, personalEnvironmentId, queryClient]);
 }
 
-/**
- * Personal's notices with their Undo, read by the app itself from authn on
- * the person's sign-in; `enabled` false on a host that does not run Personal.
- */
 export function useEnvironmentNoticesRead(
   enabled: boolean,
 ): EnvironmentRead<EnvironmentNoticesResponse> {
@@ -193,33 +182,22 @@ export function useEnvironmentNoticesRead(
   return { supported: true, data: query.data ?? null, isError: query.isError };
 }
 
-/** The review sheet's answer: authn's holds and its host's own three facts. */
 export type EnvironmentReviewSheet = Omit<
   EnvironmentReviewResponseV11,
   "entries"
 > & {
   readonly entries: readonly ReviewHeldEntry[];
-  /**
-   * Whether the host's answer carried its own record (`environment.review@1.1`
-   * or later); until then, and from an older host, its three facts read null.
-   */
+  /** Until then, and from an older host, its three facts read null. */
   readonly recorded: boolean;
 };
 
-/** A host below `environment.review@1.1` answers its `entries` alone, with no record. */
 function isReviewV11(
   review: EnvironmentReviewResponse,
 ): review is EnvironmentReviewResponseV11 {
   return "shownAt" in review && "evidence" in review;
 }
 
-/**
- * The review sheet for the host `hostId`: Personal's holds, read by the app
- * itself from authn's operation view, with that host's own record of the sheet
- * (`shownAt`, `acknowledgedAt`, `evidence`) from the top of its
- * `environment.review` answer. With that host unreachable the three read null,
- * as a host with no record answers them; its `entries` are not read.
- */
+/** With that host unreachable the three facts read null; its `entries` are never read. */
 export function useEnvironmentReviewRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,

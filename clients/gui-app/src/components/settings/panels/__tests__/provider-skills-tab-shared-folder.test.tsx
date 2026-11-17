@@ -36,7 +36,6 @@ vi.mock("../use-skill-environment-route", () => ({
     write: () => Promise.resolve(null),
   }),
 }));
-// The person may change the environment the host serves.
 vi.mock("@/hooks/environment/use-served-environment-row", () => ({
   useMayChangeServedEnvironment: () => true,
 }));

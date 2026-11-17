@@ -130,7 +130,6 @@ export function useTeamComputerClaim(
           "environment.status",
         ),
       });
-      // The app's own read of authn, under every environment it was asked for.
       void invalidateEnvironmentReads(queryClient, ["environment.host.list"]);
       void binding?.directory.refresh();
       requestFleetRefresh(runnerHost);

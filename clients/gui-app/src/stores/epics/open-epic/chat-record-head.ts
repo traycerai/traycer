@@ -57,7 +57,6 @@ export function chatRecordKey(ownerUserId: string, chatId: string): string {
   return `${ownerUserId}${KEY_SEPARATOR}${chatId}`;
 }
 
-/** Whether a {@link chatRecordKey} names `chatId`, whatever its owner. */
 export function chatRecordKeyNamesChat(key: string, chatId: string): boolean {
   return key.endsWith(`${KEY_SEPARATOR}${chatId}`);
 }

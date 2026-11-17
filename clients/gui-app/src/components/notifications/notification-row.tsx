@@ -372,9 +372,8 @@ interface NotificationRowMainProps {
 }
 
 /**
- * A chat's row says "Started by <name>" in place of its body while its task
- * is open (the task's chat records say who started the chat), unless the chat
- * failed: a failure row's body is what went wrong.
+ * "Started by <name>" replaces the body while the task is open, unless the chat
+ * failed: a failure's body is what went wrong.
  */
 function NotificationRowMain(props: NotificationRowMainProps): ReactNode {
   const chat = notificationRowStartedChat(props.row);

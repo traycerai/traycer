@@ -409,8 +409,7 @@ function WindowHostModalBody(props: {
   if (props.variant.kind === "unrecognised-refusal") {
     return <RefusalDetail code={props.variant.code} />;
   }
-  // A door state's cover is its title, its line and its buttons: a lane
-  // running on this machine is not part of it.
+  // A lane running on this machine is not part of a door state's cover.
   if (props.cause === "door-state") return null;
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
@@ -497,7 +496,6 @@ function IncompatibleDetail(props: {
   );
 }
 
-/** A refusal whose reason this app does not know: its code, for a report. */
 function RefusalDetail(props: { readonly code: string }): ReactNode {
   return (
     <div
@@ -553,7 +551,6 @@ function ClientCompatibilityDetail(props: {
 interface WindowHostModalCopy {
   readonly title: string;
   readonly description: string;
-  /** What an issue report is pre-filled with; `null` where there is no report to make. */
   readonly report: {
     readonly title: string;
     readonly message: string;

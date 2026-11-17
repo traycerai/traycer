@@ -15,14 +15,10 @@ import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 /**
- * The tile's door cover: the state's title and line, with Retry where the state
- * offers it and Switch account for a non-member. Drawn over the body, which
- * stays mounted so a draft is kept. Marked drawn only while the body is on
- * screen, so the toast stays quiet about that computer's refusal only while the
- * cover can be seen.
+ * The body stays mounted so a draft is kept. Marked drawn only while the body is
+ * on screen, so the toast is quiet only while the cover can be seen.
  */
 export function TileDoorCoverLayer(props: {
-  /** The tile's computer, whose state the cover draws. */
   readonly hostId: string;
   readonly cover: DoorStateCoverVariant;
 }): ReactNode {
@@ -62,8 +58,7 @@ function TileDoorCoverAction(props: {
         variant="outline"
         className="mt-2"
         onClick={() => {
-          // The reconnect has already run when a failed token refresh
-          // rejects; the cover stays up until an open is admitted.
+          // The reconnect already ran; the cover stays up until an open is admitted.
           retryHostDoor(cover.hostId, hostTokens).catch(() => {
             appLogger.warn("[host-door] retry token refresh failed", {
               hostId: cover.hostId,

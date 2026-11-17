@@ -556,7 +556,6 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       },
       ultracode: false,
       selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
-      // The raw pick; `selection` above is what this host's catalog shows.
       values: {
         ultracode: false,
         selection: {
@@ -1028,7 +1027,6 @@ function renderModal(
   return view;
 }
 
-/** The modal under a signed-in account whose authn accepts the team attachment. */
 async function renderSignedInModal(
   heldPost: Promise<TaskEnvironmentAttachmentResult> | null,
 ): Promise<AttachmentAuthFixture> {

@@ -40,9 +40,7 @@ export interface RecolorProviderProfileRequest {
   >["providerId"];
   readonly profileId: string;
   readonly accentColor: ProviderProfileAccentColor;
-  /** The profile's `enabled` from `providers.list`, restated unchanged. */
   readonly enabled: boolean;
-  /** The profile's `environmentProfileId` from `providers.list`; null when it has none. */
   readonly environmentProfileId: string | null;
 }
 

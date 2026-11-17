@@ -225,7 +225,6 @@ describe("TeamPlans", () => {
           },
         ]);
       });
-      // The consequences are not known yet: no confirm, no unlink.
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 
@@ -296,7 +295,6 @@ describe("TeamPlans", () => {
         },
       ]);
     });
-    // The count is still being read: the confirm stays in its loading state.
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(
@@ -1005,8 +1003,6 @@ describe("TeamGuide", () => {
 
 describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
   async function openUnlinkNamingMacMini() {
-    // The turns running on the plan are counted by the window's own computer,
-    // which authn's host list names Mac mini.
     useSelectionAuthorityStore.setState({
       effectiveHostId: mockLocalHostEntry.hostId,
     });

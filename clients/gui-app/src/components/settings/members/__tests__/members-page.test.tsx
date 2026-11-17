@@ -25,8 +25,6 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MembersPage } from "@/components/settings/members/members-page";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 
-// The toast surface is the one external boundary a removal's outcome reaches:
-// a completed removal says so, and a failed one raises a banner instead.
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("sonner")>()),
@@ -95,21 +93,12 @@ function member(
   };
 }
 
-/**
- * The window's own host as the effective one, which counts a removed member's
- * work when authn's host list names it one of the team's computers.
- */
 function seedAccount(): void {
   useSelectionAuthorityStore.setState({
     effectiveHostId: mockLocalHostEntry.hostId,
   });
 }
 
-/**
- * The account's teams as the app has them at sign-in: the environment list
- * joins the viewer's role and the team's handle from them as its first read
- * starts.
- */
 function seedTeams(): void {
   useAuthStore.setState({
     shareableTeams: [{ teamId: TEAM.ownerId, slug: "acme", avatarUrl: null }],
@@ -137,7 +126,6 @@ function mountTeamPage(
   return harness;
 }
 
-/** The same page, on a host whose handshake negotiated the given methods. */
 function mountTeamPageOnHost(
   source: Parameters<typeof mountTeamHarness>[0],
   handlers: Parameters<typeof mountTeamHarness>[1],
@@ -205,9 +193,8 @@ describe("MembersPage members read", () => {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => {
           reads += 1;
-          // The first read is the environment list's join of the viewer's
-          // role, which names the team and which the page waits for; the page's
-          // own read is the next, and stays outstanding.
+          // The first read is the list's join of the viewer's role, which the page waits
+          // for; the page's own read is next and stays outstanding.
           if (reads === 1) return membersPage([ADA]);
           return new Promise(() => undefined);
         },
@@ -235,8 +222,6 @@ describe("MembersPage members read", () => {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => {
           reads += 1;
-          // The first read is the environment list's join of the viewer's
-          // role, which the page waits for; the page's own read is the next.
           if (fail && reads > 1) throw new Error("pool unavailable");
           return membersPage([ADA, PRIYA]);
         },
@@ -762,8 +747,6 @@ describe("MembersPage offboarding previews", () => {
         "environment.members": () => membersPage([ADA, PRIYA]),
         "environment.host.list": () => ({ hosts: [listedComputer] }),
       };
-      // A host that does not serve the count answers the method as unknown,
-      // so the read never reaches `workRead`.
       const harness = mountTeamPage(
         { kind: "host" },
         scenario === "unsupported"
@@ -809,7 +792,6 @@ describe("MembersPage offboarding previews", () => {
           .disabled,
       ).toBe(false);
       if (scenario === "unsupported") {
-        // Asked once, and the host answered the method as unknown.
         expect(harness.paramsOf("environment.members.removePreview")).toEqual([
           { environmentId: "env-a", userId: "u-priya" },
         ]);
@@ -928,8 +910,6 @@ describe("MembersPage offboarding previews", () => {
         "environment.members.removePreview": () => PREVIEW,
       },
     );
-    // The confirm's preview is authn's read; the computer's work counts are
-    // asked once per opening and never again, so it is authn's that fails.
     const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     setTeamEnvironmentCloudOverride({
       ...cloud,
@@ -1239,8 +1219,6 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          // authn's answer for an accepted member's removal: the commit
-          // already made, with the operation's id.
           return { outcome: "pending", receiptId: "receipt-1" };
         },
       },
@@ -1257,7 +1235,6 @@ describe("MembersPage removal", () => {
     expect(harness.paramsOf("environment.members.remove")).toEqual([
       { environmentId: "env-a", userId: "u-priya" },
     ]);
-    // The removal is shown as done, not as failed.
     expect(toasts.success.mock.calls[0]?.[0]).toBe("Member removed");
     expect(toasts.error).not.toHaveBeenCalled();
     expect(screen.queryByTestId("members-banner")).toBeNull();
@@ -1277,8 +1254,6 @@ describe("MembersPage removal", () => {
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.remove": () => {
           removed = true;
-          // authn's answer for an accepted member's removal: the commit
-          // already made, with the operation's id.
           return { outcome: "pending", receiptId: "receipt-1" };
         },
       },
@@ -1291,7 +1266,6 @@ describe("MembersPage removal", () => {
 
     expect(await screen.findByTestId("members-read-failed")).toBeTruthy();
     expect(screen.queryByText(/removing/iu)).toBeNull();
-    // The removal itself was done; only the read after it failed.
     expect(toasts.success.mock.calls[0]?.[0]).toBe("Member removed");
     expect(toasts.error).not.toHaveBeenCalled();
     expect(screen.queryByTestId("members-banner")).toBeNull();
@@ -1419,11 +1393,7 @@ describe("MembersPage refused writes", () => {
   });
 });
 
-/**
- * authn's members answer for `members` as it is on the wire, where a seat
- * stored on the Viewer role answers `effectiveRole: null`: on the row of
- * `nullRoleUserIds`, and on the reader's own role when `readerRole` is `null`.
- */
+/** A seat stored on the Viewer role answers `effectiveRole: null` on the wire. */
 function wireMembers(
   members: readonly EnvironmentMemberV12[],
   nullRoleUserIds: readonly string[],
@@ -1458,7 +1428,6 @@ describe("MembersPage with a seat stored on the Viewer role", () => {
   const SAM = member("u-sam", "Sam", "viewer");
   const MEMBERS_ROUTE = "GET /api/v3/environments/env-a/members";
 
-  /** A row's text with its member's name and id made the same, to compare two rows. */
   function rowShape(userId: string, name: string): string {
     return rowOf(userId)
       .textContent.replaceAll(name, "<name>")

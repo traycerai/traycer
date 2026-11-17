@@ -397,8 +397,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           return auth.revalidateExpectedBearer(expected);
         },
       };
-      // Outermost, so the error a caller catches is the one whose host is
-      // recorded: the toast reads it to tell whether a door state covers it.
+      // Outermost, so the error a caller catches is the one whose host is recorded.
       const messenger: IHostMessenger<Registry> = recordingRefusedHost(
         createRetryingMessenger(
           createAuthAwareMessenger(rawMessenger, unaryRecovery, "always"),
@@ -411,8 +410,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         onHostTokenRenewal: noteHostTokenRenewal,
         registry,
         messenger,
-        // Below both resending layers above: a call made through
-        // `requestSingleAttemptFor` is sent once and never again.
+        // Below both resending layers: `requestSingleAttemptFor` sends once and never again.
         singleAttemptMessenger: rawMessenger,
         requestContextProvider: auth.getRequestContextProvider(),
         directory,

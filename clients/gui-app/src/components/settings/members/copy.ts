@@ -112,7 +112,6 @@ export function legacyRoleNotice(
   return `${lead}. ${joinNames(names)} can now edit. ${tail}`;
 }
 
-/** The standing line on a configuration a viewer may read and not change. */
 export function seeButNotChangeLine(teamName: string): string {
   return `You can see ${teamName}'s settings but not change them.`;
 }
@@ -267,7 +266,6 @@ export function memberGainedEditing(
   );
 }
 
-/** A member in the team, not an invitation. */
 function isAcceptedMember(member: MembersListMember): boolean {
   return member.inviteState !== "pending";
 }
@@ -307,7 +305,6 @@ export function removePreviewLead(
   return `${memberName} loses ${teamName}'s settings, hosts and connected services.`;
 }
 
-/** What a removal does to the member's work, with or without its count. */
 function removeWorkContinues(teamName: string): string {
   return `Their connections close. Work they started keeps running for ${teamName} under their name.`;
 }

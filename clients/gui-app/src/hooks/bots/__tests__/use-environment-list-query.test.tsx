@@ -10,9 +10,6 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-// The account directory and its cloud enrichment use the shared transport
-// fake. The hook, host binding, cloud hook and QueryClient stay real.
-
 const viewer = vi.hoisted(() => ({ current: "" }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -90,7 +87,6 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
     });
     first.unmount();
 
-    // What an identity transition does to the account directory: stale, not dropped.
     await fixture.queryClient.invalidateQueries({
       queryKey: ["host"],
       refetchType: "none",
@@ -124,7 +120,6 @@ describe("useEnvironmentListQuery - the account's teams", () => {
   const acme = { teamId: "team-a", slug: "acme", avatarUrl: null };
   const beta = { teamId: "team-b", slug: "beta", avatarUrl: null };
 
-  /** The directory names one team the account may not yet list; authn knows its role. */
   function mountTeamDirectory() {
     let reads = 0;
     const harness = mountTeamPage(poolSource("admin"), {});

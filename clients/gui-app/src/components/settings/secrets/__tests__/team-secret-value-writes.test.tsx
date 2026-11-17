@@ -207,7 +207,6 @@ async function openReplaceWithValue(): Promise<void> {
   });
 }
 
-/** The authn requests the page sent for one write, by method and path suffix. */
 function authnWrites(
   harness: TeamPageHarness,
   verb: string,

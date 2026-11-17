@@ -30,12 +30,7 @@ type AnswerProfileNameMutationResult = UseMutationResult<
   { readonly hostId: string | null }
 >;
 
-/**
- * The row's name becomes the one the account uses after the call and its other
- * names are gone, so the chips and the Settings block leave at once instead of
- * waiting for the list's re-read. When two people pick at the same time the
- * re-read shows whichever name ended up on the account.
- */
+/** Settled at once, not on the list's re-read; if two people pick together the re-read shows the winner. */
 function settleRowName(
   previous: ProvidersListResponse | undefined,
   request: AnswerProfileNameRequest,
@@ -59,11 +54,7 @@ function settleRowName(
   };
 }
 
-/**
- * `providers.answerProfileName`: sets the account's name on every computer and
- * clears its other names. Rename sends it too on a row with other names, so
- * its failure reads as a rename's.
- */
+/** Rename sends it too on a row with other names, so its failure reads as a rename's. */
 export function useProvidersAnswerProfileNameForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): AnswerProfileNameMutationResult {

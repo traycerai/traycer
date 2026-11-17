@@ -97,7 +97,6 @@ export function BotChannelSettingsPanel(props: {
   readonly bot: BotDirectoryRecord;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
-  /** The reader may change the bot's environment: its run settings and Delete. */
   readonly mayChange: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
   readonly channelId: string | null;
@@ -562,10 +561,7 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-/**
- * The harness, model, effort and profile the bot runs on; applied by the app's
- * own server call, so it needs no host.
- */
+/** Applied by the app's own server call, so it needs no host. */
 function BotRunSettingsForm(props: {
   readonly bot: BotDirectoryRecord;
 }): ReactNode {
@@ -778,7 +774,6 @@ function ChoiceOption(props: {
   );
 }
 
-/** Deleting the bot, behind a confirmation: the app's own server call, so it needs no host. */
 function BotDeleteSection(props: {
   readonly bot: BotRecord;
   readonly onDeleted: () => void;
@@ -821,8 +816,7 @@ function BotDeleteSection(props: {
           remove.mutate(
             { botId: bot.botId },
             {
-              // `null`: the sign-in it was pressed under has ended, and an
-              // abandoned delete moves nothing.
+              // `null`: the sign-in it was pressed under has ended; an abandoned delete moves nothing.
               onSuccess: (answer) => {
                 if (answer === null) return;
                 setOpen(false);

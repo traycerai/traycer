@@ -52,10 +52,8 @@ export const CONFIGURATION_ITEM_READS = [
 ] as const;
 
 /**
- * What a move of the configuration's revision re-reads. authn moves it on
- * every committed change, a secret's and an applied hold's included, so the
- * secrets reads, the review list and the notices follow it as the items do.
- * A hold proposed or discarded commits nothing, so it does not move it.
+ * authn moves the revision on every committed change, a secret's and an applied
+ * hold's included; a hold proposed or discarded commits nothing.
  */
 export const REVISION_MOVED_READS = [
   ...CONFIGURATION_ITEM_READS,

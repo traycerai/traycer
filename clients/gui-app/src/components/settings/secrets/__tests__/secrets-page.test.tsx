@@ -3,8 +3,6 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
-// The page names its environment through the surface's client and the viewer;
-// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -102,7 +100,6 @@ interface SecretsHostState {
   environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
   createAnswer: EnvironmentSecretsCreateResponse;
-  /** The sign-in's create is refused with this text, as authn words a refusal. */
   createRefusal: string | null;
   /** The create waits for this to settle before it answers. */
   createHold: Promise<void> | null;

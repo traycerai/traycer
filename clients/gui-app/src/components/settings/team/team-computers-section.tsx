@@ -40,7 +40,6 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   const { read, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
-  // Only a team's Admins and Editors claim its computers.
   const mayClaim =
     source.kind === "pool" &&
     source.environmentId === props.environmentId &&
@@ -213,7 +212,6 @@ function TeamComputerClaimDialog(props: {
 function TeamComputerRow(props: {
   readonly host: TeamComputer;
   readonly busy: boolean;
-  /** Null for a Viewer or a role not known: only Admins and Editors claim. */
   readonly onClaim: (() => void) | null;
 }): ReactNode {
   return (

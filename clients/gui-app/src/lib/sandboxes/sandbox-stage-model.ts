@@ -548,7 +548,6 @@ export function stagePrice(
   };
 }
 
-/** A team's own balance in millicredits by team id; `null` while unknown. */
 export type TeamBalanceMc = (teamId: string) => number | null;
 
 /**

@@ -21,11 +21,6 @@ afterEach(() => {
   resetHostDirectoryRows();
 });
 
-/**
- * A failed Resume that the credit gate refused from the person's own balance,
- * on a surface that names no configuration, so whose sandbox it is comes only
- * from the person's host directory.
- */
 function renderCreditFailureOn(rows: ReadonlyArray<HostDirectoryEntry>): void {
   installHostDirectoryRows(rows);
   render(

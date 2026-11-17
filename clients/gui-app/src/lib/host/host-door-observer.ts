@@ -12,12 +12,7 @@ import {
   noteHostDoorState,
 } from "@/stores/host/host-door-state-store";
 
-/**
- * The one place a host's refusal at any of its three doors becomes this app's
- * state of that host, and an admitted open clears it, unless only a
- * successful renewal clears that state. A relay's own session kill never
- * comes through here.
- */
+/** The one place a host's refusal becomes this app's state of it. A relay's own session kill never comes here. */
 export function appHostDoorObserver(hostId: string): SessionDoorObserver {
   return {
     refused: (details: FatalErrorDetails) => {
@@ -33,8 +28,7 @@ export function appHostDoorObserver(hostId: string): SessionDoorObserver {
       });
     },
     admitted: () => {
-      // An open admitted on the token already held says nothing about authn:
-      // a state only a successful renewal clears stays until one does.
+      // An open on the held token says nothing about authn: a state only a renewal clears stays.
       const state = hostDoorStateFor(hostId);
       if (
         state !== null &&
@@ -46,7 +40,6 @@ export function appHostDoorObserver(hostId: string): SessionDoorObserver {
   };
 }
 
-/** A state the app raises itself: from a mint, or a repeated refusal. */
 export function noteHostTokenRefusal(
   hostId: string,
   kind: HostDoorStateKind,
@@ -54,10 +47,6 @@ export function noteHostTokenRefusal(
   noteHostDoorState({ hostId, kind, detail: null });
 }
 
-/**
- * A renewal's answer for one host: authn unreachable raises
- * `access-check-delayed`, and a later renewal that succeeds clears it.
- */
 export function noteHostTokenRenewal(hostId: string, delayed: boolean): void {
   if (delayed) noteHostTokenRefusal(hostId, "access-check-delayed");
   else clearHostDoorStateOfKind(hostId, "access-check-delayed");

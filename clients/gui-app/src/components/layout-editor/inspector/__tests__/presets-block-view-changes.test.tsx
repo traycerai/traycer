@@ -15,8 +15,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 
-// The presets block's View changes list, split from `presets-block.test.tsx`
-// so that neither file passes the 10 s per-file test budget.
+// Split from `presets-block.test.tsx` to keep each file under the 10 s budget.
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { dismiss: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
@@ -46,8 +45,6 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     });
     render(<PresetsBlock reveal={vi.fn()} />);
 
-    // A placement change is not one a preset puts back, so the applied preset is
-    // not Modified; the note says presets keep it, and describes the applied card.
     expect(screen.getByTestId("preset-status-line").textContent).toBe(
       "Default",
     );

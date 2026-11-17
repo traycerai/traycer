@@ -112,7 +112,6 @@ export interface TeamEnvironmentCloudCall {
   readonly params: unknown;
 }
 
-/** Adapts the existing protocol fixtures at the authn transport boundary. */
 export function createTeamEnvironmentCloudHandlers(
   handlers: MockHandlerMap<HostRpcRegistry>,
   source: ConfigurationSource,

@@ -54,7 +54,6 @@ interface TeamHooksWrite {
   readonly revision: number | null;
 }
 
-/** One team item, using the existing item client and the sign-in's write seat. */
 export function useTeamNotificationHooks() {
   const source = useConfigurationSource();
   const cloud = useEnvironmentCloud();

@@ -226,8 +226,7 @@ async function rejectAfterLocalHostTokenMint(
   const bearer = await hostBearerFor(LOCAL_HOST_ID, context.credentials);
   if (bearer !== null) throw new Error("expected the local mint to refuse");
 
-  // This is WsRpcClient.withHostBearer's rejection when that real bearer path
-  // cannot supply a token for the request.
+  // WsRpcClient.withHostBearer's rejection when it cannot supply a token.
   throw new HostRpcError({
     code: "RPC_ERROR",
     message: "No host-only token is held for this host",

@@ -218,7 +218,6 @@ interface ChatMessagesProps {
   epicId: string;
   /** Host this chat tab is bound to for its full lifetime. */
   hostId: string | null;
-  /** See `ChatTranscriptIdentity.payerHostId`. */
   payerHostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;

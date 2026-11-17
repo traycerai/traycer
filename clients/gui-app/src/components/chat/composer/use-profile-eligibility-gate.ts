@@ -44,7 +44,6 @@ export function useProfileEligibilityGate(
   const provider = providersQuery.data?.providers.find(
     (candidate) => candidate.providerId === providerId,
   );
-  // The row the pin or its alias names; a removed or unknown pin has none.
   const profile =
     provider === undefined
       ? undefined

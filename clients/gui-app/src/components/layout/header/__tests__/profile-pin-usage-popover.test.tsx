@@ -25,10 +25,6 @@ import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-env
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 
-/**
- * A cached usage reading the popover's profile card paints. `errorUpdateCount`
- * is what the status-bar segment hook reads off the same query double.
- */
 interface UsageQueryDouble {
   readonly data: ProviderRateLimitEnvelope | undefined;
   readonly isPending: boolean;

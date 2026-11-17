@@ -33,7 +33,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const HOST_ID = "host-sbx-1";
 const VIEWER = "user-viewer";
 const TEAM: HostOwnerPrincipal = { kind: "team", id: "team-a", name: "Alpha" };
-/** The row names the signed-in person as the sandbox's owner. */
 const PERSONAL_OWNER: HostOwnerPrincipal = { kind: "user", id: VIEWER };
 
 const mocks = vi.hoisted(() => ({
@@ -152,9 +151,6 @@ beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   mocks.list = null;
-  // The cover reads whose credits a frozen sandbox is on from the person's
-  // host directory, through the real hook: the registry answers the same row
-  // the entry mock gives the rest of the frame.
   installHostConnectionRegistrySource({
     directory: {
       findById: (hostId) => (hostId === HOST_ID ? mocks.entry : null),

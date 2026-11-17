@@ -1,6 +1,4 @@
-/** Read keys for the app's own environment reads that answer no host method. */
 export const environmentQueryKeys = {
-  /** authn's removal preview for one member, by the viewer who asked. */
   removalPreview: (environmentId: string, userId: string, viewerId: string) =>
     [
       "environment",
@@ -10,10 +8,8 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
-  /** The read of Personal one move sheet is drawn against, by the viewer. */
   personalForMove: (viewerId: string) =>
     ["environment", "move", "personal", viewerId] as const,
-  /** authn's unlink preview for one plan, by the viewer who asked, for one opening. */
   planUnlinkPreview: (
     environmentId: string,
     profileId: string,
@@ -29,10 +25,6 @@ export const environmentQueryKeys = {
       viewerId,
       previewId,
     ] as const,
-  /**
-   * authn's listing of `hostId` in `environmentId`, as a save on that host
-   * reads it in one editor session.
-   */
   settingsSaveHost: (
     environmentId: string,
     hostId: string,
@@ -48,10 +40,6 @@ export const environmentQueryKeys = {
       viewerId,
       session,
     ] as const,
-  /**
-   * authn's rows of `kind` in `environmentId`, as the person's edit was made
-   * over them in one editor session.
-   */
   settingsSaveItems: (
     environmentId: string,
     kind: string,

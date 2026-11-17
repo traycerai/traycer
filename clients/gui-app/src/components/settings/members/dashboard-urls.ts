@@ -10,7 +10,6 @@ export function seatsManagementPath(handle: string): string | null {
   return `/team/${encodeURIComponent(handle)}/seat-management`;
 }
 
-/** Where a team gets the Traycer subscription a seats write needs. */
 export function teamBillingPath(handle: string): string | null {
   if (handle.length === 0) return null;
   return `/team/${encodeURIComponent(handle)}/billing`;

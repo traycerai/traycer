@@ -111,7 +111,6 @@ const mocks = vi.hoisted(() => ({
   /** The client of the host that runs the bot, which takes an Update. */
   boundClient: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
-  /** Whether the viewer is the Admin of the team the bot's sandbox is on. */
   billingAdmin: false,
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
@@ -125,8 +124,6 @@ vi.mock(
   () => emptyBotMentionHostListsMock,
 );
 
-// Who may buy a team's credits is the environment list's answer, read by its
-// own hook; here a case says it.
 vi.mock("@/hooks/sandboxes/use-team-billing-admin", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-team-billing-admin")
@@ -1619,7 +1616,6 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     const raw = "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
     const copy = sandboxRefusalCopyFor("SANDBOX_FROZEN", raw);
     if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
-    // The bot's sandbox is the viewer's own.
     installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
     activityStore.setState({
       activity: trunkWithReason("failed", {
@@ -1658,7 +1654,6 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     const ENDED_TURN = "This sandbox ran out of credits, which ended the turn.";
     const ACME = { id: "team-acme", name: "Acme" };
 
-    /** The line under the post, with the bot's sandbox described by `rows`. */
     function frozenLine(rows: ReadonlyArray<HostDirectoryEntry>): HTMLElement {
       installHostDirectoryRows(rows);
       activityStore.setState({
@@ -1914,7 +1909,6 @@ describe("a frozen turn in a bot's channel or thread draws no error row, and the
   const TWO_SENTENCES =
     "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
 
-  /** The bot's turn that the sandbox's want of credits ended. */
   function frozenTurn(): Message {
     const turn = botReply({
       messageId: "turn-frozen",

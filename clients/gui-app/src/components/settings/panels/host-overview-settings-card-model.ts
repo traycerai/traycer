@@ -39,10 +39,7 @@ export type HostSettingsCardState =
   | { readonly kind: "moved"; readonly acceptedAt: number }
   | { readonly kind: "other" };
 
-/**
- * The running move's line: no count until the move has registered an item,
- * never `0 of 0`.
- */
+/** Never `0 of 0`: no count until the move has registered an item. */
 export function moveProgressText(applied: number, total: number): string {
   return total === 0
     ? "Moving this computer's settings to Personal"
@@ -54,7 +51,6 @@ export function moveStoppedText(reason: string, left: number): string {
   return `Moving stopped: ${reason}. ${left === 1 ? "1 item" : `${String(left)} items`} left.`;
 }
 
-/** The environment's reported items and pending uploads: applied, of all. */
 export function moveItemCounts(status: EnvironmentStatusResponseV11): {
   readonly applied: number;
   readonly total: number;

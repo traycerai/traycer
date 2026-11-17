@@ -27,7 +27,6 @@ import {
 export type { SandboxBillingEnvironmentAnswer };
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-// The fixture user's own name and email, as the sign-in wants them (non-null).
 const BILLING_USER_NAME = "Test User";
 const BILLING_USER_EMAIL = "test@example.com";
 const BILLING_USER = createAuthenticatedUserFixture(undefined);
@@ -142,7 +141,6 @@ export function SandboxBillingRuntime(props: {
   readonly hostId: string;
   readonly children: ReactNode;
   readonly queryClient: QueryClient | undefined;
-  /** Called each time the account's environment list is read. */
   readonly onEnvironmentListRead: (() => void) | null;
   readonly onBinding:
     | ((binding: HostRuntimeBinding<HostRpcRegistry>) => void)
@@ -162,9 +160,6 @@ export function SandboxBillingRuntime(props: {
   const [runnerHost] = useState(() => buildRunnerHost(props.hostId));
   const factory = useMemo(() => messengerFactory(), []);
   const { answer, environmentId, onEnvironmentListRead, onBinding } = props;
-  // The account's environment list is the app's own authn read, not a host
-  // method: serve it at the auth service, so the real list hook, role join and
-  // billing-Admin check run over it.
   const prepareBinding = useMemo(
     () => (binding: HostRuntimeBinding<HostRpcRegistry>) => {
       serveEnvironmentList(binding.auth, {

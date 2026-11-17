@@ -48,7 +48,6 @@ export interface StagedSendSignInCheck {
 
 const NO_TEAMS: readonly string[] = [];
 
-/** No team balance known: a check that reads none. */
 const NO_TEAM_BALANCE: TeamBalanceMc = () => null;
 
 const CHECKING_NOTICE: ComposerHostNoticeState = {
@@ -100,8 +99,6 @@ export function useStagedSendSignInCheck(
   const readTeamBalance = useReadTeamBundleBalance();
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
-  // A team's credits are offered to its Admin only: anyone else reads the
-  // same notice with no action.
   const addCreditsAction = useCallback(
     (configuration: StageConfiguration): ComposerHostNoticeAction | null => {
       if (configuration.kind === "team" && !isTeamAdmin(configuration.teamId))

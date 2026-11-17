@@ -634,8 +634,6 @@ describe("InviteAcceptDialog", () => {
       const onAccepted = vi.fn(() => {
         order.push("onAccepted");
       });
-      // Signed in through the provider, so the accept counts as made on this
-      // sign-in and the account is read after it.
       const provider = new DefaultRequestContextProvider({
         origin: "renderer",
       });

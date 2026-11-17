@@ -129,7 +129,6 @@ interface RigOptions {
   readonly failList: boolean;
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: AgentDefinition | null;
-  /** The host completes a write on a computer bound to no configuration. */
   readonly localOnly: boolean;
 }
 
@@ -353,7 +352,6 @@ describe("<AgentDefinitionsTab />", () => {
     await waitFor(() => {
       expect(rig.puts).toHaveLength(1);
     });
-    // Compare-and-set on THIS definition's revision.
     expect(rig.puts[0]).toEqual({
       name: "reviewer.md",
       text: "Review the change, then approve.",

@@ -19,7 +19,6 @@ import { packVersionUseRefusalMessage } from "@/components/settings/panels/provi
 import type { VersionManagerPanelToken } from "@/components/settings/panels/provider-pack-version-manager-presence";
 import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
-/** The item a pack save writes. */
 const PACK_SAVE_KINDS = ["pack_policy"] as const;
 
 type UsePackVersionMutationResult = UseMutationResult<

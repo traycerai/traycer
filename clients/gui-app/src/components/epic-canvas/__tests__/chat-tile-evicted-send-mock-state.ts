@@ -76,7 +76,6 @@ export const MOCK_HOST_CLIENT = {
     }
     return new Promise(() => {});
   },
-  // A pool build reads the pool tier's client through the surface's.
   createRequesterForHostId: () => MOCK_HOST_CLIENT,
   getActiveHostId: () => HOST_ID,
   getRequestContextUserId: () =>
@@ -112,10 +111,7 @@ export const MOCK_HOST_DIRECTORY = {
   },
 };
 
-// ENUMERATES deliberately, as `chat-tile-queue-edit-steer.test.tsx` does: the
-// barrel's un-overridden residue is provider-coupled and throws.
-// The one binding carries the directory `useHostDirectory` answers, as in the
-// app: `useHostDirectoryEntry` reads it off the binding.
+// Enumerated: the barrel's un-overridden residue is provider-coupled and throws.
 export const MOCK_HOST_BINDING = {
   directory: MOCK_HOST_DIRECTORY,
   hostClient: {

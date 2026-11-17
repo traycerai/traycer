@@ -19,7 +19,6 @@ import {
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 
-/** Shared empty map for a computer that reports no removed accounts. */
 export const EMPTY_REMOVED_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
   readonly RemovedProviderProfile[]
@@ -27,7 +26,6 @@ export const EMPTY_REMOVED_PROFILES_BY_HARNESS_ID: ReadonlyMap<
 
 const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
-/** One harness's removed accounts; none where the map has no entry. */
 export function removedProfilesForHarness(
   removedProfilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
@@ -57,9 +55,7 @@ export interface RailEntry {
    *  missing an API key). Profile-level auth issues surface in the dropdown,
    *  not here. */
   readonly degraded: boolean;
-  /** Bottom-right accent-dot data, present whenever the provider's account
-   *  dropdown is drawn (`profileDropdownShown`). `null` renders no dot at
-   *  all: no dropdown, or a pin to a removed account. */
+  /** `null`: no dropdown, or a pin to a removed account. */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
    *  error. The entry always stays VISIBLE and labelled - the dictation-mic
@@ -132,8 +128,7 @@ function resolveAccentDot(
   )
     return null;
   const pin = resolveProfilePin(profiles, removedProfiles, activeProfileId);
-  // A removed account has no colour of its own, and another row's would
-  // name the wrong account.
+  // A removed account has no colour; another row's would name the wrong account.
   if (pin.kind === "removed") return null;
   const dotProfile = pin.kind === "row" ? pin.profile : profiles.at(0);
   if (dotProfile === undefined) return null;
@@ -173,7 +168,6 @@ export interface VisibleRailEntriesInput {
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
   >;
-  /** Each provider's removed accounts (`providers.list` `removedProfiles`). */
   readonly removedProfilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     readonly RemovedProviderProfile[]

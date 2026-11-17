@@ -11,12 +11,7 @@ import { SettingsSaveReconcile } from "@/providers/settings-save-reconcile";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * `environment.proposals` on `hostId`, over a connection this window already
- * holds: this machine's host through its own requester while it can be asked,
- * a remote host only through a ready session another surface holds. Opens
- * nothing; null when there is no such connection.
- */
+/** Opens nothing: this machine's host through its own requester, a remote one only through a ready session another surface holds. */
 function proposalsReader(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
 ): (hostId: string) => Promise<EnvironmentProposalsResponse | null> {
@@ -50,11 +45,7 @@ function nowMs(): number {
   return Date.now();
 }
 
-/**
- * The window's one settings-save coordinator: every save made in a host's
- * settings remembers itself here, and the window applies the hold of each as
- * its host connects, with or without an editor open.
- */
+/** Applies each hold as its host connects, with or without an editor open. */
 export function SettingsSaveCoordinatorProvider(props: {
   readonly children: ReactNode;
 }): ReactNode {

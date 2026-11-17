@@ -324,7 +324,6 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 
-/** The live providers and environment answers come from this fake computer. */
 function buildProvidersFixture() {
   const queryClient = createAppQueryClient();
   let requestSeq = 0;

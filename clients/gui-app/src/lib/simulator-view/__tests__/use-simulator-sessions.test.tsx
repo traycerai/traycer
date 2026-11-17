@@ -79,7 +79,6 @@ describe("useSimulatorSessionsForHost below the version floor", () => {
       useSimulatorSessionsForHost({ hostId: HOST_ID, epicId: EPIC_ID }),
     );
     const { records } = fakeDurableStreamTransports();
-    // A host exactly at the floor may own the stream.
     expect(records).toHaveLength(1);
 
     act(() => {

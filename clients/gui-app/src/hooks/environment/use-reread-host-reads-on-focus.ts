@@ -24,11 +24,6 @@ const UNPOLLED: ReadonlySet<string> = new Set(
     .map(([method]) => method),
 );
 
-/**
- * A read made through `hostId`, cached under the tier that serves it, or one the
- * app makes itself on authn (a named environment's history, the environment
- * list, the review list, the notices), cached under authn's scope.
- */
 function rereadsOnFocus(
   query: Query,
   hostId: string,

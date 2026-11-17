@@ -191,13 +191,8 @@ export interface LandingComposerSubmitArgs {
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
     readonly ultracode: boolean;
-    /** A person chose the account (`ComposerToolbarState.accountChosen`). */
     readonly accountChosen: boolean;
-    /**
-     * `selection` shows a default account (`showsDefaultAccount`), which is
-     * nobody's choice: the last-run settings record the Terminal login it
-     * stands in for.
-     */
+    /** A default account is nobody's choice: last-run records the Terminal login it stands in for. */
     readonly showsDefaultAccount: boolean;
   };
   /**
@@ -1750,7 +1745,7 @@ export function useLandingComposerActions(
       const handed = args.hand(epicId);
       if (handed === null) return null;
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
-      // The sign-in the attachment goes out on, taken at the press.
+      // The sign-in taken at the press.
       const operation = takeOperation === null ? null : takeOperation();
       const tabId = uuidv4();
       // The task opens at once, with no agent yet: its first one is created
@@ -1764,7 +1759,7 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
-      // The sign-in sent on, not only its account: a sign-in again ends it.
+      // The sign-in, not only its account: signing in again ends it.
       const sameAccount = (): boolean =>
         pressedSignInCurrent(operation, dispatchUserId);
       // A create or attachment refusal returns the only message copy. An

@@ -178,9 +178,7 @@ describe("useChatSandboxState", () => {
     });
   });
 
-  // The hook maps the configurations it is given: a team read that has not
-  // answered and one that failed hand it the same input (no team has an
-  // environment id, `complete: false`), so one case stands for both.
+  // Unanswered and failed team reads hand the hook the same input, so one case stands for both.
   it.each([
     ["not answered", new Set<string>()],
     ["a failed refetch with retained team data", new Set([TEAM_ENV])],

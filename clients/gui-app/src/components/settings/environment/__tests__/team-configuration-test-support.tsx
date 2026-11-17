@@ -709,11 +709,7 @@ function accountResponse(
   });
 }
 
-/**
- * authn answers one connection list for the whole environment: the account's
- * plan sign-ins and the profile boundary's API-key bindings arrive together,
- * as the plans read and the key form both read it.
- */
+// authn answers one connection list: plan sign-ins and API-key bindings together.
 function withBoundaryConnections(accountText: string): string {
   const account: unknown = JSON.parse(accountText);
   const boundary = teamProfileRecordHttpBoundary.connections.body;
@@ -868,11 +864,6 @@ function teamAuthnResponse(url: URL): Promise<Response> | null {
   return teamItemsResponse(url);
 }
 
-/**
- * The profile boundary's item answers. Under a verified account transport the
- * defaults leave the route to the account handler; a test that states its own
- * items or write refusal answers here.
- */
 function teamItemsResponse(url: URL): Promise<Response> | null {
   if (
     url.pathname.endsWith("/items/managed_profile") &&
@@ -899,11 +890,7 @@ function teamItemsResponse(url: URL): Promise<Response> | null {
   return null;
 }
 
-/**
- * The account read asks authn for one kind per page, and authn answers whole
- * rows; a test states only the rows it means, so each page carries that kind's
- * rows with authn's row fields filled in.
- */
+// authn answers whole rows, so each page fills in authn's row fields.
 function itemsPageAnswer(
   answer: TeamProfileRecordHttpAnswer,
   kind: string | null,
@@ -939,11 +926,7 @@ function itemsPageAnswer(
   };
 }
 
-/**
- * The teams the signed-in user belongs to, as the account directory shows
- * them. authn's user answer names the same teams, so a revalidation that
- * re-projects the user keeps the team the page is mounted for.
- */
+// authn's user answer names the same teams, so a revalidation keeps the mounted team.
 let negotiatedTeams: readonly { teamId: string; slug: string }[] = [];
 
 function publishAccountTeams(
@@ -1186,7 +1169,6 @@ type TeamPageBoundaryTarget =
   | { readonly kind: "team"; readonly environmentId: string }
   | { readonly kind: "personal" };
 
-/** Renders a team Providers surface through the real cloud boundary. */
 export function mountTeamPageThroughBoundary(
   role: TeamPageRole,
   handlers: MockHandlerMap<HostRpcRegistry>,
@@ -1865,10 +1847,6 @@ export function authnAnswer(
   return { status, text: JSON.stringify(body) };
 }
 
-/**
- * What authn answers the team's host list read for `environmentId` from now
- * on; `null` is no answer at all, as when the transport fails.
- */
 export function answerTeamHostList(
   harness: TeamPageHarness,
   environmentId: string,

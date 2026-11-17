@@ -2,7 +2,6 @@ import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ClaimedComputer } from "@traycer-clients/shared/auth/claimed-computers";
 
-/** The team computers a registry lists now: host id to its team's id. */
 export function teamComputersOf(
   registry: HostListResponse,
 ): ReadonlyMap<string, string> {
@@ -14,13 +13,11 @@ export function teamComputersOf(
   return computers;
 }
 
-/** A team the person is in, by its team id: its environment and name. */
 export interface NoticeTeam {
   readonly environmentId: string;
   readonly teamName: string;
 }
 
-/** The person's teams as the environment list answers them, by team id. */
 export function noticeTeamsOf(
   environments: EnvironmentListResponseV11,
 ): ReadonlyMap<string, NoticeTeam> {
@@ -35,10 +32,7 @@ export function noticeTeamsOf(
   return teams;
 }
 
-/**
- * The teams whose computer left the list since the last look. A computer
- * whose team the person left is a removal, which says its own sentence.
- */
+/** A computer whose team the person left is a removal, which says its own sentence. */
 export function departedTeams(
   previous: ReadonlyMap<string, string>,
   listed: ReadonlyMap<string, string>,
@@ -52,9 +46,8 @@ export function departedTeams(
 }
 
 /**
- * A read's claims split in two: the newest claim of each computer this
- * person just claimed here is theirs and only settled; every other claim is
- * a teammate's to tell. Claims arrive newest first.
+ * The newest claim of each computer this person claimed here is theirs and only
+ * settled; every other is a teammate's to tell. Claims arrive newest first.
  */
 export function splitOwnClaims(
   claims: readonly ClaimedComputer[],
@@ -77,25 +70,19 @@ export function splitOwnClaims(
   return { own, teammates };
 }
 
-/** One claim, told once per device: the computer and when it was claimed. */
+/** Told once per device. */
 export function claimNoticeKey(claim: ClaimedComputer): string {
   return `${claim.hostId}@${claim.claimedAt}`;
 }
 
-/** The first line of a claimed computer's notice: who claimed it. */
 export function claimedComputerTitle(claimantName: string): string {
   return `${claimantName} claimed this computer`;
 }
 
-/** The second line of a claimed computer's notice: the team it left. */
 export function claimedComputerDetail(teamName: string): string {
   return `It no longer belongs to ${teamName}.`;
 }
 
-/**
- * The owner's sentence for a claimed computer: the one notice teammates get,
- * and what a teammate connected to it sees.
- */
 export function claimedComputerSentence(
   claimantName: string,
   teamName: string,

@@ -91,17 +91,12 @@ const MCP_SERVER_READS = [
   "environment.configuration.items",
 ] as const;
 
-/** A server's save, as its mutation's variables hold it: never its credential. */
+/** Never its credential. */
 export interface McpServerSave {
   readonly request: Omit<
     EnvironmentConfigurationMcpServerPutRequestV11,
     "credential"
   >;
-  /**
-   * The revision of the server's item the editor showed; null for a new
-   * server, and for one shown with no item. A save whose item moved since is
-   * refused, as the host refused a revision conflict.
-   */
   readonly seenItemRevision: number | null;
 }
 

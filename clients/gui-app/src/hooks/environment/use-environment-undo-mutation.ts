@@ -18,7 +18,6 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 
 const METHOD = "environment.undo";
 
-/** What an Undo changes: the notices, the host's status, the values. */
 const UNDO_READS = [
   "environment.notices",
   "environment.status",
@@ -26,10 +25,6 @@ const UNDO_READS = [
   "providers.list",
 ] as const;
 
-/**
- * Undoes one of Personal's notices, the app's own call to authn on the person's
- * sign-in. A change made since answers `stale`, which the row draws as a refusal.
- */
 export function useEnvironmentUndoMutation() {
   const queryClient = useQueryClient();
   const cloud = useEnvironmentCloud();

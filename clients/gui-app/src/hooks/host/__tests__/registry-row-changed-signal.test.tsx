@@ -83,8 +83,6 @@ vi.mock("@/lib/host", () => {
   };
   return {
     useHostDirectory: configuredDirectory,
-    // The one directory, as in the app: `useHostDirectoryEntry` reads it off the
-    // binding.
     useHostBinding: () => ({ directory: configuredDirectory() }),
   };
 });

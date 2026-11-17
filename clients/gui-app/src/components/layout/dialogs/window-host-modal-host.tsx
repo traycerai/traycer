@@ -156,7 +156,6 @@ function NarratingWindowHostModal(props: {
     WindowNarrationState,
     { readonly kind: "narrating" }
   >;
-  /** The host whose door cover this narration is, if it is one. */
   readonly doorCoverHostId: string | null;
 }): ReactNode {
   const { narration } = props;
@@ -349,9 +348,8 @@ function NarratingWindowHostModal(props: {
 }
 
 /**
- * Whether `NarratingWindowHostModal` puts a card or a dialog on screen: the
- * branches that return one, in its order. The toast stays quiet for a door
- * refusal only while its cover is drawn, so this must not drift from them.
+ * The toast stays quiet for a door refusal only while its cover is drawn, so this
+ * must match the branches of `NarratingWindowHostModal` that return one.
  */
 function drawsNarration(
   gateCardDrawn: boolean,
@@ -437,8 +435,7 @@ function resolveRetry(args: {
   if (offersDoorRetry(variant)) {
     return {
       onRetry: () => {
-        // The reconnect has already run when a failed token refresh rejects;
-        // the cover stays up until an open is admitted.
+        // The reconnect already ran; the cover stays up until an open is admitted.
         retryHostDoor(variant.hostId, hostTokens).catch(() => {
           appLogger.warn("[host-door] retry token refresh failed", {
             hostId: variant.hostId,
@@ -448,8 +445,7 @@ function resolveRetry(args: {
       pending: false,
     };
   }
-  // An unrecognised refusal is the `offline` cover with its code shown, and
-  // keeps that cover's recovery.
+  // An unrecognised refusal is the `offline` cover with its code, and keeps its recovery.
   if (variant.kind !== "offline" && variant.kind !== "unrecognised-refusal") {
     return { onRetry: null, pending: false };
   }
@@ -469,12 +465,7 @@ function resolveRetry(args: {
   return { onRetry: presentation.refreshDirectory, pending: false };
 }
 
-/**
- * The covers that offer Report issue once something has failed: the ordinary
- * offline cover, the same cover over a refusal this app does not know, and the
- * app-update cover. Every door cover and the host-update cover draw their own
- * buttons without it.
- */
+/** Every door cover and the host-update cover draw their own buttons without it. */
 const REPORTED_VARIANTS: ReadonlySet<WindowNarrationVariant["kind"]> = new Set<
   WindowNarrationVariant["kind"]
 >(["offline", "unrecognised-refusal", "update-client"]);

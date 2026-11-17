@@ -106,7 +106,6 @@ const mocks = vi.hoisted(() => ({
     status: null as EnvironmentStatusResponseV11 | null,
     teamRole: "editor",
     environmentListFails: false,
-    /** The rendered host's client, which a request named for its id reaches. */
     client: null as HostClient<HostRpcRegistry> | null,
   },
   auth: {
@@ -144,7 +143,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-// A request named for the rendered host goes out on that host's own client.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === "host-a" ? mocks.state.client : null,
@@ -155,8 +153,6 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
-// The list is the account's, read through authn rather than this host's
-// `environment.list`; the person's role on the team is all the card reads.
 vi.mock("@/hooks/bots/use-environment-list-query", async () => {
   const { useQuery } = await import("@tanstack/react-query");
   return {

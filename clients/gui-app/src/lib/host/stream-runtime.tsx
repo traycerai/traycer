@@ -325,8 +325,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
-    // The person's Retry runs a waiting rebuild now; the streak it earned
-    // stays, so a rebuild refused again waits as long as it would have.
+    // The streak a rebuild earned stays, so one refused again waits as long as it would have.
     const stopRetry =
       value.hostId === null
         ? () => undefined
@@ -525,7 +524,6 @@ function readHostTransportKey<Registry extends VersionedRpcRegistry>(
   return hostTransportKey(client?.getActiveHost() ?? null);
 }
 
-/** Same arm as {@link useReactiveHostTransportKey}, for the version floor. */
 function useReactiveHostFloorAdmitted<Registry extends VersionedRpcRegistry>(
   client: HostClient<Registry> | null,
 ): boolean {

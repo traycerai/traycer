@@ -20,7 +20,6 @@ interface BalanceTeam {
 
 const NO_TEAMS: readonly BalanceTeam[] = [];
 
-/** The person's teams, stable while the signed-in user's record is. */
 function useBalanceTeams(): readonly BalanceTeam[] {
   const user = useAuthUser().data ?? null;
   return useMemo(
@@ -29,10 +28,6 @@ function useBalanceTeams(): readonly BalanceTeam[] {
   );
 }
 
-/**
- * One team's read, by its handle: the key it is cached under, the call that
- * answers it (the team's remaining bundle credits), and whether it may run.
- */
 function useTeamBalanceOptions() {
   const auth = useHostBinding()?.auth ?? null;
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -51,18 +46,11 @@ function useTeamBalanceOptions() {
   );
 }
 
-/**
- * Each of the person's teams' own balance, in millicredits: the team's
- * remaining bundle credits, the pot every wake of its sandboxes draws. Read
- * from authn's organization route on the person's sign-in, which answers any
- * accepted member. A team whose read is out or failed, or whose organization
- * has no bundle summary, is `null`: unknown, never short.
- */
+/** A team whose read is out or failed, or with no bundle summary, is `null`: unknown, never short. */
 export function useTeamBundleBalances(): TeamBalanceMc {
   const teams = useBalanceTeams();
   const options = useTeamBalanceOptions();
-  // Stable while the team list is, so the combined answer keeps its identity
-  // between renders (TanStack re-runs `combine` when its reference changes).
+  // Stable while the team list is: TanStack re-runs `combine` when its reference changes.
   const combine = useCallback(
     (results: ReadonlyArray<UseQueryResult<number | null>>) => {
       const byTeamId = new Map<string, number>();
@@ -85,10 +73,7 @@ export function useTeamBundleBalances(): TeamBalanceMc {
   );
 }
 
-/**
- * Reads one team's balance afresh, for Send: the cached one is advice. `null`
- * when the team is not the person's, the read fails, or it names no bundles.
- */
+/** Read afresh at Send: the cached one is advice. */
 export function useReadTeamBundleBalance(): (
   teamId: string,
 ) => Promise<number | null> {

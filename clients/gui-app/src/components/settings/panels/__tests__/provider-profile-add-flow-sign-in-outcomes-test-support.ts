@@ -1,7 +1,3 @@
-// The Add dialog, through the real flow host, over a host client whose
-// messenger answers providers.list / startLogin / awaitLogin / setEnabled.
-// `offersSignIns` on the list is the only switch: only true reads a completed
-// sign-in's profileOutcome.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
@@ -16,9 +12,8 @@ function currentAuthService(): AuthService {
   return authServiceForTest;
 }
 
-// The flow host reads `useHostClient` through the barrel, and Vite rewrites
-// that re-export onto `@/lib/host/runtime`. Both have to answer the pinned
-// client or the session throws before the dialog mounts.
+// Vite rewrites the barrel's re-export onto `@/lib/host/runtime`; both must answer
+// the pinned client or the session throws before the dialog mounts.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -356,7 +351,6 @@ function startedBody(): StartResponse {
   };
 }
 
-/** Old keys as they are when the sign-in changed nothing. */
 export function nothingChanged(
   outcome: ProviderLoginProfileOutcome | null,
 ): AwaitResponse {
@@ -402,7 +396,6 @@ function setEnabledEcho(): SetEnabledResponse {
   return { state };
 }
 
-/** The answer's own rows, authenticated, so old keys would call this signed in. */
 function echoedAwait(
   outcome: ProviderLoginProfileOutcome | null,
   echoed: readonly ProviderProfile[],
@@ -433,22 +426,15 @@ export function renderAddFlow(input: {
   readonly profilesBefore: readonly ProviderProfile[];
   readonly profilesAfter: readonly ProviderProfile[];
   readonly outcome: ProviderLoginProfileOutcome | null;
-  /** When set, the await answer carries these rows. Omitted keeps state null. */
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
-  /** Overrides the old answer's existing-profile verdict when rows are echoed. */
   readonly echoedExistingProfileId: string | null | undefined;
-  /** Number of local rename requests that fail before one succeeds. */
   readonly renameFailures: number;
-  /** How many providers.list calls after the await reject before one succeeds. */
   readonly listFailuresAfterAwait: number;
-  /** Record the login-ownership manifest before the dialog mounts. */
   readonly ownership: boolean;
-  /** Seed a fresh providers.list entry so opening the dialog only reads it. */
   readonly seedCache: boolean;
   readonly cacheSeed:
     | (ListResponse & { readonly futureKey: string })
     | undefined;
-  /** Leave the first post-await list request pending until the test releases it. */
   readonly holdListRefresh: boolean;
   readonly unknownProfileOutcome: boolean;
   readonly codePaste: boolean;
@@ -773,7 +759,6 @@ export async function chooseSignedIn(
     expect(harness.created).toHaveBeenCalledWith(PROFILE_ID);
   });
   expect(screen.queryByRole("dialog")).toBeNull();
-  // Today's providers.list read after providers.setEnabled succeeds is the recolor's.
   expect(harness.listsAfterAwait()).toBe(decisionReads + 1);
 }
 
@@ -784,7 +769,6 @@ export function expectNoSuccessSentence(): void {
   expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
 }
 
-/** providers.cancelLogin for this provider, or null when the call is absent. */
 function cancelHolderId(params: unknown): string | null {
   if (
     typeof params !== "object" ||

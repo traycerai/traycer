@@ -116,11 +116,7 @@ function throwIfNativeError<
   }
 }
 
-/**
- * Only the promote arm answers the `@1.5` codes, and these readers never send
- * it, so one here is a host off its contract and reads as an unsupported
- * action.
- */
+/** Only the promote arm answers the `@1.5` codes, so one here is a host off its contract. */
 function listOrMutateCode(
   code: ProviderNativeMutateErrorCodeV15,
 ): ProviderNativeMutateErrorCode {

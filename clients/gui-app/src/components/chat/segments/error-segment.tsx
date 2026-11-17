@@ -222,9 +222,7 @@ export function ErrorSegment({
   settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
   const readOnly = useContext(ChatStatusReadOnlyContext);
-  // Whose credits the chat's sandbox is on, from the person's host directory:
-  // a team's one out of credits names the team, and while it is not known no
-  // remedy is told as the reader's.
+  // While whose sandbox it is is unknown, no remedy is told as the reader's.
   const payer = useSandboxHostPayer(
     useMaybeChatTranscript()?.payerHostId ?? null,
   );
@@ -361,10 +359,6 @@ interface ErrorSegmentRowProps {
   readonly reportAction: ReactNode;
 }
 
-/**
- * A team's sandbox out of credits mid-turn: the title names the team, and
- * the line under it is worded for whether the person can buy its credits.
- */
 function TeamFrozenErrorSegmentRow(
   props: ErrorSegmentRowProps & {
     readonly copy: SandboxRefusalCopy;

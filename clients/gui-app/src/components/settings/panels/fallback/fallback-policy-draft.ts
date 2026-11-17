@@ -834,11 +834,7 @@ export type FallbackPolicyDraftAction =
       readonly policy: FallbackPolicy;
     }
   | FallbackSaveFailedAction
-  /**
-   * A save that was never sent (the sign-in it was pressed on ended first).
-   * The editor is as it was before the press: the pending save goes, nothing
-   * is reported, and a draft it carried counts as unsent again.
-   */
+  /** Never sent (its sign-in ended first): nothing is reported, and a draft it carried counts as unsent again. */
   | {
       readonly type: "save-abandoned";
       readonly requestId: number;
@@ -1882,10 +1878,6 @@ function withoutPendingSave(
   );
 }
 
-/**
- * The `save-abandoned` arm: the save never went out, so it leaves no notice,
- * no error and no claim about the host.
- */
 function applySaveAbandoned(
   state: FallbackPolicyDraftState,
   requestId: number,
@@ -1895,10 +1887,8 @@ function applySaveAbandoned(
   return {
     ...state,
     pendingSaves: withoutPendingSave(state, requestId),
-    // A draft is dispatched only after its own `edited`, so this one was the
-    // only dispatch at its revision and every earlier one is below it. One
-    // below is therefore the mark under which the display, at or after this
-    // revision, is unsent again; a later dispatch has already raised it past.
+    // Dispatched only after its own `edited`, so one below is the mark under which the
+    // display is unsent again; a later dispatch has already raised it.
     lastDispatchedRevision:
       pending.carries === "draft" &&
       state.lastDispatchedRevision === pending.revision

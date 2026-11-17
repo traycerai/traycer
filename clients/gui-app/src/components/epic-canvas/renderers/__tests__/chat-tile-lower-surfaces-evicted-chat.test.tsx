@@ -1,4 +1,3 @@
-/** An evicted chat parks its owner's message; a viewer stays read-only. */
 import {
   cleanup,
   fireEvent,

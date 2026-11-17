@@ -3,14 +3,9 @@ import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-so
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostDoorStateFor } from "@/stores/host/host-door-state-store";
 
-// Stream-client owners serving each host, told when the person retries it.
-// Each holds its own rebuild timer, which no reconnect lane reaches.
+/** Each owner holds its own rebuild timer, which no reconnect lane reaches. */
 const rebuildOwners = new Map<string, Set<() => void>>();
 
-/**
- * Hears {@link retryHostDoor} for `hostId`. `rebuildNow` runs a rebuild the
- * owner is waiting to run; an owner with nothing waiting ignores it.
- */
 export function onHostDoorRetry(
   hostId: string,
   rebuildNow: () => void,
@@ -26,10 +21,8 @@ export function onHostDoorRetry(
 }
 
 /**
- * The person's Retry on a host this window cannot use: reconnect to it now
- * instead of when the backoff next runs. Only a token the host called expired
- * is replaced first; every other state redials with the token held, which a
- * new one could not fix. Clears no state itself: the next admitted open does.
+ * Only a token the host called expired is replaced first; other states redial with
+ * the held token. Clears no state: the next admitted open does.
  */
 export async function retryHostDoor(
   hostId: string,

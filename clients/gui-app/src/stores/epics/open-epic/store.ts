@@ -390,12 +390,7 @@ export interface OpenEpicState {
    * it). Read through `useEpicChatRecordHead`.
    */
   readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
-  /**
-   * Who started each chat, by `chatRecordKey(ownerUserId, chatId)`, as the
-   * `@1.5` list answer and stream delta state it: see `./chat-record-starters`.
-   * Main-thread, like {@link OpenEpicState.chatRecordHeads}. Read through
-   * `useEpicChatStarter`.
-   */
+  /** Main-thread, like {@link OpenEpicState.chatRecordHeads}. */
   readonly chatRecordStarters: Readonly<Record<string, string>>;
   /**
    * The chats whose records the serving host has dropped (cold eviction), by
@@ -2085,7 +2080,6 @@ export function createOpenEpicStore(
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
           chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
-          // Main-thread too, folded in beside the head.
           chatRecordStarters: EMPTY_CHAT_RECORD_STARTERS,
           // List-only, like the head: restated by each snapshot.
           evictedChatIds: EMPTY_EVICTED_CHAT_IDS,

@@ -15,12 +15,6 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useProvidersAnswerProfileNameForClient } from "@/hooks/providers/use-providers-answer-profile-name-mutation";
 import { useHostClient } from "@/lib/host";
 
-/**
- * The account's other names, in its details: pick the name every computer
- * uses, or keep the current one and hide this. Either one, or Rename, clears
- * the other names, and the block leaves with them. Mounted only for a row
- * that has other names.
- */
 export function ProfileOtherNames(props: {
   readonly hostId: string | null;
   readonly providerId: ProvidersAnswerProfileNameRequest["providerId"];

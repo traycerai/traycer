@@ -237,10 +237,8 @@ async function readSecretsList(
 }
 
 /**
- * The ids of the configuration's sandboxes, from the host list the page
- * already holds for this viewer; `null` while that list is not loaded or its
- * last read failed. Nothing is read for it: a secret is used on sandboxes
- * only, and the history's host rows carry no kind.
+ * `null` while the list is not loaded or its last read failed. Nothing is read for
+ * it: a secret is used on sandboxes only.
  */
 function cachedSandboxIds(
   environmentId: string,

@@ -225,10 +225,7 @@ async function runSharedWake(
   return { outcome: await attempt.outcome, joined: false };
 }
 
-/**
- * `configuration` is `null` where the directory cannot say whose sandbox it
- * is: nothing is then said as the person's own credits.
- */
+/** `null`: nothing is said as the person's own credits. */
 function toastWakeOutcome(
   outcome: SandboxWakeOutcome,
   configuration: SandboxConfigurationCopy | null,
@@ -279,12 +276,7 @@ function toastWakeOutcome(
 
 const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
 
-/**
- * The credit gate's description, or `null` for the title alone. A refusal
- * that named a team pot says which, as a row does. The person's own balance,
- * or an older server's silence, keeps the add-credits line. While whose
- * sandbox it is is not known, nothing is told as the person's own.
- */
+/** While ownership is unknown, nothing is told as the person's own. */
 function creditGateDescription(
   outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
   configuration: SandboxConfigurationCopy | null,
@@ -363,9 +355,7 @@ export function startSandboxWake(
   const entry = directory.findById(hostId);
   const remote =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry : null;
-  // Whose sandbox it is, from the directory: a team's by its owner, the
-  // person's only when the row names them as owner. A row with no owner (an
-  // authn before `owner`) or no row at all says nothing about whose it is.
+  // A row with no owner (an authn before `owner`) or no row says nothing about whose it is.
   let configuration: SandboxConfigurationCopy | null = null;
   if (remote !== null && remote.sandbox !== null) {
     if (remote.sandbox.ownerTeamName !== null) {

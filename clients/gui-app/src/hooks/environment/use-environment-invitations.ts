@@ -119,8 +119,7 @@ export function useEnvironmentInvitationAcceptMutation() {
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
-  // Only the sign-in that accepted: an account switched while the call was
-  // out tells the new account nothing.
+  // An account switched while the call was out is told nothing.
   const acceptedHere = (context: RequestContext | null): boolean =>
     context !== null &&
     !context.abortSignal.aborted &&
@@ -160,11 +159,8 @@ export function useEnvironmentInvitationAcceptMutation() {
           captured.viewerUserId,
         ),
       });
-      // The list joins each team's row to the account's teams, and a new set
-      // of teams reads it again by itself. The account is read again first,
-      // so the team just joined is among them. The list is still invalidated
-      // after: an accept that changes no team, or a read that fails, still
-      // brings the new row.
+      // The account is read again first so the new team is among them; the list is still
+      // invalidated after, for an accept that changes no team or a failed read.
       if (accepted && captured.auth !== null)
         await captured.auth
           .revalidateCurrentContextAfterInvalidation()

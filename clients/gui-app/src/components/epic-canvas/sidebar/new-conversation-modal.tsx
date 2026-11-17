@@ -1180,9 +1180,8 @@ export function NewConversationModalBody(props: {
       onShownPickKept: (settings) => setSettings(epicId, settings),
     });
   }, [epicId, setSettings, toolbarStore]);
-  // Nobody chose the account while the draft holds no settings of its own, or
-  // only edits made over a default account: its Terminal login starts on the
-  // default account. A draft whose account a person chose keeps it.
+  // A draft whose account a person chose keeps it; otherwise its Terminal login
+  // starts on the default account.
   const draftAccountFollowsDefault = useNewConversationModalStore((state) => {
     const patch = state.draftPatchesByEpicId[epicId];
     return (
@@ -2737,7 +2736,7 @@ function useStagedTaskAttachment(input: {
         return;
       }
       const userId = useAuthStore.getState().profile?.userId ?? null;
-      // The sign-in the attachment goes out on, taken at the press.
+      // The sign-in taken at the press.
       const operation = takeOperation === null ? null : takeOperation();
       const generation = captureComposerSubmitGeneration(
         () =>

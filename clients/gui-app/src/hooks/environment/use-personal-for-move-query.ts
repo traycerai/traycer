@@ -15,14 +15,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 
-/**
- * The person's Personal, read on their own sign-in for the move sheet that is
- * open (`readPersonalForMove`); `null` when it could not be read. Read afresh
- * for each sheet and never kept once the sheet closes, so a sheet is never
- * drawn from an older copy. Never refetched on its own while the sheet is
- * open: the plan is drawn against this one read until the sheet asks again.
- * A read that failed is not kept: the next sheet to open reads again.
- */
+/** Read afresh per sheet, never kept or refetched: the plan is drawn against this one read. */
 export function usePersonalForMoveQuery(
   enabled: boolean,
 ): UseQueryResult<PersonalForMove | null> {

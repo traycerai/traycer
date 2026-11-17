@@ -118,11 +118,7 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   );
 }
 
-/**
- * The row itself: the switch, and while it is on the threshold, the include
- * choice and the footnote. `bounds` is null until the read lands; the
- * options wait for it.
- */
+/** `bounds` is null until the read lands; the options wait for it. */
 export function ChatAutoArchiveRowView(props: {
   readonly row: SettingsRowDefinition;
   readonly status: ReactNode;

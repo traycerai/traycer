@@ -11,8 +11,7 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
  */
 export function SecretsHeaderDetails(): ReactNode {
   const pick = useEnvironmentPick();
-  // On a Local pick no chip holds the host list the drawer counts sandboxes
-  // from, so this reads it.
+  // On a Local pick no chip holds the host list the drawer counts sandboxes from.
   useHostsRunningPersonal(pick.kind === "local");
   const environmentId = useDetailsEnvironmentId();
   if (environmentId === null) return null;

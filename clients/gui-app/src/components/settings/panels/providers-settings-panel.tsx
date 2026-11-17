@@ -323,12 +323,7 @@ function initialSelectedProfileId(
   return defaultSelectedProfileId(profiles);
 }
 
-/**
- * The row a focus intent names. An intent carries the wire `profileId`
- * ("ambient" for the Terminal login); the row is the one that id, or an
- * alias of it, resolves to. A removed or unknown id focuses nothing, and the
- * page opens on its first row as it does for any id it does not list.
- */
+/** A removed or unknown id focuses nothing; the page opens on its first row. */
 function focusedSettingsProfile(
   profiles: readonly ProviderProfile[],
   removedProfiles: readonly RemovedProviderProfile[],
@@ -1855,7 +1850,6 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: the provider's variables. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
 }): ReactNode {

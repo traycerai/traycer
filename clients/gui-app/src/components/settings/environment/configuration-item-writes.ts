@@ -46,28 +46,17 @@ interface ItemWriteState {
   readonly drafts: readonly HeldDraft[];
 }
 
-/**
- * A submitted draft, held from its first write until a write at its address
- * is saved or it is discarded, with what its writes are measured against.
- */
 interface HeldDraft {
-  /** Its text, kept current as the person types. */
   readonly write: ConfigurationItemWrite;
-  /**
-   * The revision the person was last told about: the one the draft was first
-   * typed over, then each out-of-date refusal's own revision.
-   */
+  /** First the revision the draft was typed over, then each out-of-date refusal's own. */
   readonly told: number | null;
-  /** `told` as it stood when the person last typed. */
   readonly typedAt: number | null;
-  /** The value last sent. */
   readonly submitted: ConfigurationItem["value"];
 }
 
 /**
- * Who a write is for. The person's own write (a blur, a Save, a Remove) sends
- * at the revision they were last told about. A row's unmount sends only text
- * never submitted, at the revision in force when it was typed.
+ * The person's write sends at the revision they were last told about; an unmount
+ * sends only unsubmitted text, at the revision in force when it was typed.
  */
 export type ConfigurationWriteTrigger = "person" | "unmount";
 
@@ -77,13 +66,8 @@ export interface ConfigurationItemWrites {
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly drafts: readonly ConfigurationItemWrite[];
   readonly checking: boolean;
-  /** The person's own write. */
   readonly write: (write: ConfigurationItemWrite) => Promise<void>;
-  /**
-   * A row's write as it unmounts, which the person did not make, on the
-   * sign-in its text was typed on (`typedOn`); nothing is sent once that
-   * sign-in has ended.
-   */
+  /** Nothing is sent once the sign-in its text was typed on (`typedOn`) has ended. */
   readonly writeOnUnmount: (
     write: ConfigurationItemWrite,
     typedOn: EnvironmentCloud | null,
@@ -183,7 +167,6 @@ function withoutHeld(
   );
 }
 
-/** The draft a put submits: held from its first write, its text now `write`'s. */
 function submitDraft(
   drafts: readonly HeldDraft[],
   write: ConfigurationItemWrite,
@@ -199,14 +182,7 @@ function submitDraft(
   ];
 }
 
-/**
- * What a write sends, or null for nothing. With no draft held, the row's
- * item is what the person was shown. With one:
- * - the person's write names the revision they were last told about, never
- *   one a newer read put in the row unseen, so a change since is refused;
- * - an unmount sends only text never submitted, at the revision in force
- *   when it was last typed, never one a refusal named after that typing.
- */
+/** Never a revision a newer read put in the row unseen, so a change since is refused. */
 function writeBasis(
   asked: ConfigurationItemWrite,
   trigger: ConfigurationWriteTrigger,
@@ -368,8 +344,6 @@ export function useConfigurationItemWrites(
       return Promise.resolve();
     },
   });
-  // Typing keeps a held draft's text current, and records the revision the
-  // person had been told about when they typed it.
   const updateDraft = (draft: ConfigurationItemWrite): void => {
     setState((current) => {
       const held = heldAt(current.drafts, draft);
@@ -406,9 +380,7 @@ export function useConfigurationItemWrites(
     typedOn: EnvironmentCloud | null,
   ): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
-    // An unmount's text goes only on the sign-in it was typed on; once that
-    // sign-in has ended (another account, or the same one signed in again),
-    // the write is abandoned before it is sent, silently.
+    // Abandoned silently once the sign-in it was typed on has ended.
     if (
       trigger === "unmount" &&
       (typedOn === null || !typedOn.onOriginSignIn())
@@ -461,7 +433,6 @@ export function useConfigurationItemWrites(
     onOutcome(result);
     if (result.outcome !== "saved") {
       active.current = null;
-      // An out-of-date refusal tells the person the current revision.
       const told =
         result.outcome === "conflict"
           ? (result.current?.revision ?? null)

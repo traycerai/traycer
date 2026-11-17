@@ -1,8 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
 
-// The Personal pages read through the window's own host. Mocked at the scope
-// boundary, as the other settings page suites do; the page frame, its status
-// read, the app's own reads of authn and the query cache stay real.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -68,7 +65,6 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-/** A secret's rotation, as the secrets page reads it: authn's, for a named environment. */
 function RotationReader(): ReactNode {
   useSecretsRead({
     method: "environment.secrets.rotation",
@@ -89,7 +85,6 @@ function SecretsListReader(): ReactNode {
   return null;
 }
 
-/** One subject's history, read from authn and never polled. */
 function HistoryReader(props: { readonly subjectKey: string }): ReactNode {
   useEnvironmentCloudQuery({
     method: "environment.history",
@@ -223,7 +218,6 @@ describe("a Local row's page", () => {
       expect(historyReadsOf(harness, "UNOBSERVED")).toBe(1);
     });
     await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
-    // The page stops showing one history; its answer stays cached.
     view.rerender(page(false));
 
     act(() => {

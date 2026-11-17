@@ -545,7 +545,6 @@ function readOwnerIdentityKey(
   );
 }
 
-/** `false` only for a row known to be below the version floor. */
 function readOwnerFloorAdmitted(
   client: HostClient<HostRpcRegistry> | null,
 ): boolean {
@@ -1676,9 +1675,7 @@ function createEpicSessionController(): EpicSessionController {
       targetHostId,
       originalHostId: entry.originalHostId,
     });
-    // No session may be opened to a host below the version floor, so no
-    // ladder, and none left pending from an earlier failure: rising back
-    // above it moves the run key, and that run acquires.
+    // No ladder, and none left pending: rising above the floor moves the run key, and that run acquires.
     if (!floorAdmitted) {
       entry.backoff.cancel();
       return;

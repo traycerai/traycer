@@ -448,7 +448,6 @@ const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 const NO_PROVIDERS: ReadonlyArray<ProviderCliState> = [];
 const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
-/** The two halves of the tab's `providers.list` answer the footer reads. */
 function tombstonedProfileListProps(list: ProvidersListResponse | undefined): {
   readonly providers: ReadonlyArray<ProviderCliState>;
   readonly removedProfiles: readonly RemovedProviderProfile[];
@@ -3704,8 +3703,7 @@ function useChatTileSessionViewModel(
       canParkCreatorMessage,
     ],
   );
-  // The handle's acquisition follows its actual serving peer. A host snapshot,
-  // not the at-rest hint, decides whether these locally captured messages go.
+  // A host snapshot, not the at-rest hint, decides whether locally captured messages go.
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
     if (

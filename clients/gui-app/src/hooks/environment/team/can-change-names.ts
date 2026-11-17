@@ -7,10 +7,7 @@ import {
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 
-/**
- * The team's members who may change its configuration, by name, offered only
- * after the complete roster has answered.
- */
+/** Offered only after the complete roster has answered. */
 export function canChangeNames(
   result: EnvironmentMembersListResult,
 ): readonly string[] {
@@ -24,7 +21,6 @@ export function canChangeNames(
   );
 }
 
-/** Who can change `what`, by name, or by role when no names are loaded. */
 export function canChangeSentence(
   names: readonly string[],
   what: string,
@@ -34,7 +30,6 @@ export function canChangeSentence(
     : `${names.join(", ")} can change ${what}.`;
 }
 
-/** The names that can change the configuration the settings page shows. */
 export function useConfigurationCanChangeNames(): readonly string[] {
   const source = useConfigurationSource();
   return canChangeNames(

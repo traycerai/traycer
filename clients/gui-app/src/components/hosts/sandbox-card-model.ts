@@ -220,7 +220,6 @@ export function sandboxCreatorName(
   return memberWords(creator, viewerUserId, CREATOR_WORDS);
 }
 
-/** A frozen team sandbox: the team's bundle ran out, whoever woke it last. */
 export function sandboxTeamFrozenLine(teamName: string): string {
   return `${HOST_FROZEN_WORD}: ${teamPossessive(teamName)} bundle is out.`;
 }
@@ -603,28 +602,20 @@ export function sandboxHeaderNeedsRepair(
   );
 }
 
-/** A team's frozen sandbox whose team has no name to give. */
 const TEAM_CREDITS_RAN_OUT_UNNAMED = "Your team's credits ran out";
 
-/**
- * Whose credits ran out on a team's frozen sandbox whose team the app cannot
- * name: nothing while the person's teams have not all answered (one still out
- * or failed), then the unnamed words. The sandbox page's header and a pending
- * send's line both say it through this.
- */
+/** Nothing until every one of the person's teams has answered, then the unnamed words. */
 export function unnamedTeamCreditsRanOut(
   teamsAnswered: boolean,
 ): string | null {
   return teamsAnswered ? TEAM_CREDITS_RAN_OUT_UNNAMED : null;
 }
 
-/** Whose a host page's sandbox is, as far as the app knows. */
 export type SandboxHeaderOwnership = "team" | "personal" | "unknown";
 
 /**
- * The host page offers only Destroy when credits run out, so names no wake
- * remedy. `null` while whose sandbox it is is not known, and while a team's
- * sandbox has no name to give yet.
+ * The host page offers only Destroy, so no wake remedy. `null` while ownership, or
+ * a team's name, is unknown.
  */
 export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,

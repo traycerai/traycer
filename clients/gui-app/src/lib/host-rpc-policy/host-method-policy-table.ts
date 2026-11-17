@@ -104,7 +104,6 @@ export function defineConditionPolicy<
   };
 }
 
-/** Whether a computer's `environment.status` says its move is running. */
 export function environmentStatusMoveRunning(
   data: ResponseOfMethod<HostRpcRegistry, "environment.status">,
 ): boolean {

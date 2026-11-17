@@ -47,15 +47,7 @@ export function useConfigurationPlansQuery(): UseQueryResult<
   });
 }
 
-/**
- * What authn says still works for the team once `profileId` is unlinked,
- * read on the person's sign-in when Unlink opens (`null` reads nothing), so
- * the confirm can mount on current consequences. Each opening (`previewId`)
- * reads afresh. Not kept once the confirm closes, and not retried behind the
- * person's back: a refused read is the query's error, which the confirm
- * offers to read again. The turns running on the plan are the window's own
- * team computer's count (`useTeamComputerWorkNow`).
- */
+/** Each opening reads afresh; never kept once the confirm closes, never retried behind the person's back. */
 export function useConfigurationPlanUnlinkPreview(
   profileId: string | null,
   previewId: string | null,

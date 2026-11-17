@@ -129,8 +129,7 @@ export function ConfigurationSourceBoundary(props: {
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
-      // A team role is the list's answer, so a failed re-read makes it not
-      // known, whatever an earlier answer said. Personal's is not read.
+      // A failed re-read makes a team role unknown, whatever an earlier answer said.
       effectiveRole:
         listFailed && configuration === "team"
           ? null

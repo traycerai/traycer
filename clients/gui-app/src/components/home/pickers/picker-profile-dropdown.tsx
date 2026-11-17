@@ -194,11 +194,6 @@ function hasSameAccountIdentity(
   );
 }
 
-/**
- * The run target's name as a person knows it, or `null` when the directory
- * has none: the second line of a record's row that is this computer's
- * Terminal login names it.
- */
 function useRunTargetComputerName(
   runTargetHostId: string | null,
 ): string | null {
@@ -216,10 +211,7 @@ interface PickerProfileDropdownViewInput {
   readonly removedProfiles: readonly RemovedProviderProfile[];
 }
 
-/**
- * Only a record's row that is this computer's Terminal login draws the
- * computer's name, so the directory is read only when such a row is listed.
- */
+// The directory is read only when a row that is this computer's Terminal login is listed.
 function PickerProfileDropdownView(input: PickerProfileDropdownViewInput) {
   return input.props.profiles.some(
     (profile) => profileTerminalAccountLine(profile, null) !== null,

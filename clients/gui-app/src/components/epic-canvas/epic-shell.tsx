@@ -358,10 +358,7 @@ function EpicRepointFailureCard(props: {
   );
 }
 
-/**
- * The failed card for a host below the version floor, with no Retry: no session
- * may be opened to it, and rising above the floor rebuilds the session by itself.
- */
+/** No Retry: rising above the floor rebuilds the session by itself. */
 function EpicOlderHostCard(props: {
   readonly hostId: string;
   readonly presentation: EpicSessionPresentation;

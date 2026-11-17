@@ -5,16 +5,8 @@ import {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 
-/**
- * The codes that say a person's standing is gone: the host's own, and
- * authn's as the app's own reads code them (`HOST_CODE_OF`), which are a 401
- * as `UNAUTHORIZED` and an environment authn says is not theirs to read
- * (`not_readable`: its 404 `environment_not_found` or its 403
- * `environment_action_forbidden`) as `E_ENVIRONMENT_NOT_A_MEMBER`. A
- * malformed request (`E_INVALID_ARGUMENT`) and a 403 without authn's code
- * (`E_ROLE_FORBIDDEN`) are none of these. Typed as the error's own code, so a
- * code no error can carry fails the compile here.
- */
+// A malformed request (`E_INVALID_ARGUMENT`) and a 403 without authn's code
+// (`E_ROLE_FORBIDDEN`) are not lost standing. Typed so an impossible code fails to compile.
 const RPC_AUTHORITY_REFUSALS: ReadonlySet<HostRpcError["code"]> = new Set<
   HostRpcError["code"]
 >([
@@ -24,10 +16,6 @@ const RPC_AUTHORITY_REFUSALS: ReadonlySet<HostRpcError["code"]> = new Set<
   "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
 ]);
 
-/**
- * Those, and the session-fatal codes a refusal's fatal details carry that are
- * no RPC error code. Typed as that field's own code.
- */
 const AUTHORITY_REFUSALS: ReadonlySet<
   NonNullable<HostRpcError["fatalDetails"]>["code"]
 > = new Set([
@@ -36,11 +24,7 @@ const AUTHORITY_REFUSALS: ReadonlySet<
   "TEAM_MEMBERSHIP_REQUIRED",
 ]);
 
-/**
- * The host's reasons that say the person's standing is gone. The others are a
- * condition of the computer or of a token that is renewed, so the last answer
- * is kept through them.
- */
+// The others are a condition of the computer or of a renewable token, so the last answer is kept.
 const AUTHORITY_LOST_REASONS: ReadonlySet<HostDoorReason> = new Set([
   "not_admitted",
   "membership_removed",
@@ -49,9 +33,8 @@ const AUTHORITY_LOST_REASONS: ReadonlySet<HostDoorReason> = new Set([
 ]);
 
 /**
- * Keep the last answer through outages, but never through lost authority. A
- * recognised reason decides alone; the code decides only when the reason is
- * absent or unrecognised.
+ * Kept through outages, never through lost authority. A recognised reason decides
+ * alone; the code decides only when the reason is absent or unrecognised.
  */
 export function environmentReadData<T>(query: {
   readonly data: T | undefined;

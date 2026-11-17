@@ -102,7 +102,6 @@ describe("status polling while a computer's move runs", () => {
     vi.useRealTimers();
   });
 
-  /** One answer of `environment.status`, as a `@1.3` host serves it. */
   function answer(
     planes: "local" | "moved",
     move: "running" | "done" | null,
@@ -120,10 +119,6 @@ describe("status polling while a computer's move runs", () => {
     });
   }
 
-  /**
-   * The real hook over `hostIds`, whose n-th status read (counted across all
-   * of them, in the order the hook asks) is `answerForRead(n)`.
-   */
   function mountStatuses(
     hostIds: readonly string[],
     answerForRead: (read: number) => EnvironmentStatusResponseV13,
@@ -194,9 +189,8 @@ describe("status polling while a computer's move runs", () => {
   }
 
   it("normal path: the planes flip before done, so the row clears while the move runs and the poll ends at done", async () => {
-    // The host moves the planes, then records `done`: the settle re-read
-    // answers running with the planes still local, the next poll answers
-    // running with them moved, and the one after answers done.
+    // The settle re-read answers running with the planes local, the next poll running
+    // with them moved, the one after done.
     const rig = mountStatuses([MOVED_HOST], (read) => {
       if (read === 1) return answer("local", null);
       if (read === 2) return answer("local", "running");
@@ -234,9 +228,6 @@ describe("status polling while a computer's move runs", () => {
   });
 
   it("abnormal path: a done answer that still has local planes keeps the poll until the row turns over, then it stops", async () => {
-    // The host records `done` before it flips the planes only when the flip
-    // is late: the settle re-read answers running, the first done answer
-    // still reads local, and the next answer has them moved.
     const rig = mountStatuses([MOVED_HOST], (read) => {
       if (read === 1) return answer("local", null);
       if (read === 2) return answer("local", "running");
@@ -295,9 +286,8 @@ describe("status polling while a computer's move runs", () => {
   });
 
   it("abnormal path, a given computer with no principal yet: a done move with local planes is read once and never polled", async () => {
-    // A computer given to a team answers `done` with local planes as its
-    // ordinary state, and before its first binding read it reports no
-    // principal, so it is not told apart from a personal one by the cohort.
+    // A computer given to a team answers `done` with local planes as its ordinary state,
+    // and before its first binding read it reports no principal.
     const rig = mountStatuses([MOVED_HOST], () => ({
       ...answer("local", "done"),
       principal: null,
@@ -313,8 +303,7 @@ describe("status polling while a computer's move runs", () => {
   });
 
   it("no move: reads computers at rest once each and never polls them", async () => {
-    // The first host asked answers Local, the second Personal; the row
-    // assertions fail loudly if the order ever differs.
+    // The row assertions fail loudly if the order hosts are asked in ever differs.
     const rig = mountStatuses([MOVED_HOST, RESTING_HOST], (read) =>
       read === 1 ? answer("local", null) : answer("moved", null),
     );

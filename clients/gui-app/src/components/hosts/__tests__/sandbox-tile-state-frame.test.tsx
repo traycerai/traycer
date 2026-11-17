@@ -238,11 +238,6 @@ function bodyWrapper(): HTMLElement {
   return wrapper;
 }
 
-/**
- * The frozen cover reads whose credits the sandbox is on from the person's
- * host directory: the same row the entry mock gives the frame, with the
- * signed-in person named as its owner, so the line is the Personal one.
- */
 function frozenOnThePersonsOwnSandbox(): void {
   if (mocks.entry === null) throw new Error("expected a sandbox row");
   mocks.entry = { ...mocks.entry, owner: { kind: "user", id: "u1" } };
@@ -309,8 +304,6 @@ describe("<SandboxTileStateFrame /> around a chat tile", () => {
 describe("<SandboxTileStateFrame />", () => {
   it("tells the shortfall as nobody's own and offers no top-up while the row names no owner", async () => {
     setSandboxEntry("suspended", false);
-    // The failure line reads the payer from the host directory: a sandbox row
-    // that names no owner.
     installHostDirectoryRows([sandboxHostEntryWithoutOwner(HOST_ID)]);
     mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
       ...refusal(402, "insufficient_credit"),
@@ -333,7 +326,6 @@ describe("<SandboxTileStateFrame />", () => {
   it.each<{
     label: string;
     failure: SandboxLifecycleVerbFetchResult;
-    /** The directory row names the person as the sandbox's owner. */
     ownerKnown: boolean;
   }>([
     {
@@ -355,8 +347,6 @@ describe("<SandboxTileStateFrame />", () => {
     "keeps a visible named $label wake failure with remedies on the tile",
     async ({ failure, label, ownerKnown }) => {
       setSandboxEntry("suspended", false);
-      // The failure line reads whose sandbox it is from the person's host
-      // directory; this row names them as its owner.
       if (ownerKnown)
         installHostDirectoryRows([sandboxHostEntry(HOST_ID, null)]);
       mocks.binding?.auth.runSandboxVerb.mockResolvedValue(failure);

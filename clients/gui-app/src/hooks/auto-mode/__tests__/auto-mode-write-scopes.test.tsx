@@ -99,7 +99,6 @@ import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 
-/** The operation a save was pressed on; these saves go to the host, which reads none of it. */
 const PRESSED_ON: EnvironmentCloud = {
   authnBaseUrl: "",
   bearer: { kind: "cloud", getBearerToken: () => null },

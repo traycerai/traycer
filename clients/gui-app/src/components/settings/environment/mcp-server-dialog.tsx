@@ -92,9 +92,7 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, true);
-  // The credential pressed is handed over once, when the save is sent, so a
-  // typed value is never the mutation's variables and the mutation holds no
-  // reference to the form.
+  // Handed over once at send, so a typed value is never the mutation's variables.
   const submittedCredential =
     useSubmittedSecretInput<EnvironmentMcpServerCredentialV11>(
       "MCP server input is unavailable.",

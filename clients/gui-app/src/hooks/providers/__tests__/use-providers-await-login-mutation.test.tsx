@@ -1113,9 +1113,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
   });
 });
 
-// A null state re-reads providers.list only when profileOutcome names a
-// profile. Invalidation does not fetch with no observer, so the list hook
-// stays mounted and the count is the handler, not invalidateQueries.
+// Invalidation does not fetch with no observer, so the list hook stays mounted.
 describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
   type AwaitLoginResponse = ResponseOfMethod<
     HostRpcRegistry,

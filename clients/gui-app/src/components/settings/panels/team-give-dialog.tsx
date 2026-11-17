@@ -35,30 +35,13 @@ import { authQueryKeys } from "@/lib/query-keys";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
-/**
- * Giving a computer the person owns to one of their teams, from this app
- * whether or not it runs on that computer. The computer plans the give
- * (`environment.move.plan`); the person confirms the disclosure, and the
- * confirm stages, records the acceptance at authn and starts it. A give uploads
- * nothing and stages no choices. Until `done`, the outcome is read from
- * `environment.status@1.3`'s `move` on that read's own poll (no timer of the
- * give's own); `done` is reported as given only after a fresh authn read on the
- * confirming sign-in shows the computer in the chosen team.
- *
- * A disclosure of another version than this app's shows the needs-an-update
- * line and no confirm. `needs_person`, or an attempt the computer does not
- * hold, shows the not-finished line beside the confirm. A status naming no
- * attempt or another one counts only when read after the start answered.
- *
- * Beside the disclosure, outside its hashed text, the computer's own count of
- * chats running on it under its current owner (`ClaimRunningWork`), asked on
- * each open. Keyed by the chosen team, so every give starts afresh.
- */
+// Until `done`, the outcome is `environment.status@1.3`'s `move` on that read's own
+// poll; `done` is reported only after a fresh authn read on the confirming sign-in
+// shows the computer in the team. A status naming another attempt counts only after the start.
 export function TeamGiveDialog(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  /** The environment the computer is in now, whose running chats the give stops. */
   readonly currentEnvironmentId: string | null;
   readonly team: EnvironmentDescriptorV11;
   readonly onClose: () => void;
@@ -98,9 +81,8 @@ export function TeamGiveDialog(props: {
       setNotFinished(true);
       return;
     }
-    // `done` reads the same through the status as `running`, so one path
-    // ends the give. The re-read cancels one already in flight, so every
-    // answer after `startedAt` was asked after the start.
+    // `done` reads like `running` through the status. The re-read cancels one in flight,
+    // so every answer after `startedAt` was asked after the start.
     setAttempt({ attemptId: answer.attemptId, startedAt: Date.now(), press });
     reread();
   };
@@ -335,10 +317,6 @@ function useGiveOwnership(
   return ownership;
 }
 
-/**
- * Where the started give stands, from `environment.status`'s `move` on that
- * read's own poll. `reread` asks again at once, cancelling a read in flight.
- */
 function useGiveAttempt(
   client: HostClient<HostRpcRegistry>,
   attempt: GiveAttempt | null,
@@ -365,7 +343,6 @@ function useGiveAttempt(
   };
 }
 
-/** What the dialog says beside the disclosure, each only while it is true. */
 function GiveLines(props: {
   readonly hostName: string;
   readonly teamLabel: string;

@@ -12,19 +12,13 @@ import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity"
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 import type { TerminalSessionState } from "@/stores/terminals/terminal-session-store";
 
-/** Faces drawn before the rest fold into "+N". */
 const SHOWN_VIEWERS = 3;
 
 function subscribeToSessions(listener: () => void): () => void {
   return getTerminalSessionRegistry().subscribe(listener);
 }
 
-/**
- * Who has this terminal on screen, as the host publishes it
- * (`terminal.subscribe@1.8`'s `viewers` frame): a picture per person, the
- * first three and "+N" for the rest, each name on hover. Nothing while the
- * set is unknown (no frame yet, or a host older than 1.8) or empty.
- */
+/** Nothing while the set is unknown (no frame yet, or a host older than 1.8) or empty. */
 export function TerminalViewerFaces(props: {
   readonly instanceId: string;
   readonly hostId: string;
@@ -36,8 +30,7 @@ export function TerminalViewerFaces(props: {
     readHandle,
   );
   if (handle === null) return null;
-  // A tab's title row sits outside its tile, so it reads the host's team
-  // directory itself.
+  // A tab's title row sits outside its tile, so it reads the host's team directory itself.
   return (
     <HostTeamPeopleProvider hostId={props.hostId}>
       <ViewerFaces store={handle.store} />
@@ -51,8 +44,7 @@ function ViewerFaces(props: {
   const viewers = useStore(props.store, (state) => state.viewers);
   const identify = usePersonIdentityResolver();
   if (viewers === null || viewers.length === 0) return null;
-  // Someone the GUI cannot name (no record, or not loaded yet) is shown by id,
-  // never as a blank face.
+  // Someone the GUI cannot name is shown by id, never as a blank face.
   const people = viewers.map((userId) => {
     const identity = identify(userId);
     return {

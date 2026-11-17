@@ -442,9 +442,7 @@ function AgentMemoriesRow(): ReactNode {
         },
         onSuccess: (response) => {
           if (!live()) return;
-          // Saved on a computer bound to no configuration, in force here like
-          // `applied`. A row that read a configuration ends as for a host
-          // rebound since the read, without taking the answer as its read.
+          // Saved on a computer bound to no configuration: in force here like `applied`.
           if (response.state === "local_only") {
             if (environmentId !== null) {
               finish({ kind: "settled" });

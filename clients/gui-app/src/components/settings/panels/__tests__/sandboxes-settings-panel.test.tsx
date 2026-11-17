@@ -165,9 +165,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
     return {
       ...authnBinding,
       ...(sandboxBinding ?? {}),
-      // The panel caches its list under its `auth`'s identity, which the cases
-      // read back from the sandbox binding: the authn members go onto that
-      // object rather than into a new one on every call.
+      // The list is cached under its `auth`'s identity, so authn members go onto that object.
       auth:
         sandboxBinding === null
           ? { ...authnBinding.auth }
@@ -1063,8 +1061,6 @@ describe("<SandboxesSettingsPanel />", () => {
   });
 
   it("renders one row per state with its badge and primary action", () => {
-    // The frozen row is the person's own: its environment is the one their
-    // environment list names, so Add credits is theirs to offer.
     mocks.personalEnvironmentId = PERSONAL_ENV;
     renderPanel([
       row("awake-1", { state: "awake" }),
@@ -1249,8 +1245,6 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
       "Couldn't start at 11:01 · The sandbox service couldn't start it. · SBX-0412",
     );
-    // The row's owner is not known (the default row has no environment id),
-    // so Retry is not held back for it and no top-up is offered.
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);

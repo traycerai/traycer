@@ -1,4 +1,3 @@
-/** The team notification hooks' words, kept in one place. */
 export const TEAM_NOTIFICATION_HOOKS_COPY = {
   title: "Notification hooks",
   description: (team: string) =>

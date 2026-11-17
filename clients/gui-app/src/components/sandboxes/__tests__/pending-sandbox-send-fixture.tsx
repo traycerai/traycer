@@ -302,7 +302,6 @@ export const TASK_PIN_HOST = "task-pin-host";
 const START_PAGE_PIN_HOST = "start-page-pin-host";
 
 export const SANDBOX_ID = "sbx-1";
-/** The environment id of the person's own environment: a row that carries it is theirs. */
 export const PERSONAL_ENVIRONMENT_ID = "env-personal";
 
 export const SEND_ID = "send-1";
@@ -766,7 +765,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
       mocks.useRuntimeBinding ? actual.useHostClient() : null,
     useHostBinding: () =>
       mocks.useRuntimeBinding ? actual.useHostBinding() : hostBinding,
-    // The failed line's real actions read the control plane through it.
     useAuthService: () =>
       mocks.useRuntimeBinding ? actual.useAuthService() : hostBinding.auth,
   };
@@ -1476,9 +1474,8 @@ afterEach(async () => {
 
 beforeEach(() => {
   mocks.useRuntimeBinding = false;
-  // Signed in with no teams: every team has answered, so a row in an
-  // environment no team holds is the person's own. A case sets `null` to mean
-  // the teams are not known.
+  // Every team has answered, so a row no team holds is the person's own; `null`
+  // means the teams are unknown.
   mocks.authUser = createAuthenticatedUserFixture(undefined);
   sandboxListState.pending = false;
   sandboxListState.failed = false;

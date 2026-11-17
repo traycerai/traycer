@@ -1337,9 +1337,6 @@ describe("team credits in the resource line", () => {
   });
 });
 
-// A row's credits are whose sandbox it is, which is not always the page it is
-// listed under: the page's configuration names the settings, `credits` names
-// the money. `null` is a row whose owner is not known, which tells no money.
 describe("a row's credits are not the page's", () => {
   const ACME: SandboxPageConfiguration = {
     kind: "team",

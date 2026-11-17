@@ -335,9 +335,7 @@ export function useHostQueryWithResponseMap<
           throw hostClientUnavailableError(method);
         }
         args.preflight?.();
-        // The payload, which is `params` unless a caller derives one per
-        // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
-        // that fence remains the last thing captured before the request leaves.
+        // Read before the ordering fence, so the fence stays the last capture before the request leaves.
         const buildRequest = args.buildRequest;
         const payload =
           buildRequest === undefined ? params : buildRequest(params);
@@ -453,11 +451,7 @@ export interface UseHostMutationOptions<
         client: HostRequester<Registry>,
       ) => Promise<RequestOfMethod<Registry, Method>>)
     | undefined;
-  /**
-   * A save made in a host's settings: called with the request just before it
-   * is sent, on the client it is sent on, so the app remembers what the save
-   * will propose (`useSettingsSave`). Told whether the host answered.
-   */
+  /** Called just before the request is sent, on its client, so the app remembers what the save will propose. */
   readonly followSettingsSave?:
     | SettingsSaveFollow<Registry, Method>
     | undefined;
@@ -546,10 +540,6 @@ export interface UseHostMutationOptions<
     | null;
 }
 
-/**
- * {@link SettingsSaveFollow.follow}; the captured origin belongs to this
- * public press, as `useSettingsSave`'s host-only preparation takes it.
- */
 type FollowSettingsSave<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -559,22 +549,16 @@ type FollowSettingsSave<
   origin: SettingsSaveOrigin,
 ) => Promise<PendingSettingsSave>;
 
-/**
- * {@link UseHostMutationOptions.followSettingsSave}: `source` is the window's
- * session service (`useEnvironmentCloud()`), asked for the sign-in as the
- * person acts. The caller passes it in, so this module reaches no hook module.
- */
+/** The caller passes `source` in, so this module reaches no hook module. */
 export interface SettingsSaveFollow<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
 > {
   readonly source: EnvironmentCloudSource | null;
   readonly follow: FollowSettingsSave<Registry, Method>;
-  /** Whether the host's answer proposes the save (`sendFollowedSave`). */
   readonly proposes: (response: ResponseOfMethod<Registry, Method>) => boolean;
 }
 
-/** The followed save's preparation, sign-in and client, captured at its press. */
 interface PressedSettingsSave<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -658,10 +642,8 @@ export function useHostMutation<
             if (idempotencyKey !== null) {
               return client.requestWithOptions(args.method, params, {
                 idempotencyKey,
-                // The method's own scheduling budget. A keyed create is a small
-                // INTERACTIVE request once its images travel by hash, so there is
-                // nothing to extend - and the policy table REFUSES a budget it
-                // does not declare for the method.
+                // A keyed create is a small interactive request once images travel by hash, and
+                // the policy table refuses a budget it does not declare.
                 responseTimeoutMs: null,
                 requiredHostMethodVersion: requirement,
                 signal,
@@ -679,10 +661,7 @@ export function useHostMutation<
               : client.requestWithSignal(args.method, params, signal);
           };
           const mapDispatchError = args.mapDispatchError;
-          // `.catch` directly on the dispatch, never chained after a `.then`: a
-          // catch downstream of a success arm also catches what that arm throws,
-          // and here that would re-map a `resolveResponse` failure into a
-          // dispatch error.
+          // Directly on the dispatch: a catch after a `.then` would re-map a `resolveResponse` failure.
           const mappedDispatch =
             mapDispatchError === undefined
               ? dispatch
@@ -698,9 +677,7 @@ export function useHostMutation<
                   mappedDispatch,
                   pressed.follow.proposes,
                 );
-          // Between the dispatch and `onResponse`, so a substituted response is
-          // what every arm below sees - including the caller's `onSuccess` and
-          // whatever `mutateAsync` resolves with.
+          // Here so a substituted response is what every arm below sees, `mutateAsync` included.
           const resolveResponse = args.resolveResponse;
           const response =
             resolveResponse === undefined

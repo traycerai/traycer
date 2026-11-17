@@ -436,7 +436,6 @@ export interface TextOnlyPromptHandoffInput {
    */
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
-  /** As {@link buildUnrecordedPromptHandoff}'s. */
   readonly reasonIsRemovedProfile: boolean;
   readonly cause: DroppedImageCause;
   readonly stillCurrent: () => boolean;

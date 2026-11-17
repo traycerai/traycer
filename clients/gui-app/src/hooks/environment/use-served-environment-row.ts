@@ -11,11 +11,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
-/**
- * The person's row in their environment list for the environment a computer
- * serves, by its binding. `null` until both reads have settled, and when the
- * list holds no such row: a role not known.
- */
+/** `null` until both reads settle, and when the list holds no such row. */
 export function useServedEnvironmentRow(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
@@ -37,10 +33,6 @@ export function useServedEnvironmentRow(
   );
 }
 
-/**
- * Whether the person may change the environment the surface's host serves,
- * the one an "Add to <name>" with no expected environment uploads into.
- */
 export function useMayChangeServedEnvironment(): boolean {
   const client = useHostClient();
   const hostId = useRequesterHostId(client);
@@ -50,7 +42,6 @@ export function useMayChangeServedEnvironment(): boolean {
   return mayChangeConfiguration(row === null ? null : configurationRoleOf(row));
 }
 
-/** A read's answer once it has one and is not re-reading, else `null`. */
 function settledData<T>(query: UseQueryResult<T, unknown>): T | null {
   return query.isPending || query.isFetching || query.isError
     ? null

@@ -6,11 +6,6 @@ import {
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { BotSetupFailure } from "@traycer-clients/shared/host-client/bot-setup";
 
-/**
- * A bot write the server did not take, as the error its control states
- * inline, in the words the app's other calls on the person's sign-in use: a
- * refusal in the server's own words, as the secrets calls show authn's.
- */
 export function botSetupError(failure: BotSetupFailure): EnvironmentCloudError {
   switch (failure.kind) {
     case "unauthorized":

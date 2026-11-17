@@ -91,7 +91,6 @@ type FakeHost = {
    * as it stood when the read arrived (a slow host).
    */
   listHeld: Promise<void> | null;
-  /** Full answer for a test pinning the post-update list cache write. */
   listAnswer: ExtendedProvidersList | null;
   /** How many of the next `providers.list` reads fail. */
   listRefusals: number;

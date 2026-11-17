@@ -60,9 +60,7 @@ export function useSimulatorSessionsForHost(args: {
     hostId === null || identityKey === null
       ? null
       : simulatorSessionsCoordinatorKey({ hostId, epicId, identityKey });
-  // A held coordinator outlives a null transport key while its stream
-  // re-dials, but not a row below the version floor: an older host cannot own
-  // the stream.
+  // Not across a row below the version floor: an older host cannot own the stream.
   const coordinatorKey =
     ownerKey !== null &&
     methodSupport !== false &&

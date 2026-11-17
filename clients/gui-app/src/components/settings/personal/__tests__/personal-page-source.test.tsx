@@ -220,10 +220,8 @@ function mountSection(options: {
   );
   const client = spine.createRequester(entry);
   windowHost.client = client;
-  // The app's own read of the environment list: the sign-in's directory.
   const listed: unknown[] = [];
-  // The viewing host's inventory read (`GET …/hosts?include=…`): the fake
-  // authn has no route for it, so this one is answered and recorded here.
+  // The fake authn has no route for this read, so it is answered and recorded here.
   const hostLists: unknown[] = [];
   windowHost.auth = {
     environmentCloud: () => ({

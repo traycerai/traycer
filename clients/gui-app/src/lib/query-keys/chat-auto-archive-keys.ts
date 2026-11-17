@@ -12,10 +12,7 @@ export const chatAutoArchiveMutationKeys = {
   setTeam: (teamId: string) => ["chatAutoArchive.setTeam", teamId] as const,
 };
 
-/**
- * A team's saves queue one behind another, for the same last-write-wins
- * reason as the account's.
- */
+/** Saves queue: last write wins on the server. */
 export function teamChatAutoArchiveWriteScope(teamId: string): MutationScope {
   return { id: `chatAutoArchive.setTeam:${teamId}` };
 }

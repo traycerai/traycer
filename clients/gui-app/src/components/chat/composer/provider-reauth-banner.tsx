@@ -589,8 +589,6 @@ function ReauthBannerInner({
     canTerminalLogin,
     terminalRow.kind,
   );
-  // Provider keys use the same change flow as Settings; other credentials use
-  // the selected environment-variable override.
   const apiKeySupported = state?.apiKey.supported ?? false;
 
   // No reconnect method available from here: a provider with no web login, or an
@@ -1046,7 +1044,7 @@ interface KeyCustody {
   readonly recordEnvironmentId: string | null;
 }
 
-/** Where a provider-level key is kept; an environment-variable override has no custody line. */
+/** An environment-variable override has no custody line. */
 function PastedKeyCustody(props: {
   readonly providerId: ProviderId;
   readonly keyCustody: KeyCustody;

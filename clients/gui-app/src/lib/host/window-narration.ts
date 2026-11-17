@@ -54,7 +54,6 @@ export type WindowNarrationCause =
   | "cold-start"
   | "door-state";
 
-/** The door states drawn as their own cover, each with the computer it is about. */
 type DoorCoverKind =
   | "token-unavailable"
   | "keys-unavailable"
@@ -65,7 +64,6 @@ type DoorCoverKind =
 
 type DoorCoverVariant = {
   readonly kind: DoorCoverKind;
-  /** The computer the state is about: the one Retry re-opens. */
   readonly hostId: string;
 };
 
@@ -95,27 +93,23 @@ export function isDoorStateCoverVariant(
   );
 }
 
-/** The door covers drawn with a Retry: each says "then retry". */
 const DOOR_COVERS_WITH_RETRY: ReadonlySet<string> = new Set<DoorCoverKind>([
   "keys-unavailable",
   "clock-skew",
   "token-expired",
 ]);
 
-/** Whether a door cover offers Retry, which re-opens its computer now. */
 export function offersDoorRetry(
   variant: WindowNarrationVariant,
 ): variant is DoorCoverVariant {
   return DOOR_COVERS_WITH_RETRY.has(variant.kind);
 }
 
-/** Who claimed a computer and the team it left, read from authn's claims. */
 export interface HostClaimFacts {
   readonly claimantName: string;
   readonly teamName: string;
 }
 
-/** Every cover a door state draws with its own words and buttons. */
 export type DoorStateCoverVariant =
   | { readonly kind: "team-membership-required" }
   | { readonly kind: "not-admitted" }
@@ -168,11 +162,7 @@ export function ownDoorCover(
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
   | DoorStateCoverVariant
-  /**
-   * The `offline` cover for a host whose refusal carries a reason this app
-   * does not know: a newer host, never an older one. Its own kind only so the
-   * card can show the refusal's code beneath the unchanged `offline` words.
-   */
+  /** A newer host, never an older one; its own kind only so the card can show the code. */
   | { readonly kind: "unrecognised-refusal"; readonly code: string }
   | {
       readonly kind: "update-host";
@@ -227,15 +217,8 @@ export type WindowNarrationState =
     };
 
 export interface WindowNarrationInput {
-  /**
-   * Why this app cannot use the host that would serve this window (the
-   * effective host, else the target), or `null`.
-   */
+  /** The effective host, else the target. */
   readonly doorState?: HostDoorState | null;
-  /**
-   * Who claimed that host and from which team, once read, while its door
-   * state is `host-claimed`; `null` otherwise or until it is read.
-   */
   readonly hostClaim?: HostClaimFacts | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
@@ -505,11 +488,6 @@ export function hostUpdateActionApplies(
   );
 }
 
-/**
- * The state's own cover is chosen by `ownDoorCover`. While nothing is
- * serving, an older host draws its update cover; another state falls
- * back to the "no host" cover, with an unrecognised reason's code beneath it.
- */
 function doorStateCover(input: WindowNarrationInput): {
   readonly cause: WindowNarrationCause;
   readonly variant: WindowNarrationVariant;
@@ -541,11 +519,7 @@ function doorStateCover(input: WindowNarrationInput): {
   return { cause: "no-usable-host", variant: { kind: "offline" } };
 }
 
-/**
- * The host whose door cover this narration draws, or `null` when it draws
- * none. The narration's first arm, and the one fact the toast needs: a
- * refusal it stays silent about must be one whose cover is on screen.
- */
+/** The toast stays silent only about a refusal whose cover is on screen. */
 export function doorCoverHostOf(input: WindowNarrationInput): string | null {
   if (!input.attached || doorStateCover(input) === null) return null;
   return input.effectiveHostId ?? input.targetHostId;

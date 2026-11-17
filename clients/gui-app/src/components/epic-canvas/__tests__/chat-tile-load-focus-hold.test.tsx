@@ -50,8 +50,6 @@ vi.mock(
     ActiveHostWorkspaceControls: () => null,
   }),
 );
-// The list query's settled shape: no answer yet and no error, as the
-// composer's environment line reads it.
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined, error: null }),
 }));

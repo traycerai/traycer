@@ -140,12 +140,9 @@ function withoutFailures(
 
 interface Host {
   removal: EnvironmentSecretRemovalV12 | null;
-  /** The fixture finishes the removal when its destroy handler answers. */
   finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
-  /** Runs after a destroy answer, to change the next versions read. */
   onDestroy: (() => void) | null;
-  /** The versions read fails: set by `onDestroy` to fail the read after destroy. */
   versionsFail: boolean;
   secrets: EnvironmentSecretV12[];
   /** The list's `removed`: secrets revoked within the last 30 days. */
@@ -205,7 +202,6 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
   return harness;
 }
 
-/** A Personal host, optionally viewing its own host-scoped secrets. */
 function mountPersonalRowAtDestroy10(
   host: Host,
   pick: "personal" | "local",
@@ -379,7 +375,6 @@ describe("Remove on a team secret", () => {
         `Added on ${dayMonth(AT - 1_000)}. Version 2.`,
       );
     });
-    // authn answers revoked and the next versions read carries the removal.
     host.removal = removal("revoked");
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 

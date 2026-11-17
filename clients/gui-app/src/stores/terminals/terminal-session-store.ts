@@ -182,12 +182,7 @@ export interface TerminalSessionState {
    * `terminal.list` metadata.
    */
   readonly currentCwdReported: boolean;
-  /**
-   * The people who have this terminal on screen, as the host last published
-   * them (`terminal.subscribe@1.8`), the viewer included. `null` is unknown:
-   * no frame on this connection yet, a host older than 1.8, or a dropped
-   * stream - never read as nobody.
-   */
+  /** `null` is unknown (no frame yet, a host older than 1.8, a dropped stream), never nobody. */
   readonly viewers: ReadonlyArray<string> | null;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */

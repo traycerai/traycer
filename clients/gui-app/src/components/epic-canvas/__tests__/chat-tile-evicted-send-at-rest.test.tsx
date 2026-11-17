@@ -132,8 +132,6 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
   };
 });
 
-// The real hydrate mutation, sent on the test's own host client: the one
-// boundary the tile does not own.
 vi.mock("@/hooks/chats/use-chat-hydrate-mutation", async (importActual) => {
   const support = await import("./chat-tile-evicted-send-mock-state");
   const actual =

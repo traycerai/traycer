@@ -815,7 +815,6 @@ export function hostScopedMutationModule() {
   };
 }
 
-/** The write's sign-in, still current: the retry follows it. */
 const WRITE_SIGN_IN = { isCurrent: () => true };
 
 /**
@@ -832,8 +831,7 @@ export function botMutationsModule<
     readonly useBotUpdateRunSettingsMutation: () => unknown;
   },
 >(actual: T) {
-  // The hook is chosen from the flag and then called unconditionally, so a
-  // component keeps one hook order while the flag holds.
+  // Chosen from the flag, then called unconditionally, so hook order holds.
   function useRecordedBotWrite() {
     const [pending, setPending] = useState(false);
     return {

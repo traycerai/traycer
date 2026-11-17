@@ -40,18 +40,12 @@ import {
 } from "@/stores/auth/auth-store";
 
 /**
- * The key scope the app's own environment calls are cached under, where a host
- * read puts its host id: `["host", "authn", method, params, ...]`. So the
- * configuration invalidations that match a method under any host scope
- * (`environment-host-list-key.ts`) reach these reads too.
+ * Where a host read puts its host id, so configuration invalidations by method
+ * under any host scope reach these reads too.
  */
 export const ENVIRONMENT_CLOUD_QUERY_SCOPE = "authn";
 
-/**
- * The cache entry an app-made read lands in: the one place its key is built, so
- * a caller that names the entry (a Details provider's `fetchQuery`) reads the
- * page's own.
- */
+/** The one place its key is built, so a caller that names the entry reads the page's own. */
 export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -69,10 +63,7 @@ export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
   ];
 }
 
-/**
- * Makes the app's own client for authn's environment routes, one per
- * operation, bound to the sign-in it begins on; null with no session service.
- */
+/** One per operation, bound to the sign-in it begins on. */
 export function useEnvironmentCloud(): EnvironmentCloudSource | null {
   const auth = useHostBinding()?.auth ?? null;
   return useMemo(
@@ -81,7 +72,6 @@ export function useEnvironmentCloud(): EnvironmentCloudSource | null {
   );
 }
 
-/** Marks every cached read of `methods`, under every scope, stale. */
 export function invalidateEnvironmentReads(
   queryClient: QueryClient,
   methods: ReadonlyArray<keyof HostRpcRegistry & string>,
@@ -94,11 +84,7 @@ export function invalidateEnvironmentReads(
   });
 }
 
-/**
- * Begins one operation outside React (a Details provider) or in a hook's
- * query or mutation function: call it once, at the operation's start, and
- * send every request of the operation through its answer.
- */
+/** Call it once at the operation's start and send every request of the operation through its answer. */
 export function beginEnvironmentCloudOperation(
   source: EnvironmentCloudSource | null,
 ): EnvironmentCloudSend {
@@ -111,12 +97,6 @@ export function beginEnvironmentCloudOperation(
     });
 }
 
-/**
- * {@link beginEnvironmentCloudOperation} for this window's session service:
- * call the answer at an operation's start, including a write that builds its
- * request at dispatch (a typed secret value read then, so it never becomes a
- * mutation's variables).
- */
 export function useEnvironmentCloudOperation(): () => EnvironmentCloudSend {
   const source = useEnvironmentCloud();
   return useCallback(() => beginEnvironmentCloudOperation(source), [source]);
@@ -128,21 +108,15 @@ interface UseEnvironmentCloudQueryArgs<
 > {
   readonly method: Method;
   readonly params: RequestOfMethod<HostRpcRegistry, Method>;
-  /** Extra cache identity, not sent. */
   readonly cacheKeyIdentity: ReadonlyArray<unknown>;
   readonly mapResponse: (
     response: ResponseOfMethod<HostRpcRegistry, Method>,
   ) => TData;
-  /** The caller's own gate, on top of a session, a viewer and a verdict. */
   readonly enabled: boolean;
-  /** Takes the method's table-owned polling, as `useHostQuery`'s `poll` does. */
   readonly poll: boolean;
 }
 
-/**
- * A read made by the app itself on the person's sign-in, with no host in the
- * path. Its failures are the `HostRpcError` the host gives the same one.
- */
+/** Its failures are the `HostRpcError` the host gives for the same one. */
 export function useEnvironmentCloudQuery<
   Method extends EnvironmentCloudMethod,
   TData,
@@ -180,12 +154,7 @@ export function useEnvironmentCloudQuery<
   );
 }
 
-/**
- * A read the app makes itself whose answer is assembled here from several authn
- * routes (the review sheet, the notices). Its key sits where a host read of
- * `method` would, with `params` naming the environment, so the configuration
- * invalidations reach it.
- */
+/** Keyed where a host read of `method` would be, with `params` naming the environment. */
 export function useEnvironmentCloudOwnRead<
   TData,
   Params extends { readonly environmentId: string },
@@ -238,14 +207,9 @@ interface UseEnvironmentCloudMutationArgs<
 > {
   readonly method: Method;
   readonly mutationKey: ReadonlyArray<unknown>;
-  /** The failure toast's words; null when the caller toasts its own. */
   readonly errorMessage: string | null;
-  /**
-   * Reads to mark stale once the write SETTLES, under every scope: a write
-   * whose answer was lost may still have landed, so the page re-asks.
-   */
+  /** A write whose answer was lost may still have landed, so the page re-asks. */
   readonly invalidateMethods: ReadonlyArray<keyof HostRpcRegistry & string>;
-  /** As `useHostScopedMutation`'s; `hostId` is always null here. */
   readonly onSuccess?:
     | ((
         data: ResponseOfMethod<HostRpcRegistry, Method>,
@@ -258,17 +222,10 @@ interface UseEnvironmentCloudMutationArgs<
     | ((variables: RequestOfMethod<HostRpcRegistry, Method>) => Captured)
     | undefined;
   readonly silentCodes?: readonly HostRpcError["code"][];
-  /**
-   * The sign-in a write armed before it was made, taken once by that write:
-   * it is sent on that operation instead of one begun now. Null: begin now.
-   */
+  /** Taken once by the write it armed: sent on that operation instead of one begun now. */
   readonly takeOrigin?: (() => EnvironmentCloud | null) | undefined;
 }
 
-/**
- * A write made by the app itself on the person's sign-in. Same result as
- * `useHostScopedMutation`'s; no host carried it, so the context's `hostId` is null.
- */
 export function useEnvironmentCloudMutation<
   Method extends EnvironmentCloudMethod,
   Captured = undefined,
@@ -300,8 +257,6 @@ export function useEnvironmentCloudMutation<
     },
     onMutate: (variables) => ({
       hostId: null,
-      // `undefined` is what `Captured` IS when no capture was asked for; the
-      // cast only names that fact for the compiler.
       captured:
         args.captureContext === undefined
           ? (undefined as Captured)

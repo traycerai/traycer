@@ -175,7 +175,6 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
-      // The empty listing answers no row for any host.
       findById: () => null,
     },
   };

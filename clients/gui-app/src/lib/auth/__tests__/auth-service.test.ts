@@ -4287,7 +4287,6 @@ describe("AuthService", () => {
     const SERVER_URL =
       "http://localhost:5005/api/v3/environments/env-1/mcp-servers/srv-1";
 
-    /** A server save: it reads the server's item, then writes the server. */
     const SAVE: EnvironmentConfigurationMcpServerPutRequestV11 = {
       environmentId: "env-1",
       serverId: "srv-1",
@@ -4308,11 +4307,6 @@ describe("AuthService", () => {
       readonly authorization: string;
     }
 
-    /**
-     * Answers the save's item read once `beforeAnswer` settles, and refuses
-     * its write; records every environment request. Account B's token
-     * validates as `user-2`, every other as the default profile.
-     */
     function installEnvironmentFetch(
       beforeAnswer: () => Promise<void>,
     ): Sent[] {

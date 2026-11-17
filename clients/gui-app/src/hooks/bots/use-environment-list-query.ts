@@ -34,7 +34,6 @@ import {
 
 const METHOD = "environment.list";
 
-// Stable params identity so the key stays referentially constant across renders.
 const EMPTY_PARAMS = {};
 
 /**
@@ -65,9 +64,7 @@ export function useEnvironmentListQuery(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  // What the read uses of each team (its id and slug), in a stable order: a
-  // new or changed set of teams reads the list again, the same set written
-  // again does not.
+  // A new or changed set of teams reads again; the same set written again does not.
   const teamsRead = [...teams]
     .sort((a, b) => compareAscending(a.teamId, b.teamId))
     .map((team) => [team.teamId, team.slug]);

@@ -2,10 +2,6 @@ import { Tag } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 
-/**
- * One chip per other name the account had (`otherNames`), drawn beside the
- * account's name until a person picks one in Settings.
- */
 export function ProfileOtherNameChips(props: {
   readonly otherNames: readonly string[];
 }): ReactNode {

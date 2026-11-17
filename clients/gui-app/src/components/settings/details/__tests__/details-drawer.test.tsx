@@ -717,8 +717,6 @@ describe("the Secrets header's Details", () => {
     });
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
-    // Without a cached host inventory the all-secrets drawer makes no claim
-    // about where secrets stand.
     await screen.findByRole("tab", { name: "Status" });
     expect(screen.queryByText("Not on any host")).toBeNull();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);

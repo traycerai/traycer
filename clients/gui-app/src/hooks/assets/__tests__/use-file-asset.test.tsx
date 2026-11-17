@@ -67,8 +67,6 @@ const EMPTY_HOST_DIRECTORY = vi.hoisted(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostDirectory: () => EMPTY_HOST_DIRECTORY,
-  // The one directory, as in the app: `useHostDirectoryEntry` reads it off the
-  // binding.
   useHostBinding: () => ({ directory: EMPTY_HOST_DIRECTORY }),
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),

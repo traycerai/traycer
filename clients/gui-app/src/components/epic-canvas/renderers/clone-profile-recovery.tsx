@@ -13,8 +13,7 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
-// The recovery chooses among the target's live rows; it names no pin of its
-// own that could have been removed.
+// The recovery names no pin of its own that could have been removed.
 const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 export function CloneProfileRecovery(props: {

@@ -214,7 +214,6 @@ function AuthorizedHostSection(props: {
   );
 }
 
-/** Whose the sandbox is, as far as the person's teams have answered. */
 type HostOwnership = "team" | "personal" | "unknown";
 
 /**

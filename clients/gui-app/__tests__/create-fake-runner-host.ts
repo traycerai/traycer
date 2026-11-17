@@ -27,12 +27,6 @@ import {
   systemAuthorityClock,
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 
-/**
- * The auth-facing part of the fake runner host. App readers use the real
- * `auth.listEnvironments()` and `auth.environmentCloud()` seams; these return
- * the fixture directory and send authn requests through the supplied fake
- * transport.
- */
 export interface FakeEnvironmentCloudAuthOptions {
   readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
   readonly transport: EnvironmentTransport;
@@ -78,7 +72,6 @@ export function createFakeEnvironmentCloudAuth(
   }).auth;
 }
 
-/** Shared authn transport fake for the list join and settings reads. */
 export function createFakeEnvironmentCloudTransport(options: {
   readonly environments: () => readonly EnvironmentDescriptorV11[];
   readonly onRequest?: (
@@ -206,7 +199,6 @@ export function inertHostTokenSource(): HostTokenSource {
   });
 }
 
-/** A token source holding one live host-only token, so a door can open. */
 export async function heldHostTokenSource(
   userId: string,
   hostId: string,

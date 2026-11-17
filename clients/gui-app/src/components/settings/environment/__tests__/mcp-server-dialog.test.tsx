@@ -147,10 +147,6 @@ afterEach(() => {
 
 const MCP_WRITE_PATHS = /\/(mcp-servers(\/|$)|items\/mcp_server$)/u;
 
-/**
- * The team page, with an MCP server's writes (its row and its item) answered by
- * the fake authn, which records the put the dialog built.
- */
 function mountTeamPage(
   source: Parameters<typeof mountTeamHarness>[0],
   served: MockHandlerMap<HostRpcRegistry>,
@@ -175,7 +171,6 @@ function mountTeamPage(
   };
 }
 
-/** Lose the account write's answer after the real fake transport records it. */
 function rejectMcpPutResponse(): void {
   const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
   setTeamEnvironmentCloudOverride({
@@ -240,7 +235,6 @@ function handlers(options: {
       ...options.answer,
       serverId: null,
     }),
-    // Authn lists live secrets only: a revoked one never reaches the dialog.
     "environment.secrets.list": () => ({
       secrets: options.secrets.filter((row) => !row.revoked),
       removed: [],
@@ -510,8 +504,7 @@ describe("The MCP server dialog", () => {
 
   it("says the secrets could not be read to pick from, and Retry brings them into the select", async () => {
     negotiate(PUT_1_1);
-    // The page's own list joins the same secrets read, so the read fails only
-    // once the page has loaded and before the dialog opens.
+    // The page's own list joins this read, so it fails only after the page has loaded.
     let failing = false;
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers({ servers: [], secrets: [], answer: SAVED }),

@@ -94,12 +94,7 @@ export interface NewConversationModalDraftPatch {
    * this device, like the stage it restores; absent on any other draft.
    */
   readonly returnedSandbox?: StoredReturnedSandbox;
-  /**
-   * Nobody chose this draft's account: its settings are edits made while the
-   * composer showed a default account in place of an unchosen Terminal login
-   * (`useSignedOutTerminalDefaultAccount`). Local to this device; a draft
-   * without it whose settings are set counts as chosen and never moves.
-   */
+  /** Local to this device: a draft without it whose settings are set counts as chosen and never moves. */
   readonly accountFollowsDefault?: true;
 }
 
@@ -163,11 +158,7 @@ interface NewConversationModalStore {
    * re-dirty the row the collector is about to mark clean and loop it forever.
    */
   readonly setNewChatOwnerHostId: (epicId: string, hostId: string) => void;
-  /**
-   * Record whether nobody chose the draft's account
-   * (`accountFollowsDefault`). Local and non-dirtying, like the title
-   * setter: nothing is published. No-op when the epic has no patch.
-   */
+  /** Local and non-dirtying: nothing is published. */
   readonly setAccountFollowsDefault: (epicId: string, follows: boolean) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
@@ -741,12 +732,7 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
   return contentLands;
 }
 
-/**
- * An acknowledgement older than the revision the patch already holds means a
- * newer write (another window's or device's) was observed first, so the held
- * revision is no longer this window's own: the account provenance loses its
- * proof and the draft counts as chosen.
- */
+/** An acknowledgement older than the held revision means a newer write came first, so the provenance loses its proof. */
 function withoutOwnEchoProofWhenClamped(
   current: NewConversationModalDraftPatch,
   hostRevision: number,
@@ -762,14 +748,9 @@ function withoutOwnEchoProofWhenClamped(
 }
 
 /**
- * Only this window's own write coming back keeps the draft's account
- * provenance: a document on the same draft line at the revision the patch
- * already holds. On a clean row with the bit set, that revision is this
- * window's own acknowledged write: a dirty row only becomes clean through an
- * acknowledgement, and `newChatDraftRememberSynced` clears the bit when one
- * lands behind a newer observed write. A newer revision is another window's or
- * device's write, and a cloud head (revision 0) proves nothing, so those count
- * as chosen whatever account they name: equal values are not an own echo.
+ * Only this window's own write echoing back keeps the provenance. A newer revision
+ * is another writer's, and a cloud head (revision 0) proves nothing: equal values
+ * are not an own echo.
  */
 function keptAccountProvenance(
   current: NewConversationModalDraftPatch,

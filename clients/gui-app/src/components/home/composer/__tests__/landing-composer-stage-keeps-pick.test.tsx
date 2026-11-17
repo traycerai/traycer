@@ -55,9 +55,7 @@ const host = vi.hoisted(() => ({
   startTask: vi.fn(),
   submit: vi.fn(),
   clearEditor: vi.fn(),
-  /** `undefined` leaves `providers.list` unread, as the other cases here do. */
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
-  /** The query decides only while it succeeded, is fresh, and is not fetching. */
   providersStatus: "success" as "pending" | "error" | "success",
   providersStale: false,
   providersFetchStatus: "idle" as "idle" | "fetching",
@@ -1169,7 +1167,6 @@ function publishSignedOutTerminal(
   publishProviders([claudeListing({ terminalSignedIn, signedInProfileIds })]);
 }
 
-/** Last-run captured after it is seeded, before the composer mounts. */
 function seedSignedOutTerminal(): ChatRunSettings | null {
   useComposerRunSettingsStore
     .getState()
@@ -1191,7 +1188,6 @@ function mintedDraft() {
   return minted[0];
 }
 
-/** A local draft whose Terminal login shows the one signed-in profile. */
 async function showDefaultOnDraft(): Promise<string> {
   publishSignedOutTerminal([WORK_PROFILE], false);
   seedSignedOutTerminal();

@@ -7,13 +7,8 @@ import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-qu
 const NO_TEAM: readonly string[] = [];
 
 /**
- * For each of `teamIds`, whether the person is that team's Admin, the one
- * seat that may buy the team's credits. Read from the person's own
- * environment list (the team's environment, found by the team's id, and the
- * role the list gives the person there), never from a sandbox's computer.
- * While either read is out or failed, or where no host runtime is above the
- * surface to read the list through, nobody is an Admin: until it is known,
- * the person is not one. `teamIds` must keep its identity between renders.
+ * Read from the person's own environment list, never a sandbox's computer. Nobody
+ * is an Admin while a read is out or failed. `teamIds` must keep its identity.
  */
 export function useTeamBillingAdminOf(
   teamIds: readonly string[],
@@ -33,10 +28,6 @@ export function useTeamBillingAdminOf(
   return useCallback((teamId: string) => admins.has(teamId), [admins]);
 }
 
-/**
- * Whether the person is the Admin of the team whose environment is
- * `environmentId`, read as {@link useTeamBillingAdminOf} reads it.
- */
 export function useEnvironmentBillingAdmin(environmentId: string): boolean {
   const environments = useEnvironmentListQuery(true);
   return adminOf(
@@ -57,7 +48,6 @@ function adminOf(
   );
 }
 
-/** Whether the person is `teamId`'s Admin; false for no team. */
 export function useTeamBillingAdmin(teamId: string | null): boolean {
   const teamIds = useMemo(
     () => (teamId === null ? NO_TEAM : [teamId]),
@@ -67,12 +57,7 @@ export function useTeamBillingAdmin(teamId: string | null): boolean {
   return teamId !== null && isAdmin(teamId);
 }
 
-/**
- * Whether "Add credits ↗" is offered for a configuration: always for the
- * person's own credits, and for a team's only to its Admin, the one seat the
- * team's billing page lets buy. `null` is a sandbox whose owner the app does
- * not know: nobody is offered it until it is known.
- */
+/** `null` (owner unknown) offers it to nobody. */
 export function useOffersAddCredits(
   configuration:
     | { readonly kind: "personal" }

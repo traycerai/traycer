@@ -7,10 +7,6 @@ import {
 } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 
-/**
- * A sandbox configuration reads teams and environments through queries, so these
- * render over a fresh no-retry query client as the wrapper; `rerender` keeps it.
- */
 function clientWrapper(): (props: {
   readonly children: ReactNode;
 }) => ReactNode {

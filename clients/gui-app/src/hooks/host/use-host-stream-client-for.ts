@@ -268,12 +268,8 @@ export function buildHostStreamClient(params: {
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
-  /**
-   * The sign-in's own recovery: reached only when authn refuses the sign-in
-   * token on a mint. A host's refusal never starts it.
-   */
+  /** Reached only when authn refuses the sign-in token on a mint; a host's refusal never starts it. */
   readonly auth: StreamAuthRevalidator | null;
-  /** The host-only tokens every non-pool branch opens with. */
   readonly hostTokens: HostTokenSource;
   /**
    * The signed-in user this transport is built for: part of the shared
@@ -357,8 +353,6 @@ export function buildHostStreamClient(params: {
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
-      // The sign-in's recovery, for authn refusing the sign-in token on a mint;
-      // a host's refusal recovers through the host-only token.
       auth: params.auth,
       // The same app-wide verdict the local branch passes below. A wrong wall
       // clock wedges a remote session identically - it is the machine's clock,
@@ -415,9 +409,8 @@ export function buildHostStreamClient(params: {
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.
     userId: params.userId,
-    // Every client recovers its host-only token, a one-shot included: a
-    // refused open ran nothing. `params.auth === null` keeps a one-shot from
-    // starting the sign-in's recovery.
+    // A refused open ran nothing, so a one-shot recovers too; `params.auth === null`
+    // keeps it from starting the sign-in's recovery.
     ...hostTokenSessionAuth(
       {
         tokens: localTokens,
@@ -778,8 +771,7 @@ export function useHostStreamClientBindingFor(
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
-    // The person's Retry runs a waiting rebuild now; the streak it earned
-    // stays, so a rebuild refused again waits as long as it would have.
+    // The streak a rebuild earned stays, so one refused again waits as long as it would have.
     const stopRetry =
       endpointHostId === null
         ? () => undefined

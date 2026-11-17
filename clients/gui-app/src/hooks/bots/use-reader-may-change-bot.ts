@@ -8,13 +8,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 
-/**
- * The reader may change the bot's environment: its Personal, or a team where
- * they are an Admin or Editor. A list that has answered without that role (a
- * Viewer, or a team not listed) takes the bot's run settings and Delete away.
- * Until the list answers they are offered, and the host refuses a write the
- * reader may not make, under the control.
- */
+/** Until the list answers they are offered, and the host refuses a write the reader may not make. */
 export function readerMayChangeBot(
   environments: EnvironmentListResponseV11 | undefined,
   environmentId: string,
@@ -29,10 +23,7 @@ export function readerMayChangeBot(
   );
 }
 
-/**
- * {@link readerMayChangeBot} for the bot a tab has open, from the account's
- * environment list, the one the tab reads; `true` until a bot is open.
- */
+/** `true` until a bot is open. */
 export function useReaderMayChangeBot(
   snapshot: { readonly bot: BotRecord } | null,
 ): boolean {
@@ -43,18 +34,10 @@ export function useReaderMayChangeBot(
   );
 }
 
-/**
- * {@link readerMayChangeBot} for the bot a surface draws, given by the bot's
- * tab and its threads from the environment list they already read; `true`
- * where no bot surface gives it.
- */
+/** `true` where no bot surface gives it. */
 export const BotMayChangeContext = createContext<boolean>(true);
 
-/**
- * Whether a failed turn of `epicId` may offer its Switch: on the drawn bot's
- * own chat a Switch writes the bot's run settings, so it follows
- * {@link BotMayChangeContext}; on any other chat it is not this rule's.
- */
+/** On the bot's own chat a Switch writes its run settings, so it follows {@link BotMayChangeContext}. */
 export function useBotTurnMayChange(epicId: string | null): boolean {
   const bot = useBotIdentity();
   const mayChange = use(BotMayChangeContext);

@@ -56,8 +56,6 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-configurations")
     >()),
-    // Every listed team has answered (there are none), and the person's own
-    // environment is named, so a row in it is theirs.
     useSandboxConfigurations: () => ({
       configurations: [{ kind: "personal" }],
       teamEnvironmentIds: new Set<string>(),

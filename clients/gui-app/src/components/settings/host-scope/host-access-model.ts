@@ -218,11 +218,7 @@ export function sameOverrideTarget(
 
 // ── Notices ──────────────────────────────────────────────────────────────────
 
-/**
- * "DATABASE_URL from dev-box now applies everywhere." A change no computer
- * made came from a person's session, in the app or on the dashboard, so it
- * names no place.
- */
+/** A change no computer made came from a person's session, so it names no place. */
 export function noticeText(notice: EnvironmentNotice): string {
   const { from } = notice;
   if (from.kind === "dashboard") {

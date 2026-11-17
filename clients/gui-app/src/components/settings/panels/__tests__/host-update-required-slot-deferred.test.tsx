@@ -1,7 +1,3 @@
-// A click on Settings ▸ Update now shows a deferred `applyStaged` refusal
-// inline. The older-host hook is real; only the local-host id, the directory
-// row, and `IHostManagement` are faked. `convergeReady` must not run, and the
-// refusal is not a toast.
 const toastCalls = vi.hoisted(
   (): Array<{
     readonly message: unknown;

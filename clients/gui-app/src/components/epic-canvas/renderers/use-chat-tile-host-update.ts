@@ -50,11 +50,6 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
   );
 }
 
-/**
- * The gesture behind "Update now" on a surface bound to `hostId`: Settings ▸
- * Host ▸ Updates, scoped to that host. A task tab whose host is below the
- * floor offers the same jump as a chat tile, so both read it from here.
- */
 export function useOpenHostUpdate(hostId: string): () => void {
   const { openSettings } = useSystemTabModalActions();
   return useCallback(() => {

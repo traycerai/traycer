@@ -1482,11 +1482,7 @@ function selectionIsTuple(
   );
 }
 
-/**
- * Whether two profile ids name one account on the tab's host: the same id,
- * or ids that resolve to the same row - a pin to an id a row folded in as an
- * alias is that row, so picking the row is not a switch.
- */
+/** A pin to an id a row folded in as an alias is that row, so picking the row is not a switch. */
 type SameAccountResolver = (
   harnessId: GuiHarnessId,
   left: string | null,

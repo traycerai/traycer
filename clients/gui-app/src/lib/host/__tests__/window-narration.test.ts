@@ -989,8 +989,7 @@ function renderWindowNarrationHook(serving: boolean) {
     });
   });
 
-  // `useWindowNarration` reaches `useQueryClient()` through `useHostClaim`, so
-  // every render needs a client; a fresh one per call keeps cases independent.
+  // `useHostClaim` reaches `useQueryClient()`, so every render needs a client.
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });

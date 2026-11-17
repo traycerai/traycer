@@ -42,9 +42,7 @@ function resolveTombstonedProfileLabel(
   // what makes that a property of the code instead of a property of uuids.
   // Do not "simplify" it back below the match.
   if (anchor.hostId !== hostId) return { label, removedOnThisHost: false };
-  // A profile still listed, or folded into a row that lists the anchor's id
-  // as an alias, is the same account and still active. A removed or unknown
-  // id says what it always has.
+  // A profile folded into a row that lists the anchor's id as an alias is the same account.
   const pin = resolveProfilePin(
     state.profiles,
     removedProfiles.filter((entry) => entry.providerId === providerId),
@@ -71,7 +69,6 @@ export function TombstonedProfileProvider({
   children,
 }: {
   readonly providers: ReadonlyArray<ProviderCliState>;
-  /** The same answer's `removedProfiles`, every provider's. */
   readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly hostId: string;
   readonly children: ReactNode;

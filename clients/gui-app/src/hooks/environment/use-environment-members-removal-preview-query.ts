@@ -22,13 +22,7 @@ import {
 
 const OPERATION = "environment.members.removalPreview";
 
-/**
- * What authn says removing `userId` changes for the team, read on the
- * person's sign-in while the removal confirm names them (`null` reads
- * nothing). Not kept once the confirm closes, and not retried behind the
- * person's back: a refused read is the query's error, which the confirm
- * offers to read again.
- */
+/** Never kept once the confirm closes, never retried behind the person's back. */
 export function useEnvironmentMembersRemovalPreviewQuery(
   environmentId: string,
   userId: string | null,

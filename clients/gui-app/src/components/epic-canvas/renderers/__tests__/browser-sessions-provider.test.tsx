@@ -134,8 +134,6 @@ vi.mock(
   },
 );
 
-// Nulls where the real key does: no row, no endpoint, no user, or a row below
-// the version floor.
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   hostStreamTransportKeyFor: (
     hostEntry: HostDirectoryEntry | null,

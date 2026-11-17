@@ -40,10 +40,7 @@ export function useCloudProviderKeyScope(): CloudProviderKeyScope {
   };
 }
 
-/**
- * The one read of an environment's profile and key records. Every surface on a
- * page that needs them observes this query, so the page reads them once.
- */
+/** Every surface on a page observes this query, so the page reads them once. */
 export function cloudProviderRecordsQuery(
   auth: AuthService,
   scope: CloudProviderKeyScope,

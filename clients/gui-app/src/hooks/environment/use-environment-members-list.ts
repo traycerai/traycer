@@ -86,7 +86,6 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
   retry: retryNothing,
 };
 
-/** Where a page of members is cached: the app's own scope, by viewer. */
 function membersPageKey(
   environmentId: string,
   cursor: string | null,
@@ -115,7 +114,6 @@ export interface EnvironmentMembersPages {
     EnvironmentListResponseV11,
     HostRpcError
   >;
-  /** Whose environment it is; undefined until the list names it. */
   readonly ownerKind: EnvironmentDescriptorV11["ownerKind"] | undefined;
   readonly pageKey: (environmentId: string, cursor: string | null) => QueryKey;
   readonly pageOptions: (
@@ -124,11 +122,7 @@ export interface EnvironmentMembersPages {
   ) => UseQueryOptions<EnvironmentMembersResponseV12, HostRpcError>;
 }
 
-/**
- * The page reads for `environmentId`. With `fetchPages` false nothing is
- * asked, the environment list included: the pages are only observed as
- * another surface loaded them.
- */
+/** With `fetchPages` false nothing is asked, the environment list included. */
 export function useEnvironmentMembersPages(
   environmentId: string | null,
   fetchPages: boolean,
@@ -276,7 +270,6 @@ export function useEnvironmentMembersList(
         retry: retryNothing,
       };
     }
-    // Whose environment this is was not read, so no page could be asked.
     const listFailed = ownerKind === undefined && environments.isError;
     if (listFailed) {
       return {

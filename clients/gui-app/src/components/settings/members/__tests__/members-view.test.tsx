@@ -18,8 +18,6 @@ vitest.mock("sonner", async (importOriginal) => ({
   },
 }));
 
-// The removal preview is the app's own read, which waits for the signed-in
-// viewer.
 vitest.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -27,8 +25,6 @@ vitest.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "u-admin",
 }));
 
-// The opener needs the app shell; the link it is handed is what these cases
-// read.
 const openLinkMock = vitest.hoisted(() => vitest.fn());
 vitest.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
@@ -154,10 +150,6 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
   );
 }
 
-/**
- * What the host answers `environment.members` with, which authn's write and
- * preview reads re-read to name the member by the id its list gives them.
- */
 function membersRead(
   members: readonly MembersListMember[],
   legacyRoleNoticeSeenAt: number | null,
@@ -193,9 +185,6 @@ function renderView(options: {
   /** The real client the view reads through, for settling assertions. */
   readonly queryClient: QueryClient;
 } {
-  // Authn's removal preview names the member by the id its members list
-  // gives them, and counts the work only on the window's own host when
-  // authn's host list names it one of the team's.
   useSelectionAuthorityStore.setState({
     effectiveHostId: mockLocalHostEntry.hostId,
   });
@@ -306,8 +295,7 @@ function deferredPreviews(): DeferredPreviews {
     answer: (userId) => {
       const existing = answers.get(userId);
       if (existing !== undefined) return existing;
-      // Authn's preview and the computer's counts ask separately. Both
-      // consume the member's held answer without replacing its resolver.
+      // Both consume the member's held answer without replacing its resolver.
       const answer = new Promise<EnvironmentMembersRemovePreviewResponse>(
         (resolve) => {
           pending.set(userId, resolve);

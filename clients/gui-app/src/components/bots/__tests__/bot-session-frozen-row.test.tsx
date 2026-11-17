@@ -1,9 +1,3 @@
-/**
- * A frozen turn's error row in a bot's own session, through the real
- * `BotSessionView`: the row names the payer of the host that runs the bot
- * (`boundHostId`), not of the computer serving the tab. Only the session draws
- * this row; the channel and thread panel do not.
- */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,12 +11,9 @@ const mocks = vi.hoisted(() => ({
   hostClient: { getActiveHostId: () => "host-tab" } as {
     readonly getActiveHostId: () => string | null;
   } | null,
-  /** Whether the viewer is the Admin of the team the bot's sandbox is on. */
   billingAdmin: false,
 }));
 
-// Who may buy a team's credits is the environment list's answer, read by its
-// own hook; here a case says it.
 vi.mock("@/hooks/sandboxes/use-team-billing-admin", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-team-billing-admin")
@@ -51,8 +42,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ): ChatSessionStoreHandle | null =>
     Object.hasOwn(mocks.sessions, chatId) ? mocks.sessions[chatId] : null,
 }));
-// The Update button and the rungs both need a resolvable host; the suite's
-// `null` default would make either absent whatever the readOnly guard does.
+// Both need a resolvable host; the suite's `null` default would hide either
+// whatever the readOnly guard does.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.hostClient,
 }));
@@ -94,14 +85,11 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
-// Named by `FallbackManualRungActions` itself: the error row has no epic
-// identity of its own, so it reads this ambient handle.
+// The error row has no epic identity, so it reads this ambient handle.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => ({ epicId: BOT_ID }),
 }));
-// Named by the provider-outdated Update button (`useProviderUpdateForClient`):
-// `canEnsure` gates on the host supporting the method, and the two mutation
-// hooks only need to exist, never to be called, for this suite's assertion.
+// `canEnsure` gates on the method; the mutation hooks only need to exist.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
 }));
@@ -148,9 +136,7 @@ import {
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-/** The computer serving the tab: the viewer's own, not a sandbox. */
 const HOST_ID = "host-tab";
-/** The host that runs the bot. */
 const BOUND_HOST_ID = "host-runs-bot";
 const TRUNK_ID = "trunk-chat";
 const FROZEN_RAW =
@@ -170,7 +156,6 @@ const opened = {
   close: vi.fn<() => void>(),
 };
 
-/** A session whose last turn the bot's sandbox ran out of credits on. */
 function frozenSession(chatId: string): ChatSessionStoreHandle {
   const reply = botReply({
     messageId: `${chatId}-turn`,
@@ -201,7 +186,6 @@ function frozenSession(chatId: string): ChatSessionStoreHandle {
   return handle;
 }
 
-/** The bot's session, as the tab mounts it: `boundHostId` is the host that runs the bot. */
 async function mountSession(boundHostId: string | null): Promise<void> {
   render(
     <StrictMode>

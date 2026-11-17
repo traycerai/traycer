@@ -44,9 +44,7 @@ export const authQueryKeys = {
     userId,
     teamId,
   ],
-  // One team's claimed computers (`AuthService.listClaimedComputers`), the
-  // reader's answer as it is: a claimed computer's cover and the team's own
-  // screens share the entry.
+  /** A claimed computer's cover and the team's own screens share the entry. */
   claimedComputers: (
     auth: object | null,
     userId: string | null,

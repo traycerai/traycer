@@ -21,7 +21,6 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 
-/** The operation a save was pressed on; these saves go to the host, which reads none of it. */
 const PRESSED_ON: EnvironmentCloud = {
   authnBaseUrl: "",
   bearer: { kind: "cloud", getBearerToken: () => null },

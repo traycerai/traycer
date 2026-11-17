@@ -175,7 +175,6 @@ it("holds cached ready Personal membership until the unresolved pick resolves", 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  // The host list is the app's own read of authn, keyed under its scope.
   const membershipQuery = queryOptions({
     queryKey: environmentCloudQueryKey(
       "environment.host.list",

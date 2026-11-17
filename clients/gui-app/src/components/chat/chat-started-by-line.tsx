@@ -6,10 +6,6 @@ import { useChatById } from "@/lib/epic-selectors";
 import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import { chatStarterPerson, startedByText } from "@/lib/identity/started-by";
 
-/**
- * "Started by <name>" with the person's picture at the head of a chat; nothing
- * when no person is known to have started it.
- */
 export function ChatStartedByLine(props: {
   readonly epicId: string;
   readonly chatId: string;

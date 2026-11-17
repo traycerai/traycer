@@ -79,12 +79,11 @@ export const SECRET_SCOPE_LINE =
 export const SECRET_CUSTODY_SENTENCE =
   "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.";
 
-/** A team's sentence where a value is added: no computer receives it. */
+/** No computer receives it. */
 export function teamCustodySentence(name: string): string {
   return `Stored encrypted in Traycer's cloud. ${name}'s sandboxes and connected services use it without seeing it; no computer receives the value.`;
 }
 
-/** A secret's Add and Replace: Personal's sentence, or the team's. */
 export function secretCustodySentence(personal: boolean, name: string): string {
   return personal ? SECRET_CUSTODY_SENTENCE : teamCustodySentence(name);
 }

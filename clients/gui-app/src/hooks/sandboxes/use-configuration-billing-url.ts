@@ -18,11 +18,7 @@ export function useConfigurationBillingUrl(
   return useBillingUrlOf()(configuration);
 }
 
-/**
- * {@link useConfigurationBillingUrl} as a function of the configuration, for
- * a surface whose sandbox's owner may not be known yet: it asks only once
- * the configuration is known, and never builds a page for a guessed one.
- */
+/** Asks only once the configuration is known; never builds a page for a guessed one. */
 export function useBillingUrlOf(): (
   configuration: StageConfiguration,
 ) => string {

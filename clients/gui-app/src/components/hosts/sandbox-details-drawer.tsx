@@ -139,10 +139,8 @@ function withOperationFailure(
 }
 
 /**
- * The failed operation's sentence for its reader. While whose sandbox it is
- * is not known (`ownerKnown` false), a refusal for want of credits from any
- * pot but the team's reads as the tile and the row read it for that reader,
- * with no amount told as the person's own.
+ * While ownership is unknown, a credits refusal from any pot but the team's reads
+ * as it does for that reader, with no amount told as the person's own.
  */
 function operationFailureMessage(
   error: Error,
@@ -178,8 +176,6 @@ function SandboxDetailsSections(props: {
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
-  // `null` while whose sandbox it is is not known: nobody can buy, and no
-  // amount is told as the person's own.
   const configuration = sandboxConfigurationOf(summary, configurations);
   const buysTeamCredits = useOffersAddCredits(configuration);
   const now = useSampledNow();

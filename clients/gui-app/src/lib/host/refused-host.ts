@@ -8,11 +8,8 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
 /**
- * The host each failed call was sent to, keyed by the error the caller
- * catches. The app's unary messenger writes it as its outermost layer, so
- * the object recorded is the one a caller holds. The toast reads it to tell
- * whether a door state covers that host. An error with no entry was not sent
- * through that messenger, and no door state is taken to cover it.
+ * Written by the unary messenger's outermost layer, so the recorded object is the
+ * one a caller holds. An error with no entry is never covered by a door state.
  */
 const sentTo = new WeakMap<HostRpcError, string>();
 
@@ -20,7 +17,6 @@ export function hostOfFailedCall(error: HostRpcError): string | null {
   return sentTo.get(error) ?? null;
 }
 
-/** `inner`, recording the host of every call that fails with a host error. */
 export function recordingRefusedHost<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
 ): IHostMessenger<Registry> {

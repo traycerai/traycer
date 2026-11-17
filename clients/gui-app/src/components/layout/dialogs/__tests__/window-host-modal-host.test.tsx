@@ -1978,8 +1978,6 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       {
         ...EMPTY_PRESENTATION,
-        // Local provisioning applies to the target; the modal's update action
-        // applies to the separately named remote host.
         targetKind: "local",
         localBootIntent: true,
         canManageHost: true,
@@ -2229,8 +2227,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("a computer that does not admit this account draws board C1's 'No reason known' state and nothing else, on every shell", async () => {
-    // A lane running on this machine, so the cover's silence about it is a
-    // decision rather than an absence of progress.
+    // A lane on this machine, so the cover's silence about it is a decision.
     controllerStatus.data = {
       mutation: {
         kind: "respawn",
@@ -2312,12 +2309,6 @@ describe("<WindowHostModalHost />", () => {
     }
   });
 
-  /**
-   * Draws the desktop dialog for one door state on the window's host and
-   * returns it. The presentation has failed and can manage the host, so every
-   * generic recovery (Retry, Report issue, diagnostics) would be offered if the
-   * door cover did not choose its own actions.
-   */
   async function renderDoorCover(state: HostDoorState): Promise<{
     readonly surface: HTMLElement;
     readonly runnerHost: MockRunnerHost;

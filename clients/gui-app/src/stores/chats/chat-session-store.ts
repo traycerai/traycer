@@ -897,12 +897,7 @@ export interface FailedSendRestorationState {
    * bare from its own notice and once qualified from the ack.
    */
   readonly stated: boolean;
-  /**
-   * Whether `reason` and `displacedReason` came from the removed-account code.
-   * Decides, by the code alone, that the app's words after the bare pin's
-   * words go on the next line, and that the notices told from this slot keep
-   * that line break on screen.
-   */
+  /** Decides by the code alone that the app's words go on the next line, and that its notices keep that break. */
   readonly reasonIsRemovedProfile: boolean;
   /**
    * The same account, told for a prompt that could NOT reach the composer.
@@ -2501,13 +2496,8 @@ export interface ChatSessionStoreHandle {
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
-   * The notices built from the removed-account code, whose text puts the
-   * app's words on the line after "Was removed". The toast keeps their line
-   * breaks; every other notice renders as a plain string.
-   *
-   * Beside the ring rather than on the notice, because `ChatErrorNotice` is a
-   * protocol type. Keyed by identity: the ring never copies a notice, so the
-   * object added here is the one the toast layer is handed.
+   * Beside the ring because `ChatErrorNotice` is a protocol type; keyed by identity,
+   * since the ring never copies a notice.
    */
   readonly lineBreakNotices: WeakSet<ChatErrorNotice>;
   /**
@@ -3069,7 +3059,6 @@ function deliveryMessageIdOf(
  * once the opening is withdrawn, with the reason the view already carries.
  */
 function rejectionSurfaces(input: {
-  /** See {@link ChatSessionStoreHandle.lineBreakNotices}. */
   readonly lineBreakNotices: WeakSet<ChatErrorNotice>;
   readonly state: ChatSessionState;
   readonly pending: PendingChatAction | null;
@@ -12852,7 +12841,6 @@ interface HandBackCopy {
   readonly displacedReason: string;
   /** Opens the last-copy statement - no trailing period. */
   readonly circumstance: string;
-  /** Whether the copy leads with the removed-account code's pin words. */
   readonly reasonIsRemovedProfile: boolean;
 }
 
@@ -12998,11 +12986,7 @@ function cancelRestorationSettlementForAck(
   };
 }
 
-/**
- * The host's refusal as a parenthesis, or nothing when it gave no reason. The
- * removed-account code is never said in the parenthesis: its sentence is the
- * one the app shows without a reason, under {@link hostRefusalLead}.
- */
+/** The removed-account code is never said in the parenthesis. */
 function hostReasonClause(
   hostReason: string | null,
   hostCode: string | null,
@@ -14178,7 +14162,6 @@ interface UnrecordedPrompt {
    * composer, so each needs its worktree named and a re-pick asked for.
    */
   readonly reason: string;
-  /** As {@link FailedSendRestorationState.reasonIsRemovedProfile}. */
   readonly reasonIsRemovedProfile: boolean;
 }
 

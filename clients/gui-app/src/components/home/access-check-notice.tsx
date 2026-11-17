@@ -3,12 +3,6 @@ import { Clock } from "lucide-react";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostDoorState } from "@/stores/host/host-door-state-store";
 
-/**
- * The window's host could not renew this account's access, and keeps the
- * connection meanwhile. One quiet line where the host update banner sits: it
- * blocks nothing, has no button and no dismiss, and goes when a renewal
- * succeeds and clears the state.
- */
 export function AccessCheckNotice(): ReactNode {
   const doorState = useHostDoorState(useEffectiveHostId());
   if (doorState?.kind !== "access-check-delayed") return null;

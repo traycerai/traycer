@@ -25,7 +25,6 @@ export interface PersonalMarkTarget {
   readonly scope: ProviderNativeScope;
 }
 
-/** The name of the environment this host serves: its team's, or "Personal". */
 function servedEnvironmentName(status: EnvironmentStatusResponse): string {
   return status.principal?.kind === "team"
     ? status.principal.teamName

@@ -30,9 +30,7 @@ export function commitSelection(
   // palette funnel through the identical host without threading it.
   const state = store.getState();
   const hostId = state.catalog.hostId;
-  // Committing the account already shown (a model pick, a re-click of the
-  // provider) chooses no account: a default account stays a default, and the
-  // pick keeps the Terminal login it stands in for.
+  // Committing the account already shown chooses none: a default account stays a default.
   const accountChanged =
     harnessId !== state.selection.harnessId ||
     profileId !== state.selection.profileId;

@@ -1,24 +1,16 @@
 import { useRef } from "react";
 import type { ChatAutoArchiveSetRequest } from "@traycer/protocol/host/chat-auto-archive/contracts";
 
-/**
- * Builds a write on the newest unsettled one and sends it. `build` gets the
- * policy to write over and returns the write, or `null` when there is
- * nothing to send. `onRejected` runs after the save's own error toast, for
- * the one write whose control holds local state: the custom threshold field.
- */
+/** `onRejected` runs after the save's own error toast. */
 export type AutoArchiveSave = (
   build: (base: ChatAutoArchiveSetRequest) => ChatAutoArchiveSetRequest | null,
   onRejected: (() => void) | null,
 ) => void;
 
 /**
- * One row's queued saves. Writes are BUILT on the newest write this row sent
- * that has not settled, at event time, not on the rendered `current`: the
- * mutation reaches React a timer tick after `mutate`, and a touch tap
- * delivers the threshold field's leave-blur and the switch's click in one
- * task, so a click built on the rendered `current` would carry the old
- * threshold and, queued last, put it back.
+ * Built on the newest unsettled write at event time: the mutation reaches React a
+ * tick after `mutate`, and a tap delivers the field's blur and the switch's click
+ * in one task, so the rendered value would be stale.
  */
 export function useQueuedAutoArchiveSave(
   current: ChatAutoArchiveSetRequest,
