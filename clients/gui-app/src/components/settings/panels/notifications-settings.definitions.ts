@@ -1,24 +1,21 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
-// Host-scoped: the page's scope gate conceals both cards while the host
+// Host-scoped: the page's scope gate conceals the hooks while the host
 // connects or is unreachable and drops them for a host that vanished, so
-// every card and row here folds into the page.
+// every card and row here folds into the page. Which kinds of notification
+// interrupt is not here: that is the device's, under Application → Alerts.
 export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Notifications",
     description:
-      "What gets surfaced to you, and what your automation receives.",
+      "What your automation receives when a host creates a notification.",
     keywords: [
-      "alerts",
       "inbox",
       "filter",
       "automation",
       "host",
-      "in-app notifications",
-      "toast",
-      "severity",
       "notification hooks",
       "hooks",
       "webhook",
@@ -27,61 +24,6 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
       "trigger",
       "run on",
     ],
-  },
-  inAppNotifications: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "In-app notifications",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  severityNeedsAction: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Needs action",
-    description: "Approvals and interviews.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  severityFailure: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  severityDone: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  severityInfo: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Info",
-    description: "Updates that need nothing from you.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  longTurnAlert: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Alert when a turn runs longer than",
-    description:
-      "Notifies you once per turn. Time waiting on your approval or answer doesn't count.",
-    availableWhen: alwaysAvailable,
-    keywords: ["long", "running", "stuck", "duration", "turn"],
   },
   notificationHooks: {
     kind: "group",
