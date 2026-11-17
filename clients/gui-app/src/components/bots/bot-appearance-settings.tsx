@@ -46,8 +46,12 @@ const COLORS: readonly number[] = Array.from(
   (_, index) => index,
 );
 
-/** A part's name as its button reads it: "Blob", "Shades", "None". */
+/**
+ * A part's name as its button reads it: "Blob", "Shades", "None". The
+ * eyewear stored as `glasses` is drawn as wide eyes, and is named for that.
+ */
 function partName(part: string): string {
+  if (part === "glasses") return "Wide eyes";
   return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
