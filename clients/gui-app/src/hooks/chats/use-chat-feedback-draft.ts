@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import type {
-  Mutation,
-  UseMutationResult,
-  UseQueryResult,
+import {
+  useQueryClient,
+  type Mutation,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 import {
   chatFeedbackDraftDecideResponseSchema,
@@ -25,11 +26,14 @@ import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
-  feedbackDraftDecisionKey,
   feedbackDraftSessionId,
-  useFeedbackDraftDecisionStore,
+  readFeedbackDraftDecision,
+  recordFeedbackDraftDecision,
+  settleFeedbackDraftDecision,
   type FeedbackDraftAddress,
-} from "@/stores/chats/feedback-draft-decision-store";
+  type FeedbackDraftConsumer,
+  type FeedbackDraftHeldDecision,
+} from "@/lib/chats/feedback-draft-decisions";
 
 const DECIDE_METHOD = "chat.feedbackDraft.decide" as const;
 const PREVIEW_METHOD = "chat.feedbackDraft.preview" as const;
@@ -123,14 +127,22 @@ export function feedbackDraftRefusalMessage(
 }
 
 /**
- * The account session a decision was sent in. Its answer is held only if the
- * client is still in that same session when it lands: an identity change
- * anywhere between the click and the answer, back to the same account
- * included, replaces the context object.
+ * The account session a decision was asked for in, captured when the
+ * mutation starts. The request is dispatched only while the client is still
+ * in that session, and its answer is held only if it still is when the answer
+ * lands: an identity change anywhere between the click and the answer, back
+ * to the same account included, replaces the context object
+ * (`RequestContextProvider` mints one per sign-in).
  */
 interface DecisionContext {
   readonly context: RequestContext | null;
 }
+
+/** The session each decision in flight was asked for in, by its request. */
+const intendedSessions = new WeakMap<
+  ChatFeedbackDraftDecideRequest,
+  RequestContext
+>();
 
 function decidingStamp(
   response: ChatFeedbackDraftDecideResponse | null,
@@ -157,20 +169,29 @@ export function useChatFeedbackDraftDecideMutation(
   DecisionContext
 > {
   const sessionId = useFeedbackDraftSessionId(client);
-  const record = useFeedbackDraftDecisionStore((state) => state.record);
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     typeof DECIDE_METHOD,
     DecisionContext
   >({
-    client,
+    // Read at dispatch, synchronously before the request is sent: a session
+    // change after the mutation started sends nothing, rather than deciding
+    // the draft as whoever is signed in by then.
+    client: (variables) =>
+      client !== null &&
+      intendedSessions.get(variables) === client.getRequestContext()
+        ? client
+        : null,
     method: DECIDE_METHOD,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: decideMutationKey(draft, sessionId),
-      onMutate: () => ({
-        context: client === null ? null : client.getRequestContext(),
-      }),
+      onMutate: (variables) => {
+        const context = client === null ? null : client.getRequestContext();
+        if (context !== null) intendedSessions.set(variables, context);
+        return { context };
+      },
       onSuccess: (response, _variables, sent) => {
         const stamp = decidingStamp(response);
         if (
@@ -179,7 +200,12 @@ export function useChatFeedbackDraftDecideMutation(
           client !== null &&
           client.getRequestContext() === sent.context
         ) {
-          record(feedbackDraftSessionId(sent.context), draft, stamp);
+          recordFeedbackDraftDecision(
+            queryClient,
+            feedbackDraftSessionId(sent.context),
+            draft,
+            stamp,
+          );
         }
         const refusal = feedbackDraftRefusalMessage(response);
         if (refusal !== null) toast.error(refusal);
@@ -225,7 +251,8 @@ function selectDecideAttempt(mutation: Mutation): DecideAttempt {
  * attempts still answer for a decision in flight and for a failed one.
  *
  * Both sources are read for the client's current account session only, so
- * an account change hides every earlier decision at once.
+ * an account change hides every earlier decision immediately; they are
+ * discarded on the next session's first write.
  */
 export function useChatFeedbackDraftDecisionState(
   client: HostRequester<HostRpcRegistry> | null,
@@ -241,23 +268,18 @@ export function useChatFeedbackDraftDecisionState(
     { mutationKey, status: undefined, exact: true },
     selectDecideAttempt,
   );
-  const held = useFeedbackDraftDecisionStore((state) =>
-    sessionId === null || state.sessionId !== sessionId
-      ? null
-      : (state.decisions.get(
-          feedbackDraftDecisionKey(sessionId, {
-            hostId,
-            epicId,
-            chatId,
-            blockId,
-          }),
-        ) ?? null),
-  );
+  const held = useHeldFeedbackDraftDecision(sessionId, {
+    hostId,
+    epicId,
+    chatId,
+    blockId,
+  });
+  const heldStamp = held === undefined ? null : held.stamp;
   return useMemo(() => {
     // Answers can land out of submission order, and only one attempt can
     // decide the draft: a sent or skipped answer outranks any failure.
     const deciding =
-      held ??
+      heldStamp ??
       attempts
         .map((attempt) => decidingStamp(attempt.response))
         .find((stamp) => stamp !== null) ??
@@ -269,26 +291,67 @@ export function useChatFeedbackDraftDecisionState(
       isPending: attempts.some((attempt) => attempt.isPending),
       settled: deciding ?? (newest === null ? null : newest.feedbackDraft),
     };
-  }, [attempts, held]);
+  }, [attempts, heldStamp]);
+}
+
+/** The held decision on a draft for `sessionId`, re-read on every cache change. */
+function useHeldFeedbackDraftDecision(
+  sessionId: number | null,
+  draft: FeedbackDraftAddress,
+): FeedbackDraftHeldDecision | undefined {
+  const queryClient = useQueryClient();
+  const { hostId, epicId, chatId, blockId } = draft;
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      queryClient.getQueryCache().subscribe(onStoreChange),
+    [queryClient],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      sessionId === null
+        ? undefined
+        : readFeedbackDraftDecision(queryClient, sessionId, {
+            hostId,
+            epicId,
+            chatId,
+            blockId,
+          }),
+    [queryClient, sessionId, hostId, epicId, chatId, blockId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => undefined);
 }
 
 /**
- * Marks a draft settled for the client's account session once its transcript
- * stamp is sent or skipped: the transcript answers for the card from then on,
- * the notification row has its own resolve, and an answer that lands later
- * holds nothing.
+ * Marks `consumer`'s own state for a draft as arrived, for the client's
+ * account session: the card's transcript stamp is sent or skipped, or the
+ * notification row resolved. The held decision is dropped once both have.
  */
 export function useSettleFeedbackDraftDecision(
   client: HostRequester<HostRpcRegistry> | null,
   draft: FeedbackDraftAddress,
-  transcriptSettled: boolean,
+  consumer: FeedbackDraftConsumer,
+  settled: boolean,
 ): void {
   const { hostId, epicId, chatId, blockId } = draft;
   const sessionId = useFeedbackDraftSessionId(client);
-  const settle = useFeedbackDraftDecisionStore((state) => state.settle);
+  const queryClient = useQueryClient();
   useEffect(() => {
-    if (transcriptSettled && sessionId !== null) {
-      settle(sessionId, { hostId, epicId, chatId, blockId });
+    if (settled && sessionId !== null) {
+      settleFeedbackDraftDecision(
+        queryClient,
+        sessionId,
+        { hostId, epicId, chatId, blockId },
+        consumer,
+      );
     }
-  }, [transcriptSettled, sessionId, hostId, epicId, chatId, blockId, settle]);
+  }, [
+    settled,
+    sessionId,
+    hostId,
+    epicId,
+    chatId,
+    blockId,
+    consumer,
+    queryClient,
+  ]);
 }

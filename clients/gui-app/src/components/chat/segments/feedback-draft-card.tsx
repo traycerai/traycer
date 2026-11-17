@@ -133,6 +133,7 @@ function LiveFeedbackDraftCard(
   useSettleFeedbackDraftDecision(
     client,
     draftRef,
+    "card",
     props.draft.state === "sent" || props.draft.state === "skipped",
   );
   const readOnly = liveReadOnlyReason(canAct, supported);

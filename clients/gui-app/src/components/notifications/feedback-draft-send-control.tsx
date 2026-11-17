@@ -5,6 +5,7 @@ import {
   useChatFeedbackDraftDecideMutation,
   useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftSupported,
+  useSettleFeedbackDraftDecision,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import { newFeedbackDraftClientActionId } from "@/lib/chats/feedback-draft-client-action-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -39,6 +40,7 @@ export function FeedbackDraftSendControl(props: {
   };
   const decide = useChatFeedbackDraftDecideMutation(client, draft);
   const decision = useChatFeedbackDraftDecisionState(client, draft);
+  useSettleFeedbackDraftDecision(client, draft, "row", props.resolved);
   const settled = decision.settled;
   if (settled !== null && settled.state === "sent") {
     return (

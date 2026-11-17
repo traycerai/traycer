@@ -14,7 +14,11 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
+import {
+  feedbackDraftSessionId,
+  readFeedbackDraftDecision,
+} from "@/lib/chats/feedback-draft-decisions";
+import { feedbackDraftQueryKeys } from "@/lib/query-keys";
 import {
   feedbackDraftRefusalMessage,
   useChatFeedbackDraftDecideMutation,
@@ -102,6 +106,7 @@ function contextFor(user: "a" | "b"): RequestContext {
 }
 
 interface Harness {
+  readonly queryClient: QueryClient;
   readonly spine: HostClient<HostRpcRegistry>;
   readonly client: HostRequester<HostRpcRegistry>;
   readonly wrapper: (props: { children: ReactNode }) => ReactNode;
@@ -125,11 +130,34 @@ function buildHarness(
   });
   spine.setRequestContext(contextFor("a"));
   return {
+    queryClient,
     spine,
     client: spine.createRequester(mockLocalHostEntry),
     wrapper: ({ children }) =>
       createElement(QueryClientProvider, { client: queryClient }, children),
   };
+}
+
+/** The account session the harness's client currently resolves to. */
+function sessionOf(harness: Harness): number {
+  const context = harness.client.getRequestContext();
+  if (context === null) throw new Error("the harness client has a session");
+  return feedbackDraftSessionId(context);
+}
+
+/** The stamp held for the draft in the harness's session, `null` when none is. */
+function heldStamp(harness: Harness) {
+  return (
+    readFeedbackDraftDecision(harness.queryClient, sessionOf(harness), DRAFT)
+      ?.stamp ?? null
+  );
+}
+
+/** How many held-decision entries, tombstones included, the query cache has. */
+function heldEntryCount(harness: Harness): number {
+  return harness.queryClient
+    .getQueryCache()
+    .findAll({ queryKey: feedbackDraftQueryKeys.decisions() }).length;
 }
 
 async function advance(ms: number): Promise<void> {
@@ -186,14 +214,68 @@ function heldDecision(): {
   };
 }
 
+/**
+ * A requester that forwards everything to the real one, and runs `afterFirstRead`
+ * right after the first `getRequestContext()` it answers: the read `onMutate`
+ * makes, which is the last thing before TanStack awaits it and runs `mutationFn`.
+ */
+class ContextHookedRequester implements HostRequester<HostRpcRegistry> {
+  contextReads = 0;
+
+  constructor(
+    private readonly inner: HostRequester<HostRpcRegistry>,
+    private readonly afterFirstRead: () => void,
+  ) {}
+
+  getRegistry(): HostRpcRegistry {
+    return this.inner.getRegistry();
+  }
+  getActiveHost: HostRequester<HostRpcRegistry>["getActiveHost"] = () =>
+    this.inner.getActiveHost();
+  getActiveHostId: HostRequester<HostRpcRegistry>["getActiveHostId"] = () =>
+    this.inner.getActiveHostId();
+  getRequestContext(): RequestContext | null {
+    const context = this.inner.getRequestContext();
+    this.contextReads += 1;
+    if (this.contextReads === 1) this.afterFirstRead();
+    return context;
+  }
+  getRequestContextUserId(): string | null {
+    return this.inner.getRequestContextUserId();
+  }
+  onChange: HostRequester<HostRpcRegistry>["onChange"] = (handler) =>
+    this.inner.onChange(handler);
+  request: HostRequester<HostRpcRegistry>["request"] = (method, params) =>
+    this.inner.request(method, params);
+  requestWithIdempotencyKey: HostRequester<HostRpcRegistry>["requestWithIdempotencyKey"] =
+    (method, params, key) =>
+      this.inner.requestWithIdempotencyKey(method, params, key);
+  requestWithOptions: HostRequester<HostRpcRegistry>["requestWithOptions"] = (
+    method,
+    params,
+    options,
+  ) => this.inner.requestWithOptions(method, params, options);
+  requestWithSignal: HostRequester<HostRpcRegistry>["requestWithSignal"] = (
+    method,
+    params,
+    signal,
+  ) => this.inner.requestWithSignal(method, params, signal);
+  requestWithSignalRequiringHostMethodVersion: HostRequester<HostRpcRegistry>["requestWithSignalRequiringHostMethodVersion"] =
+    (method, params, signal, floor) =>
+      this.inner.requestWithSignalRequiringHostMethodVersion(
+        method,
+        params,
+        signal,
+        floor,
+      );
+  requestWithResponseTimeout: HostRequester<HostRpcRegistry>["requestWithResponseTimeout"] =
+    (method, params, ms) =>
+      this.inner.requestWithResponseTimeout(method, params, ms);
+}
+
 describe("feedback draft decision state", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useFeedbackDraftDecisionStore.setState({
-      sessionId: null,
-      decisions: new Map(),
-      settled: new Set(),
-    });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -207,17 +289,22 @@ describe("feedback draft decision state", () => {
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
   });
 
-  it("drops the held decision once the draft's transcript settled", async () => {
+  it("drops the held decision only once both the card and the row have settled", async () => {
     const harness = buildHarness(() => SENT);
     await decideFromClosedCard(harness);
     const row = mountReader(harness);
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
 
     renderHook(
-      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, true),
+      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, "card", true),
       { wrapper: harness.wrapper },
     );
+    expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
 
+    renderHook(
+      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, "row", true),
+      { wrapper: harness.wrapper },
+    );
     expect(row.result.current.settled).toBeNull();
   });
 
@@ -289,7 +376,7 @@ describe("feedback draft decision state", () => {
 
     const row = mountReader(harness);
     expect(row.result.current.settled).toBeNull();
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    expect(heldStamp(harness)).toBeNull();
   });
 
   it("holds nothing for an answer delivered in the instant the context it was sent in changed", async () => {
@@ -317,10 +404,10 @@ describe("feedback draft decision state", () => {
 
     const row = mountReader(harness);
     expect(row.result.current.settled).toBeNull();
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    expect(heldStamp(harness)).toBeNull();
   });
 
-  it("holds nothing for an answer that lands after the draft's transcript settled", async () => {
+  it("holds nothing for an answer that lands after both the card and the row settled", async () => {
     const held = heldDecision();
     const harness = buildHarness(held.handler);
     const card = renderHook(
@@ -329,19 +416,77 @@ describe("feedback draft decision state", () => {
     );
     const decided = card.result.current.mutateAsync(DECIDE_REQUEST);
     await advance(1_000);
-    renderHook(
-      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, true),
-      { wrapper: harness.wrapper },
-    );
+    for (const consumer of ["card", "row"] as const) {
+      renderHook(
+        () =>
+          useSettleFeedbackDraftDecision(harness.client, DRAFT, consumer, true),
+        { wrapper: harness.wrapper },
+      );
+    }
 
     held.answer(SENT);
     await advance(1_000);
     await expect(decided).resolves.toEqual(SENT);
 
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    expect(heldStamp(harness)).toBeNull();
     card.unmount();
     await advance(GC_WINDOW_MS);
     const row = mountReader(harness);
     expect(row.result.current.settled).toBeNull();
   });
+  it("dispatches nothing when the account changes after the decision started and before it is sent", async () => {
+    let dispatched = 0;
+    const harness = buildHarness(() => {
+      dispatched += 1;
+      return SENT;
+    });
+    const hooked = new ContextHookedRequester(harness.client, () => {
+      queueMicrotask(() => {
+        harness.spine.setRequestContext(contextFor("b"));
+      });
+    });
+    const card = renderHook(
+      () => useChatFeedbackDraftDecideMutation(hooked, DRAFT),
+      { wrapper: harness.wrapper },
+    );
+    const decided = card.result.current.mutateAsync(DECIDE_REQUEST).then(
+      () => "answered",
+      () => "failed",
+    );
+    await advance(1_000);
+
+    const outcome = await decided;
+    // onMutate captured A, and the dispatch-time read saw B.
+    expect(hooked.contextReads).toBeGreaterThanOrEqual(2);
+    expect(dispatched).toBe(0);
+    expect(outcome).toBe("failed");
+    expect(heldEntryCount(harness)).toBe(0);
+  });
+
+  it.each([
+    { first: "row", second: "card" },
+    { first: "card", second: "row" },
+  ] as const)(
+    "keeps a sent decision when $first settles alone, and drops it when $second settles too",
+    async ({ first, second }) => {
+      const harness = buildHarness(() => SENT);
+      await decideFromClosedCard(harness);
+
+      renderHook(
+        () =>
+          useSettleFeedbackDraftDecision(harness.client, DRAFT, first, true),
+        { wrapper: harness.wrapper },
+      );
+      await advance(GC_WINDOW_MS);
+      const reader = mountReader(harness);
+      expect(reader.result.current.settled).toEqual(SENT.feedbackDraft);
+
+      renderHook(
+        () =>
+          useSettleFeedbackDraftDecision(harness.client, DRAFT, second, true),
+        { wrapper: harness.wrapper },
+      );
+      expect(reader.result.current.settled).toBeNull();
+    },
+  );
 });

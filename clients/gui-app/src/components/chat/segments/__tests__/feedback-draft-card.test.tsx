@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -28,8 +29,10 @@ import {
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 import {
   feedbackDraftSessionId,
-  useFeedbackDraftDecisionStore,
-} from "@/stores/chats/feedback-draft-decision-store";
+  readFeedbackDraftDecision,
+  recordFeedbackDraftDecision,
+  settleFeedbackDraftDecision,
+} from "@/lib/chats/feedback-draft-decisions";
 import { FeedbackDraftCard } from "@/components/chat/segments/feedback-draft-card";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
@@ -173,11 +176,6 @@ function decideCardDraft(
 
 beforeEach(() => {
   queryClient = new QueryClient();
-  useFeedbackDraftDecisionStore.setState({
-    sessionId: null,
-    decisions: new Map(),
-    settled: new Set(),
-  });
   mocks.mutate.mockReset();
   mocks.supported = true;
   mocks.canAct = true;
@@ -339,18 +337,16 @@ describe("FeedbackDraftCard", () => {
     );
   });
 
-  it("keeps a held sent decision while its transcript reads pending, and drops it once the transcript settles", () => {
+  it("keeps a held sent decision while its transcript reads pending, and keeps it after the transcript settles until the row has too", () => {
     const sessionId = giveCardASession();
-    useFeedbackDraftDecisionStore.getState().record(
-      sessionId,
-      {
-        hostId: SCOPE.hostId,
-        epicId: SCOPE.epicId,
-        chatId: SCOPE.chatId,
-        blockId: "block-1",
-      },
-      { ...PENDING, state: "sent", decidedAt: 5 },
-    );
+    const address = {
+      hostId: SCOPE.hostId,
+      epicId: SCOPE.epicId,
+      chatId: SCOPE.chatId,
+      blockId: "block-1",
+    };
+    const sent = { ...PENDING, state: "sent", decidedAt: 5 } as const;
+    recordFeedbackDraftDecision(queryClient, sessionId, address, sent);
     const view = renderCard(PENDING, SCOPE);
 
     expect(screen.getByText("Sent")).toBeTruthy();
@@ -358,8 +354,19 @@ describe("FeedbackDraftCard", () => {
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
     expect(queryClient.getMutationCache().getAll()).toHaveLength(0);
 
-    view.rerender(cardTree({ ...PENDING, state: "sent", decidedAt: 5 }, SCOPE));
+    view.rerender(cardTree(sent, SCOPE));
 
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    expect(readFeedbackDraftDecision(queryClient, sessionId, address)).toEqual({
+      stamp: sent,
+      settled: { card: true, row: false },
+    });
+
+    act(() => {
+      settleFeedbackDraftDecision(queryClient, sessionId, address, "row");
+    });
+
+    expect(
+      readFeedbackDraftDecision(queryClient, sessionId, address)?.stamp ?? null,
+    ).toBeNull();
   });
 });

@@ -23,8 +23,9 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 import {
   feedbackDraftSessionId,
-  useFeedbackDraftDecisionStore,
-} from "@/stores/chats/feedback-draft-decision-store";
+  readFeedbackDraftDecision,
+  recordFeedbackDraftDecision,
+} from "@/lib/chats/feedback-draft-decisions";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 interface BoundaryState {
@@ -201,11 +202,6 @@ function decideElsewhere(
 }
 
 beforeEach(() => {
-  useFeedbackDraftDecisionStore.setState({
-    sessionId: null,
-    decisions: new Map(),
-    settled: new Set(),
-  });
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
   mocks.state.supported = true;
@@ -398,16 +394,18 @@ describe("<NotificationRow /> feedback draft rows", () => {
     );
     const sessionId = rowSessionId();
     if (sessionId === null) throw new Error("the client has a session");
-    useFeedbackDraftDecisionStore.getState().record(sessionId, address, {
-      ...STAMP,
-      state: "sent",
-      decidedAt: 6_000,
-    });
+    const sent = { ...STAMP, state: "sent", decidedAt: 6_000 } as const;
+    recordFeedbackDraftDecision(queryClient, sessionId, address, sent);
     const view = renderRow(buildRow({}), vi.fn());
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(1);
+    expect(
+      readFeedbackDraftDecision(queryClient, sessionId, address)?.stamp,
+    ).toEqual(sent);
 
     view.rerender(rowTree(buildRow({ resolvedAt: 5_000 }), vi.fn()));
 
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(1);
+    expect(readFeedbackDraftDecision(queryClient, sessionId, address)).toEqual({
+      stamp: sent,
+      settled: { card: false, row: true },
+    });
   });
 });
