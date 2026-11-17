@@ -341,6 +341,10 @@ function moveOutcome(state: "running" | "done") {
   });
 }
 
+/** The computer's own running work, as `environment.previewLocalFacts` answers it. */
+let runningChatFacts: { activeTurns: number | null; terminals: number | null } =
+  { activeTurns: 0, terminals: 0 };
+
 /** A computer that takes the give: it plans, stages, starts, and is then the team's. */
 function defaultMoveHostReply(
   method: string,
@@ -372,6 +376,8 @@ function defaultMoveHostReply(
       );
     case "environment.host.read":
       return Promise.resolve(teamBinding);
+    case "environment.previewLocalFacts":
+      return Promise.resolve(runningChatFacts);
     default:
       return Promise.reject(new Error(`unexpected host RPC ${method}`));
   }
@@ -610,6 +616,7 @@ describe("install auth helpers", () => {
       "identity",
       "enrollment.json",
     );
+    runningChatFacts = { activeTurns: 0, terminals: 0 };
     mocks.callHostRpcAtResolvedEndpointMock.mockImplementation(
       defaultMoveHostReply,
     );
@@ -733,6 +740,7 @@ describe("install auth helpers", () => {
 
     expect(order).toEqual([
       "environment.move.plan",
+      "environment.previewLocalFacts",
       ...TEAM_TRANSFER_DISCLOSURE.map((line) => `progress:${line}`),
       `progress:${RESTARTING_LINE}`,
       "environment.move.stage",
@@ -742,6 +750,59 @@ describe("install auth helpers", () => {
     ]);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    {
+      label: "chats running",
+      facts: { activeTurns: 3, terminals: 1 },
+      lines: ["3 chats are running and will stop."],
+    },
+    {
+      label: "a count the computer cannot read",
+      facts: { activeTurns: null, terminals: null },
+      lines: ["Running chats will stop."],
+    },
+    {
+      label: "nothing running",
+      facts: { activeTurns: 0, terminals: 0 },
+      lines: [],
+    },
+  ])(
+    "with $label, says after the disclosure which chats will stop",
+    async ({ facts, lines }) => {
+      runningChatFacts = facts;
+      const progress = vi.fn<CommandContext["progress"]>();
+      mocks.readHostOwnershipMock
+        .mockResolvedValueOnce(
+          hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+        )
+        .mockResolvedValueOnce(
+          hostOwnership(
+            { kind: "team", id: TEST_TEAM_ID, name: "Acme" },
+            "personal",
+          ),
+        );
+
+      await expect(
+        completeTeamInstall(
+          "acme",
+          { preflight: signedIn(), inlineSignInToken: null },
+          progress,
+        ),
+      ).resolves.toEqual(teamBinding);
+
+      expect(progress.mock.calls.map(([info]) => info.message)).toEqual([
+        ...TEAM_TRANSFER_DISCLOSURE,
+        ...lines,
+        RESTARTING_LINE,
+      ]);
+      expect(
+        hostCalls("environment.previewLocalFacts").map(([, params]) => params),
+      ).toEqual([
+        { environmentId: "environment-acme", subject: { kind: "computer" } },
+      ]);
+    },
+  );
 
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
     const legacyHost = new LegacyTeamHost();
@@ -967,6 +1028,7 @@ describe("install auth helpers", () => {
       ),
     ).toEqual([
       "environment.move.plan",
+      "environment.previewLocalFacts",
       "environment.move.stage",
       "environment.move.start",
       "environment.status",
@@ -1125,7 +1187,11 @@ describe("install auth helpers", () => {
       mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
         ([method]) => method,
       ),
-    ).toEqual(["environment.move.plan", "environment.move.stage"]);
+    ).toEqual([
+      "environment.move.plan",
+      "environment.previewLocalFacts",
+      "environment.move.stage",
+    ]);
     expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1266,6 +1332,7 @@ describe("install auth helpers", () => {
       ),
     ).toEqual([
       "environment.move.plan",
+      "environment.previewLocalFacts",
       "environment.move.stage",
       "environment.move.start",
     ]);

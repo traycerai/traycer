@@ -49,6 +49,7 @@ import {
   readHostPidMetadata,
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { readRunningChatCount, runningChatsLine } from "./running-chat-count";
 import {
   readSignInEnvironments,
   type SignInEnvironment,
@@ -759,7 +760,16 @@ export async function useInstalledHostTeam(
   if (plan.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION) {
     throw teamTransferNotConfirmed();
   }
-  for (const message of TEAM_TRANSFER_DISCLOSURE) {
+  // The computer counts its own owner's chats; the environment named is the
+  // team the give is into.
+  const runningChats = runningChatsLine(
+    await readRunningChatCount(endpoint, auth, target.environmentId),
+  );
+  const disclosure =
+    runningChats === null
+      ? TEAM_TRANSFER_DISCLOSURE
+      : [...TEAM_TRANSFER_DISCLOSURE, runningChats];
+  for (const message of disclosure) {
     progress({
       stage: "host-team",
       message,
