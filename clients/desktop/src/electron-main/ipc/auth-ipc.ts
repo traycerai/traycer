@@ -370,9 +370,8 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
  * happens only inside `tokenStore.rotate`, under the file lock.
  */
 /**
- * The sandbox control plane, the team environment, the secret decisions and
- * the executable-write grant: the IPC the gui-app's sandbox, environment and
- * bot surfaces call.
+ * The sandbox control plane, the team environment and the secret decisions:
+ * the IPC the gui-app's sandbox, environment and bot surfaces call.
  */
 function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   // The sandbox control plane. traycer-server's base URL is read from the
