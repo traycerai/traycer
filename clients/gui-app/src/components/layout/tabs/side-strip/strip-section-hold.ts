@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SplitSideName } from "@/stores/tabs/layout";
+import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import {
   groupEntriesBySection,
   type StripSection,
@@ -118,10 +118,26 @@ function sectionOfItem(
   );
 }
 
-/** The current item, and which half of it when it is a split pair. */
-export interface StripOpening {
+/**
+ * The current item, and the tab on screen in it when it is a split pair: the
+ * tab and not its side, since swapping a pair's sides opens nothing.
+ */
+interface StripOpening {
   readonly itemId: string;
-  readonly focusedSide: SplitSideName | null;
+  readonly focusedTab: string | null;
+}
+
+function openingOf(
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+): StripOpening | null {
+  if (activeItemId === null) return null;
+  const item = layoutItems.find((entry) => entry.id === activeItemId);
+  const focused = item?.kind === "split" ? item[item.focusedSide] : null;
+  return {
+    itemId: activeItemId,
+    focusedTab: focused?.kind === "tab" ? tabRefKey(focused.ref) : null,
+  };
 }
 
 interface OpenedHoldState {
@@ -131,7 +147,7 @@ interface OpenedHoldState {
 }
 
 function sameOpening(a: StripOpening | null, b: StripOpening | null): boolean {
-  return a?.itemId === b?.itemId && a?.focusedSide === b?.focusedSide;
+  return a?.itemId === b?.itemId && a?.focusedTab === b?.focusedTab;
 }
 
 function openedHoldOf(
@@ -165,9 +181,11 @@ function openedHoldOf(
  */
 export function useOpenedSectionHold(
   sections: ReadonlyArray<StripSectionGroup>,
-  opening: StripOpening | null,
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSectionHold | null {
+  const opening = openingOf(layoutItems, activeItemId);
   const [state, setState] = useState<OpenedHoldState>(() => ({
     sections,
     opening,
