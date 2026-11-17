@@ -172,7 +172,7 @@ function LoginFlowHarness(props: {
   readonly onCancel?: (request: CancelLoginRequest) => void;
   readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onSubmitVariables: (variables: SubmitLoginCodeVariables) => void;
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
   readonly onIdentity: () => void;
 }): ReactNode {
   const startLogin: StartLoginMutation = useMutation<
@@ -323,12 +323,12 @@ function renderFlow(options: {
   readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onIdentity?: () => void;
 }): {
-  readonly onFailed: Mock<(message: string) => void>;
+  readonly onFailed: Mock<(message: string, hostSentence: boolean) => void>;
   readonly onSubmitVariables: Mock<
     (variables: SubmitLoginCodeVariables) => void
   >;
 } {
-  const onFailed = vi.fn<(message: string) => void>();
+  const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
   const onSubmitVariables =
     vi.fn<(variables: SubmitLoginCodeVariables) => void>();
   render(
@@ -555,7 +555,7 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
     expect(screen.getByTestId("flow-message").textContent).toBe(REFUSAL.reason);
     expect(failedRefusal()).toEqual(REFUSAL);
     expect(onFailed).toHaveBeenCalledTimes(1);
-    expect(onFailed).toHaveBeenCalledWith(REFUSAL.reason);
+    expect(onFailed).toHaveBeenCalledWith(REFUSAL.reason, false);
   });
 
   it("keeps a provider-authored refusal in the UI and callback, but never in the warning fields", async () => {
@@ -577,7 +577,7 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
       expect(screen.getByTestId("flow-message").textContent).toBe(
         sensitiveRefusal.reason,
       );
-      expect(onFailed).toHaveBeenCalledWith(sensitiveRefusal.reason);
+      expect(onFailed).toHaveBeenCalledWith(sensitiveRefusal.reason, false);
       expect(warn).toHaveBeenCalledWith("[provider-login] flow failed", {
         provider: PROVIDER_ID,
         mode: "create",
@@ -664,7 +664,7 @@ describe("useProviderProfileLoginFlow - failures the flow words itself carry no 
       await waitFor(() => expect(flowState()).toBe("failed"));
       expect(screen.getByTestId("flow-message").textContent).toBe(NOT_FINISHED);
       expect(failedRefusal()).toBeNull();
-      expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+      expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
       expect(warn).toHaveBeenCalledWith("[provider-login] flow failed", {
         provider: PROVIDER_ID,
         mode: "create",
