@@ -373,7 +373,8 @@ function RemoveFolderButton(props: {
   readonly moveToRecent: boolean;
 }) {
   const { item } = props;
-  const removeIcon = props.moveToRecent ? (
+  const movesToRecent = props.moveToRecent && item.removeSkipsRecent !== true;
+  const removeIcon = movesToRecent ? (
     <CircleMinus className="size-3.5" />
   ) : (
     <Trash2 className="size-3.5" />
@@ -386,7 +387,7 @@ function RemoveFolderButton(props: {
     <button
       type="button"
       aria-label={
-        props.moveToRecent
+        movesToRecent
           ? `Move ${item.displayName} to Recent`
           : `Remove ${item.displayName}`
       }
@@ -397,7 +398,7 @@ function RemoveFolderButton(props: {
       onClick={item.onRemove ?? undefined}
       className={cn(
         "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-[var(--fc-opacity,0.7)] outline-none transition-[opacity,color,background-color] hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:text-muted-foreground/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60 disabled:hover:opacity-[var(--fc-opacity,0.7)]",
-        props.moveToRecent
+        movesToRecent
           ? "hover:bg-accent/50 hover:text-foreground"
           : "hover:bg-destructive/10 hover:text-destructive",
       )}
@@ -425,7 +426,7 @@ function RemoveFolderButton(props: {
       </TooltipWrapper>
     );
   }
-  if (props.moveToRecent) {
+  if (movesToRecent) {
     return (
       <TooltipWrapper
         label="Move to Recent"
