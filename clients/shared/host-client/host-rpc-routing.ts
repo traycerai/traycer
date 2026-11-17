@@ -739,8 +739,6 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.fallbackPolicy.restoreTierGroups": "target-host",
   "providers.fallbackPolicy.set": "target-host",
   "providers.installPackVersion": "target-host",
-  "providers.link": "target-host",
-  "providers.linkComplete": "target-host",
   "providers.list": "target-host",
   "providers.listModelProviders": "target-host",
   "providers.mcpAuth": "target-host",

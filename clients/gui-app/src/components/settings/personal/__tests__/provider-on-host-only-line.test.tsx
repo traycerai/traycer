@@ -40,8 +40,7 @@ function renderLines(options: {
   readonly onHostOnly: readonly OnHostOnlyEntry[] | null;
   readonly methods: readonly string[] | null;
   readonly lines: readonly OnHostOnlyEntry[];
-}): { readonly queryClient: QueryClient; readonly linkCalls: () => number } {
-  let linkCalls = 0;
+}): { readonly queryClient: QueryClient } {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
@@ -54,17 +53,6 @@ function renderLines(options: {
               scope: "personal" as const,
               onHostOnly: [...options.onHostOnly],
             };
-      },
-      "providers.link": () => {
-        linkCalls += 1;
-        return {
-          linkId: "link-1",
-          prompt: {
-            kind: "sign_in_url" as const,
-            url: "https://example.invalid/sign-in",
-            codePrompt: "Paste the code",
-          },
-        };
       },
     },
   });
@@ -90,10 +78,7 @@ function renderLines(options: {
       ))}
     </QueryClientProvider>,
   );
-  return {
-    queryClient,
-    linkCalls: () => linkCalls,
-  };
+  return { queryClient };
 }
 
 async function waitForProvidersList(queryClient: QueryClient): Promise<void> {
@@ -132,19 +117,7 @@ describe("<ProviderOnHostOnlyLine />", () => {
     expect(lineIn(P1_OTHER_PROVIDER)).toBeNull();
   });
 
-  it("shows the available line without a Link control when sign-ins are absent even if providers.link is advertised", async () => {
-    const { linkCalls } = renderLines({
-      onHostOnly: [P1],
-      methods: ["providers.list", "providers.link"],
-      lines: [P1],
-    });
-    const line = await screen.findByTestId(LINE_TESTID);
-    expect(line.textContent).toBe("Available on this computer");
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(linkCalls()).toBe(0);
-  });
-
-  it("shows the available line with no Link control on a host without providers.link", async () => {
+  it("shows the available line with no Link control on a handshaked host", async () => {
     renderLines({
       onHostOnly: [P1],
       methods: ["providers.list"],
@@ -169,7 +142,7 @@ describe("<ProviderOnHostOnlyLine />", () => {
   it("says nothing when the list names no profile as on this host only", async () => {
     const { queryClient } = renderLines({
       onHostOnly: [],
-      methods: ["providers.list", "providers.link"],
+      methods: ["providers.list"],
       lines: [P1],
     });
     await waitForProvidersList(queryClient);
@@ -179,7 +152,7 @@ describe("<ProviderOnHostOnlyLine />", () => {
   it("says nothing on a host whose list carries no onHostOnly (a 10.0 host)", async () => {
     const { queryClient } = renderLines({
       onHostOnly: null,
-      methods: ["providers.list", "providers.link"],
+      methods: ["providers.list"],
       lines: [P1],
     });
     await waitForProvidersList(queryClient);

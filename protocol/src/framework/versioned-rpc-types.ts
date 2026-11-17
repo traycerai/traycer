@@ -312,14 +312,6 @@ export const RPC_ERROR_CODES = [
   // `staleWrite` says who and the current revision; the page re-reads and
   // says "changed on <host> just now". Additive, as above.
   "ENVIRONMENT_WRITE_STALE",
-  // `providers.link`: the harness has no sign-in the
-  // environment can hold, so the profile stays on this host; the Link dialog
-  // says "On <host> only." and nothing more. Additive, as above.
-  "PROVIDER_LINK_NOT_OFFERED",
-  // `providers.link`: Traycer is not reachable (or the host is not set up
-  // yet), so nothing can be linked now; the dialog says "Connect to Traycer
-  // to link this profile." Additive, as above.
-  "PROVIDER_LINK_UNAVAILABLE",
   // ─── Same principal ─────────────────────────────────────────────────────
   //
   // The two hosts belong to different owners (a person and a team, or two

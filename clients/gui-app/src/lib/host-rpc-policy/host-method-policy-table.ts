@@ -2625,16 +2625,6 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "environment.notices": { ...LATEST_SCHEDULING, poll: null },
   "environment.review": { ...LATEST_SCHEDULING, poll: null },
-  "providers.link": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.linkComplete": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   "config.env.localOverride.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -23,9 +23,7 @@ import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
  * `environment.secrets.*` request names the environment it addresses (null
  * for the host's own) and `versions` answers a secret's removal;
  * `environment.status` answers the move's consent and planes;
- * `environment.review` answers the retrospective sheet's record;
- * `providers.link` and `providers.linkComplete` name the environment whose
- * plan they link. Each is a MINOR because every addition is additive and an
+ * `environment.review` answers the retrospective sheet's record. Each is a MINOR because every addition is additive and an
  * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
  * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
  * why the fields those releases require are filled from
@@ -473,54 +471,6 @@ export const environmentSecretsConsentUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersLinkV10 = defineRpcContract({
-  method: "providers.link",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: schemas.providersLinkRequestSchema,
-  responseSchema: schemas.providersLinkResponseSchema,
-});
-
-export const providersLinkV11 = defineRpcContract({
-  method: "providers.link",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: schemas.providersLinkRequestSchemaV11,
-  responseSchema: schemas.providersLinkResponseSchema,
-});
-
-export const providersLinkUpgradeV10ToV11 = defineUpgradePath<
-  typeof providersLinkV10,
-  typeof providersLinkV11
->({
-  from: providersLinkV10.schemaVersion,
-  to: providersLinkV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, environmentId: null }),
-  upgradeResponse: (response) => response,
-});
-
-export const providersLinkCompleteV10 = defineRpcContract({
-  method: "providers.linkComplete",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: schemas.providersLinkCompleteRequestSchema,
-  responseSchema: schemas.providersLinkCompleteResponseSchema,
-});
-
-export const providersLinkCompleteV11 = defineRpcContract({
-  method: "providers.linkComplete",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: schemas.providersLinkCompleteRequestSchemaV11,
-  responseSchema: schemas.providersLinkCompleteResponseSchema,
-});
-
-export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
-  typeof providersLinkCompleteV10,
-  typeof providersLinkCompleteV11
->({
-  from: providersLinkCompleteV10.schemaVersion,
-  to: providersLinkCompleteV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, environmentId: null }),
-  upgradeResponse: (response) => response,
-});
-
 export const environmentAgentDefinitionsPutV10 = defineRpcContract({
   method: "environment.agentDefinitions.put",
   schemaVersion: { major: 1, minor: 0 },
@@ -589,40 +539,6 @@ export const environmentSetupPutUpgradeV10ToV11 = defineUpgradePath<
 });
 
 export const ENVIRONMENT_RPC_METHODS = {
-  "providers.link": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersLinkV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersLinkV11,
-          upgradeFromPreviousVersion: providersLinkUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.linkComplete": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersLinkCompleteV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersLinkCompleteV11,
-          upgradeFromPreviousVersion: providersLinkCompleteUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "config.env.localOverride.set": {
     degrade: { kind: "unsupported" },
     1: {

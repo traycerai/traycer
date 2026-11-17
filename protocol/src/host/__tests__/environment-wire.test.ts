@@ -93,8 +93,6 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
-  "providers.link",
-  "providers.linkComplete",
   "environment.agentDefinitions.put",
   "environment.agentDefinitions.delete",
   "environment.setup.put",
@@ -210,9 +208,9 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 29 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(29);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(29);
+  it("registers exactly 27 environment methods", () => {
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(27);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(27);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
@@ -2044,30 +2042,6 @@ describe("environment.secrets.* @1.1 requests gain environmentId: null through t
         ),
       v11: env.environmentSecretsConsentRequestSchemaV11,
     },
-    {
-      method: "providers.link",
-      request: { providerId: "claude-code", profileId: null },
-      upgrade: (request) =>
-        upgradeRequestToVersion(
-          hostRpcRegistry["providers.link"],
-          ONE_ZERO,
-          ONE_ONE,
-          env.providersLinkRequestSchema.parse(request),
-        ),
-      v11: env.providersLinkRequestSchemaV11,
-    },
-    {
-      method: "providers.linkComplete",
-      request: { linkId: "l1", code: null },
-      upgrade: (request) =>
-        upgradeRequestToVersion(
-          hostRpcRegistry["providers.linkComplete"],
-          ONE_ZERO,
-          ONE_ONE,
-          env.providersLinkCompleteRequestSchema.parse(request),
-        ),
-      v11: env.providersLinkCompleteRequestSchemaV11,
-    },
   ];
 
   it.each(cases.map((c) => [c.method, c] as const))(
@@ -2091,14 +2065,12 @@ describe("environment.secrets.* @1.1 requests gain environmentId: null through t
     },
   );
 
-  it("covers every environment.secrets.* method and both link methods", () => {
+  it("covers every environment.secrets.* method", () => {
     expect(cases.map((c) => c.method).sort()).toEqual(
       [
         ...ENVIRONMENT_METHOD_NAMES.filter((name) =>
           name.startsWith("environment.secrets."),
         ),
-        "providers.link",
-        "providers.linkComplete",
       ].sort(),
     );
   });
