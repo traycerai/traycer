@@ -147,6 +147,8 @@ export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
       messageId: idSchema.optional(),
       eventId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
       /** Present only on a completed turn the provider paused before verification. */
       unverified: z.literal(true).optional(),
@@ -178,6 +180,8 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
       providerId: z.string().optional(),
       occurrenceId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
     })
     .catchall(z.unknown()),
