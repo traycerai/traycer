@@ -57,7 +57,9 @@ import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-op
 import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import { playbackTrack } from "@/lib/soundtrack/__tests__/playback-track";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import "@/index.css";
@@ -81,6 +83,11 @@ import "@/index.css";
  * skips the phone-form flags, so a wide window gets the desktop form. With
  * neither, the page is the phone form with the snapshot delivered.
  *
+ * `?music=1` turns the playback controls on with a sounding track, as the
+ * Music settings do, and `window.__botChannelProbe` changes them live:
+ * `setControls` turns the setting on or off, `setPaneWidth` sets the width of
+ * the pane the channel is drawn in, in CSS pixels.
+ *
  * The drafts bridge the app mounts above every tab
  * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
  * the bot tab shows its tree only once the signed-in account's own drafts are
@@ -89,6 +96,16 @@ import "@/index.css";
 const QUERY = new URLSearchParams(window.location.search);
 const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
 const DESKTOP_FORM = QUERY.get("form") === "desktop";
+const MUSIC = QUERY.get("music") === "1";
+
+declare global {
+  interface Window {
+    __botChannelProbe?: {
+      readonly setControls: (on: boolean) => void;
+      readonly setPaneWidth: (px: number) => void;
+    };
+  }
+}
 
 const HOST_ID = "bot-compact-actions-menu-host";
 const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
@@ -101,6 +118,32 @@ if (!DESKTOP_FORM) {
   setPhoneLayoutOnly(true);
   setMobileApp(true);
 }
+
+if (MUSIC) {
+  // The availability the controls read: a desktop build that reports a source.
+  Object.defineProperty(globalThis, "runnerHost", {
+    configurable: true,
+    value: {
+      soundtrackSourceAvailable: true,
+      readSoundtrackSet: () => Promise.resolve({ kind: "unavailable" }),
+    },
+  });
+  useSettingsStore.setState({
+    soundtrackEnabled: true,
+    soundtrackPlaybackControls: true,
+  });
+  useSoundtrackStore.setState({
+    soundingTrack: { ...playbackTrack("slow-tide", 60), title: "Slow Tide" },
+  });
+}
+window.__botChannelProbe = {
+  setControls: (on) => {
+    useSettingsStore.setState({ soundtrackPlaybackControls: on });
+  },
+  setPaneWidth: (px) => {
+    document.documentElement.style.setProperty("--pane-width", `${px}px`);
+  },
+};
 
 // The page offers only what the host advertised in its handshake; this
 // fixture's mock messenger makes none, so the methods are recorded here.
@@ -438,7 +481,7 @@ function Page(): ReactElement {
               <ActivityGroupOpenStoreProvider store={null}>
                 <A2AOpenStoreProvider store={null}>
                   <ChatFindForceStoreProvider tileInstanceId="compact-actions-menu">
-                    <div className="h-full w-full">
+                    <div className="h-full w-[var(--pane-width,100%)]">
                       <BotTabSurface botId={BOT_ID} hostId={HOST_ID} />
                     </div>
                   </ChatFindForceStoreProvider>

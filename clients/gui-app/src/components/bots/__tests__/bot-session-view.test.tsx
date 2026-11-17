@@ -37,6 +37,10 @@ const mocks = vi.hoisted(() => ({
   sessionReads: [] as string[],
 }));
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -108,6 +112,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { useTileFindStore } from "@/stores/tile-find";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const IDENTITY: BotIdentity = {
   botId: BOT_ID,
@@ -410,6 +415,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.sessions = {};
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
 
 describe("a bot's trunk session, read whole", () => {
@@ -597,6 +603,19 @@ describe("a bot's trunk session, read whole", () => {
     expect(opened.channel).toHaveBeenCalledWith(null);
     await user.click(within(view()).getByRole("button", { name: "Back" }));
     expect(opened.close).toHaveBeenCalledOnce();
+  });
+
+  it("draws the music controls inside the session's header", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+    mountTrunk(null);
+
+    const group = within(view()).getByRole("group", {
+      name: "Music playback",
+    });
+    expect(group.closest("header")?.parentElement).toBe(view());
   });
 
   it("finds text in the check-in turn's activity and in what the bot posted, as the agent chat's find does", async () => {

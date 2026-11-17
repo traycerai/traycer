@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // What a choice in the compact header's Channel actions menu hands focus to once
 // the menu has closed. Radix returns focus to the menu's trigger from a
@@ -17,6 +17,15 @@ test.use({
 
 const SETTINGS = '[data-testid="bot-channel-settings"]';
 const SEARCH_INPUT = '[data-testid="bot-search-input"]';
+
+declare global {
+  interface Window {
+    __botChannelProbe?: {
+      readonly setControls: (on: boolean) => void;
+      readonly setPaneWidth: (px: number) => void;
+    };
+  }
+}
 
 async function openMenu(page: Page): Promise<Locator> {
   await page.goto(fixture("bot-compact-actions-menu"));
@@ -95,4 +104,69 @@ test("keeps the active-task badge inside the header with zero top inset", async 
   expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual(
     headerBox.y + headerBox.height,
   );
+});
+
+test.describe("the music controls in the desktop channel header", () => {
+  test.use({
+    viewport: { width: 1280, height: 800 },
+    hasTouch: false,
+    isMobile: false,
+  });
+
+  test("sit in the title row left of Search without growing the header, and give way as the pane narrows", async ({
+    page,
+  }) => {
+    await page.goto(
+      `${fixture("bot-compact-actions-menu")}?form=desktop&music=1`,
+    );
+    await page.waitForFunction(() => window.__botChannelProbe !== undefined);
+    const header = page.getByTestId("bot-channel-header");
+    const group = header.getByRole("group", { name: "Music playback" });
+    const search = page.getByTestId("bot-channel-search-open");
+    const track = header.getByTestId("epic-playback-track");
+    const previous = header.getByTestId("epic-playback-previous");
+    const next = header.getByTestId("epic-playback-next");
+    const setPaneWidth = async (px: number): Promise<void> => {
+      await page.evaluate((w) => window.__botChannelProbe?.setPaneWidth(w), px);
+      await nextFrames(page, 2);
+    };
+    const boxOf = async (locator: Locator) => {
+      const box = await locator.boundingBox();
+      if (box === null) throw new Error(`no box for ${locator.toString()}`);
+      return box;
+    };
+
+    await expect(group).toBeVisible();
+    const withControls = await boxOf(header);
+    const row = await boxOf(header.locator(":scope > div").first());
+    const box = await boxOf(group);
+    const searchBox = await boxOf(search);
+    expect(box.y).toBeGreaterThanOrEqual(row.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height);
+    expect(box.x + box.width).toBeLessThanOrEqual(searchBox.x);
+    expect((await boxOf(track)).width).toBeGreaterThan(100);
+
+    await page.evaluate(() => window.__botChannelProbe?.setControls(false));
+    await expect(group).toHaveCount(0);
+    expect((await boxOf(header)).height).toBe(withControls.height);
+    await page.evaluate(() => window.__botChannelProbe?.setControls(true));
+    await expect(group).toBeVisible();
+
+    // Under 40rem of title row the track is read by screen readers only.
+    await setPaneWidth(560);
+    await expect.poll(async () => (await boxOf(track)).width).toBeLessThan(2);
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+
+    // Under 24rem previous and next go; Pause stays and works.
+    await setPaneWidth(340);
+    await expect(previous).toBeHidden();
+    await expect(next).toBeHidden();
+    await header.getByRole("button", { name: "Pause" }).click();
+    await expect(header.getByRole("button", { name: "Play" })).toBeVisible();
+    expect((await boxOf(header)).height).toBe(withControls.height);
+
+    await search.click();
+    await expect(page.locator(SEARCH_INPUT)).toBeFocused();
+  });
 });
