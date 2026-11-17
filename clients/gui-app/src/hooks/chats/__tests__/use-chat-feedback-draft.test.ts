@@ -216,17 +216,22 @@ function heldDecision(): {
 
 /**
  * A requester that forwards everything to the real one, and runs `afterFirstRead`
- * right after the first `getRequestContext()` it answers: the read `onMutate`
- * makes, which is the last thing before TanStack awaits it and runs `mutationFn`.
+ * right after the first `getRequestContext()` it answers once `arm()` was called.
+ * That read may be a render's rather than `onMutate`'s, so a test proves the
+ * ordering from the context `onMutate` stored, not from this hook firing.
  */
 class ContextHookedRequester implements HostRequester<HostRpcRegistry> {
-  contextReads = 0;
+  private armed = false;
+  private fired = false;
 
   constructor(
     private readonly inner: HostRequester<HostRpcRegistry>,
     private readonly afterFirstRead: () => void,
   ) {}
 
+  arm(): void {
+    this.armed = true;
+  }
   getRegistry(): HostRpcRegistry {
     return this.inner.getRegistry();
   }
@@ -236,8 +241,10 @@ class ContextHookedRequester implements HostRequester<HostRpcRegistry> {
     this.inner.getActiveHostId();
   getRequestContext(): RequestContext | null {
     const context = this.inner.getRequestContext();
-    this.contextReads += 1;
-    if (this.contextReads === 1) this.afterFirstRead();
+    if (this.armed && !this.fired) {
+      this.fired = true;
+      this.afterFirstRead();
+    }
     return context;
   }
   getRequestContextUserId(): string | null {
@@ -398,6 +405,8 @@ describe("feedback draft decision state", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(await decided).toBe("answered");
+    // Nothing was recorded under the session the decision was sent in, before any later session exists.
+    expect(heldEntryCount(harness)).toBe(0);
     card.unmount();
     await switchIdentity(harness.spine, contextFor("a"));
     await advance(GC_WINDOW_MS);
@@ -449,6 +458,8 @@ describe("feedback draft decision state", () => {
       () => useChatFeedbackDraftDecideMutation(hooked, DRAFT),
       { wrapper: harness.wrapper },
     );
+    const contextA = harness.client.getRequestContext();
+    hooked.arm();
     const decided = card.result.current.mutateAsync(DECIDE_REQUEST).then(
       () => "answered",
       () => "failed",
@@ -456,8 +467,13 @@ describe("feedback draft decision state", () => {
     await advance(1_000);
 
     const outcome = await decided;
-    // onMutate captured A, and the dispatch-time read saw B.
-    expect(hooked.contextReads).toBeGreaterThanOrEqual(2);
+    const contextB = harness.client.getRequestContext();
+    expect(contextB).not.toBe(contextA);
+    // onMutate captured A, and the live context at dispatch time was B.
+    const [mutation] = harness.queryClient.getMutationCache().findAll();
+    expect(Reflect.get(Object(mutation.state.context), "context")).toBe(
+      contextA,
+    );
     expect(dispatched).toBe(0);
     expect(outcome).toBe("failed");
     expect(heldEntryCount(harness)).toBe(0);
