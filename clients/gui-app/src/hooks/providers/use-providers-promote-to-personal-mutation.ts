@@ -45,8 +45,8 @@ const METHOD = "providers.nativeMutate";
 
 /**
  * The floor at which the host takes the app's `mcp_promote` intent on the
- * promote arm. Below it the arm drops `intentOperationId`, so no intent is
- * recorded and the call is today's.
+ * promote arm. Below it the arm drops `intentOperationId` and no intent is
+ * recorded.
  */
 const PROMOTE_INTENT_REQUIRED_HOST_VERSION: RequiredHostMethodVersion = {
   method: METHOD,
@@ -114,7 +114,7 @@ interface RecordedIntent {
  * token against it, and the intent is read back. The click is one operation
  * on the sign-in current when it was pressed: both authn calls go on it, and
  * the upload is not asked for once that sign-in is gone. A skill is promoted
- * as today, with no intent.
+ * with no intent.
  *
  * A refusal is an answer, not a transport error: it comes back as
  * `refused` with its words, and only a failed send toasts.

@@ -1,11 +1,9 @@
 /**
- * The `shell` item a shell save leaves, as the app states it in the request
- * (`selection`, `config.shell.*@1.2`). Computed from the computer's own
- * `config.shell.get` read: the host computes the item from its config the
- * same way, so the two agree whenever that read is current, and the save is
- * then confirmed without a click. When they differ, the change waits in the
- * review list. Until that read has answered, a save that needs it states
- * nothing and the app expects no proposal.
+ * The `shell` item a shell save leaves, stated in the request (`selection`,
+ * `config.shell.*@1.2`) from the computer's own `config.shell.get` read. The host
+ * computes the item the same way, so a current read confirms the save without a
+ * click; a difference waits in the review list. Before that read answers, a save
+ * that needs it states nothing and expects no proposal.
  */
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import type {

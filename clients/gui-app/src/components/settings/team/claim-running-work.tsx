@@ -1,11 +1,7 @@
 import type { ReactNode } from "react";
 import { useClaimRunningChats } from "./claim-running-chats";
 
-/**
- * The claim confirm's line for the team work it stops: board C13's Proposal,
- * and board C30's Proposal (row 5) for exactly one chat, built while that
- * board waits.
- */
+/** The claim confirm's line for the team work it stops. */
 function claimRunningChatsLine(chats: number): string {
   return chats === 1
     ? "1 chat is running and will stop."
@@ -13,8 +9,8 @@ function claimRunningChatsLine(chats: number): string {
 }
 
 /**
- * What the confirm says when the count is not known, ruled by the owner
- * (ruling 210). Never the nothing-running form: an unread count is not 0.
+ * What the confirm says when the count is not known: never the nothing-running
+ * form, since an unread count is not 0.
  */
 const claimRunningChatsNotKnownLine = "Running chats will stop.";
 

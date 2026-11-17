@@ -318,7 +318,7 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "Acme's credits are short $0.12. $0.12 more starts this sandbox for an hour.",
     );
-    // A team's credits are bought by its Admin only (board C25).
+    // A team's credits are bought by its Admin only.
     expect(
       within(screen.getByTestId("consequences-block")).queryByRole("button", {
         name: "Add credits ↗",

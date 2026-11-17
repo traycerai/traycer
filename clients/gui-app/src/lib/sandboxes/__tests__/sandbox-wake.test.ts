@@ -399,8 +399,8 @@ describe("wakeSandboxOnPick", () => {
       { description: "Add 11 credits, then try again." },
     );
 
-    // Older servers omit the pot name. A known team gets the board's generic
-    // add-credits remedy.
+    // Older servers omit the pot name. A known team gets the generic add-credits
+    // remedy.
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 10_100,

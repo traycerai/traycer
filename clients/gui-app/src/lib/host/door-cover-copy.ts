@@ -11,8 +11,8 @@ export interface DoorCoverCopy {
 }
 
 /**
- * Board C1's words for each door cover: the same title and line on the window
- * cover and on a tile whose computer is not the window's own.
+ * Each door cover's words: the same title and line on the window cover and on
+ * a tile whose computer is not the window's own.
  */
 const DOOR_COVER_COPY: Readonly<
   Record<Exclude<DoorStateCoverVariant["kind"], "host-claimed">, DoorCoverCopy>

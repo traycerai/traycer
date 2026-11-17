@@ -241,9 +241,8 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
 /**
- * Board C25's Alternative, waiting for the owner's ruling: said after a
- * team's frozen cause on its row, to a member who is not the team's Admin.
- * Not shown until it is ruled in; showing it is the one change of `shown`.
+ * Said after a team's frozen cause on its row, to a member who is not the
+ * team's Admin. Not shown yet: `shown` is the one switch that shows it.
  */
 export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
   "Only team admins can add credits.";
@@ -253,13 +252,12 @@ export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
 
 // ── Telling a member to add credits ───────────────────────────────────────
 //
-// Built to the Proposal of board C29, provisional until that board is ruled;
-// its Alternative takes these out and gives everyone today's sentences back.
-// Only a team's Admin can buy the team's credits, so on a team's sandbox
-// anyone else reads these in place of a sentence telling them to add credits.
-// The Admin and a Personal sandbox keep today's, except the chat's title,
-// which the team's Admin reads too. A wake refused by an older server, which
-// does not say whose credits were short, keeps today's sentence.
+// Only a team's Admin can buy the team's credits, so on a team's sandbox anyone
+// else reads these in place of a sentence telling them to add credits. The
+// Admin and a Personal sandbox keep the add-credits sentences, except the
+// chat's title, which the team's Admin reads too. A wake refused by an older
+// server, which does not say whose credits were short, keeps the add-credits
+// sentence.
 
 /** Under a message sent to a team's sandbox that is out of credits. */
 export function teamCreditsRanOutLine(teamName: string): string {

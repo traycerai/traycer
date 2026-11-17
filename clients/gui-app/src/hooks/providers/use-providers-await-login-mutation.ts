@@ -79,7 +79,7 @@ export type AwaitLoginAnswer = AwaitLoginResponse & {
  *
  * `readsProfileOutcome` is true only for a caller that reads the answer's
  * `profileOutcome`: it alone has the list read again for an answer with no
- * state that names a profile. Every other caller makes today's reads.
+ * state that names a profile.
  */
 export type AwaitLoginVariables = {
   readonly request: AwaitLoginRequest;
@@ -141,8 +141,8 @@ function signInRequestToRecord(
  * that carries `signInRequest` is recorded at authn on the person's own
  * session, and the same handle is asked once more with `recordedOperationId`.
  * A recording that ends returns that unfinished answer with the reason, which
- * every caller already reads as "the sign-in did not complete". A computer
- * that never asks for a recording is asked exactly as before.
+ * every caller reads as "the sign-in did not complete". A computer that never
+ * asks for a recording is asked once.
  */
 async function awaitWithRecording(
   client: HostClient<HostRpcRegistry>,

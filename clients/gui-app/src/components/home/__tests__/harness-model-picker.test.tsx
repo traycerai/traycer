@@ -3934,7 +3934,7 @@ describe("<HarnessModelPicker />", () => {
     // migration; it used to read the app-wide default's `providers.list`
     // unconditionally). Claude can have profiles, so the account dropdown
     // and its "Add a profile" row render from one row; this fixture keeps
-    // two profiles so the row this test clicks is the same one as before.
+    // two profiles, the shape the clicks below are written against.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",

@@ -44,10 +44,10 @@ import {
  *   host it is booting FOR the user. So during a first launch the authority
  *   names a host, ∅ is false, and a strictly-∅ modal would be invisible for
  *   exactly the state this surface is supposed to own.
- * - `door-state` - the host this window would use is in a door state the
- *   boards draw a cover for. The cover is exactly that state's: its words and
- *   its buttons. It is not a failure of this app, so it offers no issue report
- *   and no diagnostics of this machine's host.
+ * - `door-state` - the host this window would use is in a door state with a
+ *   cover of its own: that state's words and buttons. It is not a failure of
+ *   this app, so it offers no issue report and no diagnostics of this
+ *   machine's host.
  */
 export type WindowNarrationCause =
   | "no-usable-host"
@@ -95,7 +95,7 @@ export function isDoorStateCoverVariant(
   );
 }
 
-/** The door covers board C1 draws with a Retry: each says "then retry". */
+/** The door covers drawn with a Retry: each says "then retry". */
 const DOOR_COVERS_WITH_RETRY: ReadonlySet<string> = new Set<DoorCoverKind>([
   "keys-unavailable",
   "clock-skew",
@@ -115,7 +115,7 @@ export interface HostClaimFacts {
   readonly teamName: string;
 }
 
-/** Every cover a door state draws with its own words and buttons (board C1). */
+/** Every cover a door state draws with its own words and buttons. */
 export type DoorStateCoverVariant =
   | { readonly kind: "team-membership-required" }
   | { readonly kind: "not-admitted" }
@@ -128,8 +128,8 @@ export type DoorStateCoverVariant =
  * `retry` is `none`) covers outright: only a person or an Admin clears it. A
  * state it retries on its own covers only while the host is not already
  * serving. A claimed computer covers once `claim` names who claimed it, and
- * until then keeps today's cover (board C30, row 14). An older host and an
- * unrecognised reason have no cover of their own.
+ * until then keeps the cover it had before the claim was read. An older host
+ * and an unrecognised reason have no cover of their own.
  */
 export function ownDoorCover(
   state: HostDoorState | null,

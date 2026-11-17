@@ -12,9 +12,8 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
  * The reader may change the bot's environment: its Personal, or a team where
  * they are an Admin or Editor. A list that has answered without that role (a
  * Viewer, or a team not listed) takes the bot's run settings and Delete away.
- * Until the list answers, personal or team is not known either, so they are
- * offered as before and the host refuses a write the reader may not make,
- * under the control.
+ * Until the list answers they are offered, and the host refuses a write the
+ * reader may not make, under the control.
  */
 export function readerMayChangeBot(
   environments: EnvironmentListResponseV11 | undefined,
@@ -46,8 +45,8 @@ export function useReaderMayChangeBot(
 
 /**
  * {@link readerMayChangeBot} for the bot a surface draws, given by the bot's
- * tab and its threads from the environment list they already read. `true`
- * where no bot surface gives it, as before.
+ * tab and its threads from the environment list they already read; `true`
+ * where no bot surface gives it.
  */
 export const BotMayChangeContext = createContext<boolean>(true);
 

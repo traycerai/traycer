@@ -220,11 +220,8 @@ type HostOwnership = "team" | "personal" | "unknown";
 /**
  * The configuration the sandbox runs under, the line under its name: the
  * sandbox's bound environment, read against the person's teams as
- * `sandboxConfigurationOf` reads it. An absent environment is unknown, and so
- * is a row that is still not known once the teams have answered (a team
- * agent sandbox of a team that is not the person's); the label is `null` only
- * while its name is still unread. The summary keeps this available while the
- * sandbox is suspended or stopped.
+ * `sandboxConfigurationOf` reads it; unknown when absent or not the person's
+ * team's, `null` only while its name is unread. Kept while suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,

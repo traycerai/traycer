@@ -321,8 +321,8 @@ describe("<NotificationRow /> about a member's post", () => {
   });
 });
 
-// Board C30 row 24 governs when a notification may replace its server body:
-// the chat did not fail, its task is open in this session, a person started it.
+// A notification replaces its server body only when the chat did not fail, its
+// task is open in this session, and a person started it.
 describe("NotificationRow started-by attribution", () => {
   const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
   let runnerHost: MockRunnerHost;

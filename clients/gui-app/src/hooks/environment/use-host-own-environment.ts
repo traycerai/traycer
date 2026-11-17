@@ -31,16 +31,15 @@ const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 const NONE: AddressedEnvironment = { environmentId: null, resolved: true };
 
 /**
- * The environment `hostId` runs, as the app names it to authn: what a host
- * filled in for a secrets request that named none. The host's own status
- * says which kind it runs; Personal is the person's from `environment.list`,
- * and a team's is the one of the person's team environments whose authn host
- * list holds this host (authn lists a host under one environment only).
+ * The environment `hostId` runs, as the app names it to authn for a secrets
+ * request that names none. The host's own status says which kind it runs;
+ * Personal is the person's from `environment.list`, and a team's is the team
+ * environment whose authn host list holds this host (authn lists a host under
+ * one environment only).
  *
- * `resolved` is false while that is not known yet, a team host list that
- * failed included. A host that runs none, or whose status cannot be read,
- * names none (`environmentId: null`, resolved): a secrets read naming none
- * fails, as the host's did.
+ * `resolved` is false while that is not known, a failed team host list
+ * included. A host that runs none, or whose status cannot be read, names none
+ * (`environmentId: null`, resolved), and a secrets read naming none fails.
  */
 export function useHostOwnEnvironment(
   client: HostClient<HostRpcRegistry> | null,

@@ -48,8 +48,8 @@ import {
 export const ENVIRONMENT_CLOUD_QUERY_SCOPE = "authn";
 
 /**
- * The cache entry a moved read lands in: the one place its key is built, so a
- * caller that names the entry (a Details provider's `fetchQuery`) reads the
+ * The cache entry an app-made read lands in: the one place its key is built, so
+ * a caller that names the entry (a Details provider's `fetchQuery`) reads the
  * page's own.
  */
 export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
@@ -140,9 +140,8 @@ interface UseEnvironmentCloudQueryArgs<
 }
 
 /**
- * A moved read, made by the app itself on the person's sign-in: no host in
- * the path. Its failures are the `HostRpcError` the host gave the same one, so
- * a screen reads them as before.
+ * A read made by the app itself on the person's sign-in, with no host in the
+ * path. Its failures are the `HostRpcError` the host gives the same one.
  */
 export function useEnvironmentCloudQuery<
   Method extends EnvironmentCloudMethod,
@@ -182,10 +181,10 @@ export function useEnvironmentCloudQuery<
 }
 
 /**
- * A read the app makes itself whose answer is assembled here from authn's
- * routes rather than one moved method's (the review sheet, the notices). Its
- * key sits where a host read of `method` would, with `params` naming the
- * environment, so the configuration invalidations reach it.
+ * A read the app makes itself whose answer is assembled here from several authn
+ * routes (the review sheet, the notices). Its key sits where a host read of
+ * `method` would, with `params` naming the environment, so the configuration
+ * invalidations reach it.
  */
 export function useEnvironmentCloudOwnRead<
   TData,
@@ -267,9 +266,8 @@ interface UseEnvironmentCloudMutationArgs<
 }
 
 /**
- * A moved write, made by the app itself on the person's sign-in. The same
- * result as `useHostScopedMutation`'s, so its callers are unchanged; no host
- * carried it, so the context's `hostId` is null.
+ * A write made by the app itself on the person's sign-in. Same result as
+ * `useHostScopedMutation`'s; no host carried it, so the context's `hostId` is null.
  */
 export function useEnvironmentCloudMutation<
   Method extends EnvironmentCloudMethod,

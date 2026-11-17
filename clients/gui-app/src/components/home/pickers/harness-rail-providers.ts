@@ -77,17 +77,12 @@ export function railEntryKey(harnessId: GuiHarnessId): string {
 }
 
 /**
- * Resolves which profile is "active" for a harness whose account dropdown is
- * drawn: the reducer's browsed `activeProfileId` if it belongs to this
- * harness, else the composer's already-committed `selectedProfileId` if the
- * list resolves it (`resolveProfilePin`: its row, a row it is an alias of,
- * the record's row that is the Terminal login, or an account a person
- * removed), else the harness's first selectable profile (typically its
- * ambient row). A resolved committed id is returned as it is, never its
- * row's id, so a pin is never rewritten by browsing. Returns `null` outright
- * when the account dropdown is not drawn (`profileDropdownShown`) - profile
- * identity has no meaning there (progressive disclosure). A pin to a removed
- * account always draws it, so choosing a model keeps that pin.
+ * The harness's active profile when its account dropdown is drawn: the
+ * reducer's browsed `activeProfileId` if it belongs to this harness, else the
+ * committed `selectedProfileId` if `resolveProfilePin` resolves it (returned
+ * as is, so browsing never rewrites a pin), else the first selectable profile.
+ * `null` when the dropdown is not drawn (`profileDropdownShown`); a removed
+ * pin always draws it, so choosing a model keeps that pin.
  */
 export function resolveActiveProfileForHarness(input: {
   readonly harnessId: GuiHarnessId;

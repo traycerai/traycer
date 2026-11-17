@@ -29,10 +29,9 @@ export function profileCommitId(profile: ProviderProfile): string | null {
 
 /**
  * Whether the computer that answered this list offers sign-ins by itself in a
- * switched-on environment (`providers.list@10.12` `offersSignIns`). The one
- * condition every one-sign-in screen of the Providers page and the Add and
- * Sign in again dialogs decides on: false or absent, each of them is exactly
- * what it was before the key existed.
+ * switched-on environment (`providers.list@10.12` `offersSignIns`). Every
+ * one-sign-in screen of the Providers page and the Add and Sign in again dialogs
+ * is drawn only when it is true.
  */
 export function listOffersSignIns(
   list: { readonly offersSignIns?: boolean } | undefined,
@@ -70,18 +69,16 @@ export function removedProfilesForProvider(
  * What a stored profile id (a chat's pin, a fork's seed, a remembered pick)
  * names in one provider's list:
  *
- * - `row`: the one row listing the id, as its commit id or in `aliases` (the
- *   id a folded duplicate had). For the Terminal login (`null`): the ambient
- *   row, else the record's row this computer's Terminal login is
- *   (`terminalOnThisComputer`).
+ * - `row`: the one row listing the id, as its commit id or in `aliases`. For the
+ *   Terminal login (`null`): the ambient row, else the record's row this
+ *   computer's Terminal login is (`terminalOnThisComputer`).
  * - `removed`: no row lists it and a person removed that account
  *   (`removedProfiles`).
- * - `unknown`: anything else, including an id more than one row lists, which
- *   is never guessed. Each caller keeps what it did for a missing id before
- *   aliases existed.
+ * - `unknown`: anything else, including an id more than one row lists, which is
+ *   never guessed; each caller treats it as a missing id.
  *
- * A list from a computer that sends no aliases and no removed accounts
- * resolves exactly as an exact match on the commit id did.
+ * With no aliases and no removed accounts in the list, this is an exact match on
+ * the commit id.
  */
 export type ProfilePinResolution =
   | { readonly kind: "row"; readonly profile: ProviderProfile }
@@ -131,16 +128,12 @@ function resolveTerminalPin(
 }
 
 /**
- * Whether the picker draws a provider's account dropdown, in place of its
- * status line:
- * - for a pin to a removed account, whatever the rows, so it reads "Was
- *   removed" rather than turning into the Terminal pin when a model is
- *   chosen;
- * - for a provider that can have profiles (`providerSupportsManagedProfiles`),
- *   from one account row, one row as for many (owner, 14 Nov);
- * - for any other provider, from two rows, as before.
- *
- * `providerId` is the provider CLI id (`claude-code`, not the harness id).
+ * Whether the picker draws a provider's account dropdown in place of its status
+ * line: always for a pin to a removed account, so it reads "Was removed" rather
+ * than becoming the Terminal pin when a model is chosen; from one row for a
+ * provider that can have profiles (`providerSupportsManagedProfiles`); from two
+ * rows for any other. `providerId` is the provider CLI id (`claude-code`, not the
+ * harness id).
  */
 export function profileDropdownShown(
   providerId: string | null,

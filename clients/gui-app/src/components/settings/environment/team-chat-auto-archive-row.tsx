@@ -29,11 +29,10 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 const TEAM_CHAT_AUTO_ARCHIVE_READ_ERROR = "Couldn't read this setting.";
 
 /**
- * Environment ▸ Storage ▸ Archived chats ▸ "Archive idle agents
- * automatically" for a team (board C24): the team's own setting, which every
- * computer of the team follows. Read on the person's sign-in; an Admin or an
- * Editor changes it, and anyone else sees its value with the controls greyed
- * out. A team that never saved one shows it off.
+ * Environment ▸ Storage ▸ Archived chats ▸ "Archive idle agents automatically"
+ * for a team: the team's own setting, which every computer of the team follows.
+ * An Admin or an Editor changes it; anyone else sees it greyed out. Off until
+ * the team saves one.
  */
 export function TeamChatAutoArchiveRow(props: {
   readonly environmentId: string;

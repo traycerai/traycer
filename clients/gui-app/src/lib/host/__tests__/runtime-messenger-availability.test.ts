@@ -1444,9 +1444,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 
   it("keeps its host-token transport when a personal-looking entry gains sandbox facts, and for a same-content re-emit", async () => {
-    // Sandbox facts used to switch the open from the user bearer to a session
-    // grant. Every remote host now opens with the host-only token, and those
-    // facts are not part of the transport key, so the live session stays.
+    // Sandbox facts are not part of the transport key and every remote host
+    // opens with the host-only token, so the live session stays.
     const session = controllableSession();
     mocks.createRemoteHostTransport.mockImplementation(() => ({
       session,

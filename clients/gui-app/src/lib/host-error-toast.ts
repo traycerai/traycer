@@ -677,9 +677,9 @@ function signInAdvice(fallback: string): string {
 
 /**
  * A host's refusal that its recognised reason decides, whatever code carries
- * it: one the host did not mark retryable. `null` with no reason, one this
- * app does not know, or a retryable refusal: then the code decides, as it
- * always has. Every dispatch in this file reads this before any code.
+ * it: one the host did not mark retryable. `null` with no reason, one this app
+ * does not know, or a retryable refusal: then the code decides. Every dispatch
+ * in this file reads this before any code.
  */
 function reasonedDoorRefusal(error: HostRpcError): FatalErrorDetails | null {
   const refusal = hostRefusalOf(error);

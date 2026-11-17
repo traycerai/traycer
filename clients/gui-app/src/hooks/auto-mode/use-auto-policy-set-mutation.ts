@@ -152,12 +152,11 @@ async function saveOnSignIn(
 /**
  * Saves the account's auto-mode policy.
  *
- * Where the computer this save goes to has completed its handshake and
- * advertises `host.accountSettings.refresh@1.0`, the app saves on the
- * person's own sign-in and then asks that computer, and each one it is
- * connected to, to refresh. Anywhere else (no handshake yet, the method
- * missing) the save is the host's `autoPolicy.set`, as before, so a computer
- * that cannot refresh keeps the policy it was told.
+ * Where the target computer has completed its handshake and advertises
+ * `host.accountSettings.refresh@1.0`, the app saves on the person's own sign-in
+ * and then asks that computer, and each one it is connected to, to refresh.
+ * Anywhere else the save is the host's `autoPolicy.set`, so a computer that
+ * cannot refresh keeps the policy it was told.
  *
  * Last-write-wins on the server, so the ORDER these reach it is the client's
  * job, and `autoPolicyWriteScope` is the thing that does it. `fifo` in the

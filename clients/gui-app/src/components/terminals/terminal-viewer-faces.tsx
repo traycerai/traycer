@@ -12,7 +12,7 @@ import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity"
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 import type { TerminalSessionState } from "@/stores/terminals/terminal-session-store";
 
-/** Faces drawn before the rest fold into "+N" (board C16). */
+/** Faces drawn before the rest fold into "+N". */
 const SHOWN_VIEWERS = 3;
 
 function subscribeToSessions(listener: () => void): () => void {

@@ -1,6 +1,5 @@
 import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 
-/** Board C15's words. */
 const STARTED_BY = "Started by";
 
 /**

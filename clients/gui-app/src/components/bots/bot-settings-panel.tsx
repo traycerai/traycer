@@ -86,17 +86,12 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * The Model group and Delete are drawn only for a reader who may change the
- * bot's environment (`mayChange`): for a team's Viewer neither is drawn, and
- * nothing stands in their place. The model, the reply mode and the delete
- * are the app's own calls to the server on the person's sign-in, so they need
- * no host; the reply mode is offered only to a person whose role may change
- * the bot's environment. Every other write goes through the tab host's
- * client - the host `bot.open` chose to serve the tab - with nothing gated on
- * which host that is. A refusal is shown in place, under the control, as it
- * is when the reader's role changed after the panel opened. The stream
- * snapshot, not the mutation's answer, is what the header re-renders from (a
- * direct write lays its answer over that snapshot).
+ * The Model group and Delete are drawn only when `mayChange`; nothing stands in
+ * their place for a Viewer. The model, reply mode and delete are the app's own
+ * server calls on the person's sign-in and need no host; every other write goes
+ * through the tab host's client. A refusal is shown under its control. The
+ * header re-renders from the stream snapshot, which a direct write's answer is
+ * laid over.
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotDirectoryRecord;
@@ -568,9 +563,8 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
 }
 
 /**
- * The harness, model, effort and profile the bot runs on. Applied by the
- * app's own call to the server, so it needs no host. The panel draws it only
- * for a reader who may change the bot's environment (`mayChange`).
+ * The harness, model, effort and profile the bot runs on; applied by the app's
+ * own server call, so it needs no host.
  */
 function BotRunSettingsForm(props: {
   readonly bot: BotDirectoryRecord;
@@ -784,11 +778,7 @@ function ChoiceOption(props: {
   );
 }
 
-/**
- * Deleting the bot, behind a confirmation: the app's own call to the server,
- * so it needs no host. The panel draws it only for a reader who may change
- * the bot's environment (`mayChange`).
- */
+/** Deleting the bot, behind a confirmation: the app's own server call, so it needs no host. */
 function BotDeleteSection(props: {
   readonly bot: BotRecord;
   readonly onDeleted: () => void;

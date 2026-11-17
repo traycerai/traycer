@@ -37,29 +37,22 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 /**
  * Giving a computer the person owns to one of their teams, from this app
- * whether or not it runs on that computer. The computer computes what the
- * give is (`environment.move.plan` for the team), the person reads the
- * disclosure and confirms, and the confirm stages, records the acceptance at
- * authn and starts it (`useEnvironmentMoveStartMutation`). A give uploads
- * nothing and has no per-row choice, so it stages no choices. Until the
- * computer answers `done`, the dialog reads the attempt's outcome from
- * `environment.status@1.3`'s `move`, on that read's own poll: the give adds
- * no timer of its own. A done attempt is reported as given only after one
- * fresh authn read confirms that this computer belongs to the chosen team,
- * on the sign-in that confirmed the give.
+ * whether or not it runs on that computer. The computer plans the give
+ * (`environment.move.plan`); the person confirms the disclosure, and the
+ * confirm stages, records the acceptance at authn and starts it. A give uploads
+ * nothing and stages no choices. Until `done`, the outcome is read from
+ * `environment.status@1.3`'s `move` on that read's own poll (no timer of the
+ * give's own); `done` is reported as given only after a fresh authn read on the
+ * confirming sign-in shows the computer in the chosen team.
  *
- * A computer whose disclosure is another version than this app's shows the
- * needs-an-update line and no confirm. One that answers `needs_person`, or no
- * longer holds the attempt, shows C7's line with the confirm beside it. A
- * status answer naming no attempt, or another one, says the attempt is not
- * held only when it was read after the start answered; one read before could
- * still name the previous attempt.
+ * A disclosure of another version than this app's shows the needs-an-update
+ * line and no confirm. `needs_person`, or an attempt the computer does not
+ * hold, shows the not-finished line beside the confirm. A status naming no
+ * attempt or another one counts only when read after the start answered.
  *
- * Beside the disclosure and outside its hashed text, the computer's own count
- * of the chats running on it under its current owner (`ClaimRunningWork`,
- * shared with the claim confirm), asked each time the dialog opens.
- *
- * Mounted while a team is chosen, keyed by it, so every give starts afresh.
+ * Beside the disclosure, outside its hashed text, the computer's own count of
+ * chats running on it under its current owner (`ClaimRunningWork`), asked on
+ * each open. Keyed by the chosen team, so every give starts afresh.
  */
 export function TeamGiveDialog(props: {
   readonly client: HostClient<HostRpcRegistry>;

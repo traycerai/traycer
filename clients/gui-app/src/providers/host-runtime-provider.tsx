@@ -372,8 +372,8 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
       // Every host but the server pool is reached with its host-only token,
-      // and a refusal there recovers that token; the pool still opens with the
-      // sign-in, so its refusal recovers the sign-in as before.
+      // and a refusal there recovers that token; the pool opens with the
+      // sign-in, so its refusal recovers the sign-in.
       const hostTokenRecovery = hostTokenUnaryRevalidator({
         tokens: runnerHost.hostTokens,
         currentUserId: () =>

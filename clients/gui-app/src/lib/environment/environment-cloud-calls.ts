@@ -49,9 +49,9 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * The host methods whose reads and writes the app now makes itself, on the
- * person's sign-in, through authn's environment routes. Each answers the
- * protocol's response for that method, so a screen keeps its data contract.
+ * The host methods whose reads and writes the app makes itself, on the person's
+ * sign-in, through authn's environment routes. Each answers the protocol's
+ * response for that method, so a screen keeps its data contract.
  */
 export type EnvironmentCloudMethod =
   | "environment.configuration.revision"

@@ -93,8 +93,8 @@ export function claimedComputerDetail(teamName: string): string {
 }
 
 /**
- * The owner's sentence for a claimed computer (14 Nov): the one notice
- * teammates get, and what a teammate connected to it sees.
+ * The owner's sentence for a claimed computer: the one notice teammates get,
+ * and what a teammate connected to it sees.
  */
 export function claimedComputerSentence(
   claimantName: string,

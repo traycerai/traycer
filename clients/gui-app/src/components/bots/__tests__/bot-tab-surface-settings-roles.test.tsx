@@ -1,11 +1,8 @@
 /**
- * A team bot's settings by the reader's role. The tab opens the real settings
- * panel, and the panel is told whether the reader may change the bot's
- * environment by the tab's own rule over the environment list: the Model
- * group and Delete are drawn for an owner of Personal, an Admin or an Editor,
- * not for a Viewer or a team the list does not hold, and are drawn as before
- * until the list answers. The environment list is scripted at the boundary
- * the other tab cases script it at; the rule, the tab and the panel are real.
+ * A team bot's settings by the reader's role, over the real tab, rule and panel:
+ * the Model group and Delete are drawn for an owner of Personal, an Admin or an
+ * Editor, and until the list answers; not for a Viewer or a team the list does
+ * not hold. Only the environment list is scripted.
  */
 import {
   botListChangedMock,

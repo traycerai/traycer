@@ -25,10 +25,9 @@ const UNPOLLED: ReadonlySet<string> = new Set(
 );
 
 /**
- * A read made through `hostId`, cached under the tier that serves it, or one
- * the app makes itself on authn (a named environment's history, the
- * environment list, the review list, the notices), cached under authn's
- * scope where the pool's answer was before those reads moved.
+ * A read made through `hostId`, cached under the tier that serves it, or one the
+ * app makes itself on authn (a named environment's history, the environment
+ * list, the review list, the notices), cached under authn's scope.
  */
 function rereadsOnFocus(
   query: Query,

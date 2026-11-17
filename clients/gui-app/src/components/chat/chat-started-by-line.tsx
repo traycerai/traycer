@@ -7,9 +7,8 @@ import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import { chatStarterPerson, startedByText } from "@/lib/identity/started-by";
 
 /**
- * "Started by <name>" at the head of a chat, with the person's picture, as
- * board C15 draws it. No line when nothing says who started the chat or no
- * person did.
+ * "Started by <name>" with the person's picture at the head of a chat; nothing
+ * when no person is known to have started it.
  */
 export function ChatStartedByLine(props: {
   readonly epicId: string;

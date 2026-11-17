@@ -292,8 +292,8 @@ function NarratingWindowHostModal(props: {
     // report to be about. Not folded into `onRetry`'s gate: Retry is also
     // right on the slow arm, where nothing has failed yet but the wait has
     // outrun the healthy band, and a report there would still describe a
-    // start that is merely taking its time. And only on a state whose board
-    // draws it: see `REPORTED_VARIANTS`.
+    // start that is merely taking its time. And only on the states in
+    // `REPORTED_VARIANTS`.
     showReportIssue: showsReportIssue(narration.variant, settled),
     // With no Retry and no Report issue on a healthy start, `Open settings`
     // is the only control on screen - and as an equal-weight button it still
@@ -471,9 +471,9 @@ function resolveRetry(args: {
 
 /**
  * The covers that offer Report issue once something has failed: the ordinary
- * offline cover, the same cover over a refusal this app does not know (ruling
- * 188), and the app-update cover, which no board redraws. Every door cover
- * (C1) and the host-update cover (C5) draws its own buttons without it.
+ * offline cover, the same cover over a refusal this app does not know, and the
+ * app-update cover. Every door cover and the host-update cover draw their own
+ * buttons without it.
  */
 const REPORTED_VARIANTS: ReadonlySet<WindowNarrationVariant["kind"]> = new Set<
   WindowNarrationVariant["kind"]

@@ -1,7 +1,7 @@
 // The Add dialog, through the real flow host, over a host client whose
 // messenger answers providers.list / startLogin / awaitLogin / setEnabled.
-// offersSignIns on the list is the only switch: absent and false keep today's
-// dialog, true reads a completed sign-in's profileOutcome.
+// `offersSignIns` on the list is the only switch: only true reads a completed
+// sign-in's profileOutcome.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );

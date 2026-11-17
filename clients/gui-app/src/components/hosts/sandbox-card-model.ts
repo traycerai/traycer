@@ -603,10 +603,7 @@ export function sandboxHeaderNeedsRepair(
   );
 }
 
-/**
- * A team's frozen sandbox whose team has no name to give. Built to the
- * Proposal of board C30, row 6, provisional until that board is ruled.
- */
+/** A team's frozen sandbox whose team has no name to give. */
 const TEAM_CREDITS_RAN_OUT_UNNAMED = "Your team's credits ran out";
 
 /**

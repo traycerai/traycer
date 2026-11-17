@@ -27,9 +27,8 @@ const UNDO_READS = [
 ] as const;
 
 /**
- * Undoes one of Personal's notices, the app's own call to authn on the
- * person's sign-in. A change made since answers `stale`, which the row draws
- * with today's refusal line.
+ * Undoes one of Personal's notices, the app's own call to authn on the person's
+ * sign-in. A change made since answers `stale`, which the row draws as a refusal.
  */
 export function useEnvironmentUndoMutation() {
   const queryClient = useQueryClient();

@@ -25,10 +25,10 @@ import {
  *     removed" on it and nothing starts on the Terminal login without the
  *     person choosing it;
  *   - an id found in no row, alias or removed account resolves to ambient
- *     (`null`), as it always did. A settled-empty list (an old host, or a
- *     host without multi-profile support for this provider) is judged
- *     "unsupported here" the same way: preserving such an id silently ran
- *     the account on ambient while the UI kept claiming the managed profile.
+ *     (`null`). A settled-empty list (an old host, or a host without
+ *     multi-profile support for this provider) is judged "unsupported here"
+ *     the same way: a kept id would run the account on ambient while the UI
+ *     claimed the managed profile.
  */
 export function resolveSeededProfileId(
   profileId: string | null,

@@ -232,7 +232,7 @@ const NO_ECHOED_PROFILES = (): readonly ProviderProfile[] => [];
 
 /**
  * What an outcome ends the attempt on, or null to read the answer's other
- * keys as before (`resolveListedOutcome` for one that names its profile).
+ * keys (`resolveListedOutcome` for one that names its profile).
  *
  * An outcome that says nothing changed and does not belong here (a mismatch
  * or an unproven account on Add, a refused target or a sign-in held for leave
@@ -1127,7 +1127,7 @@ export function useProviderDestinationLoginFlow(
   // Where an outcome the flow reads ends the attempt. Every arm but `failed`
   // releases nothing: there is no login left to hold, and a cancel would
   // retire the answer the computer keeps for it. `failed`, an outcome that
-  // does not belong to this dialog, takes today's failed state whole,
+  // does not belong to this dialog, takes the ordinary failed state whole,
   // release included.
   const settleProfileOutcome = useCallback(
     (thisAttemptId: number, outcome: ProfileOutcomeResolution): void => {

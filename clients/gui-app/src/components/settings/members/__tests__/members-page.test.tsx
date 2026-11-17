@@ -377,9 +377,8 @@ describe("MembersPage members read", () => {
     expect(screen.getByText("Grace")).toBeTruthy();
     expect(screen.getByText("u-noname@acme.test")).toBeTruthy();
     expect(screen.getByText("u-admin@acme.test")).toBeTruthy();
-    // Authn's read names a member with neither a name nor an email "Member"
-    // (since d42de7c79, which mirrors #9264's memberDisplayName), so the
-    // unloaded line with Retry is not reachable for an accepted member.
+    // Authn's read names a member with neither a name nor an email "Member", so
+    // the unloaded line with Retry is not reachable for an accepted member.
     const ghost = rowOf("u-ghost");
     expect(within(ghost).getByText("Member")).toBeTruthy();
     expect(ghost.textContent).not.toContain("u-ghost");

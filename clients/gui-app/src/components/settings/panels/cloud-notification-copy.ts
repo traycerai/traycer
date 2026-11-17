@@ -1,4 +1,4 @@
-/** Proposal words from boards C26 and C27, kept together for the owner's ruling. */
+/** The team notification hooks' words, kept in one place. */
 export const TEAM_NOTIFICATION_HOOKS_COPY = {
   title: "Notification hooks",
   description: (team: string) =>
@@ -23,7 +23,6 @@ export const ACCOUNT_NOTIFICATIONS_COPY = {
   computerTab: "Notifications",
 } as const;
 
-/** Built to the Proposal of board C30, row 2; awaiting the owner. */
 export const CLOUD_NOTIFICATION_LIST_COPY = {
   deleteTitle: "Delete hook?",
   deleteDescription: (name: string, team: string | null) =>

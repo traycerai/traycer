@@ -219,8 +219,7 @@ async function attachOnSignIn(
  * chat continues on one of them: `epic.attachEnvironment@2.0` on the
  * person's own host prepares the task (a local create still on its way to
  * the cloud is waited for, with the host's refusals), then the app attaches
- * it on the person's own sign-in. Unsupported is left to the caller, which
- * continues as before.
+ * it on the person's own sign-in. Unsupported is left to the caller.
  * `surface` is what asked for it: the new-agent modal and the fork dialog
  * tell a refusal here, while `landing` tells its own, once it knows where the
  * message went.

@@ -46,9 +46,8 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     });
     render(<PresetsBlock reveal={vi.fn()} />);
 
-    // T5: a placement change is not one a preset puts back, so the applied
-    // preset is not Modified; the note says presets keep it, and the applied
-    // card is described by that note.
+    // A placement change is not one a preset puts back, so the applied preset is
+    // not Modified; the note says presets keep it, and describes the applied card.
     expect(screen.getByTestId("preset-status-line").textContent).toBe(
       "Default",
     );

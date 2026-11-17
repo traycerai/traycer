@@ -341,12 +341,11 @@ function askFailedReads(
 }
 
 /**
- * A teammate's claim of a team computer, told once per device (ruling 2,
- * 14 Nov). The app reads authn's claimed computers for each of the person's
- * teams on sign-in, and again for a team when one of its computers leaves
- * the list or its connection closes. Every claim this device has not told
- * yet shows the owner's sentence. A team's read waits until one answers: a
- * failed read is read again on focus and on the next list refresh. Each team
+ * A teammate's claim of a team computer, told once per device. The app reads
+ * authn's claimed computers for each of the person's teams on sign-in, and
+ * again for a team when one of its computers leaves the list or its connection
+ * closes. Every claim this device has not told yet shows the owner's sentence.
+ * A failed read is read again on focus and on the next list refresh. Each team
  * has one entry, which a claimed computer's cover reads too: a trigger never
  * cancels a read there, and only the read it asked for settles its team.
  */

@@ -1,10 +1,8 @@
 /**
- * A frozen turn's error row in a bot's own session, through the REAL
- * `BotSessionView` over the real `BotChatTranscript` and `ChatMessages`: the
- * row names the payer of the host that runs the bot (`boundHostId`), not of
- * the computer serving the tab, which is never a sandbox here. The channel
- * and a thread panel draw a bot's rows in their own layout and never this
- * row, so the session is where a reader sees the headline.
+ * A frozen turn's error row in a bot's own session, through the real
+ * `BotSessionView`: the row names the payer of the host that runs the bot
+ * (`boundHostId`), not of the computer serving the tab. Only the session draws
+ * this row; the channel and thread panel do not.
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -53,10 +51,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ): ChatSessionStoreHandle | null =>
     Object.hasOwn(mocks.sessions, chatId) ? mocks.sessions[chatId] : null,
 }));
-// Both the Update button (`useHostClientForHostId`) and the rungs
-// (`useExistingChatSessionHandle`, below `getChatSessionRegistry`, already
-// real above) need a resolvable host - the shared bots-suite default of
-// `null` would make either vacuously absent whatever the readOnly guard does.
+// The Update button and the rungs both need a resolvable host; the suite's
+// `null` default would make either absent whatever the readOnly guard does.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.hostClient,
 }));

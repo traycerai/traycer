@@ -2507,8 +2507,7 @@ export interface ChatSessionStoreHandle {
    *
    * Beside the ring rather than on the notice, because `ChatErrorNotice` is a
    * protocol type. Keyed by identity: the ring never copies a notice, so the
-   * object added here is the one the toast layer is handed. A notice missing
-   * from it renders as it always has.
+   * object added here is the one the toast layer is handed.
    */
   readonly lineBreakNotices: WeakSet<ChatErrorNotice>;
   /**
