@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -944,7 +944,7 @@ describe("<BotTabSurface /> views", () => {
     return copy.textContent;
   }
 
-  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+  it("rule 6: lists every row whatever puts a task there, and the tab carries no count", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       status: "signed-in",
@@ -1010,15 +1010,10 @@ describe("<BotTabSurface /> views", () => {
       .dataset.rowIds?.split(",");
     expect(shown).toHaveLength(4);
     expect(shown).not.toContain("task-quiet");
-    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
-    expect(badge.textContent).toContain(String(shown?.length));
-    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
-    // jsdom joins the name's parts without the spaces a browser puts in.
-    expect(
-      screen.getByRole("tab", {
-        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
-      }),
-    ).toBe(activityTab());
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
+    expect(activityTab().textContent).not.toMatch(/\d|active/);
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
