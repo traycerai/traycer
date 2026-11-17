@@ -8,11 +8,14 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   emptyTabStripLayout,
+  removeLayoutRef,
   swapSplitSides,
+  tabItemId,
   type SplitSideName,
   type SplitStripItem,
   type StripItem,
 } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
 import { holdInPlace, useOpenedSectionHold } from "../strip-section-hold";
 import {
   groupEntriesBySection,
@@ -21,13 +24,15 @@ import {
 } from "../strip-sections";
 
 const PAIR = "pair";
+const REF_A: TabRef = { kind: "epic", id: "a" };
+const REF_B: TabRef = { kind: "epic", id: "b" };
 
 function pairFocusing(focusedSide: SplitSideName): SplitStripItem {
   return {
     kind: "split",
     id: PAIR,
-    left: { kind: "tab", ref: { kind: "epic", id: "a" } },
-    right: { kind: "tab", ref: { kind: "epic", id: "b" } },
+    left: { kind: "tab", ref: REF_A },
+    right: { kind: "tab", ref: REF_B },
     focusedSide,
     routeBackingSide: "left",
     leftRatio: 0.5,
@@ -40,13 +45,14 @@ function swapped(item: SplitStripItem): ReadonlyArray<StripItem> {
     .items;
 }
 
-function sectionsWithPairIn(
+function sectionsWith(
+  itemId: string,
   section: StripSection,
 ): ReadonlyArray<StripSectionGroup> {
   return groupEntriesBySection([
     {
       kind: "tabs",
-      itemId: PAIR,
+      itemId,
       stripIndex: 0,
       section,
       group: null,
@@ -55,7 +61,14 @@ function sectionsWithPairIn(
   ]);
 }
 
+function sectionsWithPairIn(
+  section: StripSection,
+): ReadonlyArray<StripSectionGroup> {
+  return sectionsWith(PAIR, section);
+}
+
 interface Input {
+  readonly activeItemId: string | null;
   readonly sections: ReadonlyArray<StripSectionGroup>;
   readonly items: ReadonlyArray<StripItem>;
 }
@@ -69,7 +82,12 @@ interface Drawn {
 function drawnOf(input: Input): Drawn {
   const { result, rerender } = renderHook(
     (props: Input) => {
-      const hold = useOpenedSectionHold(props.sections, props.items, PAIR, []);
+      const hold = useOpenedSectionHold(
+        props.sections,
+        props.items,
+        props.activeItemId,
+        [],
+      );
       return holdInPlace(props.sections, hold === null ? [] : [hold]);
     },
     { initialProps: input },
@@ -87,6 +105,7 @@ function drawnOf(input: Input): Drawn {
 describe("useOpenedSectionHold", () => {
   it("holds a current pair in To review when its other member is focused from there", () => {
     const drawn = drawnOf({
+      activeItemId: PAIR,
       sections: sectionsWithPairIn("idle"),
       items: [pairFocusing("left")],
     });
@@ -102,6 +121,7 @@ describe("useOpenedSectionHold", () => {
 
   it("lets a pair that finished and was read under the person, then had its sides swapped, go to Idle", () => {
     const drawn = drawnOf({
+      activeItemId: PAIR,
       sections: sectionsWithPairIn("idle"),
       items: [pairFocusing("left")],
     });
@@ -115,6 +135,7 @@ describe("useOpenedSectionHold", () => {
 
   it("keeps an existing hold through a swap of the pair's sides", () => {
     const drawn = drawnOf({
+      activeItemId: PAIR,
       sections: sectionsWithPairIn("idle"),
       items: [pairFocusing("left")],
     });
@@ -125,5 +146,60 @@ describe("useOpenedSectionHold", () => {
     drawn.set({ sections: sectionsWithPairIn("idle") });
 
     expect(drawn.section()).toBe("to-review");
+  });
+
+  describe("when a member of a held pair is closed", () => {
+    function heldPair(): Drawn {
+      const drawn = drawnOf({
+        activeItemId: PAIR,
+        sections: sectionsWithPairIn("idle"),
+        items: [pairFocusing("left")],
+      });
+      drawn.set({ sections: sectionsWithPairIn("to-review") });
+      drawn.set({ items: [pairFocusing("right")] });
+      drawn.set({ sections: sectionsWithPairIn("idle") });
+      return drawn;
+    }
+
+    function closed(ref: TabRef): {
+      readonly items: ReadonlyArray<StripItem>;
+      readonly activeItemId: string | null;
+    } {
+      return removeLayoutRef(
+        {
+          ...emptyTabStripLayout(),
+          items: [pairFocusing("right")],
+          activeItemId: PAIR,
+        },
+        ref,
+        false,
+      );
+    }
+
+    it("keeps the hold on the surviving tab when the focused member stays", () => {
+      const drawn = heldPair();
+      const layout = closed(REF_A);
+
+      drawn.set({
+        ...layout,
+        sections: sectionsWith(tabItemId(REF_B), "idle"),
+      });
+
+      expect(layout.activeItemId).toBe(tabItemId(REF_B));
+      expect(drawn.section()).toBe("to-review");
+    });
+
+    it("does not give the surviving tab the hold when the focused member is closed", () => {
+      const drawn = heldPair();
+      const layout = closed(REF_B);
+
+      drawn.set({
+        ...layout,
+        sections: sectionsWith(tabItemId(REF_A), "idle"),
+      });
+
+      expect(layout.activeItemId).toBe(tabItemId(REF_A));
+      expect(drawn.section()).toBe("idle");
+    });
   });
 });

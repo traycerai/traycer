@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
+import {
+  tabRefKey,
+  type SplitSide,
+  type StripItem,
+} from "@/stores/tabs/layout";
 import {
   groupEntriesBySection,
   type StripSection,
@@ -119,12 +123,17 @@ function sectionOfItem(
 }
 
 /**
- * The current item, and the tab on screen in it when it is a split pair: the
- * tab and not its side, since swapping a pair's sides opens nothing.
+ * The current item and the tab on screen in it, a pair's focused member. The
+ * tab is what was opened: swapping a pair's sides opens nothing, and neither
+ * does closing its other member, though that gives the row a new item id.
  */
 interface StripOpening {
   readonly itemId: string;
   readonly focusedTab: string | null;
+}
+
+function focusedSideOf(item: StripItem): SplitSide {
+  return item.kind === "split" ? item[item.focusedSide] : item;
 }
 
 function openingOf(
@@ -133,7 +142,7 @@ function openingOf(
 ): StripOpening | null {
   if (activeItemId === null) return null;
   const item = layoutItems.find((entry) => entry.id === activeItemId);
-  const focused = item?.kind === "split" ? item[item.focusedSide] : null;
+  const focused = item === undefined ? null : focusedSideOf(item);
   return {
     itemId: activeItemId,
     focusedTab: focused?.kind === "tab" ? tabRefKey(focused.ref) : null,
@@ -146,8 +155,30 @@ interface OpenedHoldState {
   readonly hold: StripSectionHold | null;
 }
 
-function sameOpening(a: StripOpening | null, b: StripOpening | null): boolean {
-  return a?.itemId === b?.itemId && a?.focusedTab === b?.focusedTab;
+/** Whether the same tab is on screen; by item where no tab is known. */
+function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
+  if (a === null) return false;
+  return a.focusedTab === null && b.focusedTab === null
+    ? a.itemId === b.itemId
+    : a.focusedTab === b.focusedTab;
+}
+
+/**
+ * Where an item's row was drawn when the person opened it in this render,
+ * which a read landing in the same render has not changed yet. Opening a
+ * pair's other member is an opening too, and the pair's row is one row.
+ * `null` for an item with no row before this render.
+ */
+function drawnWhenOpened(
+  prev: OpenedHoldState | null,
+  itemId: string,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSection | null {
+  return (
+    holds.find((held) => held.itemId === itemId)?.section ??
+    (prev?.hold?.itemId === itemId ? prev.hold.section : null) ??
+    (prev === null ? null : sectionOfItem(prev.sections, itemId))
+  );
 }
 
 function openedHoldOf(
@@ -160,15 +191,11 @@ function openedHoldOf(
   const { itemId } = opening;
   const now = sectionOfItem(sections, itemId);
   if (now !== "to-review" && now !== "idle") return null;
-  if (prev !== null && sameOpening(prev.opening, opening)) return prev.hold;
-  // Opened in this render: where the row was drawn when the person opened it,
-  // which a read landing in the same render has not changed yet. Opening a
-  // pair's other half is an opening too, and the pair's row is one row.
-  const opened =
-    holds.find((held) => held.itemId === itemId)?.section ??
-    (prev?.hold?.itemId === itemId ? prev.hold.section : null) ??
-    (prev === null ? null : sectionOfItem(prev.sections, itemId)) ??
-    now;
+  if (prev !== null && sameOpened(prev.opening, opening)) {
+    const { hold } = prev;
+    return hold === null || hold.itemId === itemId ? hold : { ...hold, itemId };
+  }
+  const opened = drawnWhenOpened(prev, itemId, holds) ?? now;
   return opened === "to-review" ? { itemId, section: "to-review" } : null;
 }
 
@@ -191,7 +218,11 @@ export function useOpenedSectionHold(
     opening,
     hold: openedHoldOf(null, sections, opening, holds),
   }));
-  if (state.sections !== sections || !sameOpening(state.opening, opening)) {
+  if (
+    state.sections !== sections ||
+    state.opening?.itemId !== opening?.itemId ||
+    state.opening?.focusedTab !== opening?.focusedTab
+  ) {
     setState({
       sections,
       opening,
