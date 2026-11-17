@@ -295,16 +295,21 @@ function ThreadCards(props: {
     ),
   );
   const unfold = useBotThreadFoldStore((state) => state.unfold);
+  const paneVisible = usePaneVisible();
   const pendingVisit = useRef<number | null>(null);
   const cancelLanding = useCallback(() => {
     pendingVisit.current = null;
   }, []);
+  useEffect(() => {
+    if (!paneVisible) cancelLanding();
+  }, [cancelLanding, paneVisible]);
   const pageNavigation = useMemo(
     () => ({
       cancel: cancelLanding,
-      isPending: (visit: number) => pendingVisit.current === visit,
+      isPending: (visit: number) =>
+        paneVisible && pendingVisit.current === visit,
     }),
-    [cancelLanding],
+    [cancelLanding, paneVisible],
   );
   useThreadsScrollIntent(scroller, cancelLanding);
   const visitCounter = useRef(0);
@@ -383,18 +388,15 @@ function useThreadsScrollIntent(
     const keydown = (event: KeyboardEvent) => {
       if (isThreadsScrollKey(event)) cancel();
     };
-    const pointerdown = (event: PointerEvent) => {
-      if (event.target === scroller) cancel();
-    };
     scroller.addEventListener("wheel", cancel, { passive: true });
     scroller.addEventListener("touchmove", cancel, { passive: true });
     scroller.addEventListener("keydown", keydown);
-    scroller.addEventListener("pointerdown", pointerdown);
+    scroller.addEventListener("pointerdown", cancel);
     return () => {
       scroller.removeEventListener("wheel", cancel);
       scroller.removeEventListener("touchmove", cancel);
       scroller.removeEventListener("keydown", keydown);
-      scroller.removeEventListener("pointerdown", pointerdown);
+      scroller.removeEventListener("pointerdown", cancel);
     };
   }, [cancel, scroller]);
 }
@@ -402,22 +404,31 @@ function useThreadsScrollIntent(
 function isThreadsScrollKey(event: KeyboardEvent): boolean {
   if (event.defaultPrevented || isEditableEventTarget(event.target))
     return false;
-  if (
-    event.target instanceof Element &&
-    event.target.closest(
-      'button, a, select, [role="button"], [role="listbox"], [role="menu"], [role="slider"], [role="tree"], [role="grid"]',
-    ) !== null
-  )
-    return false;
-  return [
-    "ArrowUp",
-    "ArrowDown",
-    "PageUp",
-    "PageDown",
-    "Home",
-    "End",
-    " ",
-  ].includes(event.key);
+  const { key } = event;
+  let owner: string;
+  switch (key) {
+    case "PageUp":
+    case "PageDown":
+      owner = 'select, [role="listbox"], [role="slider"], [role="grid"]';
+      break;
+    case "ArrowUp":
+    case "ArrowDown":
+    case "Home":
+    case "End":
+      owner =
+        'select, [role="listbox"], [role="menu"], [role="slider"], [role="tree"], [role="grid"]';
+      break;
+    case " ":
+      // Links activate on Enter; Space still scrolls their containing page.
+      owner =
+        'button, select, [role="button"], [role="listbox"], [role="menu"], [role="tree"], [role="grid"]';
+      break;
+    default:
+      return false;
+  }
+  return (
+    !(event.target instanceof Element) || event.target.closest(owner) === null
+  );
 }
 
 /**

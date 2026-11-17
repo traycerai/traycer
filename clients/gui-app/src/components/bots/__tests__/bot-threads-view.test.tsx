@@ -15,6 +15,7 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
+import { type ReactNode, useSyncExternalStore } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -71,6 +72,7 @@ import type {
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -367,6 +369,33 @@ const FOLLOWING: BotThreadFollow = {
   reason: "participated",
 };
 
+/** Whether the pane the view is in is on screen, and who is told when that changes. */
+const pane = { visible: true, listeners: new Set<() => void>() };
+
+/** The pane's visibility as the tab host provides it, driven by `setPaneVisible`. */
+function PaneGate(props: { readonly children: ReactNode }): ReactNode {
+  const visible = useSyncExternalStore(
+    (listener) => {
+      pane.listeners.add(listener);
+      return () => pane.listeners.delete(listener);
+    },
+    () => pane.visible,
+  );
+  return (
+    <PaneVisibilityContext value={visible}>
+      {props.children}
+    </PaneVisibilityContext>
+  );
+}
+
+/** The pane goes off screen or comes back, with the view mounted throughout. */
+function setPaneVisible(visible: boolean): void {
+  act(() => {
+    pane.visible = visible;
+    for (const listener of pane.listeners) listener();
+  });
+}
+
 /** The installed app's form the next mount draws in; `null` where the container decides. */
 let mountLevel2: MobileLevel2Form | null = null;
 /** Whether the next mount draws the app header beside the view, which the view portals its picker into. */
@@ -446,22 +475,24 @@ function mount(): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   render(
     <QueryClientProvider client={queryClient}>
-      <MobileBotHeaderSlotProvider>
-        {mountUnderHeader ? <MobileAppHeader /> : null}
-        <BotTestRunnerHost>
-          <TooltipProvider>
-            <ChatExpansionTestProviders tileInstanceId="tile-1">
-              <BotThreadsView
-                level2={mountLevel2}
-                hostId="host-1"
-                channelId={TRACY}
-                channelTitle="Tracy"
-                onBack={mocks.back}
-              />
-            </ChatExpansionTestProviders>
-          </TooltipProvider>
-        </BotTestRunnerHost>
-      </MobileBotHeaderSlotProvider>
+      <PaneGate>
+        <MobileBotHeaderSlotProvider>
+          {mountUnderHeader ? <MobileAppHeader /> : null}
+          <BotTestRunnerHost>
+            <TooltipProvider>
+              <ChatExpansionTestProviders tileInstanceId="tile-1">
+                <BotThreadsView
+                  level2={mountLevel2}
+                  hostId="host-1"
+                  channelId={TRACY}
+                  channelTitle="Tracy"
+                  onBack={mocks.back}
+                />
+              </ChatExpansionTestProviders>
+            </TooltipProvider>
+          </BotTestRunnerHost>
+        </MobileBotHeaderSlotProvider>
+      </PaneGate>
     </QueryClientProvider>,
   );
 }
@@ -769,6 +800,7 @@ beforeEach(() => {
     "scrollIntoView",
   );
   vi.clearAllMocks();
+  pane.visible = true;
   mountLevel2 = null;
   mountUnderHeader = false;
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
@@ -2847,9 +2879,12 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
     const OPENING_POST_ID = conversationRequestMessageId("req-team-new");
     /** The message reply 4 of the thread answers. */
     let answers = replyId(THREAD, 1);
+    /** What reply 4 says. */
+    let replyFourText = "reply 4";
 
     beforeEach(() => {
       answers = replyId(THREAD, 1);
+      replyFourText = "reply 4";
     });
 
     /** Reply `n` as a colleague's row; reply 4 is the bot's, answering reply 1, so it draws a badge. */
@@ -2860,7 +2895,7 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
           message: {
             ...botReply({
               messageId: id,
-              text: `reply ${String(n)}`,
+              text: replyFourText,
               timestamp: n * 1_000,
             }),
             repliesTo: answers,
@@ -3138,23 +3173,31 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
       expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
     });
 
-    it("still lands on the divider when the reply that holds it loads after a key pressed on a control inside a card and a press inside a card, neither of which scrolls the page", async () => {
+    /** An ordinary button of a card: no menu, tab or other composite control, which would own keys of its own. */
+    function ordinaryButtonIn(threadId: string): HTMLElement {
+      const found = within(card(threadId))
+        .getAllByRole("button")
+        .find(
+          (button) =>
+            !button.hasAttribute("aria-haspopup") &&
+            button.getAttribute("role") === null,
+        );
+      if (found === undefined)
+        throw new Error(`no ordinary button in ${threadId}`);
+      return found;
+    }
+
+    it("still lands on the divider when the reply that holds it loads after the Space an ordinary button of a card consumes, which does not scroll the page", async () => {
       const { scrolled, pill } = await mountWithMissingBoundary({
         answers,
         withReadCard: false,
       });
 
       fireEvent.click(pill);
-      const control = within(card(THREAD)).getAllByRole("button")[0];
-      expect(card(THREAD).contains(control)).toBe(true);
+      const control = ordinaryButtonIn(THREAD);
       expect(
         reachedScroller("keydown", () =>
-          fireEvent.keyDown(control, { key: "PageDown" }),
-        ),
-      ).toBe(true);
-      expect(
-        reachedScroller("pointerdown", () =>
-          fireEvent.pointerDown(card(THREAD)),
+          fireEvent.keyDown(control, { key: " " }),
         ),
       ).toBe(true);
       hydrate([0, 1, 2, 3, 4]);
@@ -3164,6 +3207,126 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
       await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
       expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
     });
+
+    it("does not pull the page to the divider when the reply that holds it loads after a press anywhere inside a card, and a fresh press lands", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      expect(dividersIn(THREAD)).toHaveLength(0);
+      expect(scrolledToDivider(scrolled)).toBe(false);
+      expect(
+        reachedScroller("pointerdown", () =>
+          fireEvent.pointerDown(card(THREAD)),
+        ),
+      ).toBe(true);
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    it("lands on the divider when the pill is pressed again, pointer first and then the click, after a press inside a card retired the first press", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      fireEvent.pointerDown(card(THREAD));
+      fireEvent.pointerDown(pill);
+      fireEvent.click(pill);
+      hydrate([0, 1, 2, 3, 4]);
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    it("keeps the intent of a pill press whose own pointer press came first, and lands on the divider once the reply that holds it loads", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.pointerDown(pill);
+      fireEvent.click(pill);
+      hydrate([0, 1, 2, 3, 4]);
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    it("does not pull the page to the divider when the reply that holds it loads after Space pressed on a link in a reply, which scrolls the page, and a fresh press lands", async () => {
+      replyFourText = "reply 4, with [the report](https://example.com/report)";
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      const link = within(card(THREAD)).getByRole("link", {
+        name: "the report",
+      });
+      expect(dividersIn(THREAD)).toHaveLength(0);
+      expect(scrolledToDivider(scrolled)).toBe(false);
+      expect(
+        reachedScroller("keydown", () => fireEvent.keyDown(link, { key: " " })),
+      ).toBe(true);
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    it("does not pull the page to the divider when the reply that holds it loads while the pane is hidden, nor when the pane returns, and a fresh press lands", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+      fireEvent.click(pill);
+
+      setPaneVisible(false);
+      hydrate([0, 1, 2, 3, 4]);
+      expect(scrolledToDivider(scrolled)).toBe(false);
+      setPaneVisible(true);
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    it("does not pull the page to the divider when the reply that holds it loads after the pane was hidden and shown again, and a fresh press lands", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+      fireEvent.click(pill);
+
+      setPaneVisible(false);
+      setPaneVisible(true);
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    it.each(["PageDown", "ArrowDown"])(
+      "does not pull the page to the divider when the reply that holds it loads after %s pressed on an ordinary button of a card, which scrolls the page, and a fresh press lands",
+      async (key) => {
+        const { scrolled, pill } = await mountWithMissingBoundary({
+          answers,
+          withReadCard: false,
+        });
+
+        fireEvent.click(pill);
+        const control = ordinaryButtonIn(THREAD);
+        expect(dividersIn(THREAD)).toHaveLength(0);
+        expect(scrolledToDivider(scrolled)).toBe(false);
+        expect(
+          reachedScroller("keydown", () => fireEvent.keyDown(control, { key })),
+        ).toBe(true);
+
+        await expectNoStealThenFreshPressLands(scrolled, pill);
+      },
+    );
 
     /** Four rows loaded and read-enabled, then the session's snapshot is withdrawn, which turns reading off. */
     async function mountWithReadingOff(): Promise<{

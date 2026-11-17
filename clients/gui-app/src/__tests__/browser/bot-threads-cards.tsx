@@ -66,13 +66,22 @@ import "@/index.css";
  * reports for those cards, standing in for a card beyond the fold, so its
  * summary can be seen; `?filler=<n>` adds older threads after them, read,
  * so the last card starts far below the view; `?phone=true` draws the
- * installed app's phone form; `?theme=dark` draws it dark.
+ * installed app's phone form; `?theme=dark` draws it dark;
+ * `?gate=<chatId,…>` withholds those chats' snapshots, as a host that is slow
+ * to hydrate a thread does, until the page calls `window.__releaseChat(id)`.
  */
 const params = new URLSearchParams(window.location.search);
 useSettingsStore
   .getState()
   .setTheme(params.get("theme") === "dark" ? "dark" : "light");
 if (params.get("phone") === "true") setPhoneLayoutOnly(true);
+
+declare global {
+  interface Window {
+    /** Delivers the snapshot of a chat named in `?gate=`, which the page withheld until now. */
+    __releaseChat?: (chatId: string) => void;
+  }
+}
 
 const held = new Set(
   (params.get("hold") ?? "").split(",").filter((id) => id.length > 0),
@@ -630,9 +639,18 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
+const gated = new Set(
+  (params.get("gate") ?? "").split(",").filter((id) => id.length > 0),
+);
+const gatedDeliveries = new Map<string, () => void>();
+window.__releaseChat = (chatId) => {
+  gatedDeliveries.get(chatId)?.();
+  gatedDeliveries.delete(chatId);
+};
+
 __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
   const messages = CHATS[chatId] ?? [];
-  queueMicrotask(() => {
+  const deliver = (): void => {
     callbacks.onConnectionStatus("open", null, null, null);
     callbacks.onSnapshot({
       kind: "snapshot",
@@ -675,7 +693,9 @@ __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
         portForwards: [],
       },
     });
-  });
+  };
+  if (gated.has(chatId)) gatedDeliveries.set(chatId, deliver);
+  else queueMicrotask(deliver);
   return {
     sendAction: () => undefined,
     sameTurnSteeringProtocolSupported: () => true,
