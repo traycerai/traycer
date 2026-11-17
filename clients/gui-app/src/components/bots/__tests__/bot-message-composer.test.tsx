@@ -1090,6 +1090,8 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     expect(mocks.send).not.toHaveBeenCalled();
 
     await typeBox("{ArrowUp}");
+    expect(highlightedLabel()).toBe("Back");
+    await typeBox("{ArrowUp}");
     expect(highlightedLabel()).toBe("Roadmap");
     await typeBox("{Enter}");
 

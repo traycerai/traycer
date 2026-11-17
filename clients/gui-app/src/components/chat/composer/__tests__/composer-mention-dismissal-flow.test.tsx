@@ -381,6 +381,7 @@ describe("mention selection", () => {
     });
     rerender({ step: pickerStore.getState().step });
     publish();
+    pressKey(editor, "ArrowUp");
     pressKey(editor, "Enter");
     expect(pickerStore.getState().step).toEqual({ kind: "root" });
     rerender({ step: pickerStore.getState().step });
@@ -388,7 +389,6 @@ describe("mention selection", () => {
     pressKey(editor, "Enter");
     rerender({ step: pickerStore.getState().step });
     publish();
-    pressKey(editor, "ArrowDown");
     pressKey(editor, "Enter");
     expect(editor.getJSON().content[0].content?.[0]).toMatchObject({
       attrs: { contextType: "host", id: "host-42" },

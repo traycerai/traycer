@@ -360,22 +360,37 @@ function wrapIndex(index: number, length: number): number {
 }
 
 /**
+ * Row an un-navigated highlight rests on. A mention sub-step lists Back first,
+ * and the step was entered to pick something from it, so the highlight starts
+ * on the row after Back whenever there is one; Enter then takes the top
+ * result rather than undoing the step. Everywhere else it is the top row.
+ */
+function homeIndex(items: ReadonlyArray<ComposerPickerItem>): number {
+  if (items.length < 2) return 0;
+  const first = items[0];
+  return first.kind === "mention" && first.entry.action.kind === "back" ? 1 : 0;
+}
+
+/**
  * Active index to carry across an item-list replacement. A refresh of the same
  * query can reorder rows as slower sources land (root mention search ranks all
  * sources into one flat list); once the user has chosen a row with the arrow
- * keys, or moved the highlight off the top row by any means, it follows that
+ * keys, or moved the highlight off its home row by any means, it follows that
  * row - matched by id - rather than the index it happened to sit at. An
- * un-navigated highlight at index 0 stays on the top row, so the best match
- * keeps the selection as better results arrive. A NAVIGATED highlight at
- * index 0 (arrow down, arrow up) is a choice like any other and is carried:
- * the row under a highlight the user put there must not change under them.
+ * un-navigated highlight on its home row stays on the new list's home row, so
+ * the best match keeps the selection as better results arrive, and a step
+ * that opened with only Back moves to its first result when the rows land. A
+ * NAVIGATED highlight on the home row (arrow down, arrow up) is a choice like
+ * any other and is carried: the row under a highlight the user put there must
+ * not change under them.
  */
 function carriedActiveIndex(
   previous: ComposerPickerState,
   items: ReadonlyArray<ComposerPickerItem>,
 ): number {
+  const atHome = previous.activeIndex === homeIndex(previous.items);
   if (
-    (previous.navigated || previous.activeIndex > 0) &&
+    (previous.navigated || !atHome) &&
     previous.activeIndex >= 0 &&
     previous.activeIndex < previous.items.length
   ) {
@@ -387,10 +402,8 @@ function carriedActiveIndex(
     const carried = items.findIndex((item) => item.id === activeId);
     if (carried >= 0) return carried;
   }
-  return (
-    findEnabledIndex(items, previous.activeIndex, 1) ??
-    clampIndex(previous.activeIndex, items.length)
-  );
+  const start = atHome ? homeIndex(items) : previous.activeIndex;
+  return findEnabledIndex(items, start, 1) ?? clampIndex(start, items.length);
 }
 
 /**
@@ -481,14 +494,15 @@ export function createComposerPickerStore(): ComposerPickerStore {
       // scope. Drop it now rather than rendering (and accepting commits on)
       // rows whose policy no longer holds for this caret position.
       const scopeChanged = previous.slashScope !== slashScope;
+      const items = scopeChanged ? [] : previous.items;
       set({
         range,
         query,
         slashScope,
-        activeIndex: 0,
+        activeIndex: homeIndex(items),
         navigated: false,
         clientRect: clientRect ?? previous.clientRect,
-        items: scopeChanged ? [] : previous.items,
+        items,
         itemsForQuery: scopeChanged ? null : previous.itemsForQuery,
         itemsForStepId: scopeChanged ? null : previous.itemsForStepId,
         itemsForSlashScope: scopeChanged ? null : previous.itemsForSlashScope,

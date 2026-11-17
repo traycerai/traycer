@@ -112,9 +112,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("a", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("c", { kind: "back" }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
     expect(store.getState().activeIndex).toBe(0);
@@ -131,9 +131,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("c", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("a", { kind: "back" }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
 
@@ -148,9 +148,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("a", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("c", { kind: "back" }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
     expect(store.getState().activeIndex).toBe(0);
@@ -161,9 +161,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("c", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("a", { kind: "back" }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
 
@@ -178,9 +178,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "au",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("a", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("c", { kind: "back" }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
     store.getState().moveActive(1);
@@ -201,9 +201,9 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "auth",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("c", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
-        mentionItem("a", { kind: "back" }),
+        mentionItem("c", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
 
@@ -220,8 +220,8 @@ describe("composer picker store - navigated highlight carry", () => {
       query: "",
       step: ROOT_MENTION_STEP,
       items: [
-        mentionItem("a", { kind: "back" }),
-        mentionItem("b", { kind: "back" }),
+        mentionItem("a", { kind: "complete", mention: FILE_MENTION }),
+        mentionItem("b", { kind: "complete", mention: FILE_MENTION }),
       ],
     });
     store.getState().moveActive(1);
@@ -370,5 +370,91 @@ describe("composer picker store - onMentionPick observer", () => {
     expect(observed.map((observedEntry) => observedEntry.id)).toEqual([
       "file-a",
     ]);
+  });
+});
+
+function providerStepItems(
+  ids: ReadonlyArray<string>,
+): ReadonlyArray<ComposerPickerItem> {
+  return [
+    mentionItem("back", { kind: "back" }),
+    ...ids.map((id) =>
+      mentionItem(id, { kind: "complete", mention: FILE_MENTION }),
+    ),
+  ];
+}
+
+function openProviderStep(store: ComposerPickerStore, query: string): void {
+  openMention(store, 1, query);
+  store.getState().setStep(PROVIDER_STEP);
+}
+
+function setProviderStepItems(
+  store: ComposerPickerStore,
+  query: string,
+  ids: ReadonlyArray<string>,
+): void {
+  setMentionItems(store, {
+    sessionId: 1,
+    query,
+    step: PROVIDER_STEP,
+    items: providerStepItems(ids),
+  });
+}
+
+describe("composer picker store - sub-step home row", () => {
+  it("rests on Back while only Back is listed, then moves to the first result when rows land", () => {
+    const store = createComposerPickerStore();
+    openProviderStep(store, "");
+
+    setProviderStepItems(store, "", []);
+    expect(store.getState().activeIndex).toBe(0);
+
+    setProviderStepItems(store, "", ["x", "y"]);
+    expect(store.getState().activeIndex).toBe(1);
+    expect(store.getState().navigated).toBe(false);
+  });
+
+  it("returns to the first result after a query change inside the step", () => {
+    const store = createComposerPickerStore();
+    openProviderStep(store, "a");
+    setProviderStepItems(store, "a", ["x", "y"]);
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(2);
+
+    store.getState().updateRange({
+      sessionId: 1,
+      range: { from: 0, to: 2 },
+      query: "ab",
+      slashScope: null,
+      clientRect: null,
+    });
+    expect(store.getState().activeIndex).toBe(1);
+
+    setProviderStepItems(store, "ab", ["y", "x"]);
+    expect(store.getState().activeIndex).toBe(1);
+  });
+
+  it("keeps a deliberate move onto Back through a refresh", () => {
+    const store = createComposerPickerStore();
+    openProviderStep(store, "");
+    setProviderStepItems(store, "", ["x", "y"]);
+    store.getState().moveActive(-1);
+    expect(store.getState().activeIndex).toBe(0);
+
+    setProviderStepItems(store, "", ["x", "y", "z"]);
+
+    expect(store.getState().activeIndex).toBe(0);
+  });
+
+  it("keeps a hover onto Back through a refresh", () => {
+    const store = createComposerPickerStore();
+    openProviderStep(store, "");
+    setProviderStepItems(store, "", ["x", "y"]);
+    store.getState().setActiveIndex(0);
+
+    setProviderStepItems(store, "", ["x", "y", "z"]);
+
+    expect(store.getState().activeIndex).toBe(0);
   });
 });

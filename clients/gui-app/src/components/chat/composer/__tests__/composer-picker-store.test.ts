@@ -38,7 +38,7 @@ function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
     searchText: null,
     disabledReason: null,
     icon: FAKE_ICON,
-    action: { kind: "back" },
+    action: { kind: "navigate", step: FILES_PROVIDER_STEP },
     updatedAt: null,
     archived: false,
     dormant: false,
