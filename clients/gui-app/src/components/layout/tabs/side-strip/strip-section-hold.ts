@@ -104,6 +104,73 @@ export function useStripSectionHolds(
   );
 }
 
+function sectionOfItem(
+  sections: ReadonlyArray<StripSectionGroup>,
+  itemId: string,
+): StripSection | null {
+  return (
+    sections.find((group) =>
+      group.entries.some(
+        (entry) => entry.kind === "tabs" && entry.itemId === itemId,
+      ),
+    )?.section ?? null
+  );
+}
+
+interface OpenedHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
+  readonly activeItemId: string | null;
+  readonly hold: StripSectionHold | null;
+}
+
+function openedHoldOf(
+  prev: OpenedHoldState | null,
+  sections: ReadonlyArray<StripSectionGroup>,
+  activeItemId: string | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  if (activeItemId === null) return null;
+  const now = sectionOfItem(sections, activeItemId);
+  if (now !== "to-review" && now !== "idle") return null;
+  if (prev?.activeItemId === activeItemId) return prev.hold;
+  // Opened in this render: where the row was drawn when the person opened it,
+  // which a read landing in the same render has not changed yet.
+  const opened =
+    holds.find((held) => held.itemId === activeItemId)?.section ??
+    (prev === null ? null : sectionOfItem(prev.sections, activeItemId)) ??
+    now;
+  return opened === "to-review"
+    ? { itemId: activeItemId, section: "to-review" }
+    : null;
+}
+
+/**
+ * The current task's row, held in To review when the person opened it from
+ * there. Opening a task reads it, which would send its row down to Idle, out
+ * from where the person just clicked and often out of view. It stays until
+ * they open another task, or until this one starts working or needs them,
+ * which is a move its own state makes.
+ */
+export function useOpenedSectionHold(
+  sections: ReadonlyArray<StripSectionGroup>,
+  activeItemId: string | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  const [state, setState] = useState<OpenedHoldState>(() => ({
+    sections,
+    activeItemId,
+    hold: openedHoldOf(null, sections, activeItemId, holds),
+  }));
+  if (state.sections !== sections || state.activeItemId !== activeItemId) {
+    setState({
+      sections,
+      activeItemId,
+      hold: openedHoldOf(state, sections, activeItemId, holds),
+    });
+  }
+  return state.hold;
+}
+
 /**
  * The sections with each held row kept in the section it was drawn in, among
  * that section's rows in the strip's order. A held row still says what is true
