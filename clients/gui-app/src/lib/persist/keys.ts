@@ -451,7 +451,8 @@ export const PERSIST_STORES = [
   },
   // Imported tasks the user has not opened yet: the task list's unread dot.
   // Epic ids are cloud entities, so no host scoping; entries clear on first
-  // open and the set is small (one import run's worth at most).
+  // open. The record holds one entry per imported task not yet opened, and
+  // an import makes one task per session, so it can hold thousands.
   {
     camelName: "sessionImportUnseen",
     leaf: "session-import-unseen",
