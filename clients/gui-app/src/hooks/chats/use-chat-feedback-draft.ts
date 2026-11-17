@@ -273,21 +273,22 @@ export function useChatFeedbackDraftDecisionState(
 }
 
 /**
- * Marks a draft resolved for the client's account session once its
- * notification row has: the row's own state answers from then on, and an
- * answer that lands later holds nothing.
+ * Marks a draft settled for the client's account session once its transcript
+ * stamp is sent or skipped: the transcript answers for the card from then on,
+ * the notification row has its own resolve, and an answer that lands later
+ * holds nothing.
  */
-export function useRetireFeedbackDraftDecision(
+export function useSettleFeedbackDraftDecision(
   client: HostRequester<HostRpcRegistry> | null,
   draft: FeedbackDraftAddress,
-  resolved: boolean,
+  transcriptSettled: boolean,
 ): void {
   const { hostId, epicId, chatId, blockId } = draft;
   const sessionId = useFeedbackDraftSessionId(client);
-  const resolve = useFeedbackDraftDecisionStore((state) => state.resolve);
+  const settle = useFeedbackDraftDecisionStore((state) => state.settle);
   useEffect(() => {
-    if (resolved && sessionId !== null) {
-      resolve(sessionId, { hostId, epicId, chatId, blockId });
+    if (transcriptSettled && sessionId !== null) {
+      settle(sessionId, { hostId, epicId, chatId, blockId });
     }
-  }, [resolved, sessionId, hostId, epicId, chatId, blockId, resolve]);
+  }, [transcriptSettled, sessionId, hostId, epicId, chatId, blockId, settle]);
 }

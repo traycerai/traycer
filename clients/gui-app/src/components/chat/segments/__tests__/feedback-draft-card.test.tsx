@@ -2,6 +2,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -9,6 +10,15 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { create } from "zustand";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import {
+  HostClient,
+  type HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { ChatFeedbackDraftDecideResponse } from "@traycer/protocol/host/chat/feedback-draft";
 import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -16,7 +26,10 @@ import {
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
-import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
+import {
+  feedbackDraftSessionId,
+  useFeedbackDraftDecisionStore,
+} from "@/stores/chats/feedback-draft-decision-store";
 import { FeedbackDraftCard } from "@/components/chat/segments/feedback-draft-card";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
@@ -24,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   supported: true as boolean | null,
   canAct: true as boolean | null,
+  client: null as HostRequester<HostRpcRegistry> | null,
 }));
 
 // The host boundary: the RPC hooks and the chat's live session. The card's
@@ -51,7 +65,7 @@ vi.mock("@/hooks/chats/use-chat-feedback-draft", async (importActual) => {
 });
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: () => mocks.client,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -84,10 +98,41 @@ const PENDING: ToolCallFeedbackDraftStamp = {
 
 let queryClient = new QueryClient();
 
-function renderCard(
+const CARD_HOST: HostDirectoryEntry = {
+  hostId: SCOPE.hostId,
+  label: "Card computer",
+  kind: "local",
+  websocketUrl: null,
+  version: null,
+  transportDialability: "dialable",
+};
+
+/** Gives the card a client with a request context, and returns its session id. */
+function giveCardASession(): number {
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "request-1",
+      handlers: {},
+    }),
+    findHostById: () => CARD_HOST,
+  });
+  const context = createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "token-a",
+    identity: { userId: "user-a", username: "a", providerHandle: null },
+  });
+  spine.setRequestContext(context);
+  mocks.client = spine.createRequester(CARD_HOST);
+  return feedbackDraftSessionId(context);
+}
+
+function cardTree(
   draft: ToolCallFeedbackDraftStamp,
   scope: ChatAttachmentScopeValue | null,
-): void {
+): ReactNode {
   const wrap = (children: ReactNode): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <ChatAttachmentScopeContext.Provider value={scope}>
@@ -95,11 +140,16 @@ function renderCard(
       </ChatAttachmentScopeContext.Provider>
     </QueryClientProvider>
   );
-  render(
-    wrap(
-      <FeedbackDraftCard id="block-1" draft={draft} headerFindUnitId={null} />,
-    ),
+  return wrap(
+    <FeedbackDraftCard id="block-1" draft={draft} headerFindUnitId={null} />,
   );
+}
+
+function renderCard(
+  draft: ToolCallFeedbackDraftStamp,
+  scope: ChatAttachmentScopeValue | null,
+): RenderResult {
+  return render(cardTree(draft, scope));
 }
 
 /** A decision on the card's draft, made on another surface or on the card. */
@@ -126,11 +176,12 @@ beforeEach(() => {
   useFeedbackDraftDecisionStore.setState({
     sessionId: null,
     decisions: new Map(),
-    resolved: new Set(),
+    settled: new Set(),
   });
   mocks.mutate.mockReset();
   mocks.supported = true;
   mocks.canAct = true;
+  mocks.client = null;
   useToolOpenStore.setState({ openIds: new Set() });
 });
 
@@ -286,5 +337,29 @@ describe("FeedbackDraftCard", () => {
       "disabled",
       true,
     );
+  });
+
+  it("keeps a held sent decision while its transcript reads pending, and drops it once the transcript settles", () => {
+    const sessionId = giveCardASession();
+    useFeedbackDraftDecisionStore.getState().record(
+      sessionId,
+      {
+        hostId: SCOPE.hostId,
+        epicId: SCOPE.epicId,
+        chatId: SCOPE.chatId,
+        blockId: "block-1",
+      },
+      { ...PENDING, state: "sent", decidedAt: 5 },
+    );
+    const view = renderCard(PENDING, SCOPE);
+
+    expect(screen.getByText("Sent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(queryClient.getMutationCache().getAll()).toHaveLength(0);
+
+    view.rerender(cardTree({ ...PENDING, state: "sent", decidedAt: 5 }, SCOPE));
+
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
   });
 });

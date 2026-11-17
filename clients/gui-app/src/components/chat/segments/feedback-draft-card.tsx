@@ -22,6 +22,7 @@ import {
   useChatFeedbackDraftDecideMutation,
   useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftPreviewQuery,
+  useSettleFeedbackDraftDecision,
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -129,6 +130,11 @@ function LiveFeedbackDraftCard(
   const draftRef = { ...blockRef, hostId };
   const decide = useChatFeedbackDraftDecideMutation(client, draftRef);
   const decision = useChatFeedbackDraftDecisionState(client, draftRef);
+  useSettleFeedbackDraftDecision(
+    client,
+    draftRef,
+    props.draft.state === "sent" || props.draft.state === "skipped",
+  );
   const readOnly = liveReadOnlyReason(canAct, supported);
   // The settled stamp also arrives as a row update; until it does, the
   // answer to a decision made here or on the draft's notification row is

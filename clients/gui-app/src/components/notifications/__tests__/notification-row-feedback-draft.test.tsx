@@ -204,7 +204,7 @@ beforeEach(() => {
   useFeedbackDraftDecisionStore.setState({
     sessionId: null,
     decisions: new Map(),
-    resolved: new Set(),
+    settled: new Set(),
   });
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
@@ -380,7 +380,7 @@ describe("<NotificationRow /> feedback draft rows", () => {
     );
   });
 
-  it("drops the held decision on its draft once the row resolves", () => {
+  it("keeps the held decision on its draft once the row resolves, for the card whose transcript is still pending", () => {
     const address = {
       hostId: ORIGIN_HOST_ID,
       epicId: "epic-1",
@@ -408,6 +408,6 @@ describe("<NotificationRow /> feedback draft rows", () => {
 
     view.rerender(rowTree(buildRow({ resolvedAt: 5_000 }), vi.fn()));
 
-    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(1);
   });
 });

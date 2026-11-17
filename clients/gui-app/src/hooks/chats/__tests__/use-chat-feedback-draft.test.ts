@@ -19,7 +19,7 @@ import {
   feedbackDraftRefusalMessage,
   useChatFeedbackDraftDecideMutation,
   useChatFeedbackDraftDecisionState,
-  useRetireFeedbackDraftDecision,
+  useSettleFeedbackDraftDecision,
 } from "../use-chat-feedback-draft";
 
 describe("feedbackDraftRefusalMessage", () => {
@@ -192,7 +192,7 @@ describe("feedback draft decision state", () => {
     useFeedbackDraftDecisionStore.setState({
       sessionId: null,
       decisions: new Map(),
-      resolved: new Set(),
+      settled: new Set(),
     });
   });
   afterEach(() => {
@@ -207,14 +207,14 @@ describe("feedback draft decision state", () => {
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
   });
 
-  it("drops the held decision once the draft's row has resolved", async () => {
+  it("drops the held decision once the draft's transcript settled", async () => {
     const harness = buildHarness(() => SENT);
     await decideFromClosedCard(harness);
     const row = mountReader(harness);
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
 
     renderHook(
-      () => useRetireFeedbackDraftDecision(harness.client, DRAFT, true),
+      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, true),
       { wrapper: harness.wrapper },
     );
 
@@ -320,7 +320,7 @@ describe("feedback draft decision state", () => {
     expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
   });
 
-  it("holds nothing for an answer that lands after the draft's row resolved", async () => {
+  it("holds nothing for an answer that lands after the draft's transcript settled", async () => {
     const held = heldDecision();
     const harness = buildHarness(held.handler);
     const card = renderHook(
@@ -330,7 +330,7 @@ describe("feedback draft decision state", () => {
     const decided = card.result.current.mutateAsync(DECIDE_REQUEST);
     await advance(1_000);
     renderHook(
-      () => useRetireFeedbackDraftDecision(harness.client, DRAFT, true),
+      () => useSettleFeedbackDraftDecision(harness.client, DRAFT, true),
       { wrapper: harness.wrapper },
     );
 
