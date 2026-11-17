@@ -378,6 +378,36 @@ export function mayHaveReachedHost(error: unknown): boolean {
 }
 
 /**
+ * Failures that are the HOST's own answer: the error envelope of a response
+ * frame, marked where the session builds it. Every other `HostRpcError` a
+ * session rejects with is unmarked, whether this side raised it before
+ * dispatch (a version floor it refuses, a refusal it remembers for the
+ * connection, a degrade it answers locally, a request it cannot project or
+ * enqueue) or the request had already been sent (an answer it could not
+ * read, a fatal that ended the pending request, a post-send transport
+ * failure). Many share the class, and often the code, of an answer. Keyed by
+ * identity, like `reachedHostFailures`.
+ */
+const targetAnswers = new WeakSet<HostRpcError>();
+
+/** Records that `error` is the host's own answer to the request. */
+export function markTargetAnswer(error: HostRpcError): void {
+  targetAnswers.add(error);
+}
+
+/**
+ * Whether `error` is a marked response-frame error envelope: the host's own
+ * answer to the request. `false` says only that it is not one - never that the
+ * request was not sent; `mayHaveReachedHost` answers that. A caller that must
+ * not read a failure this side met as "the host said no" - a keyed resend of a
+ * request that may already have run there - asks this rather than the class or
+ * the code.
+ */
+export function isTargetAnswer(error: unknown): boolean {
+  return error instanceof HostRpcError && targetAnswers.has(error);
+}
+
+/**
  * A refusal decided before any frame of this attempt was written.
  *
  * A `HostTransportFailureError` with null `fatalDetails` reads as having

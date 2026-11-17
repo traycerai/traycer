@@ -54,6 +54,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markTargetAnswer,
   negotiatedVersionMeetsRequirement,
   transportFailureBeforeSend,
   RetryableTransportError,
@@ -4733,13 +4734,13 @@ export class RemoteSession<
           parsed.data.error.message,
         );
       }
-      entry.reject(
-        HostRpcError.fromWireEnvelope(
-          parsed.data.error,
-          entry.requestId,
-          entry.method,
-        ),
+      const answer = HostRpcError.fromWireEnvelope(
+        parsed.data.error,
+        entry.requestId,
+        entry.method,
       );
+      markTargetAnswer(answer);
+      entry.reject(answer);
       return;
     }
     try {

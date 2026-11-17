@@ -676,7 +676,9 @@ import {
 import {
   hostAgentCreateFromRemoteSenderV10,
   hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderV12,
   hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+  hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -11992,7 +11994,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "host.agent.createFromRemoteSender": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostAgentCreateFromRemoteSenderV10,
@@ -12002,6 +12004,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: hostAgentCreateFromRemoteSenderV11,
           upgradeFromPreviousVersion:
             hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostAgentCreateFromRemoteSenderV12,
+          upgradeFromPreviousVersion:
+            hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
