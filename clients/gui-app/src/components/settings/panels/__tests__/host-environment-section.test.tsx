@@ -553,7 +553,7 @@ describe("HostEnvironmentSection", () => {
     }
     expect(
       within(dialog).getByText(
-        "Any member of the team can claim this computer as their own.",
+        "Any Admin or Editor of the team can claim this computer as their own.",
       ),
     ).toBeTruthy();
     expect(

@@ -3,6 +3,7 @@ import type {
   EnvironmentMovePlanResponseV20,
   EnvironmentMoveStageResponse,
 } from "@traycer/protocol/host/environment/move-contracts";
+import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 export const GIVE_TEAM_ID = "2b7e9d10-4c5a-4f6e-8d3b-a1c2e3f40516";
@@ -15,7 +16,7 @@ export const GIVE_PLAN: EnvironmentMovePlanResponseV20 = {
   planHash: GIVE_PLAN_HASH,
   planRevision: 1,
   hostVersion: "1.5.0",
-  disclosureVersion: 2,
+  disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
   rows: {
     moves: [],
     staysOnThisComputer: [],
@@ -44,7 +45,7 @@ export function giveStageFixture(args: {
       targetKind: "team",
       environmentId: args.environmentId,
       teamId: args.teamId,
-      disclosureVersion: 2,
+      disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     },
     authorization: { disclosureHash: GIVE_DISCLOSURE_HASH },
   };

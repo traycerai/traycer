@@ -219,7 +219,10 @@ import type {
 } from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
-import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
+import {
+  TEAM_TRANSFER_DISCLOSURE,
+  TEAM_TRANSFER_DISCLOSURE_VERSION,
+} from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
@@ -289,7 +292,7 @@ function movePlan() {
     planHash: MOVE_PLAN_HASH,
     planRevision: 3,
     hostVersion: "1.2.3",
-    disclosureVersion: 2,
+    disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     rows: {
       moves: [],
       staysOnThisComputer: [],
@@ -327,7 +330,7 @@ function moveStage(params: unknown) {
       targetKind: "team",
       environmentId: target.environmentId,
       teamId: target.teamId,
-      disclosureVersion: 2,
+      disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     },
     authorization: { disclosureHash: MOVE_DISCLOSURE_HASH },
   });

@@ -27,6 +27,7 @@ import {
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import { RETIRED_SAME_NAME_IN_PERSONAL_ROWS } from "@traycer/protocol/host/released-wire-rows";
+import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 
 const emptyRequestSchema = lazySchema(() => z.object({}));
 
@@ -503,7 +504,7 @@ export const environmentMoveStageResponseSchema = lazySchema(() =>
         targetKind: z.literal("team"),
         environmentId: z.string().min(1),
         teamId: z.uuid(),
-        disclosureVersion: z.literal(2),
+        disclosureVersion: z.literal(TEAM_TRANSFER_DISCLOSURE_VERSION),
       }),
       authorization: z.object({ disclosureHash: sha256HexSchema }),
     }),

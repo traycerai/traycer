@@ -11,6 +11,7 @@ import type {
   EnvironmentMoveStageResponse,
   EnvironmentMoveStartRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
+import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import {
   runEnvironmentMove,
   type EnvironmentMoveAcceptance,
@@ -50,7 +51,7 @@ function teamStage(
       targetKind: "team",
       environmentId: "env-team",
       teamId: TEAM_ID,
-      disclosureVersion: 2,
+      disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     },
     authorization: { disclosureHash: DISCLOSURE_HASH },
   };

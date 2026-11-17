@@ -15,6 +15,7 @@ import {
   hostRemoteAccessSetV20,
 } from "@traycer/protocol/host/environment-contracts";
 import { environmentPreviewLocalFactsV10 } from "@traycer/protocol/host/environment/contracts";
+import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 
 const UUID = "123e4567-e89b-42d3-a456-426614174000";
 const HASH = "a".repeat(64);
@@ -48,7 +49,7 @@ function stageAnswer(kind: "personal" | "team") {
           targetKind: "team" as const,
           environmentId: "env-team",
           teamId: UUID,
-          disclosureVersion: 2 as const,
+          disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
           unexpected: true,
         },
         authorization: { disclosureHash: HASH },
@@ -223,7 +224,9 @@ describe("dormant move call contracts", () => {
         "sharingGeneration",
       ].sort(),
     );
-    expect(teamRequest.disclosureVersion).toBe(2);
+    expect(teamRequest.disclosureVersion).toBe(
+      TEAM_TRANSFER_DISCLOSURE_VERSION,
+    );
   });
 
   it("upgrades a parsed status@1.2 answer without changing it except for move", () => {
@@ -242,7 +245,7 @@ describe("dormant move call contracts", () => {
     expect(() =>
       environmentMoveStageV10.responseSchema.parse({
         ...answer,
-        evidence: { ...answer.evidence, disclosureVersion: 3 },
+        evidence: { ...answer.evidence, disclosureVersion: 2 },
       }),
     ).toThrow();
     const personal = stageAnswer("personal");

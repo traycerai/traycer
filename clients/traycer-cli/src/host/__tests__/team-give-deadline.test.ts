@@ -12,6 +12,7 @@ import {
 import type { HostPidMetadata } from "../pid-metadata";
 import type { HealthProbeOptions } from "../../service/health-probe";
 import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
+import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import {
   environmentMoveOutcomeAnswerSchema,
   environmentMovePlanResponseSchemaV20,
@@ -226,7 +227,7 @@ function movePlan() {
     planHash: "a".repeat(64),
     planRevision: 3,
     hostVersion: "1.2.3",
-    disclosureVersion: 2,
+    disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     rows: {
       moves: [],
       staysOnThisComputer: [],
@@ -252,7 +253,7 @@ function moveStage() {
       targetKind: "team",
       environmentId: TARGET_ENVIRONMENT_ID,
       teamId: TEAM_ID,
-      disclosureVersion: 2,
+      disclosureVersion: TEAM_TRANSFER_DISCLOSURE_VERSION,
     },
     authorization: { disclosureHash: "b".repeat(64) },
   });
