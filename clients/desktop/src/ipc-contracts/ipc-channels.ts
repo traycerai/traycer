@@ -93,17 +93,16 @@ export const RunnerHostInvoke = {
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
-  // The environment directory (traycer-server `/api/environments`), same reason.
+  // The environment directory (`/api/environments`), same reason.
   listEnvironments: "runnerHost:environments:list",
-  // The account's auto-approve policy (traycer-server `/api/traycer/auto-policy`), same reason.
+  // The account's auto-approve policy (`/api/traycer/auto-policy`), same reason.
   saveAutoPolicy: "runnerHost:autoPolicy:save",
-  // A task's team-environment attachment (traycer-server `/api/tasks/environment-attachment`), same reason.
+  // A task's team-environment attachment (`/api/tasks/environment-attachment`), same reason.
   attachTaskEnvironment: "runnerHost:tasks:attachEnvironment",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
   getTraycerModels: "runnerHost:traycer:models",
-  // A team's chat auto-archive setting, read and saved.
   getTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:get",
   setTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:set",
   // The voice session routes (traycer-server `/api/voice/sessions`): the SDP
@@ -132,7 +131,7 @@ export const RunnerHostInvoke = {
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
   setSlackAppDms: "runnerHost:slackApps:dms",
-  // A bot's settings (traycer-server `/api/bots/*`), for the same reason.
+  // A bot's settings (`/api/bots/*`), for the same reason.
   updateBotRunSettings: "runnerHost:bots:updateRunSettings",
   updateBotReplyMode: "runnerHost:bots:updateReplyMode",
   deleteBot: "runnerHost:bots:delete",

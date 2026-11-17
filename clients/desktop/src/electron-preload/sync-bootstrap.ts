@@ -20,7 +20,6 @@ export function readSyncNumber(channel: string, fallback: number): number {
   return syncNumberOf(ipcRenderer.sendSync(channel), fallback);
 }
 
-/** {@link readSyncNumber} for a read that names what it is asking about. */
 export function readSyncNumberFor(
   channel: string,
   argument: string,

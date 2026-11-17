@@ -235,8 +235,6 @@ describe("local browser.sessions ownership changes", () => {
     expect(client.isClosed()).toBe(true);
     expect(session.closed).toBe(true);
 
-    // The next real registry open resolves the now-known team owner. The
-    // production jar selector refuses it before a second socket is born.
     harness.registry.open(WINDOW_ID, OPEN_REQUEST);
     await vi.waitFor(() =>
       expect(harness.openTransport).toHaveBeenCalledTimes(2),

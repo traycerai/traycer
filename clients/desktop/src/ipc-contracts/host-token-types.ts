@@ -35,12 +35,8 @@ export interface HostTokenRenewReply extends HostTokenEraReply {
 export const NO_ISSUED_HOST_TOKEN_ERA = -1;
 
 /**
- * The renderer's reach into main's host-only tokens. Main mints with the
- * sign-in token it already holds, so nothing here carries one.
- *
- * Main's era is the only one. `era` reads it, synchronously. Every request
- * names the era its work began in, and main keeps nothing for a request whose
- * era has moved.
+ * Main mints with the sign-in it holds, so nothing here carries one. Every request
+ * names the era its work began in; main keeps nothing for one whose era has moved.
  */
 export interface HostTokensBridgeSurface {
   era(userId: string): number;
