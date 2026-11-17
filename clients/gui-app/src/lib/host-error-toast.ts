@@ -829,6 +829,8 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   // A start named an account a person removed: the pin's own words, never
   // the computer's text, which carries the profile id.
   if (error.code === "removed-by-person") return REMOVED_PROFILE_PIN_TEXT;
+  // The host refused an account its environment holds, in its own words.
+  if (error.code === "environment-managed") return error.message;
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
   }
