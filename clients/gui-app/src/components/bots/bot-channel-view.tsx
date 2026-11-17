@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
@@ -141,7 +140,6 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
-import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
 import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
@@ -407,7 +405,6 @@ export function BotChannelView(props: {
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
-  const background = useChannelBackground(botId);
   const conversations = useBotConversationListQuery(client, botId, true);
   const channel = useMemo(
     () =>
@@ -907,17 +904,9 @@ export function BotChannelView(props: {
                 railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
             >
-              {/* The message area: where a chosen background tints the
-                  channel. The dock below it (the replying strip, the
-                  routing card and the box) keeps the page's own. */}
               <div
                 data-testid="bot-channel-messages"
-                data-channel-background={background.index}
-                style={{ "--channel-tint": background.color } as CSSProperties}
-                className={cn(
-                  "flex min-h-0 flex-1 flex-col",
-                  background.className,
-                )}
+                className="flex min-h-0 flex-1 flex-col"
               >
                 <ChannelSearchBack
                   botId={botId}

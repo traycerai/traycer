@@ -19,7 +19,6 @@ import {
   BotLooksContext,
   type BotLooks,
 } from "@/hooks/bots/use-bot-appearance";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
@@ -49,7 +48,6 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
-  BOT_APPEARANCE_UNRECOGNISED,
   type BotAppearance,
   type BotReadCursorAdvanceRequest,
   type BotNotificationLevel,
@@ -697,47 +695,23 @@ afterEach(() => {
 });
 
 describe("<BotChannelView tiles={null} /> channel background", () => {
-  const TINT_CLASS = "bg-(--channel-tint)/10";
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   it.each([false, true])(
-    "tints the message area, and only it, with the chosen colour (dark: %s)",
+    "keeps the page's own colour in the message area and everywhere else though the bot saved a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       mountBackground = 11;
       mount({ openThreadPostId: "post-1" });
 
       const area = screen.getByTestId("bot-channel-messages");
-      expect(area.classList.contains(TINT_CLASS)).toBe(true);
-      expect(area.getAttribute("data-channel-background")).toBe("11");
-      expect(area.style.getPropertyValue("--channel-tint")).toBe(
-        botColorAt(11),
-      );
-      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
-      // The composer and the thread panel sit outside it.
-      expect(
-        within(area).queryByTestId("stub-bot-channel-composer"),
-      ).toBeNull();
-      const panel = screen.getByTestId("bot-thread-panel");
-      expect(area.contains(panel)).toBe(false);
-      expect(panel.closest(`[data-channel-background]`)).toBeNull();
-      expect(
-        screen
-          .getByTestId("stub-bot-channel-composer")
-          .closest(`[data-channel-background]`),
-      ).toBeNull();
-    },
-  );
-
-  it.each([null, BOT_APPEARANCE_UNRECOGNISED] as const)(
-    "keeps the page's own message area when the background is %s",
-    (background) => {
-      mountBackground = background;
-      mount({ openThreadPostId: null });
-
-      const area = screen.getByTestId("bot-channel-messages");
-      expect(area.classList.contains(TINT_CLASS)).toBe(false);
       expect(area.hasAttribute("data-channel-background")).toBe(false);
       expect(area.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(area.className).not.toContain("channel-tint");
+      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
+      expect(document.body.querySelector(TINT)).toBeNull();
     },
   );
 });

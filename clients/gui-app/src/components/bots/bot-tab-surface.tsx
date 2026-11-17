@@ -18,7 +18,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -54,11 +53,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import {
-  BotLooksContext,
-  botLooksOf,
-  useChannelBackground,
-} from "@/hooks/bots/use-bot-appearance";
+import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -2157,7 +2152,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     props.level2 === "menu" || props.level2 === "bar"
       ? (botHeaderSlot?.target ?? null)
       : null;
-  const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
@@ -2216,12 +2210,9 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       ref={setHeader}
       hidden={threadHasFocus}
       data-testid="bot-channel-header"
-      data-channel-background={background.index}
-      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && titleTarget === null && "pt-3",
-        background.className,
       )}
     >
       {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
