@@ -10,6 +10,7 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   isHarnessRowSignedOut,
   isProviderAmbientSignedOut,
+  soleSignedInProfileForSignedOutTerminal,
 } from "@/lib/providers/provider-ambient-auth";
 import {
   providerSetupActionPlacement,
@@ -72,7 +73,11 @@ export function PickerProviderAuthLine(props: {
   /** Closes the picker without opening anything else. */
   readonly onClosePicker: () => void;
 }): ReactNode {
-  const verdict = pickerAuthLineVerdict(props.state, props.harness);
+  const verdict = pickerAuthLineVerdict(
+    props.state,
+    props.harness,
+    "provider",
+  );
   switch (verdict.kind) {
     case "hidden":
       return null;
@@ -105,7 +110,11 @@ export function PickerTerminalSetupGuidance(props: {
   readonly onClosePicker: () => void;
 }): ReactNode {
   if (props.selectedProfile?.kind !== "ambient") return null;
-  const verdict = pickerAuthLineVerdict(props.state, props.harness);
+  const verdict = pickerAuthLineVerdict(
+    props.state,
+    props.harness,
+    "terminal-row",
+  );
   if (verdict.kind !== "setup") return null;
   return (
     <SetupGuidanceRow
@@ -140,6 +149,7 @@ type PickerAuthLineVerdict =
 function pickerAuthLineVerdict(
   state: ProviderCliState | null,
   harness: GuiHarnessCatalogEntry | null,
+  scope: PickerAuthLineScope,
 ): PickerAuthLineVerdict {
   const providerId = resolveProviderId(state, harness);
   if (providerId === null || !isEnabled(state, harness)) {
@@ -148,7 +158,7 @@ function pickerAuthLineVerdict(
   const catalogSignedOut =
     harness !== null &&
     isProviderSignedOutCatalogError(providerId, harness.modelsError);
-  if (catalogSignedOut || isSignedOut(state, harness)) {
+  if (catalogSignedOut || isSignedOut(state, harness, scope)) {
     // Whether a terminal sign-in applies is the host's call, read from the
     // `providers.list` row; a row that has not resolved reads as "not yet".
     const setup = resolveProviderTerminalSetup(providerId, state);
@@ -185,11 +195,25 @@ function isEnabled(
   return harness !== null && harness.enabled;
 }
 
-// The two separately-timed verdicts the rail's degraded treatment reads.
+// What the verdict speaks for: the provider as a whole, or the Terminal row
+// itself, whose own signed-out verdict stands whatever else can run a turn.
+type PickerAuthLineScope = "provider" | "terminal-row";
+
+// The two separately-timed verdicts the rail's degraded treatment reads. For
+// the provider as a whole they yield to the one signed-in managed profile a
+// new chat runs on while the Terminal login is signed out, as the rail does.
 function isSignedOut(
   state: ProviderCliState | null,
   harness: GuiHarnessCatalogEntry | null,
+  scope: PickerAuthLineScope,
 ): boolean {
+  if (
+    scope === "provider" &&
+    state !== null &&
+    soleSignedInProfileForSignedOutTerminal(state) !== null
+  ) {
+    return false;
+  }
   return (
     (state !== null && isProviderAmbientSignedOut(state)) ||
     (harness !== null && isHarnessRowSignedOut(harness))
