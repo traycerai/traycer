@@ -45,11 +45,10 @@ export async function readProvidersList(): Promise<ProvidersListResponse> {
 export type ProviderListState = ProvidersListResponse["providers"][number];
 
 /**
- * The row of one provider that `id` names: the one row whose own `profileId`
- * it is or whose `aliases` (the ids of rows folded into it) hold it. An id
- * that more than one row lists is not guessed. Null when no row or several
- * rows list it, so the caller keeps what it does today for an id it cannot
- * find.
+ * The row of one provider that `id` names: the one row whose own `profileId` it
+ * is or whose `aliases` (the ids of rows folded into it) hold it. An id that
+ * more than one row lists is not guessed: null when no row or several rows list
+ * it.
  */
 export function findProfileByIdOrAlias(
   profiles: readonly ProviderProfile[],
@@ -63,10 +62,10 @@ export function findProfileByIdOrAlias(
 }
 
 /**
- * The listed row `id` names under `providerId`, read from `providers.list`
- * the moment before a change is sent. Null when the provider or the row is
- * not listed; the caller then sends `id` as typed, as it always has, and the
- * host's answer for a missing profile is what the person sees.
+ * The listed row `id` names under `providerId`, read from `providers.list` the
+ * moment before a change is sent. Null when the provider or the row is not
+ * listed; the caller then sends `id` as typed, and the host's answer for a
+ * missing profile is what the person sees.
  */
 export async function readListedProfile(
   providerId: ProviderId,

@@ -24,8 +24,7 @@ import type {
   CommandResult,
 } from "../runner/runner";
 
-// The confirm line is the app's claim sentence; the question, its answers,
-// the refusals and the help text are boards C17 and C30.
+// The confirm line is the app's claim sentence.
 const CLAIM_WORDS = {
   confirm: "This computer will become yours. The team will lose access to it.",
   question: "Claim it as your own? [y/N] ",
@@ -44,7 +43,7 @@ const CLAIM_WORDS = {
 } as const;
 
 export interface HostClaimArgs {
-  /** Skips the question, for scripts (board C17). */
+  /** Skips the question, for scripts. */
   readonly yes: boolean;
 }
 

@@ -8,11 +8,9 @@ import type { CliHostTokenFailure } from "./cli-host-tokens";
 
 /**
  * Every line the CLI prints when a host's door, or authn's mint of a host-only
- * token, refuses it. One place, so a ruling on any of them changes one line.
- *
- * Only words already in the CLI or ruled for it are here. A refusal the owner
- * has not yet worded prints its command's generic line, with no server text
- * from authn and never sign-in advice for a person who is signed in.
+ * token, refuses it, in one place. A refusal with no worded line prints its
+ * command's generic line, with no server text from authn and never sign-in
+ * advice for a person who is signed in.
  */
 
 /** Printed only when this machine holds no usable sign-in. */
@@ -38,15 +36,14 @@ export const HOST_OWNERSHIP_UNCONFIRMED_MESSAGE =
 export const AUTHN_UNREACHABLE_MESSAGE =
   "Could not reach the authn service; check your network.";
 
-/** The owner's ruling 2 of 14 Nov: an older host, never a login. */
+/** An older host, never a login. */
 export const OLDER_HOST_MESSAGE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";
 
 /**
- * authn's refusals of a mint the owner has not worded yet: a computer that is
- * not this person's, a frozen sandbox, and authn unreachable. Nothing authn
- * sent is printed. Empty until ruled; the runner then prints `error: ` and the
- * code.
+ * authn's refusals of a mint that have no worded line: a computer that is not
+ * this person's, a frozen sandbox, and authn unreachable. Nothing authn sent is
+ * printed. Empty, so the runner prints `error: ` and the code.
  */
 export const UNWORDED_MINT_REFUSAL_MESSAGE = "";
 
@@ -84,8 +81,8 @@ export function olderHostCliError(): CliError {
  *   sign-in during this call's recovery. Only this case, and a machine with
  *   no sign-in at all, gives sign-in advice.
  * - `older-host`: no reason, on a non-retryable refusal of the token itself.
- * - `unworded`: every reason the owner has not worded. The command prints its
- *   own line for an unexpected host error, never sign-in advice and never the
+ * - `unworded`: every reason with no worded line. The command prints its own
+ *   line for an unexpected host error, never sign-in advice and never the
  *   epic-access line.
  *
  * `null`: not the door's refusal; the command's own arms decide. A reason
@@ -108,11 +105,9 @@ export function hostDoorRefusalKind(
 /**
  * A command's line for a door refusal ({@link hostDoorRefusalKind}), or `null`
  * when the refusal is not the door's. `generic` is the command's own line for
- * an unexpected host error.
- *
- * The owner's board on the door's reasons words `not_admitted`,
- * `keys_unavailable`, `clock_skew`, `enrolment_broken`, `membership_removed`
- * and `host_claimed`; those arms go here, and print `generic` until then.
+ * an unexpected host error, printed for `not_admitted`, `keys_unavailable`,
+ * `clock_skew`, `enrolment_broken`, `membership_removed` and `host_claimed`
+ * until each has words of its own.
  */
 export function hostDoorRefusalCliError<Generic extends Error>(
   refusal: FatalErrorDetails,

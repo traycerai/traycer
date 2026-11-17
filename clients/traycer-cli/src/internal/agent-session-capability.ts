@@ -16,10 +16,9 @@ import type {
  * Every use of the value is in this module. It is opaque: read by its name,
  * never parsed, printed or logged. The supplied UUID is immutable for its
  * session/runtime generation and dies when the host releases that generation,
- * so nothing here renews it: a
- * refusal of it is final. It goes only to the loopback host the pid file
- * names, as the token every frame already carries, and never to authn, a
- * mint or a provisioning call.
+ * so nothing here renews it: a refusal of it is final. It goes only to the
+ * loopback host the pid file names, as the token every frame already carries,
+ * and never to authn, a mint or a provisioning call.
  */
 const AGENT_SESSION_CAPABILITY_VARIABLE = "TRAYCER_AGENT_SESSION_CAPABILITY";
 

@@ -771,7 +771,7 @@ function acceptPastedCode(
  * asked for again a few times rather than read as a failure. An unfinished
  * answer carrying `signInRequest` is recorded at authn and asked again with
  * `recordedOperationId`; a recording that ends returns that answer, which
- * reads as today's "did not complete".
+ * reads as "did not complete".
  */
 async function awaitUntilSettled(
   io: ProfileLoginIo,

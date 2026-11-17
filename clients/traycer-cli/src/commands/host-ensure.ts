@@ -86,24 +86,16 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     ): Promise<CommandResult> => {
       const teamSession = attended?.kind === "give" ? attended.session : null;
       try {
-        // This command can install + register + START a host (three of its four
-        // actions), so it owns the same sign-in pre-flight and post-start
-        // credential provisioning as `host install` and `host service install` -
-        // see install-auth.ts for the start-capable command inventory.
-        //
-        // Unlike those two, ensure is idempotent and its FOURTH action is a
-        // no-op, so the pre-flight cannot run unconditionally: the desktop calls
-        // ensure on every launch, and a signed-out operator whose host is
-        // already healthy would be prompted to sign in for a command that then
-        // does nothing. `beforeMutate` fires only once provisionHost has
-        // committed to installing/registering/starting - still outside the
-        // cli-lock and ahead of the staging download, so the inline sign-in
-        // neither extends the lock's critical section nor waits out a transfer.
-        //
-        // A no-op therefore leaves this at `not-checked`, which is the honest
-        // report: we never looked, so we make no claim either way about a host
-        // this run did not touch. Bytes-only mirrors host-install -
-        // `--no-service-register` starts nothing itself.
+        // This command can install, register and start a host, so it owns the same
+        // sign-in pre-flight and post-start credential provisioning as `host install`
+        // and `host service install` (install-auth.ts lists the start-capable
+        // commands). Its fourth action is a no-op, so the pre-flight cannot run
+        // unconditionally: the desktop calls ensure on every launch, and a signed-out
+        // operator with a healthy host would be prompted for nothing. `beforeMutate`
+        // fires only once provisionHost commits to installing, registering or
+        // starting: outside the cli-lock and ahead of the staging download. A no-op
+        // leaves this at `not-checked`: this run looked at nothing. Bytes-only mirrors
+        // host-install: `--no-service-register` starts nothing itself.
         let authPreflight: HostInstallAuthPreflight = attended?.session
           .preflight ?? {
           state: "not-checked",
@@ -142,27 +134,21 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
             }
           },
         });
-        // (A deliberate downgrade through `host ensure --release X` records its
-        // version hold inside `provisionHost`, at the committed-install boundary
-        // under the CLI lock - see `holdExplicitDowngrade` in `host/ensure.ts` and
-        // `host/provision.ts`. Nothing to reconcile here.)
-        // After ensureHost returns - and with it the cli-lock it took - exactly
-        // like host-install's post-lock probe. `serviceLifecycle` is non-null on
-        // every branch that started or cycled the service, so the two `"none"`
-        // cases below are both deliberate:
+        // A downgrade's version hold is recorded inside `provisionHost`, at the
+        // committed-install boundary under the CLI lock (`holdExplicitDowngrade` in
+        // `host/ensure.ts`); nothing to reconcile here.
+        // Probed after ensureHost returns (and its cli-lock with it), like
+        // host-install's post-lock probe. Two `"none"` cases are deliberate:
         //   - `serviceLifecycle === null` is the noop branch: already installed,
-        //     registered AND running, so this command started nothing (and, per
-        //     `beforeMutate` above, never even ran the pre-flight). The host
-        //     keeps whatever provisioning state the command that installed it
-        //     left behind. Probing a host we did not start would re-run the mint
-        //     on every idempotent desktop call; an already-unprovisioned one
-        //     self-heals on the next minting client, the same argument that
-        //     keeps `host restart` unwired (install-auth.ts).
-        //   - `postSwapError !== null` means the post-swap start itself failed -
-        //     there is nothing listening to dial.
+        //     registered and running, so this command started nothing and ran no
+        //     pre-flight. Probing a host it did not start would re-run the mint on
+        //     every idempotent desktop call; an unprovisioned one self-heals on the
+        //     next minting client (the argument that keeps `host restart` unwired,
+        //     install-auth.ts).
+        //   - `postSwapError !== null`: the post-swap start failed, so nothing
+        //     listens to dial.
         // Read off the result rather than `serviceLifecycle.postSwapError`: both
-        // carry the same value on every branch provision.ts constructs, and the
-        // top-level field is what this file's human line already reads.
+        // carry the same value on every branch provision.ts constructs.
         const responsiveness = await readNoopHostResponsiveness(
           result,
           ctx.runtime.environment,
@@ -242,9 +228,9 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
                     ? `${human}; the computer was not added to the team`
                     : human,
           // An ensure whose post-swap start failed did not ensure anything is
-          // running, so it exits non-zero - the same rule as `host install`. The
-          // payload is unchanged: Desktop trusts a terminal `ok` line over a
-          // non-zero exit and already maps `postSwapError` to a failed converge.
+          // running, so it exits non-zero, the same rule as `host install`. Desktop
+          // trusts a terminal `ok` line over a non-zero exit and maps `postSwapError`
+          // to a failed converge.
           exitCode:
             result.postSwapError !== null ||
             (args.team !== null &&

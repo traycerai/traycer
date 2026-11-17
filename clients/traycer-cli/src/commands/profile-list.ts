@@ -28,8 +28,7 @@ const TERMINAL_ACCOUNT_LINE = "Terminal account on this computer";
 
 /**
  * The last three keys are present only when the computer says something
- * through them, so the row a computer that predates them answers with is
- * exactly the row it always was.
+ * through them, so a computer that predates them answers the row without them.
  */
 export interface ProfileListRow {
   readonly profileId: string;
