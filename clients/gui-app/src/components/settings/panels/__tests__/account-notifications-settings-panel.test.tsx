@@ -1,6 +1,7 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountNotificationSettingsResponse } from "@traycer-clients/shared/environment/account-notification-schemas";
+import { NEEDS_CONNECTION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 
 const hooks = vi.hoisted(() => ({
@@ -43,6 +44,16 @@ afterEach(() => {
 });
 
 describe("account Notifications settings", () => {
+  it("shows an empty hooks list before a notification row has been saved", () => {
+    hooks.response = { revision: null, settings: null };
+
+    render(<NotificationsSettingsPanel />);
+
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    expect(within(manager).getByText("0 hooks")).toBeTruthy();
+    expect(screen.queryByText(NEEDS_CONNECTION_MESSAGE.settings)).toBeNull();
+  });
+
   it("opens the account page with no computer selected or online", () => {
     hooks.response = {
       revision: 4,

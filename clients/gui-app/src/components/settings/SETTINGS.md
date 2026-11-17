@@ -4402,10 +4402,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       user action.
 - `Notifications` is the account's page. It reads and saves on the person's
   sign-in through `GET` / `PUT /api/v3/user/notification-settings`, without a
-  selected or connected computer. The four in-app severity switches send only
-  the renderer matrix and its row revision. A matrix save never reads or writes
-  the hooks column. The shared client re-reads after a revision conflict and
-  retries once. Successful saves refresh each already-connected computer once;
+  selected or connected computer. The shared client re-reads after a revision
+  conflict and retries once. Successful saves refresh each already-connected computer once;
   offline computers pick the change up through their ordinary account read.
   SMTP configuration, its password and the email matrix column stay local.
   Which kinds of notification interrupt is the device's, under Application →
