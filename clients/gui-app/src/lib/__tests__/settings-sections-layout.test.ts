@@ -101,8 +101,8 @@ describe("Layout section placement and digit reassignment", () => {
     const providersIndex = sections.findIndex(
       (section) => section.id === "providers",
     );
-    // The five desktop Account pages sit ahead of Providers.
-    expect(providersIndex).toBe(15);
+    // The four desktop Account pages sit ahead of Providers.
+    expect(providersIndex).toBe(14);
     for (const id of [
       "devices",
       "link-phone",
@@ -119,7 +119,6 @@ describe("Layout section placement and digit reassignment", () => {
       "sandboxes",
       "storage",
       "members",
-      "notifications",
       "host",
       "worktrees",
       "diagnostics",
@@ -171,11 +170,36 @@ describe("Layout section placement and digit reassignment", () => {
     ).toBe("personal");
   });
 
-  it("pushes host (Overview) to index 29, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 28, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(29);
+    expect(hostIndex).toBe(28);
+  });
+
+  it("no longer offers Notifications, and moves no leader digit by it", () => {
+    for (const mobile of [false, true]) {
+      setMobileApp(mobile);
+      expect(
+        visibleSettingsSections().map((section) => section.id),
+      ).not.toContain("notifications");
+    }
+    // It sat in Account, past the digit range, so every digit still lands on
+    // the page it did (with the soundtrack offered, as in this file's default).
+    setMobileApp(false);
+    const ids = visibleSettingsSections().map((section) => section.id);
+    expect(ids.slice(0, SINGLE_DIGIT_LEADER_INDEX_LIMIT)).toEqual([
+      "getting-started",
+      "general",
+      "appearance",
+      "browser",
+      "opening-behavior",
+      "app-notifications",
+      "alerts",
+      "keybindings",
+      "layout",
+      "app-diagnostics",
+    ]);
   });
 
   it("keeps the first ten sections within the single-digit range", () => {

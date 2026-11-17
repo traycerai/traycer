@@ -35,7 +35,6 @@ SettingsLayout
         ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
-        ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
         ├── FallbackSettingsPanel
         ├── KeybindingsSettingsPanel
@@ -484,12 +483,11 @@ different answers:
   is registered with `hostScope: "connecting"`, so the executor has proved the
   anchor lands while the host has no usable client.
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
-  host runtime and a successful first read of the browser bridge; host
-  Notifications' two groups, which the page's scope gate conceals while the
-  host connects or is unreachable and drops for a vanished host; and every
-  Fallback group, behind the same kind of scope gate and rendered only once
-  the host answers the policy read) — not entries either: they contribute to
-  the General, host Notifications and Fallback page entries.
+  host runtime and a successful first read of the browser bridge; and every
+  Fallback group, behind a scope gate that conceals it while the host
+  connects or is unreachable and drops it for a vanished host, rendered only
+  once the host answers the policy read) — not entries either: they
+  contribute to the General and Fallback page entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
@@ -706,10 +704,9 @@ Supporting pieces, all viewport-agnostic where possible:
   Rows that are two columns from their own markup rather than through
   `SettingsRow` - the Shell panel's program and startup-flags rows,
   Diagnostics' memory and log-detail rows, the host identity/updates rows, the
-  worktree branch-prefix row, the Skills header and the notification-hook rows
-  - apply it directly. Without a floor the control keeps its intrinsic width
-    and the label takes what is left, which on a phone is a sliver: a two-word
-    label breaks one word per line.
+  worktree branch-prefix row and the Skills header - apply it directly. Without a floor the control keeps its intrinsic width
+  and the label takes what is left, which on a phone is a sliver: a two-word
+  label breaks one word per line.
 - `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
   (switches) stay inline while wide controls wrap below the label on narrow
   containers; `SETTINGS_ROW_STACK` raises that floor below `md` so the split
@@ -942,8 +939,8 @@ Account; the rest is the app itself.
 - **Application** - General, Appearance, Browser, Opening behavior, Sounds
   (only in a build with a soundtrack), Alerts, Keybindings, Layout,
   Diagnostics.
-- **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
-  and Delete account on mobile. Read through the window's own host, never
+- **Account** - Sessions, Link mobile app, Usage, Credits, and Delete
+  account on mobile. Read through the window's own host, never
   through the picker. The list is headed **Signed-in sessions**, with "Browser,
   desktop, CLI, extension, and host access for this account." A row's heading
   is **This session** or **Session**. The client kind is an outline badge
@@ -1026,6 +1023,10 @@ Model routing, Variables and shells, Agent selection, Permissions and
 Notifications left the Host group; only their group did. Browser agent access
 moved out of Browser into its own section, `browser-agent-access`, and then
 into Permissions; agent definitions became the Agents page's Definitions tab.
+Notifications (`notifications`) is retired with notification hooks, the last
+thing it held: its route, a remembered section and a host's "hooks removed"
+row all open Alerts (`RETIRED_SECTION_REPLACEMENTS`), and it has no search
+entries. The hooks' wire methods stay registered for released peers.
 
 Sandboxes (`sandboxes`) names the environment once in its header. Editors see
 the shape, idle and removal controls with **Save defaults** on arrival; viewers
@@ -4418,35 +4419,6 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       credential does not change which CLIs are installed, and re-probing every
       harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
       user action.
-- `Notifications` One `SettingsGroup` card, the hooks manager, which owns
-  the page's whole height. The per-severity switches that once sat above it
-  are gone (which kinds interrupt is the device's, on Application → Alerts,
-  and the panel no longer reads or writes `host.notifications.getConfig` /
-  `setConfig`; those wire methods stay), and so is the long-turn alert,
-  whose method pair was removed from the protocol before any release
-  carried it.
-  - **`"Notification hooks"`** (`notification-hooks-section.tsx`): a toolbar
-    (hook count, a copy-config-path chip, Refresh, Add hook) over a row list
-    that owns the remaining height (`fillHeight` on the shell +
-    `min-h-0 flex-1` down the tree - only the row list scrolls, the toolbar
-    stays pinned). The config-path chip consumes the toolbar width left after
-    the count and actions, truncating only when that real remaining width is
-    exhausted. The no-hooks state fills and centers within the list viewport.
-    Each row shows name, a Script/HTTP type badge, destination,
-    severity filter (or "Every severity"), latest test result, an inline
-    enabled `Switch`, and inline **Test / Edit / Delete** buttons (not a row
-    action menu) - Delete confirms via `ConfirmDestructiveDialog`. Edit/Add
-    open the pre-existing hook editor dialog (`notification-hook-editor-
-dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
-    States: a loading spinner; a neutral "unavailable, reconnect" message when
-    the host is unreachable; the query's own error message; an empty state
-    with its own "Add hook" plus the toolbar's; and, when the hooks file
-    itself fails to parse, the row list is replaced by the parse error with
-    editing disabled while the config-path copy chip stays available (the
-    invalid file is never overwritten). A running test spins only on the
-    tested row, but the Test button on every OTHER row is also disabled while
-    any one test is in flight (the mutation is global, not per-row) - worth
-    knowing if this ever reads as a bug report.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents

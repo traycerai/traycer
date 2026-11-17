@@ -239,13 +239,6 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         return `request-${String(requestId)}`;
       },
       handlers: {
-        "host.notificationHooks.status": () => ({
-          configPath: "/home/me/.traycer/notification-hooks.json",
-          configError: null,
-          hooks: [],
-          configurationRevision: "rev-1",
-          pendingRemovalNotices: [],
-        }),
         "host.notifications.cloudFeed.markRead": async (params) => {
           calls.cloudMarkRead.push(params.entryId);
           cloudMarkReadConcurrency.live += 1;

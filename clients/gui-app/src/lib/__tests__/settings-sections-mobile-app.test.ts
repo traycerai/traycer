@@ -32,6 +32,7 @@ const RETIRED: ReadonlyArray<SettingsSectionId> = [
   "machine-setup",
   "agent-definitions",
   "browser-agent-access",
+  "notifications",
 ];
 
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));

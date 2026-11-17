@@ -199,8 +199,8 @@ function UsageSettingsPanelBody(props: {
 }
 
 /**
- * Direct-client entry point for tests - bypasses `useHostScope`, mirroring
- * `NotificationsSettingsPanelForClient`. Passes an EMPTY host-name map,
+ * Direct-client entry point for tests - bypasses `useHostScope`. Passes an
+ * EMPTY host-name map,
  * which is the honest shape without the settings shell around it: every host
  * id then renders through the truncated-id fallback, exactly as one absent
  * from a real directory would.
