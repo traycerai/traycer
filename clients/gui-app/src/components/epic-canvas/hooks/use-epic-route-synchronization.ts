@@ -502,6 +502,7 @@ export function useEpicRouteSynchronization(
         focusArtifactId,
         recordCount: records.length,
         requestOutrunsNestedRoute: focusRequestOutrunsNestedRoute,
+        canvasHoldsTiles,
       })
     ) {
       return;
@@ -988,6 +989,15 @@ function shouldSuppressLegacyAutoOpen(args: {
    * precedence alone.
    */
   readonly requestOutrunsNestedRoute: boolean;
+  /**
+   * Whether the canvas shows anything. A nested target on a canvas with no
+   * tiles can only name the empty opener pane, and the route gets one without
+   * anyone choosing it: the opener is seeded while the records are still on
+   * their way, and the nested-route effect writes the active pane into the
+   * URL. That target governs nothing a landing could override, so it does not
+   * stand a landing down. An explicit request keeps the precedence above.
+   */
+  readonly canvasHoldsTiles: boolean;
 }): boolean {
   const {
     nestedFocusEnabled,
@@ -995,11 +1005,15 @@ function shouldSuppressLegacyAutoOpen(args: {
     focusArtifactId,
     recordCount,
     requestOutrunsNestedRoute,
+    canvasHoldsTiles,
   } = args;
+  const landingOnEmptyCanvas =
+    focusArtifactId === undefined && !canvasHoldsTiles;
   if (
     nestedFocusEnabled &&
     nestedRouteTarget !== null &&
-    !requestOutrunsNestedRoute
+    !requestOutrunsNestedRoute &&
+    !landingOnEmptyCanvas
   ) {
     return true;
   }

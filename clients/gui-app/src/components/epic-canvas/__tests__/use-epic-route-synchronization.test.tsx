@@ -1373,6 +1373,54 @@ describe("useEpicRouteSynchronization", () => {
     expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
   });
 
+  // The desktop shape of the case above: with nested route focus on, the
+  // seeded opener pane is written into the route before the records arrive.
+  it("auto-opens the target when the route already names the seeded opener pane", async () => {
+    testState.nestedFocusEnabled = true;
+    testState.records = [];
+    setSinglePaneCanvas("pane-opener", [], null);
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const hook = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+    await waitFor(() => {
+      expect(testState.navigate).toHaveBeenCalled();
+    });
+    expect(lastNavigateSearchPatch()).toEqual({ focusPaneId: "pane-opener" });
+
+    const landed: EpicRouteFocusIntent = {
+      ...intent,
+      focusPaneId: "pane-opener",
+    };
+    hook.rerender(landed);
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+    testState.records = [{ id: "artifact-1" }];
+    hook.rerender(landed);
+
+    await waitFor(() => {
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { tabId: TAB_ID },
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+          }) as EpicCanvasTileRef,
+        }),
+      );
+    });
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves a canvas that already shows a tile alone when the records arrive", async () => {
     testState.records = [];
     setSinglePaneCanvas(
