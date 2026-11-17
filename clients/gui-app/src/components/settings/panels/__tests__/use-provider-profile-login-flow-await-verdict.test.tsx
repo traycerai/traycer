@@ -16,10 +16,10 @@ import {
   HostRequestControlFlowError,
   type HostRequestControlFlowReason,
 } from "@traycer-clients/shared/host-client/host-request-coordinator";
-import type {
+import {
   HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
@@ -135,6 +135,27 @@ function controlFlowRejection(
   );
 }
 
+const ENVIRONMENT_MANAGED_LINE =
+  "This account is managed by your environment — sign in there.";
+
+/** The host's refusal of an environment-held account, minted by the real
+ *  boundary from the typed host error the transport delivers. */
+function environmentManagedRejection(): Promise<AwaitLoginResponse> {
+  return withHostQueryErrorBoundary<AwaitLoginResponse>(
+    "providers.awaitLogin",
+    () =>
+      Promise.reject(
+        new HostRpcError({
+          code: "environment-managed",
+          message: ENVIRONMENT_MANAGED_LINE,
+          requestId: "request-environment-managed",
+          method: "providers.awaitLogin",
+          fatalDetails: null,
+        }),
+      ),
+  );
+}
+
 /** The same boundary applied to an ordinary failure (a transport error). */
 function transportRejection(): Promise<AwaitLoginResponse> {
   return withHostQueryErrorBoundary<AwaitLoginResponse>(
@@ -239,6 +260,11 @@ function LoginFlowHarness(props: {
       <div data-testid="flow-state">{flow.state.kind}</div>
       <div data-testid="flow-message">
         {flow.state.kind === "failed" ? flow.state.message : ""}
+      </div>
+      <div data-testid="flow-refusal">
+        {flow.state.kind === "failed" && flow.state.refusal !== null
+          ? "refusal"
+          : "none"}
       </div>
       <button
         type="button"
@@ -404,4 +430,22 @@ describe("useProviderProfileLoginFlow - an await that ends without a verdict", (
     expect(flowState()).toBe("cancelled");
     expect(awaitEndedCalls(warn)).toHaveLength(0);
   });
+
+  it.each<ProviderProfileLoginFlowMode>(["create", "reauth"])(
+    "%s mode ends on the host's own line when the host refuses the sign-in as environment-managed, with no provider refusal",
+    async (mode) => {
+      vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      renderFlow({
+        mode,
+        existingProfileId: mode === "reauth" ? "p-existing" : null,
+        awaitLoginImpl: () => environmentManagedRejection(),
+      });
+
+      await waitFor(() => expect(flowState()).toBe("failed"));
+      expect(screen.getByTestId("flow-message").textContent).toBe(
+        ENVIRONMENT_MANAGED_LINE,
+      );
+      expect(screen.getByTestId("flow-refusal").textContent).toBe("none");
+    },
+  );
 });
