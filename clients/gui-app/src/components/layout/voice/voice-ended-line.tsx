@@ -164,11 +164,15 @@ function refusalLine(refusal: VoiceRefusal, botTitle: string): string {
       return `Calls need an update on ${botTitle}'s host.`;
     case "voice-unconfirmed":
       return VOICE_UNCONFIRMED_LINE;
+    case "session-changed":
+      return SESSION_CHANGED_LINE;
   }
 }
 
 const VOICE_UNCONFIRMED_LINE =
   "We couldn't confirm the call's voice. Please start a new call.";
+const SESSION_CHANGED_LINE =
+  "The call's sign-in session changed. Start a new call to continue.";
 
 function endedLine(reason: VoiceEndReason, botTitle: string): string {
   switch (reason) {
@@ -192,6 +196,8 @@ function endedLine(reason: VoiceEndReason, botTitle: string): string {
       return "This call's voice is no longer available. Start a new call to choose another.";
     case "voice-unconfirmed":
       return VOICE_UNCONFIRMED_LINE;
+    case "session-changed":
+      return SESSION_CHANGED_LINE;
     case "ended":
       return "Call ended.";
   }

@@ -1790,7 +1790,7 @@ describe("<BotChannelSettingsPanel /> voice", () => {
       within(voice)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual(["Alloy", "Cedar", "MarinDefault"]);
+    ).toEqual(["Deployment default (Marin)", "Alloy", "Cedar", "Marin"]);
   });
 
   it("does not draw the Voice group when voice is not available on the deployment", () => {

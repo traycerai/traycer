@@ -14,6 +14,7 @@ import type {
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type { VoiceAvailabilityFetchResult } from "@traycer-clients/shared/host-client/voice-sessions";
 import { botPausedCopy } from "@/components/bots/bot-tab-open-state";
 import { useBotActivityForHost } from "@/hooks/bots/use-bot-activity";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
@@ -48,7 +49,10 @@ import {
   useVoiceShellLiveMutation,
 } from "@/hooks/voice/use-voice-session-mutations";
 import { voiceQueryKeys } from "@/lib/query-keys";
-import type { VoiceCallAuthority } from "@/lib/auth/auth-service";
+import type {
+  VoiceCallAuthority,
+  VoiceCallPrincipalChanged,
+} from "@/lib/auth/auth-service";
 import {
   useAuthService,
   useHostClient,
@@ -170,8 +174,8 @@ function callSendRequest(
  * - `credits`: the account cannot pay for a session.
  * - `voice-unavailable`: a renewal's voice is no longer offered.
  * - `voice-unconfirmed`: the answer did not confirm the voice asked for.
- * - `account`: the call's account is no longer the one signed in, so nothing
- *   was sent.
+ * - `session-changed`: the call's account is no longer the one signed in,
+ *   whatever the cause; nothing more of the call is sent or used.
  * - `unavailable`: anything else.
  */
 type AttemptFailure =
@@ -179,7 +183,7 @@ type AttemptFailure =
   | "unavailable"
   | "voice-unavailable"
   | "voice-unconfirmed"
-  | "account";
+  | "session-changed";
 
 /** How a live call that loses its session on `failure` ends. */
 function endReasonFor(failure: AttemptFailure | null): VoiceEndReason {
@@ -187,7 +191,7 @@ function endReasonFor(failure: AttemptFailure | null): VoiceEndReason {
     case "credits":
     case "voice-unavailable":
     case "voice-unconfirmed":
-    case "account":
+    case "session-changed":
       return failure;
     case "unavailable":
     case null:
@@ -200,9 +204,9 @@ function refusalFor(failure: AttemptFailure | null): VoiceRefusal {
   switch (failure) {
     case "credits":
     case "voice-unconfirmed":
+    case "session-changed":
       return failure;
     case "voice-unavailable":
-    case "account":
     case "unavailable":
     case null:
       return "unavailable";
@@ -247,13 +251,10 @@ export function CallController(): ReactNode {
   const auth = useAuthService();
   // Whether this deployment offers voice, read once per window before Call
   // is drawn; a dormant mint invalidates it, so the answer is read again.
-  // The voices it offers are read from the same answer as a call starts.
+  // The voices a call may ask for are not taken from it: each call reads
+  // them again as it starts, under its own account.
   const availability = useVoiceAvailabilityQuery(true);
   const available = availability.data?.available;
-  const voiceSelectionRef = useRef(availability.data?.voiceSelection ?? null);
-  useEffect(() => {
-    voiceSelectionRef.current = availability.data?.voiceSelection ?? null;
-  }, [availability.data]);
   useEffect(() => {
     if (available === undefined) return;
     useVoiceSessionStore
@@ -873,6 +874,23 @@ export function CallController(): ReactNode {
   }, [applyCapture, sayLine]);
 
   /**
+   * The call's voice, confirmed by a session's answer: every renewal asks for
+   * exactly it from now on, and a saved voice the server replaced with its
+   * default is said.
+   */
+  const freezeCallVoice = useCallback(
+    (voice: string, replaced: string | null) => {
+      voicePlanRef.current = { kind: "frozen", voice };
+      const store = useVoiceSessionStore.getState();
+      store.setAttestedVoice(voice);
+      if (replaced !== null) {
+        store.setVoiceNotice({ kind: "fallback", saved: replaced, voice });
+      }
+    },
+    [],
+  );
+
+  /**
    * Opens an engine on the current microphone, under the call's account. A
    * call's mint carries no input; its voice is the call's plan.
    */
@@ -901,6 +919,23 @@ export function CallController(): ReactNode {
           "PEER_FAILED",
           "The voice session was ended before it started.",
         );
+      /**
+       * The attempt failed before it started: it is taken away and settled.
+       * The first opening never was a call, so nothing ended. A replacement
+       * is the live call ending, with the reason its mint gave or else the
+       * connection it was running on. Either way no other session is asked
+       * for: the attempt's id is ended and the call is over.
+       */
+      const failAttempt = (): false => {
+        attemptRef.current = null;
+        attempt.cancelled = true;
+        let lastWords = NOTHING_LEFT;
+        if (firstOpeningRef.current)
+          refuseLocal(refusalFor(attempt.failure), null);
+        else lastWords = finishLocal(endReasonFor(attempt.failure));
+        void settleAttempt(attempt, lastWords);
+        return false;
+      };
       try {
         await attempt.engine.connect({
           micTrack,
@@ -925,6 +960,17 @@ export function CallController(): ReactNode {
                   void endRoute(result.session.voiceSessionId, authority);
                   throw closedBeforeStart();
                 }
+                // The account can change while the mint is out before
+                // anything else has seen it (a sign-out moves the identity
+                // before its storage settles): the answer is then not the
+                // call's to use, and its id is ended with the attempt.
+                if (!auth.isVoiceCallAuthorityLive(authority)) {
+                  attempt.failure = "session-changed";
+                  throw new VoiceEngineError(
+                    "EXCHANGE_FAILED",
+                    "the call's account changed while its session was minted",
+                  );
+                }
                 // Nothing is heard before the answer confirms the voice asked
                 // for: a session that does not is ended, and the call does not
                 // ask again.
@@ -940,17 +986,7 @@ export function CallController(): ReactNode {
                   );
                 }
                 if (confirmation.kind === "confirmed") {
-                  voicePlanRef.current = {
-                    kind: "frozen",
-                    voice: confirmation.voice,
-                  };
-                  if (confirmation.replaced !== null) {
-                    useVoiceSessionStore.getState().setVoiceNotice({
-                      kind: "fallback",
-                      saved: confirmation.replaced,
-                      voice: confirmation.voice,
-                    });
-                  }
+                  freezeCallVoice(confirmation.voice, confirmation.replaced);
                 }
                 // Without a line a sentence can match, no utterance would ever
                 // close: a session that names none cannot carry a call, and
@@ -983,7 +1019,7 @@ export function CallController(): ReactNode {
                 attempt.failure = "voice-unavailable";
                 break;
               case "principal-changed":
-                attempt.failure = "account";
+                attempt.failure = "session-changed";
                 break;
               case "unavailable":
               case "unauthorized":
@@ -1101,23 +1137,18 @@ export function CallController(): ReactNode {
         // An End or a replacement during the handshake has already finished
         // locally and is settling the attempt (its minted id included).
         if (attempt.cancelled) return false;
-        attemptRef.current = null;
-        attempt.cancelled = true;
         appLogger.warn("[voice] session connect failed", {
           error: describeLogError(error),
         });
-        // The first opening never was a call, so nothing ended. A replacement
-        // is the live call ending, with the reason its mint gave or else the
-        // connection it was running on. Either way no other session is asked
-        // for: the attempt's id is ended and the call is over.
-        let lastWords = NOTHING_LEFT;
-        if (firstOpeningRef.current)
-          refuseLocal(refusalFor(attempt.failure), null);
-        else lastWords = finishLocal(endReasonFor(attempt.failure));
-        void settleAttempt(attempt, lastWords);
-        return false;
+        return failAttempt();
       }
       if (!owns() || attempt.sessionId === null) return false;
+      // Nothing is published live under an account that is no longer the
+      // call's, even when it changed after the answer was taken.
+      if (!auth.isVoiceCallAuthorityLive(authority)) {
+        attempt.failure = "session-changed";
+        return failAttempt();
+      }
       attempt.started = true;
       attempt.startedAt = Date.now();
       firstOpeningRef.current = false;
@@ -1144,10 +1175,12 @@ export function CallController(): ReactNode {
     },
     [
       applyCapture,
+      auth,
       clearTimers,
       endRoute,
       ensureSpeech,
       finishLocal,
+      freezeCallVoice,
       mintAsync,
       queryClient,
       refuseLocal,
@@ -1271,21 +1304,98 @@ export function CallController(): ReactNode {
   );
 
   /**
-   * What a call starting now asks for its voice: the saved choice, read
-   * against the voices the deployment offers; on a connection that offers no
-   * choice, nothing is asked, and a person who chose a voice is told so.
+   * The availability read a call makes as it starts, under its own account:
+   * the voices it may ask for come from this answer, never a cached one. A
+   * read that throws is a failed read.
    */
-  const beginCallVoice = useCallback(() => {
-    const capability = voiceSelectionRef.current;
-    const saved = useSettingsStore.getState().callVoice;
-    voicePlanRef.current =
-      capability === null
-        ? { kind: "legacy" }
-        : { kind: "initial", saved, capability };
-    if (capability === null && saved !== null) {
-      useVoiceSessionStore.getState().setVoiceNotice({ kind: "legacy" });
-    }
-  }, []);
+  const readCallVoices = useCallback(
+    async (
+      authority: VoiceCallAuthority,
+    ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> => {
+      try {
+        return await auth.getVoiceAvailabilityForCall(authority);
+      } catch (error) {
+        appLogger.warn("[voice] call availability read failed", {
+          error: describeLogError(error),
+        });
+        return {
+          kind: "network-error",
+          detail: "the call's availability read failed",
+        };
+      }
+    },
+    [auth],
+  );
+
+  /**
+   * Settles what the call asks for its voice from its own availability read:
+   * the saved choice against the voices offered now, or, on a connection that
+   * offers none, nothing, which the call says. The answer also refreshes the
+   * window's cached one, so the settings show what calls use. The refusal
+   * when the dial cannot go on: a read that failed, an account that changed
+   * while it was out, or a deployment that turned voice off (Call hides).
+   */
+  const callVoiceRefusal = useCallback(
+    (
+      answer: VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+      authority: VoiceCallAuthority,
+      saved: string | null,
+    ): VoiceRefusal | null => {
+      if (
+        answer.kind === "principal-changed" ||
+        !auth.isVoiceCallAuthorityLive(authority)
+      ) {
+        return "session-changed";
+      }
+      if (answer.kind !== "ok") return "unavailable";
+      const userId = callAccountRef.current;
+      const fresh = {
+        available: answer.available,
+        voiceSelection: answer.voiceSelection,
+      };
+      queryClient.setQueriesData(
+        {
+          queryKey: voiceQueryKeys.availabilityAll(),
+          predicate: (query) => query.queryKey[3] === userId,
+        },
+        fresh,
+      );
+      if (!answer.available) {
+        useVoiceSessionStore.getState().setAvailability("dormant");
+        return "unavailable";
+      }
+      const capability = answer.voiceSelection;
+      voicePlanRef.current =
+        capability === null
+          ? { kind: "legacy" }
+          : { kind: "initial", saved, capability };
+      if (capability === null) {
+        useVoiceSessionStore.getState().setVoiceNotice({ kind: "legacy" });
+      }
+      return null;
+    },
+    [auth, queryClient],
+  );
+
+  /**
+   * Whether the dial goes on to its mint once its availability read is in:
+   * a dial ended or replaced meanwhile takes nothing from the answer, and
+   * one the answer cannot carry is refused with the reason, minting nothing.
+   */
+  const beginCallVoice = useCallback(
+    (
+      answer: VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+      authority: VoiceCallAuthority,
+      saved: string | null,
+      stillStarting: () => boolean,
+    ): boolean => {
+      if (!stillStarting()) return false;
+      const refusal = callVoiceRefusal(answer, authority, saved);
+      if (refusal !== null) refuseLocal(refusal, null);
+      return refusal === null;
+    },
+    [callVoiceRefusal, refuseLocal],
+  );
 
   /**
    * The dial: the bot is asked whether a host can run it now (`bot.open`,
@@ -1312,7 +1422,10 @@ export function CallController(): ReactNode {
         refuseLocal("unavailable", null);
         return;
       }
-      beginCallVoice();
+      // Read once for this call, beside the bot's open and the microphone,
+      // and waited for before the first mint.
+      const callVoices = readCallVoices(authority);
+      const saved = useSettingsStore.getState().callVoice;
       callAccountRef.current = signedInAccount();
       firstOpeningRef.current = true;
       shortSessionsRef.current = 0;
@@ -1377,6 +1490,8 @@ export function CallController(): ReactNode {
         if (micStreamRef.current === stream) end("interrupted");
       });
       applyCapture();
+      const answer = await callVoices;
+      if (!beginCallVoice(answer, authority, saved, stillStarting)) return;
       await connectEngine(authority);
     },
     [
@@ -1387,6 +1502,7 @@ export function CallController(): ReactNode {
       connectEngine,
       end,
       microphoneAccessAsync,
+      readCallVoices,
       refuseLocal,
     ],
   );

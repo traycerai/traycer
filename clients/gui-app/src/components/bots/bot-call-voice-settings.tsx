@@ -26,9 +26,11 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
  * nothing here writes the bot. A pick applies from the next call; a call in
  * progress keeps the voice it started with.
  *
- * The list is the deployment's offered voices, searchable. A saved voice it
- * no longer offers stays saved, and the group says which voice speaks
- * instead. There is no way to hear a voice from here.
+ * The list is the deployment's offered voices, searchable, after a choice
+ * to follow the deployment's default (saved as `null`, so calls follow it if
+ * it changes); a named voice, the current default included, stays that voice.
+ * A saved voice the deployment no longer offers stays saved, and the group
+ * says which voice speaks instead. There is no way to hear a voice from here.
  */
 export function BotCallVoiceSettings(props: {
   readonly catalogue: CallVoiceCatalogueState;
@@ -40,8 +42,12 @@ export function BotCallVoiceSettings(props: {
       setCallVoice: s.setCallVoice,
     })),
   );
-  const callInProgress = useVoiceSessionStore(
-    (s) => s.phase === "connecting" || s.phase === "live",
+  // Only a call whose voice the server confirmed keeps it; a call on a
+  // connection that offers no choice promises nothing about its voice.
+  const callKeepsVoice = useVoiceSessionStore(
+    (s) =>
+      (s.phase === "connecting" || s.phase === "live") &&
+      s.attestedVoice !== null,
   );
   return (
     <SettingsGroup title="Voice" testId="bot-settings-voice">
@@ -54,7 +60,7 @@ export function BotCallVoiceSettings(props: {
       ) : (
         <CallVoiceWithoutChoices kind={catalogue.kind} saved={callVoice} />
       )}
-      {callInProgress ? (
+      {callKeepsVoice ? (
         <p
           className="text-ui-xs text-muted-foreground"
           data-testid="bot-settings-voice-in-call"
@@ -69,18 +75,22 @@ export function BotCallVoiceSettings(props: {
 function CallVoicePicker(props: {
   readonly catalogue: CallVoiceCatalogue;
   readonly saved: string | null;
-  readonly onPick: (voice: string) => void;
+  readonly onPick: (voice: string | null) => void;
 }): ReactNode {
   const { catalogue, saved, onPick } = props;
   const [query, setQuery] = useState("");
   const resolution = resolveCallVoice(saved, catalogue);
   const needle = query.trim().toLowerCase();
-  const matching =
-    needle.length === 0
-      ? catalogue.voices
-      : catalogue.voices.filter((voice) =>
-          callVoiceLabel(voice).toLowerCase().includes(needle),
-        );
+  const matches = (label: string): boolean =>
+    needle.length === 0 || label.toLowerCase().includes(needle);
+  const defaultLabel = `Deployment default (${callVoiceLabel(catalogue.defaultVoice)})`;
+  const showDefault = matches(defaultLabel);
+  const matching = catalogue.voices.filter((voice) =>
+    matches(callVoiceLabel(voice)),
+  );
+  // What speaks follows the deployment's default unless a named voice that
+  // is offered was chosen.
+  const followsDefault = resolution.kind !== "selected";
   return (
     <div className="flex flex-col gap-2">
       <span className="text-ui-sm font-medium text-foreground">
@@ -100,24 +110,34 @@ function CallVoicePicker(props: {
             spellCheck={false}
           />
           <CommandList label="Voice for calls" className="max-h-60 p-1">
-            {matching.length === 0 ? (
+            {matching.length === 0 && !showDefault ? (
               <CommandEmpty>No matching voices.</CommandEmpty>
             ) : (
               <CommandGroup>
+                {showDefault ? (
+                  <CommandItem
+                    value={DEPLOYMENT_DEFAULT_VALUE}
+                    data-checked={followsDefault ? "true" : "false"}
+                    onSelect={() => onPick(null)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {defaultLabel}
+                    </span>
+                  </CommandItem>
+                ) : null}
                 {matching.map((voice) => (
                   <CommandItem
                     key={voice}
                     value={voice}
-                    data-checked={voice === resolution.voice ? "true" : "false"}
+                    data-checked={
+                      !followsDefault && voice === resolution.voice
+                        ? "true"
+                        : "false"
+                    }
                     onSelect={() => onPick(voice)}
                   >
                     <span className="min-w-0 flex-1 truncate">
                       {callVoiceLabel(voice)}
-                      {voice === catalogue.defaultVoice ? (
-                        <span className="ml-2 text-ui-xs text-muted-foreground">
-                          Default
-                        </span>
-                      ) : null}
                     </span>
                   </CommandItem>
                 ))}
@@ -130,7 +150,7 @@ function CallVoicePicker(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="bot-settings-voice-current"
       >
-        {currentVoiceLine(resolution, catalogue.defaultVoice)}
+        {currentVoiceLine(resolution)}
       </p>
       <p className="text-ui-xs text-muted-foreground">
         Used on this device. Changes apply to the next call.
@@ -147,18 +167,23 @@ function CallVoicePicker(props: {
   );
 }
 
-/** "Selected: Marin (default)", or the saved voice that is not offered now. */
-function currentVoiceLine(
-  resolution: CallVoiceResolution,
-  defaultVoice: string,
-): string {
-  if (resolution.kind === "unavailable") {
-    return `Saved: ${callVoiceLabel(resolution.saved)} (unavailable)`;
+/** The list's value for following the deployment's default; no voice name can be it. */
+const DEPLOYMENT_DEFAULT_VALUE = "deployment-default:";
+
+/**
+ * "Selected: Marin (default)" while following the deployment's default,
+ * "Selected: Cedar" for a named voice, or the saved voice that is not
+ * offered now.
+ */
+function currentVoiceLine(resolution: CallVoiceResolution): string {
+  switch (resolution.kind) {
+    case "unavailable":
+      return `Saved: ${callVoiceLabel(resolution.saved)} (unavailable)`;
+    case "default":
+      return `Selected: ${callVoiceLabel(resolution.voice)} (default)`;
+    case "selected":
+      return `Selected: ${callVoiceLabel(resolution.voice)}`;
   }
-  const label = callVoiceLabel(resolution.voice);
-  return resolution.voice === defaultVoice
-    ? `Selected: ${label} (default)`
-    : `Selected: ${label}`;
 }
 
 /**

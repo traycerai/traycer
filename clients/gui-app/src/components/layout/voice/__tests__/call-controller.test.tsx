@@ -217,6 +217,15 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
     captureVoiceCallAuthority: () => fake.authority,
+    // Each call reads the voices it may ask for as it starts; this
+    // connection offers no choice, so calls name no voice.
+    getVoiceAvailabilityForCall: () =>
+      Promise.resolve({
+        kind: "ok" as const,
+        available: true,
+        voiceSelection: null,
+      }),
+    isVoiceCallAuthorityLive: () => true,
     mintVoiceSession: fake.mint,
     endVoiceSession: fake.endVoiceSession,
   }),

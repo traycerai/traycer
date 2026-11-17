@@ -15,6 +15,8 @@ vi.mock("@/hooks/auth/use-platform-billing-url", () => ({
 
 const CONFIRM_LINE =
   "We couldn't confirm the call's voice. Please start a new call.";
+const CHANGED_LINE =
+  "The call's sign-in session changed. Start a new call to continue.";
 const UNAVAILABLE_LINE =
   "This call's voice is no longer available. Start a new call to choose another.";
 
@@ -51,5 +53,30 @@ describe("the voice outcome lines", () => {
     render(<VoiceOutcomeLine surface="composer" />);
 
     expect(outcomeLine()).toBe(UNAVAILABLE_LINE);
+  });
+
+  it("says a refused opening's sign-in session changed", () => {
+    useVoiceSessionStore.setState({ refusal: "session-changed" });
+    render(<VoiceOutcomeLine surface="composer" />);
+
+    expect(outcomeLine()).toBe(CHANGED_LINE);
+    expect(screen.getByTestId("voice-outcome").dataset["state"]).toBe(
+      "refused",
+    );
+  });
+
+  it("says an ended call's sign-in session changed", () => {
+    useVoiceSessionStore.setState({ endReason: "session-changed" });
+    render(<VoiceOutcomeLine surface="composer" />);
+
+    expect(outcomeLine()).toBe(CHANGED_LINE);
+    expect(screen.getByTestId("voice-outcome").dataset["state"]).toBe("ended");
+  });
+
+  it("keeps its own line for a real account switch", () => {
+    useVoiceSessionStore.setState({ endReason: "account" });
+    render(<VoiceOutcomeLine surface="composer" />);
+
+    expect(outcomeLine()).toBe("Call ended when you switched accounts.");
   });
 });

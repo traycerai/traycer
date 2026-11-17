@@ -17,6 +17,15 @@ const WITHOUT_CEDAR: CallVoiceCatalogueState = {
   kind: "ready",
   catalogue: { defaultVoice: "marin", voices: ["alloy", "marin", "verse"] },
 };
+function defaultingTo(defaultVoice: string): CallVoiceCatalogueState {
+  return {
+    kind: "ready",
+    catalogue: {
+      defaultVoice,
+      voices: ["alloy", "cedar", "marin", "sage", "verse"],
+    },
+  };
+}
 const IN_CALL_NOTE = "This call keeps its current voice.";
 
 function reset(): void {
@@ -45,7 +54,7 @@ describe("BotCallVoiceSettings", () => {
     expect(
       screen.getByRole("listbox", { name: "Voice for calls" }),
     ).toBeTruthy();
-    expect(checkedOptions()).toEqual(["MarinDefault"]);
+    expect(checkedOptions()).toEqual(["Deployment default (Marin)"]);
     expect(screen.getByText("Selected: Marin (default)")).toBeTruthy();
     expect(
       screen.getByText("Used on this device. Changes apply to the next call."),
@@ -62,8 +71,9 @@ describe("BotCallVoiceSettings", () => {
 
     await user.type(search, "AR");
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Deployment default (Marin)",
       "Cedar",
-      "MarinDefault",
+      "Marin",
     ]);
 
     await user.clear(search);
@@ -87,6 +97,53 @@ describe("BotCallVoiceSettings", () => {
     expect(checkedOptions()).toEqual(["Cedar"]);
   });
 
+  it("saves no choice when the deployment default is picked after a named voice", async () => {
+    const user = userEvent.setup();
+    render(<BotCallVoiceSettings catalogue={READY} />);
+    await user.click(screen.getByRole("option", { name: "Cedar" }));
+    expect(useSettingsStore.getState().callVoice).toBe("cedar");
+
+    await user.click(
+      screen.getByRole("option", { name: "Deployment default (Marin)" }),
+    );
+
+    expect(useSettingsStore.getState().callVoice).toBeNull();
+    const persisted = JSON.parse(
+      window.localStorage.getItem("traycer-gui-app:settings") ?? "null",
+    ) as { state: { callVoice: string | null } };
+    expect(persisted.state.callVoice).toBeNull();
+    expect(checkedOptions()).toEqual(["Deployment default (Marin)"]);
+  });
+
+  it("names the deployment's current default on its option and status line when the default changes", () => {
+    const { rerender } = render(<BotCallVoiceSettings catalogue={READY} />);
+    expect(
+      screen.getByRole("option", { name: "Deployment default (Marin)" }),
+    ).toBeTruthy();
+
+    rerender(<BotCallVoiceSettings catalogue={defaultingTo("alloy")} />);
+
+    expect(
+      screen.getByRole("option", { name: "Deployment default (Alloy)" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("bot-settings-voice-current").textContent,
+    ).toContain("Alloy");
+  });
+
+  it("keeps a named Marin explicit, saved as marin, when the deployment default later changes", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<BotCallVoiceSettings catalogue={READY} />);
+
+    await user.click(screen.getByRole("option", { name: "Marin" }));
+    expect(useSettingsStore.getState().callVoice).toBe("marin");
+
+    rerender(<BotCallVoiceSettings catalogue={defaultingTo("alloy")} />);
+
+    expect(useSettingsStore.getState().callVoice).toBe("marin");
+    expect(checkedOptions()).toEqual(["Marin"]);
+  });
+
   it("names a saved voice that is no longer offered, keeps it saved, and checks the default", () => {
     useSettingsStore.setState({ callVoice: "cedar" });
     render(<BotCallVoiceSettings catalogue={WITHOUT_CEDAR} />);
@@ -95,7 +152,7 @@ describe("BotCallVoiceSettings", () => {
     expect(
       screen.getByText("Cedar isn't available now, so calls use Marin."),
     ).toBeTruthy();
-    expect(checkedOptions()).toEqual(["MarinDefault"]);
+    expect(checkedOptions()).toEqual(["Deployment default (Marin)"]);
     expect(useSettingsStore.getState().callVoice).toBe("cedar");
   });
 
@@ -130,32 +187,18 @@ describe("BotCallVoiceSettings", () => {
     expect(useSettingsStore.getState().callVoice).toBe("cedar");
   });
 
-  it("says a call in progress keeps its voice only while the call is connecting or live", () => {
+  it("says a call keeps its voice only once the call is connecting or live and its voice is attested", () => {
     render(<BotCallVoiceSettings catalogue={READY} />);
     expect(screen.queryByText(IN_CALL_NOTE)).toBeNull();
 
-    act(() => {
-      useVoiceSessionStore
-        .getState()
-        .sessionConnecting(
-          { botId: "bot-1", hostId: "host-1", threadId: null },
-          "Tracy",
-        );
-    });
+    act(() => startCall());
+    // Connecting, the voice not yet confirmed: nothing to promise.
+    expect(screen.queryByText(IN_CALL_NOTE)).toBeNull();
+
+    act(() => useVoiceSessionStore.setState({ attestedVoice: "cedar" }));
     expect(screen.getByText(IN_CALL_NOTE)).toBeTruthy();
 
-    act(() => {
-      useVoiceSessionStore.getState().sessionLive({
-        id: "session-1",
-        expiresAt: 0,
-        engine: {
-          connect: () => Promise.resolve(),
-          appendCommentary: () => undefined,
-          appendThinking: () => undefined,
-          close: () => Promise.resolve(),
-        },
-      });
-    });
+    act(() => goLive());
     expect(screen.getByText(IN_CALL_NOTE)).toBeTruthy();
 
     act(() => {
@@ -163,4 +206,36 @@ describe("BotCallVoiceSettings", () => {
     });
     expect(screen.queryByText(IN_CALL_NOTE)).toBeNull();
   });
+
+  it("says nothing about the call's voice on a legacy call, whatever the catalogue offers", () => {
+    render(<BotCallVoiceSettings catalogue={READY} />);
+
+    act(() => startCall());
+    act(() => goLive());
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(screen.queryByText(IN_CALL_NOTE)).toBeNull();
+  });
 });
+
+function startCall(): void {
+  useVoiceSessionStore
+    .getState()
+    .sessionConnecting(
+      { botId: "bot-1", hostId: "host-1", threadId: null },
+      "Tracy",
+    );
+}
+
+function goLive(): void {
+  useVoiceSessionStore.getState().sessionLive({
+    id: "session-1",
+    expiresAt: 0,
+    engine: {
+      connect: () => Promise.resolve(),
+      appendCommentary: () => undefined,
+      appendThinking: () => undefined,
+      close: () => Promise.resolve(),
+    },
+  });
+}

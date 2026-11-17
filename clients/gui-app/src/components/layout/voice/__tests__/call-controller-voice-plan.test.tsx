@@ -104,6 +104,7 @@ const fake = vi.hoisted(() => {
   const capability: { current: VoiceSelectionCapability | null } = {
     current: null,
   };
+  const refreshAnswer: { current: unknown } = { current: null };
   const order: string[] = [];
   const sendHosts: string[] = [];
   // A track is an event target, as the real one is: the controller listens
@@ -172,8 +173,13 @@ const fake = vi.hoisted(() => {
     >(),
     endVoiceSession:
       vi.fn<(id: string, authority: object) => Promise<unknown>>(),
-    // What the availability read answers for `voiceSelection`.
+    // What the cached availability query answers for `voiceSelection`.
     capability,
+    // False while the availability read is pending, as after a host or account key change.
+    cacheReadable: { current: true },
+    // What the call-start refresh answers.
+    refreshAnswer,
+    refresh: vi.fn<(authority: object) => Promise<unknown>>(),
     sendMock:
       vi.fn<
         (
@@ -202,6 +208,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
     captureVoiceCallAuthority: fake.capture,
+    getVoiceAvailabilityForCall: fake.refresh,
+    isVoiceCallAuthorityLive: () => true,
     mintVoiceSession: fake.mint,
     endVoiceSession: fake.endVoiceSession,
   }),
@@ -273,7 +281,9 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({
-    data: { available: true, voiceSelection: fake.capability.current },
+    data: fake.cacheReadable.current
+      ? { available: true, voiceSelection: fake.capability.current }
+      : undefined,
   }),
 }));
 vi.mock(
@@ -358,12 +368,22 @@ function driverOf() {
 let rerenderController: (() => void) | null = null;
 
 /**
- * What the availability read answers for `voiceSelection`, re-rendering the
- * controller as a real answer arriving would.
+ * What the cached availability query answers for `voiceSelection`,
+ * re-rendering the controller as a real answer arriving would. The plan does
+ * not read it.
  */
 function offerVoices(capability: VoiceSelectionCapability | null): void {
   fake.capability.current = capability;
   act(() => rerenderController?.());
+}
+
+/** What the call-start refresh answers: the capability the plan is made from. */
+function serverOffers(capability: VoiceSelectionCapability | null): void {
+  fake.refreshAnswer.current = {
+    kind: "ok",
+    available: true,
+    voiceSelection: capability,
+  };
 }
 
 async function dial(target: CallTarget): Promise<void> {
@@ -401,6 +421,16 @@ beforeEach(() => {
   fake.capture.mockReset();
   fake.capture.mockImplementation(() => fake.authority);
   fake.capability.current = null;
+  fake.cacheReadable.current = true;
+  fake.refreshAnswer.current = {
+    kind: "ok",
+    available: true,
+    voiceSelection: null,
+  };
+  fake.refresh.mockReset();
+  fake.refresh.mockImplementation(() =>
+    Promise.resolve(fake.refreshAnswer.current),
+  );
   useSettingsStore.setState({ callVoice: null });
   fake.mint.mockReset();
   fake.mint.mockImplementation(() => Promise.resolve(minted("vs1", null)));
@@ -501,7 +531,7 @@ async function renew(): Promise<void> {
 
 describe("the voice a call asks for", () => {
   it("asks for the saved voice with the fallback policy on a server that offers a choice, and for none when none is saved", async () => {
-    offerVoices(CAPABILITY);
+    serverOffers(CAPABILITY);
     useSettingsStore.setState({ callVoice: "cedar" });
     mintsAnswer(minted("vs1", valid("cedar", "cedar", "selected")));
     await dialLive(CHANNEL_CALL);
@@ -522,7 +552,7 @@ describe("the voice a call asks for", () => {
   });
 
   it("asks for no voice on a server that offers no choice, says nothing is promised, and goes live without voice metadata", async () => {
-    offerVoices(null);
+    serverOffers(null);
     useSettingsStore.setState({ callVoice: "cedar" });
     await dialLive(CHANNEL_CALL);
 
@@ -536,7 +566,7 @@ describe("the voice a call asks for", () => {
 
 describe("a renewal keeps the voice the call opened with", () => {
   it("asks for that exact voice whatever the settings say by then", async () => {
-    offerVoices(CAPABILITY);
+    serverOffers(CAPABILITY);
     useSettingsStore.setState({ callVoice: "cedar" });
     mintsAnswer(
       minted("vs1", valid("cedar", "cedar", "selected")),
@@ -555,7 +585,7 @@ describe("a renewal keeps the voice the call opened with", () => {
   });
 
   it("keeps the fallback notice and renews on the default voice, not the one that was unavailable", async () => {
-    offerVoices(CAPABILITY);
+    serverOffers(CAPABILITY);
     useSettingsStore.setState({ callVoice: "cedar" });
     mintsAnswer(
       minted("vs1", valid("cedar", "marin", "unavailable")),
@@ -587,7 +617,7 @@ describe("a renewal keeps the voice the call opened with", () => {
   ])(
     "ends the call as unconfirmed, with no further mint, when the renewal's answer %s",
     async (_label, selection) => {
-      offerVoices(CAPABILITY);
+      serverOffers(CAPABILITY);
       mintsAnswer(
         minted("vs1", valid(null, "marin", "default")),
         minted("vs2", selection),
@@ -606,7 +636,7 @@ describe("a renewal keeps the voice the call opened with", () => {
   );
 
   it("ends the call as unavailable, with no further mint, when the server no longer offers the voice", async () => {
-    offerVoices(CAPABILITY);
+    serverOffers(CAPABILITY);
     mintsAnswer(minted("vs1", valid(null, "marin", "default")), {
       kind: "voice-unavailable",
     });
@@ -648,7 +678,7 @@ describe("an opening whose voice cannot be confirmed", () => {
   ])(
     "refuses the call on %s: no answer reaches the engine, the id is ended, and nothing is minted again",
     async (_label, saved, selection) => {
-      offerVoices(CAPABILITY);
+      serverOffers(CAPABILITY);
       useSettingsStore.setState({ callVoice: saved });
       mintsAnswer(minted("vs1", selection));
 
@@ -662,4 +692,173 @@ describe("an opening whose voice cannot be confirmed", () => {
       expect(fake.mint).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe("the plan comes from the call-start refresh", () => {
+  it("goes live on the server's current default when the cached default is stale, asking for no voice", async () => {
+    offerVoices(CAPABILITY);
+    serverOffers({ ...CAPABILITY, defaultVoice: "cedar" });
+    mintsAnswer(minted("vs1", valid(null, "cedar", "default")));
+
+    await dialLive(CHANNEL_CALL);
+
+    expect(mintRequest(0)).toMatchObject({ voice: null, voicePolicy: null });
+  });
+
+  it("refreshes once for a new call, not on a renewal, and again for the next call", async () => {
+    serverOffers(CAPABILITY);
+    mintsAnswer(
+      minted("vs1", valid(null, "marin", "default")),
+      minted("vs2", valid("marin", "marin", "selected")),
+      minted("vs3", valid(null, "marin", "default")),
+    );
+    await dialLive(CHANNEL_CALL);
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+    expect(fake.refresh).toHaveBeenCalledWith(fake.authority);
+
+    await renew();
+    expect(fake.mint).toHaveBeenCalledTimes(2);
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+
+    act(() => driverOf().end());
+    await settle();
+    await dialLive(CHANNEL_CALL);
+    expect(fake.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an unavailable deployment, hides Call, and mints nothing", async () => {
+    fake.refreshAnswer.current = {
+      kind: "ok",
+      available: false,
+      voiceSelection: null,
+    };
+
+    await dial(CHANNEL_CALL);
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.refusal).toBe("unavailable");
+    expect(state.availability).toBe("dormant");
+    expect(fake.mint).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the principal changed", { kind: "principal-changed" }, "session-changed"],
+    [
+      "the read failed",
+      { kind: "network-error", detail: "offline" },
+      "unavailable",
+    ],
+    ["the read was refused", { kind: "unauthorized" }, "unavailable"],
+  ])(
+    "refuses the call, minting nothing, when %s",
+    async (_label, answer, refusal) => {
+      fake.refreshAnswer.current = answer;
+
+      await dial(CHANNEL_CALL);
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.phase).toBe("idle");
+      expect(state.refusal).toBe(refusal);
+      expect(fake.mint).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sets no plan, notice or mint when the dial is ended while the refresh is held", async () => {
+    serverOffers(CAPABILITY);
+    let release: (answer: unknown) => void = () => undefined;
+    fake.refresh.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    act(() => driverOf().start(CHANNEL_CALL));
+    await settle();
+    act(() => driverOf().end());
+    await settle();
+
+    release(fake.refreshAnswer.current);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.voiceNotice).toBeNull();
+    expect(state.attestedVoice).toBeNull();
+    expect(fake.mint).not.toHaveBeenCalled();
+  });
+});
+
+describe("the plan does not depend on the cached availability", () => {
+  it("asks for the saved voice, with no legacy notice, while the cached availability is pending", async () => {
+    fake.cacheReadable.current = false;
+    useVoiceSessionStore.getState().setAvailability("live");
+    serverOffers(CAPABILITY);
+    useSettingsStore.setState({ callVoice: "cedar" });
+    mintsAnswer(minted("vs1", valid("cedar", "cedar", "selected")));
+
+    await dialLive(CHANNEL_CALL);
+
+    expect(mintRequest(0)).toMatchObject({
+      voice: "cedar",
+      voicePolicy: "fallback",
+    });
+    expect(useVoiceSessionStore.getState().voiceNotice).toBeNull();
+  });
+
+  it("treats a refresh that says no choice is offered as a legacy call, asking for nothing", async () => {
+    fake.cacheReadable.current = false;
+    useSettingsStore.setState({ callVoice: "cedar" });
+    fake.refreshAnswer.current = {
+      kind: "ok",
+      available: true,
+      voiceSelection: null,
+    };
+
+    await dialLive(CHANNEL_CALL);
+
+    expect(mintRequest(0)).toMatchObject({ voice: null, voicePolicy: null });
+    expect(useVoiceSessionStore.getState().voiceNotice).toEqual({
+      kind: "legacy",
+    });
+  });
+});
+
+describe("the legacy notice and the attested voice", () => {
+  it("says a legacy call may change voice even when nothing is saved", async () => {
+    serverOffers(null);
+
+    await dialLive(CHANNEL_CALL);
+
+    expect(useVoiceSessionStore.getState().voiceNotice).toEqual({
+      kind: "legacy",
+    });
+  });
+
+  it("attests the confirmed voice, keeps it across a renewal, and clears it at the end", async () => {
+    serverOffers(CAPABILITY);
+    useSettingsStore.setState({ callVoice: "cedar" });
+    mintsAnswer(
+      minted("vs1", valid("cedar", "cedar", "selected")),
+      minted("vs2", valid("cedar", "cedar", "selected")),
+    );
+    await dialLive(CHANNEL_CALL);
+    expect(useVoiceSessionStore.getState().attestedVoice).toBe("cedar");
+
+    await renew();
+    expect(useVoiceSessionStore.getState().attestedVoice).toBe("cedar");
+
+    act(() => driverOf().end());
+    await settle();
+    expect(useVoiceSessionStore.getState().attestedVoice).toBeNull();
+  });
+
+  it("attests no voice throughout a legacy call", async () => {
+    serverOffers(null);
+    useSettingsStore.setState({ callVoice: "cedar" });
+    await dialLive(CHANNEL_CALL);
+    expect(useVoiceSessionStore.getState().attestedVoice).toBeNull();
+
+    await renew();
+    expect(useVoiceSessionStore.getState().attestedVoice).toBeNull();
+  });
 });

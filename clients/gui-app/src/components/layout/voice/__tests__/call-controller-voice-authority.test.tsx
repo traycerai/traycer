@@ -23,6 +23,7 @@ import {
 } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
@@ -102,6 +103,9 @@ const fake = vi.hoisted(() => {
     engines: [] as FakeEngine[],
     // Set per test: the real service the controller's `useAuthService` reads.
     auth: { current: null as AuthService | null },
+    // When set, an engine's `connect` waits on it after the answer is taken.
+    connectGate: { current: null as Promise<void> | null },
+    shellLive: vi.fn<(live: boolean) => Promise<void>>(),
   };
 });
 
@@ -113,7 +117,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     requestMicrophoneAccess: () => Promise.resolve("granted"),
     onSystemSuspended: () => ({ dispose: () => undefined }),
-    setVoiceSessionLive: () => Promise.resolve(),
+    setVoiceSessionLive: fake.shellLive,
     setVoiceSessionIndicator: () => Promise.resolve(),
     onVoiceTrayAction: () => ({ dispose: () => undefined }),
   }),
@@ -223,8 +227,9 @@ vi.mock("@/lib/voice/gpt-live-engine", () => ({
       connect: vi.fn<(input: ConnectInput) => Promise<void>>(async (input) => {
         engine.events = input.events;
         await input.exchangeSdp("offer").then(
-          (answered) => {
+          async (answered) => {
             engine.exchanges.push({ answered, rejected: false });
+            await fake.connectGate.current;
           },
           (error: unknown) => {
             engine.exchanges.push({ answered: null, rejected: true });
@@ -410,6 +415,9 @@ let mint: Mock<
     request: VoiceSessionMintRequest,
   ) => Promise<VoiceSessionMintFetchResult>
 >;
+let availability: Mock<
+  (bearerToken: string) => Promise<VoiceAvailabilityFetchResult>
+>;
 let end: Mock<
   (bearer: string, id: string) => Promise<VoiceSessionEndFetchResult>
 >;
@@ -480,6 +488,49 @@ async function signOutAndBackIn(token: string): Promise<void> {
   expect(useAuthStore.getState().status).toBe("signed-in");
 }
 
+/** Every phase the call store passes through, in order. */
+function recordPhases(): ReadonlyArray<string> {
+  const phases: string[] = [useVoiceSessionStore.getState().phase];
+  useVoiceSessionStore.subscribe((state) => {
+    if (phases.at(-1) !== state.phase) phases.push(state.phase);
+  });
+  return phases;
+}
+
+/** `signOut` has bumped the identity generation and waits on storage. */
+function startSignOutWaitingOnStorage(): Deferred<void> {
+  const storage = deferred<void>();
+  vi.spyOn(host.tokenStore, "delete").mockImplementation(() => storage.promise);
+  void service.signOut();
+  expect(useAuthStore.getState().status).toBe("signed-in");
+  return storage;
+}
+
+/** The ways a call's principal changes with the session still `signed-in`. */
+const REVOCATIONS: ReadonlyArray<{
+  readonly name: string;
+  readonly revoke: () => Promise<void>;
+}> = [
+  {
+    name: "sign-out waits on its storage",
+    revoke: async () => {
+      startSignOutWaitingOnStorage();
+      await settle();
+    },
+  },
+  {
+    name: "the same user's credentials are replaced",
+    revoke: () => signOutAndBackIn("user-1-again"),
+  },
+  {
+    name: "the auth service is disposed",
+    revoke: async () => {
+      service.dispose();
+      await settle();
+    },
+  },
+];
+
 function mintBearers(): ReadonlyArray<string> {
   return mint.mock.calls.map(([bearer]) => bearer);
 }
@@ -491,6 +542,9 @@ function endCalls(): ReadonlyArray<readonly [string, string]> {
 beforeEach(async () => {
   vi.useFakeTimers();
   fake.engines.length = 0;
+  fake.connectGate.current = null;
+  fake.shellLive.mockReset();
+  fake.shellLive.mockImplementation(() => Promise.resolve());
   fake.track.enabled = true;
   fake.track.stop.mockReset();
   useAuthStore.getState().setSignedOut();
@@ -510,6 +564,11 @@ beforeEach(async () => {
   mint = vi
     .spyOn(host, "mintVoiceSession")
     .mockImplementation(() => Promise.resolve(okMint("vs1")));
+  availability = vi
+    .spyOn(host, "getVoiceAvailability")
+    .mockImplementation(() =>
+      Promise.resolve({ kind: "ok", available: true, voiceSelection: null }),
+    );
   end = vi
     .spyOn(host, "endVoiceSession")
     .mockImplementation(() => Promise.resolve({ kind: "ok", closedAt: 1 }));
@@ -643,5 +702,114 @@ describe("a call's one authority", () => {
     await settle();
 
     expect(mintBearers()).toEqual(["user-1-token"]);
+  });
+
+  describe.each(REVOCATIONS)(
+    "when $name between the mint going out and its answer",
+    ({ revoke }) => {
+      it("refuses the answer, keeps the id for cleanup unsent, and mints no second session", async () => {
+        const held = deferred<VoiceSessionMintFetchResult>();
+        mint.mockImplementationOnce(() => held.promise);
+        const phases = recordPhases();
+        const cleanup = vi.spyOn(service, "endVoiceSession");
+        await dial();
+
+        await revoke();
+        held.resolve(okMint("vs-late-signout"));
+        await settle();
+
+        expect(engine().exchanges).toEqual([
+          { answered: null, rejected: true },
+        ]);
+        expect(phases).not.toContain("live");
+        expect(fake.shellLive).not.toHaveBeenCalledWith(true);
+        expect(cleanup.mock.calls.map(([id]) => id)).toEqual([
+          "vs-late-signout",
+        ]);
+        expect(engine().close).toHaveBeenCalled();
+        expect(endCalls()).toEqual([]);
+        expect(mint).toHaveBeenCalledTimes(1);
+        expect(useVoiceSessionStore.getState().refusal).toBe("session-changed");
+      });
+    },
+  );
+
+  it("sends nothing more once the sign-out's storage wait ends", async () => {
+    const held = deferred<VoiceSessionMintFetchResult>();
+    mint.mockImplementationOnce(() => held.promise);
+    await dial();
+    const storage = startSignOutWaitingOnStorage();
+    held.resolve(okMint("vs-late-signout"));
+    await settle();
+
+    storage.resolve();
+    await settle();
+
+    expect(endCalls()).toEqual([]);
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  describe.each(REVOCATIONS)(
+    "when $name after the answer and before the engine connects",
+    ({ revoke }) => {
+      it("never goes live, closes the engine, ends nothing and asks for no second session", async () => {
+        const gate = deferred<void>();
+        fake.connectGate.current = gate.promise;
+        const phases = recordPhases();
+        const cleanup = vi.spyOn(service, "endVoiceSession");
+        await dial();
+        expect(engine().exchanges).toEqual([
+          { answered: "answer", rejected: false },
+        ]);
+
+        await revoke();
+        gate.resolve();
+        await settle();
+
+        expect(phases).not.toContain("live");
+        expect(fake.shellLive).not.toHaveBeenCalledWith(true);
+        expect(engine().close).toHaveBeenCalled();
+        expect(cleanup.mock.calls.map(([id]) => id)).toEqual(["vs1"]);
+        expect(endCalls()).toEqual([]);
+        expect(mint).toHaveBeenCalledTimes(1);
+        expect(useVoiceSessionStore.getState().refusal).toBe("session-changed");
+      });
+    },
+  );
+
+  describe("the call's capability", () => {
+    it("is read once per new call under the call's bearer, and not again by a renewal", async () => {
+      await dial();
+      expect(useVoiceSessionStore.getState().phase).toBe("live");
+      expect(availability.mock.calls).toEqual([["user-1-token"]]);
+
+      act(() => {
+        engine().events?.onClosed("connection");
+      });
+      await settle();
+      expect(mintBearers()).toEqual(["user-1-token", "user-1-token"]);
+      expect(availability).toHaveBeenCalledTimes(1);
+
+      await endCall();
+      await dial();
+      expect(availability.mock.calls).toEqual([
+        ["user-1-token"],
+        ["user-1-token"],
+      ]);
+    });
+
+    it("dispatches no mint when the principal changes while the read is out, and refuses the call as session-changed", async () => {
+      const held = deferred<VoiceAvailabilityFetchResult>();
+      availability.mockImplementationOnce(() => held.promise);
+      await dial();
+
+      await signOutAndBackIn("user-1-again");
+      held.resolve({ kind: "ok", available: true, voiceSelection: null });
+      await settle();
+
+      expect(mint).not.toHaveBeenCalled();
+      expect(useVoiceSessionStore.getState().phase).toBe("idle");
+      expect(useVoiceSessionStore.getState().refusal).toBe("session-changed");
+    });
   });
 });

@@ -315,6 +315,16 @@ interface LiveSessionAuthority {
 }
 
 /**
+ * Which account a session belongs to: its identity generation, its user and
+ * its live credential object. No bearer: that is read from the live session
+ * when a request is sent.
+ */
+type SessionPrincipal = Pick<
+  LiveSessionAuthority,
+  "credentials" | "userId" | "generation"
+>;
+
+/**
  * The account one voice call was started under. Every mint and end of that
  * call, renewals included, goes out under it or not at all. Opaque: only the
  * AuthService that captured it can read what it stands for, and neither a
@@ -322,19 +332,19 @@ interface LiveSessionAuthority {
  */
 class VoiceCallAuthority {
   readonly #issuer: AuthService;
-  readonly #authority: LiveSessionAuthority;
+  readonly #principal: SessionPrincipal;
 
-  constructor(issuer: AuthService, authority: LiveSessionAuthority) {
+  constructor(issuer: AuthService, principal: SessionPrincipal) {
     this.#issuer = issuer;
-    this.#authority = authority;
+    this.#principal = principal;
   }
 
   /** What `handle` stands for, to the service that captured it; `null` to any other. */
   static capturedBy(
     handle: VoiceCallAuthority,
     service: AuthService,
-  ): LiveSessionAuthority | null {
-    return handle.#issuer === service ? handle.#authority : null;
+  ): SessionPrincipal | null {
+    return handle.#issuer === service ? handle.#principal : null;
   }
 }
 export type { VoiceCallAuthority };
@@ -2216,7 +2226,7 @@ export class AuthService {
   }
 
   private captureUpdatedSessionAuthority(
-    expected: LiveSessionAuthority,
+    expected: SessionPrincipal,
   ): LiveSessionAuthority | null {
     const current = this.captureLiveSessionAuthority();
     if (
@@ -3364,7 +3374,9 @@ export class AuthService {
   captureVoiceCallAuthority(): VoiceCallAuthority | null {
     if (this.disposed || !this.hasVerifiedSession()) return null;
     const authority = this.captureLiveSessionAuthority();
-    return authority === null ? null : new VoiceCallAuthority(this, authority);
+    if (authority === null) return null;
+    const { credentials, userId, generation } = authority;
+    return new VoiceCallAuthority(this, { credentials, userId, generation });
   }
 
   /**
@@ -3377,6 +3389,31 @@ export class AuthService {
     const captured = VoiceCallAuthority.capturedBy(handle, this);
     if (captured === null) return null;
     return this.captureUpdatedSessionAuthority(captured)?.bearer ?? null;
+  }
+
+  /**
+   * Whether a call's account is still the one signed in, checked without
+   * sending anything: a sign-out moves the identity before its storage
+   * settles, so an answer that arrives in between is no longer the call's.
+   */
+  isVoiceCallAuthorityLive(authority: VoiceCallAuthority): boolean {
+    return this.voiceCallBearer(authority) !== null;
+  }
+
+  /**
+   * The availability read a call makes as it starts, under its own account:
+   * the voices it may ask for come from this answer, never from a cached
+   * one.
+   */
+  async getVoiceAvailabilityForCall(
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false, voiceSelection: null };
+    }
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
+    return this.runnerHost.getVoiceAvailability(bearer);
   }
 
   async mintVoiceSession(
