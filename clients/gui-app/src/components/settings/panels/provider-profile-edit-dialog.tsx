@@ -1,6 +1,10 @@
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
+import {
+  brokeredProfileConnection,
+  useDisconnectBrokeredProfile,
+} from "@/hooks/providers/use-disconnect-brokered-profile-mutation";
 import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
@@ -550,6 +554,7 @@ function ProfileSignOutAction(props: {
     props.recordAccount,
   );
   const signOut = props.recordAccount ? recordSignOut : localSignOut;
+  const disconnect = useDisconnectBrokeredProfile();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(
@@ -565,7 +570,7 @@ function ProfileSignOutAction(props: {
   const label = environmentAccount
     ? profilePersonActionLabel("sign-out", scope)
     : "Sign out";
-  const submit = (): void =>
+  const signOutOnHost = (): void =>
     signOut.mutate(
       { providerId: props.providerId, profileId: props.profile.profileId },
       {
@@ -575,16 +580,29 @@ function ProfileSignOutAction(props: {
         },
       },
     );
+  // An unmapped brokered row is disconnected at authn on the person's sign-in
+  // first; the host signs it out only once that disconnect has landed.
+  const connection = recordAccount
+    ? null
+    : brokeredProfileConnection(props.providerId, props.profile);
+  const submit = (): void => {
+    if (connection === null) {
+      signOutOnHost();
+      return;
+    }
+    disconnect.mutate(connection, { onSuccess: signOutOnHost });
+  };
+  const pending = signOut.isPending || disconnect.isPending;
   return (
     <>
       <Button
         type="button"
         size="sm"
         variant="ghost"
-        disabled={props.disabled || signOut.isPending}
+        disabled={props.disabled || pending}
         onClick={() => (environmentAccount ? setConfirmOpen(true) : submit())}
       >
-        {signOut.isPending ? <MutedAgentSpinner /> : null}
+        {pending ? <MutedAgentSpinner /> : null}
         {label}
       </Button>
       {environmentAccount ? (
@@ -595,7 +613,7 @@ function ProfileSignOutAction(props: {
           environmentName={props.environmentName}
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
-          isPending={signOut.isPending}
+          isPending={pending}
           blockedReason={
             props.disabled
               ? "This profile is busy. Try again when it finishes."
