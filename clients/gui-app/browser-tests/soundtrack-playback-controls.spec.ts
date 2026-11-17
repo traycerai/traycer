@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
@@ -8,6 +8,11 @@ declare global {
       readonly setTrack: (name: string, title: string) => void;
       readonly setPaused: (paused: boolean) => void;
       readonly setSettingsOverlay: (open: boolean) => void;
+      readonly showStrip: (
+        kind: "title-strip" | "settings-modal" | null,
+        controls: boolean,
+      ) => void;
+      readonly setStripWidth: (px: number) => void;
     };
   }
 }
@@ -254,7 +259,7 @@ test("a Settings overlay takes the controls from the page behind it, and one gro
   await expect(page.getByTestId("overlay")).toHaveCount(0);
 });
 
-test("the controls' row keeps its 40px height for a short title, a long one and a change between them", async ({
+test("the surface placement's row keeps its 40px height for a short title, a long one and a change between them", async ({
   page,
 }) => {
   await open(page);
@@ -269,6 +274,84 @@ test("the controls' row keeps its 40px height for a short title, a long one and 
     (await page.getByTestId(TRACK).boundingBox())?.height,
   ).toBeLessThanOrEqual(40);
 });
+
+for (const kind of ["title-strip", "settings-modal"] as const) {
+  test(`the ${kind} placement adds no row to its strip, and gives way as the strip narrows`, async ({
+    page,
+  }) => {
+    await open(page);
+    await setTrack(page, "short", SHORT);
+    const strip = (): Locator =>
+      kind === "settings-modal"
+        ? page.getByRole("dialog").locator("header")
+        : page.getByTestId("strip-row");
+    const show = (controls: boolean): Promise<void> =>
+      page.evaluate(
+        ([k, c]) => window.__soundtrackControlsProbe?.showStrip(k, c),
+        [kind, controls] as const,
+      );
+    const setWidth = async (px: number): Promise<void> => {
+      await page.evaluate(
+        (w) => window.__soundtrackControlsProbe?.setStripWidth(w),
+        px,
+      );
+      await nextFrames(page, 2);
+    };
+    await setWidth(900);
+
+    // The modal frame scales in, and a box read mid-animation is scaled too.
+    const settled = (): Promise<void> =>
+      page.evaluate(async () => {
+        await Promise.all(
+          document.getAnimations().map((animation) => animation.finished),
+        );
+      });
+    await show(false);
+    await expect(strip()).toBeVisible();
+    await settled();
+    const without = await strip().boundingBox();
+    await show(true);
+    const group = strip().getByRole("group", { name: "Music playback" });
+    await expect(group).toBeVisible();
+    await settled();
+    const row = await strip().boundingBox();
+    const box = await group.boundingBox();
+    if (without === null || row === null || box === null) {
+      throw new Error("the strip or its controls have no layout box");
+    }
+    // Inside the strip's own row, which the controls leave at its height.
+    expect(row.height).toBe(without.height);
+    expect(box.y).toBeGreaterThanOrEqual(row.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height);
+    expect(box.x).toBeGreaterThanOrEqual(row.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(row.x + row.width);
+    const previous = strip().getByTestId("epic-playback-previous");
+    const next = strip().getByTestId("epic-playback-next");
+    const track = strip().getByTestId(TRACK);
+    const trackWidth = async (): Promise<number | undefined> =>
+      (await track.boundingBox())?.width;
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+    expect(await trackWidth()).toBeGreaterThan(100);
+
+    // Under 40rem the track is read by screen readers only.
+    await setWidth(500);
+    await expect.poll(trackWidth).toBeLessThan(2);
+    await expect(strip().getByText(SHORT)).toHaveCount(1);
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+
+    // Under 24rem previous and next go; play and pause stays and works.
+    await setWidth(300);
+    await expect(previous).toBeHidden();
+    await expect(next).toBeHidden();
+    const toggle = strip().getByRole("button", { name: "Pause" });
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    await expect(strip().getByRole("button", { name: "Play" })).toBeVisible();
+    expect((await strip().boundingBox())?.height).toBe(without.height);
+  });
+}
 
 test("under 768px the page's controls are not drawn", async ({ page }) => {
   await page.setViewportSize({ width: 767, height: 600 });
