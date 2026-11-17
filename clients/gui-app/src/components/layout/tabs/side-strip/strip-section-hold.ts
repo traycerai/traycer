@@ -170,19 +170,19 @@ function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
  * `null` for an item with no row before this render.
  */
 function drawnWhenOpened(
-  prev: OpenedHoldState | null,
+  prev: OpenedHoldState,
   itemId: string,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSection | null {
   return (
     holds.find((held) => held.itemId === itemId)?.section ??
-    (prev?.hold?.itemId === itemId ? prev.hold.section : null) ??
-    (prev === null ? null : sectionOfItem(prev.sections, itemId))
+    (prev.hold?.itemId === itemId ? prev.hold.section : null) ??
+    sectionOfItem(prev.sections, itemId)
   );
 }
 
 function openedHoldOf(
-  prev: OpenedHoldState | null,
+  prev: OpenedHoldState,
   sections: ReadonlyArray<StripSectionGroup>,
   opening: StripOpening | null,
   holds: ReadonlyArray<StripSectionHold>,
@@ -191,7 +191,7 @@ function openedHoldOf(
   const { itemId } = opening;
   const now = sectionOfItem(sections, itemId);
   if (now !== "to-review" && now !== "idle") return null;
-  if (prev !== null && sameOpened(prev.opening, opening)) {
+  if (sameOpened(prev.opening, opening)) {
     const { hold } = prev;
     return hold === null || hold.itemId === itemId ? hold : { ...hold, itemId };
   }
@@ -213,11 +213,12 @@ export function useOpenedSectionHold(
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSectionHold | null {
   const opening = openingOf(layoutItems, activeItemId);
-  const [state, setState] = useState<OpenedHoldState>(() => ({
+  // No hold at mount: the task current then was not opened from anywhere.
+  const [state, setState] = useState<OpenedHoldState>({
     sections,
     opening,
-    hold: openedHoldOf(null, sections, opening, holds),
-  }));
+    hold: null,
+  });
   if (
     state.sections !== sections ||
     state.opening?.itemId !== opening?.itemId ||

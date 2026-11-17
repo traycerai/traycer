@@ -103,6 +103,21 @@ function drawnOf(input: Input): Drawn {
 }
 
 describe("useOpenedSectionHold", () => {
+  // A mount is not an opening.
+  it("takes no hold for a task already current in To review when the list mounts", () => {
+    const itemId = tabItemId(REF_A);
+    const drawn = drawnOf({
+      activeItemId: itemId,
+      sections: sectionsWith(itemId, "to-review"),
+      items: [{ kind: "tab", id: itemId, ref: REF_A }],
+    });
+    expect(drawn.section()).toBe("to-review");
+
+    drawn.set({ sections: sectionsWith(itemId, "idle") });
+
+    expect(drawn.section()).toBe("idle");
+  });
+
   it("holds a current pair in To review when its other member is focused from there", () => {
     const drawn = drawnOf({
       activeItemId: PAIR,
