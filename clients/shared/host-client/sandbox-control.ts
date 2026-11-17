@@ -393,6 +393,7 @@ const traycerCatalogModelSchema = z.object({
   name: z.string().min(1).nullish(),
   description: z.string().nullish(),
   provider: z.string().min(1).nullish(),
+  vendor: z.string().min(1).nullish(),
   contextWindow: z.number().nullish(),
   maxOutputTokens: z.number().nullish(),
   supportsImages: z.boolean().nullish(),
@@ -407,7 +408,9 @@ type TraycerCatalogModel = z.infer<typeof traycerCatalogModelSchema>;
 /**
  * The catalog names its upstream by id alone. A group header never prefixes
  * its models' names (the picker strips it from them), so gemini's is its
- * vendor; an unknown id is title-cased.
+ * vendor; an unknown id is title-cased. A row that carries its maker (`vendor`,
+ * display only) is grouped under that name instead; `provider` still alone
+ * decides routing.
  */
 const TRAYCER_PROVIDER_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
@@ -417,6 +420,10 @@ const TRAYCER_PROVIDER_LABELS: Readonly<Record<string, string>> = {
   openrouter: "OpenRouter",
   gemini: "Google",
 };
+
+function traycerVendorGroupId(vendor: string): string {
+  return vendor.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
 
 function traycerProviderLabel(provider: string): string {
   return (
@@ -432,6 +439,7 @@ function traycerProviderLabel(provider: string): string {
 /** A catalog row as the Traycer harness lists it, under the same slug. */
 function traycerModelOption(model: TraycerCatalogModel): GuiAgentModelOption {
   const provider = model.provider ?? null;
+  const vendor = model.vendor ?? null;
   return {
     harnessId: "traycer",
     slug: `traycer:${model.id}`,
@@ -448,8 +456,9 @@ function traycerModelOption(model: TraycerCatalogModel): GuiAgentModelOption {
       ...(provider === null
         ? {}
         : {
-            openCodeProviderId: provider,
-            openCodeProviderLabel: traycerProviderLabel(provider),
+            openCodeProviderId:
+              vendor === null ? provider : traycerVendorGroupId(vendor),
+            openCodeProviderLabel: vendor ?? traycerProviderLabel(provider),
           }),
       ...(model.supportsImages === true
         ? { supportsImages: true, inputModalities: ["text", "image"] }
