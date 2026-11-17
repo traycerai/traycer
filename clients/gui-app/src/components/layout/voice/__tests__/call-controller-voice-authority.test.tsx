@@ -106,6 +106,8 @@ const fake = vi.hoisted(() => {
     // When set, an engine's `connect` waits on it after the answer is taken.
     connectGate: { current: null as Promise<void> | null },
     shellLive: vi.fn<(live: boolean) => Promise<void>>(),
+    // The text of every call send that left, in order.
+    sentTexts: [] as string[],
   };
 });
 
@@ -138,13 +140,17 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
       } satisfies BotConversationSendResponse),
   }),
   useBotCallSendMutation: () => ({
-    mutateAsync: () =>
-      Promise.resolve({
+    mutateAsync: (variables: {
+      readonly request: { readonly text: string };
+    }) => {
+      fake.sentTexts.push(variables.request.text);
+      return Promise.resolve({
         messageId: "m1",
         requestId: "r1",
         delivery: "written",
         threadId: "t1",
-      } satisfies BotConversationSendResponse),
+      } satisfies BotConversationSendResponse);
+    },
   }),
   useBotOpenMutation: () => ({
     mutateAsync: () =>
@@ -497,6 +503,13 @@ function recordPhases(): ReadonlyArray<string> {
   return phases;
 }
 
+/** The person says `text`; no utterance boundary closes it yet. */
+function speak(text: string): void {
+  act(() => {
+    engine().events?.onInputTranscriptDelta(text);
+  });
+}
+
 /** `signOut` has bumped the identity generation and waits on storage. */
 function startSignOutWaitingOnStorage(): Deferred<void> {
   const storage = deferred<void>();
@@ -543,6 +556,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   fake.engines.length = 0;
   fake.connectGate.current = null;
+  fake.sentTexts.length = 0;
   fake.shellLive.mockReset();
   fake.shellLive.mockImplementation(() => Promise.resolve());
   fake.track.enabled = true;
@@ -811,5 +825,40 @@ describe("a call's one authority", () => {
       expect(useVoiceSessionStore.getState().phase).toBe("idle");
       expect(useVoiceSessionStore.getState().refusal).toBe("session-changed");
     });
+  });
+
+  describe("the words a call leaves unsent", () => {
+    it("are sent by an ordinary End under an intact authority", async () => {
+      await dial();
+      speak("Hold the build");
+
+      await endCall();
+
+      expect(fake.sentTexts).toEqual(["Hold the build"]);
+    });
+
+    describe.each(REVOCATIONS.filter(({ name }) => !name.includes("disposed")))(
+      "when $name while the call is live",
+      ({ revoke }) => {
+        it("ends a refused renewal as session-changed and sends none of them", async () => {
+          await dial();
+          expect(useVoiceSessionStore.getState().phase).toBe("live");
+          speak("Hold the build");
+          await revoke();
+          expect(useVoiceSessionStore.getState().phase).toBe("live");
+
+          act(() => {
+            engine().events?.onClosed("connection");
+          });
+          await settle();
+
+          const state = useVoiceSessionStore.getState();
+          expect(state.phase).toBe("idle");
+          expect(state.endReason).toBe("session-changed");
+          expect(fake.sentTexts).toEqual([]);
+          expect(mint).toHaveBeenCalledTimes(1);
+        });
+      },
+    );
   });
 });

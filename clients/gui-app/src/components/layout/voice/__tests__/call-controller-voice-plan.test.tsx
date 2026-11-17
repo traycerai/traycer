@@ -726,7 +726,7 @@ describe("the plan comes from the call-start refresh", () => {
     expect(fake.refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses an unavailable deployment, hides Call, and mints nothing", async () => {
+  it("refuses a deployment that offers no calls with its own refusal, hides Call, and mints nothing", async () => {
     fake.refreshAnswer.current = {
       kind: "ok",
       available: false,
@@ -736,7 +736,7 @@ describe("the plan comes from the call-start refresh", () => {
     await dial(CHANNEL_CALL);
 
     const state = useVoiceSessionStore.getState();
-    expect(state.refusal).toBe("unavailable");
+    expect(state.refusal).toBe("calls-unavailable");
     expect(state.availability).toBe("dormant");
     expect(fake.mint).not.toHaveBeenCalled();
   });
@@ -762,6 +762,29 @@ describe("the plan comes from the call-start refresh", () => {
       expect(fake.mint).not.toHaveBeenCalled();
     },
   );
+
+  it("reads once and refuses as unavailable when the read rejects, even under a client that retries mutations", async () => {
+    cleanup();
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { mutations: { retry: 2 } } })
+        }
+      >
+        <CallController />
+      </QueryClientProvider>,
+    );
+    fake.refresh.mockRejectedValue(new Error("offline"));
+
+    await dial(CHANNEL_CALL);
+    await advance(30_000);
+
+    const state = useVoiceSessionStore.getState();
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(fake.mint).not.toHaveBeenCalled();
+  });
 
   it("sets no plan, notice or mint when the dial is ended while the refresh is held", async () => {
     serverOffers(CAPABILITY);

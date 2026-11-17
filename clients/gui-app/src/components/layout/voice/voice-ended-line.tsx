@@ -166,6 +166,8 @@ function refusalLine(refusal: VoiceRefusal, botTitle: string): string {
       return VOICE_UNCONFIRMED_LINE;
     case "session-changed":
       return SESSION_CHANGED_LINE;
+    case "calls-unavailable":
+      return "Calls are not available right now.";
   }
 }
 

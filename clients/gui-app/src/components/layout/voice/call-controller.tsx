@@ -42,6 +42,7 @@ import {
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
+  useVoiceCallAvailabilityMutation,
   useVoiceMicrophoneAccessMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
@@ -243,6 +244,8 @@ export function CallController(): ReactNode {
   const runnerHost = useRunnerHost();
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
+  const { mutateAsync: readCallAvailabilityAsync } =
+    useVoiceCallAvailabilityMutation();
   const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
   const { mutateAsync: shellIndicatorAsync } = useVoiceShellIndicatorMutation();
   const { mutateAsync: microphoneAccessAsync } =
@@ -718,12 +721,14 @@ export function CallController(): ReactNode {
    * only under the account the call started under, which each send carries
    * to its dispatch: once another account is signed in, at the end or at
    * any point after, nothing more is sent, since the words were another
-   * person's. The check here only stops early. (A call closing on a queued
+   * person's. A call ended because its sign-in session changed sends none
+   * either: they were said under a session that is gone, whoever is signed
+   * in now. The check here only stops early. (A call closing on a queued
    * send let its words go when the microphone went off.)
    */
   const takeLastWords = useCallback(
     (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
-      if (reason === "account") return null;
+      if (reason === "account" || reason === "session-changed") return null;
       const store = useVoiceSessionStore.getState();
       const call = store.focus;
       const known = channelRef.current;
@@ -1313,7 +1318,7 @@ export function CallController(): ReactNode {
       authority: VoiceCallAuthority,
     ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> => {
       try {
-        return await auth.getVoiceAvailabilityForCall(authority);
+        return await readCallAvailabilityAsync({ authority });
       } catch (error) {
         appLogger.warn("[voice] call availability read failed", {
           error: describeLogError(error),
@@ -1324,7 +1329,7 @@ export function CallController(): ReactNode {
         };
       }
     },
-    [auth],
+    [readCallAvailabilityAsync],
   );
 
   /**
@@ -1362,7 +1367,7 @@ export function CallController(): ReactNode {
       );
       if (!answer.available) {
         useVoiceSessionStore.getState().setAvailability("dormant");
-        return "unavailable";
+        return "calls-unavailable";
       }
       const capability = answer.voiceSelection;
       voicePlanRef.current =

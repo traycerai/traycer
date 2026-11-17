@@ -79,7 +79,12 @@ export type VoiceRefusal =
   /** The server's answer did not confirm the voice the call asked for. */
   | "voice-unconfirmed"
   /** The call's account is no longer the one signed in. */
-  | "session-changed";
+  | "session-changed"
+  /**
+   * The deployment answered that it offers no calls now; Call hides for this
+   * window.
+   */
+  | "calls-unavailable";
 
 /**
  * What the call says about its voice while it runs: the saved voice is not

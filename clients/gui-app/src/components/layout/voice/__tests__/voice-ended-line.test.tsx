@@ -79,4 +79,14 @@ describe("the voice outcome lines", () => {
 
     expect(outcomeLine()).toBe("Call ended when you switched accounts.");
   });
+
+  it("says calls are not available when the deployment offers none", () => {
+    useVoiceSessionStore.setState({ refusal: "calls-unavailable" });
+    render(<VoiceOutcomeLine surface="composer" />);
+
+    expect(outcomeLine()).toBe("Calls are not available right now.");
+    expect(screen.getByTestId("voice-outcome").dataset["state"]).toBe(
+      "refused",
+    );
+  });
 });

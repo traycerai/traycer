@@ -1,5 +1,6 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
@@ -35,6 +36,25 @@ export function useVoiceSessionMintMutation(): UseMutationResult<
     mutationKey: voiceMutationKeys.mint(),
     mutationFn: ({ request, authority }) =>
       auth.mintVoiceSession(request, authority),
+  });
+}
+
+/**
+ * `GET /api/voice/availability`, read once by a call as it starts, under the
+ * call's own account: the voices it may ask for come from this answer, never
+ * the window's cached one. Not retried: a failed read refuses the dial, and
+ * the person's next Call reads again.
+ */
+export function useVoiceCallAvailabilityMutation(): UseMutationResult<
+  VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+  Error,
+  { readonly authority: VoiceCallAuthority }
+> {
+  const auth = useAuthService();
+  return useMutation({
+    mutationKey: voiceMutationKeys.callAvailability(),
+    mutationFn: ({ authority }) => auth.getVoiceAvailabilityForCall(authority),
+    retry: false,
   });
 }
 
