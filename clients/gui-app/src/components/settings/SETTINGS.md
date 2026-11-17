@@ -4418,18 +4418,13 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       credential does not change which CLIs are installed, and re-probing every
       harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
       user action.
-- `Notifications` Two `SettingsGroup` cards. A design pass
-  (`settings-related-panels-core-flows` artifact) replaced the old one-column
-  severity×channel matrix with a compact policy card, and gave the hooks
-  manager below it the remaining height.
-  - **The turn alert** (`notification-long-turn-alert-row.tsx`), in an
-    untitled card of its own that is drawn only with its row: not for a host
-    too old to serve it (`E_HOST_UNSUPPORTED`), and not before the host
-    answers. The per-severity switches that shared the card are gone: which
-    kinds interrupt is the device's, on Application → Alerts, and the panel
-    no longer reads or writes `host.notifications.getConfig` / `setConfig`
-    (the wire methods stay; the host's stored matrix is simply no longer
-    edited here).
+- `Notifications` One `SettingsGroup` card, the hooks manager, which owns
+  the page's whole height. The per-severity switches that once sat above it
+  are gone (which kinds interrupt is the device's, on Application → Alerts,
+  and the panel no longer reads or writes `host.notifications.getConfig` /
+  `setConfig`; those wire methods stay), and so is the long-turn alert,
+  whose method pair was removed from the protocol before any release
+  carried it.
   - **`"Notification hooks"`** (`notification-hooks-section.tsx`): a toolbar
     (hook count, a copy-config-path chip, Refresh, Add hook) over a row list
     that owns the remaining height (`fillHeight` on the shell +

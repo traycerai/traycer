@@ -1,10 +1,4 @@
 import {
-  useHostLongTurnAlertForClient,
-  useHostSetLongTurnAlertForClient,
-  type LongTurnAlertQuery,
-  type SetLongTurnAlertMutation,
-} from "@/hooks/host/use-host-notifications-long-turn-alert";
-import {
   useNotificationHooksSaveForClient,
   useNotificationHooksStatusForClient,
   useNotificationHooksTestForClient,
@@ -14,7 +8,6 @@ import {
 } from "@/hooks/host/use-notification-hooks-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
-import { NotificationLongTurnAlertCard } from "@/components/settings/panels/notification-long-turn-alert-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
   HostScopeConnecting,
@@ -25,13 +18,11 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
-import { cn } from "@/lib/utils";
-import { useSettingsDensity } from "@/providers/settings-density-context";
 
 /**
  * The route / modal entry point.
  *
- * The long-turn alert and the hooks are stored BY THE HOST, so this panel was
+ * The hooks are stored BY THE HOST, so this panel was
  * always host-scoped — it just never said which host, and silently configured
  * whichever one happened to be active under a heading that read "Current
  * host". It was the worst of the invisible bindings: a person could edit
@@ -45,8 +36,6 @@ export function NotificationsSettingsPanel() {
   return (
     <NotificationsSettingsPanelContent
       scope={scope}
-      longTurnAlertQuery={useHostLongTurnAlertForClient(scope.client)}
-      setLongTurnAlert={useHostSetLongTurnAlertForClient(scope.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(scope.client)}
       testHook={useNotificationHooksTestForClient(scope.client)}
       saveHooks={useNotificationHooksSaveForClient(scope.client)}
@@ -60,8 +49,6 @@ export function NotificationsSettingsPanelForClient(props: {
   return (
     <NotificationsSettingsPanelContent
       scope={null}
-      longTurnAlertQuery={useHostLongTurnAlertForClient(props.client)}
-      setLongTurnAlert={useHostSetLongTurnAlertForClient(props.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(props.client)}
       testHook={useNotificationHooksTestForClient(props.client)}
       saveHooks={useNotificationHooksSaveForClient(props.client)}
@@ -72,25 +59,13 @@ export function NotificationsSettingsPanelForClient(props: {
 function NotificationsSettingsPanelContent(props: {
   /** `null` when the caller supplied a client directly and owns the gating. */
   readonly scope: HostScope | null;
-  readonly longTurnAlertQuery: LongTurnAlertQuery;
-  readonly setLongTurnAlert: SetLongTurnAlertMutation;
   readonly hooksStatusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
-  const compact = useSettingsDensity() === "compact";
   const { scope } = props;
   const body = (
-    <div
-      className={cn(
-        "flex h-full min-h-0 flex-col",
-        compact ? "gap-3.5" : "gap-5",
-      )}
-    >
-      <NotificationLongTurnAlertCard
-        query={props.longTurnAlertQuery}
-        setAlert={props.setLongTurnAlert}
-      />
+    <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
         {/* Keyed by host. The editor below holds an open hook draft and an
             armed pending-delete, and a save rebuilds the host's ENTIRE hooks
@@ -117,7 +92,7 @@ function NotificationsSettingsPanelContent(props: {
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="Long-turn alerts from this host, and what its automation receives. Choose which kinds interrupt you under Application → Alerts."
+      description="What this host's automation receives when it creates a notification. Choose which kinds interrupt you under Application → Alerts."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
       // The header named the scoped host until the sidebar started doing it a
