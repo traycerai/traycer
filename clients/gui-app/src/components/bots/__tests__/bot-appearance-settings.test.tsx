@@ -346,6 +346,14 @@ function partName(part: string): string {
   return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
+/** The eyewear buttons' names as assistive tech reads them; `glasses` reads as wide eyes. */
+const EYEWEAR_NAMES: readonly string[] = [
+  "None",
+  "Wide eyes",
+  "Shades",
+  "Visor",
+];
+
 /** The choice a section shows pressed. */
 function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
   const [pressed, ...rest] = within(
@@ -434,16 +442,13 @@ describe("<BotAppearanceSettings />", () => {
   it("offers every eyewear and accessory and writes the chosen one alone", async () => {
     const user = userEvent.setup();
     mount(BARE);
-    for (const [section, options] of [
-      ["eyewear", BOT_MASCOT_EYEWEAR],
-      ["accessory", BOT_MASCOT_ACCESSORIES],
-    ] as const) {
-      expect(
-        within(screen.getByTestId(`bot-settings-${section}`))
-          .getAllByRole("button", { name: /^[A-Z][a-z]+$/ })
-          .map((button) => button.getAttribute("aria-label")),
-      ).toEqual(options.map(partName));
-    }
+    const namesIn = (section: "eyewear" | "accessory"): Array<string | null> =>
+      within(screen.getByTestId(`bot-settings-${section}`))
+        .getAllByRole("button", { name: /^[A-Z][a-z]+( eyes)?$/ })
+        .map((button) => button.getAttribute("aria-label"));
+    expect(namesIn("eyewear")).toEqual(EYEWEAR_NAMES);
+    expect(namesIn("accessory")).toEqual(BOT_MASCOT_ACCESSORIES.map(partName));
+    expect(BOT_MASCOT_EYEWEAR).toHaveLength(EYEWEAR_NAMES.length);
 
     await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
     await waitFor(() => {
@@ -457,6 +462,23 @@ describe("<BotAppearanceSettings />", () => {
     expect(mocks.appearanceWrites).toEqual([
       { botId: BOT_ID, eyewear: "shades" },
       { botId: BOT_ID, accessory: "halo" },
+    ]);
+  });
+
+  it("names the glasses choice Wide eyes to assistive tech and still writes glasses alone", async () => {
+    const user = userEvent.setup();
+    mount(BARE);
+
+    const wide = screen.getByRole("button", { name: "Wide eyes" });
+    expect(wide).toBe(screen.getByTestId("bot-settings-eyewear-glasses"));
+    expect(screen.queryByRole("button", { name: "Glasses" })).toBeNull();
+    await user.click(wide);
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(1);
+    });
+
+    expect(mocks.appearanceWrites).toEqual([
+      { botId: BOT_ID, eyewear: "glasses" },
     ]);
   });
 
@@ -718,7 +740,7 @@ describe("<BotAppearanceSettings />", () => {
           "Only the owner may change this.",
         );
       });
-      expect(pressedIn("eyewear")).toBe("Glasses");
+      expect(pressedIn("eyewear")).toBe("Wide eyes");
       expect(
         within(screen.getByTestId("bot-settings-accessory")).queryByRole(
           "alert",

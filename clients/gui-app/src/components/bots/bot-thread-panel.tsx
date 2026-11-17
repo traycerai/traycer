@@ -14,6 +14,7 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
+import { QuoteArea } from "@/components/chat/quote/quote-area";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
@@ -56,7 +57,6 @@ import type {
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
-  BotTranscriptMark,
   QuestionAnswerSend,
   QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
@@ -129,8 +129,7 @@ export type BotThreadPanelThread =
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
  * card's post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
- * in full), and the reply its reading would acknowledge is marked
- * (`readMark`, `null` for none).
+ * in full).
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -138,7 +137,6 @@ export type BotThreadLayout =
       readonly kind: "card";
       readonly fold: BotTranscriptFold | null;
       readonly onShowPost: () => void;
-      readonly readMark: BotTranscriptMark | null;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -557,23 +555,41 @@ function ThreadOriginPost(
  * tall as the post and no taller than the pane leaves it. On the focus layout
  * it is the context region and takes all the pane leaves, so the box rests on
  * the keyboard under a short post too. A card draws it as tall as it is.
+ *
+ * In the panel, a selection of the post offers Quote, by the button or a
+ * native shell's edit menu, into the thread's box, as the replies' transcript
+ * does once it holds the post.
  */
 function ThreadPostScroll(props: {
   readonly layout: BotThreadLayout;
+  /** The channel's conversation, which holds the post. */
+  readonly conversationId: string;
   readonly children: ReactNode;
 }): ReactNode {
+  const scrollRef = useRef<HTMLDivElement>(null);
   if (props.layout.kind === "card") {
     return <div className="pt-2">{props.children}</div>;
   }
   return (
     <div
+      ref={scrollRef}
       className="min-h-0 overflow-y-auto pt-2 group-data-[focus-layout]/thread-panel:flex-1"
       data-testid="bot-thread-post-scroll"
     >
       {props.children}
+      <QuoteArea
+        chatId={props.conversationId}
+        containerRef={scrollRef}
+        active
+        bottomOverlayInsetPx={0}
+        onQuoted={keepThreadPanel}
+      />
     </div>
   );
 }
+
+/** A quote of the post leaves the panel as it is: nothing in it hides the box. */
+function keepThreadPanel(): void {}
 
 /**
  * The tasks the thread's session set up (Tracy Bots T82), each with where it
@@ -735,6 +751,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         thread={thread}
         sendFailure={props.sendFailure}
         layout={props.layout}
+        conversationId={props.conversationId}
       />
     );
   }
@@ -743,7 +760,12 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     <>
       {box.threadId === null ? (
         <>
-          <ThreadPostScroll layout={props.layout}>{origin}</ThreadPostScroll>
+          <ThreadPostScroll
+            layout={props.layout}
+            conversationId={props.conversationId}
+          >
+            {origin}
+          </ThreadPostScroll>
           <ThreadListReadFailure retry={thread.retry} />
         </>
       ) : (
@@ -1070,16 +1092,15 @@ function KnownThread(
     [hasReplies, onCard, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
-    () =>
-      layout.kind === "card"
-        ? { fold: layout.fold, mark: layout.readMark }
-        : null,
+    () => (layout.kind === "card" ? { fold: layout.fold } : null),
     [layout],
   );
   return (
     <>
       {hasReplies ? null : (
-        <ThreadPostScroll layout={layout}>{origin}</ThreadPostScroll>
+        <ThreadPostScroll layout={layout} conversationId={conversationId}>
+          {origin}
+        </ThreadPostScroll>
       )}
       <ThreadListReadFailure retry={retry} />
       {listed === null ? null : (
@@ -1213,6 +1234,8 @@ function UnlistedThread(props: {
   >;
   readonly sendFailure: BotSendFailure;
   readonly layout: BotThreadLayout;
+  /** The channel's conversation, which holds the post. */
+  readonly conversationId: string;
 }): ReactNode {
   const sendFailed = props.sendFailure.failed ? (
     <div className="shrink-0 px-4 pt-2">
@@ -1222,7 +1245,10 @@ function UnlistedThread(props: {
   if (props.thread.kind === "failed") {
     return (
       <>
-        <ThreadPostScroll layout={props.layout}>
+        <ThreadPostScroll
+          layout={props.layout}
+          conversationId={props.conversationId}
+        >
           {props.origin}
         </ThreadPostScroll>
         {sendFailed}
@@ -1238,7 +1264,12 @@ function UnlistedThread(props: {
   }
   return (
     <>
-      <ThreadPostScroll layout={props.layout}>{props.origin}</ThreadPostScroll>
+      <ThreadPostScroll
+        layout={props.layout}
+        conversationId={props.conversationId}
+      >
+        {props.origin}
+      </ThreadPostScroll>
       {sendFailed}
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"

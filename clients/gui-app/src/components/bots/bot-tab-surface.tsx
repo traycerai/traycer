@@ -1860,7 +1860,7 @@ function environmentBotsOf(
 function BotTabConnecting(): ReactNode {
   return (
     <div
-      className="flex h-full items-center justify-center text-muted-foreground"
+      className="flex size-full items-center justify-center text-muted-foreground"
       aria-busy="true"
       data-testid="bot-tab-connecting"
     >
@@ -2226,13 +2226,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-tab-activity-count"
-            corner={null}
-            noun="active"
-          />
         </TabsTrigger>
       </TabsList>
     </header>

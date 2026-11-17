@@ -6,6 +6,7 @@ import type {
 import type {
   BotNotificationLevelReadResponse,
   BotReadCursorReadResponse,
+  BotReadPosition,
   BotRecord,
   BotThreadFollowReadResponse,
 } from "@traycer/protocol/host/bot/schemas";
@@ -21,7 +22,7 @@ import {
   channelMuted,
   followingOf,
 } from "@/lib/bots/bot-notification-settings";
-import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
+import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 
 /** A thread the person follows, with the bot whose channel it hangs off. */
 export type BotFollowedThread = {
@@ -29,6 +30,7 @@ export type BotFollowedThread = {
   readonly thread: BotThreadSummary;
   /** A reply has landed past the person's read cursor (decision 139). */
   readonly newReplies: boolean;
+  readonly readTarget: BotReadPosition | null;
 };
 
 export type BotFollowedThreads =
@@ -181,6 +183,10 @@ function followedThreadsOf(
       threads.push({
         bot,
         thread,
+        readTarget:
+          cursors === undefined
+            ? null
+            : advanceTarget(cursors, thread.threadId),
         newReplies: threadHasNewReplies(
           cursors,
           thread.threadId,
