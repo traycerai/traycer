@@ -93,3 +93,31 @@ describe("<NotificationHookEditorDialog /> credentials", () => {
     });
   });
 });
+
+describe("<NotificationHookEditorDialog /> severities", () => {
+  function commandDraft(): HookDraft {
+    return { ...emptyDraft(), command: "/usr/local/bin/notify" };
+  }
+
+  it("saves a new hook without info until its switch is turned on", () => {
+    const { onSave } = renderDialog(commandDraft());
+
+    const info = screen.getByRole("switch", { name: "Info hook deliveries" });
+    expect(info.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Save hook" }));
+    expect(onSave.mock.calls[0]?.[0].severities).toEqual([
+      "needs_action",
+      "failure",
+      "done",
+    ]);
+
+    fireEvent.click(info);
+    fireEvent.click(screen.getByRole("button", { name: "Save hook" }));
+    expect(onSave.mock.calls[1]?.[0].severities).toEqual([
+      "needs_action",
+      "failure",
+      "done",
+      "info",
+    ]);
+  });
+});

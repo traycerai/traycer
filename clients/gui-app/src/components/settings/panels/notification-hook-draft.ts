@@ -5,29 +5,40 @@ import type {
 import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 
 /**
- * The severities a notification can actually carry, in the same order and
- * wording as the Interruptions matrix. `info` is omitted for the same reason
- * the matrix omits it: no notification kind emits it today.
+ * The severities a hook can match, in the same order and wording as the
+ * in-app notifications switches. `onForNewHook` is the switch's state in a
+ * new hook: `info` starts off, as it does in-app, because it is the tier
+ * that needs nothing from the person.
  */
 export const HOOK_SEVERITIES: ReadonlyArray<{
   readonly id: HostNotificationSeverity;
   readonly label: string;
   readonly description: string;
+  readonly onForNewHook: boolean;
 }> = [
   {
     id: "needs_action",
     label: "Needs action",
     description: "Approvals and interviews.",
+    onForNewHook: true,
   },
   {
     id: "failure",
     label: "Failure",
     description: "Errored turns, stalls, crashes, and rate limits.",
+    onForNewHook: true,
   },
   {
     id: "done",
     label: "Done",
     description: "Completed or intentionally stopped turns.",
+    onForNewHook: true,
+  },
+  {
+    id: "info",
+    label: "Info",
+    description: "Updates that need nothing from you.",
+    onForNewHook: false,
   },
 ];
 
@@ -40,9 +51,8 @@ export type HookDraft = {
   readonly name: string;
   readonly enabled: boolean;
   /**
-   * Full severity list as the file holds it. The form renders one switch per
-   * reachable severity; any severity outside that set (e.g. a hand-authored
-   * `info`) simply rides along untouched, so editing never drops it.
+   * The severities whose switches are on. The form renders one switch per
+   * severity.
    */
   readonly severities: readonly HostNotificationSeverity[];
   readonly actionType: "http" | "command";
@@ -68,8 +78,8 @@ type CommandAction = Extract<
 function shownSeverities(
   held: NotificationHookConfig["severities"],
 ): HostNotificationSeverity[] {
-  // `null` on the wire means "any severity"; every reachable severity
-  // selected is the same thing, and it is what the switches can show.
+  // `null` on the wire means "any severity"; every severity selected is the
+  // same thing, and it is what the switches can show.
   return held === null ? HOOK_SEVERITIES.map((entry) => entry.id) : [...held];
 }
 
@@ -100,7 +110,9 @@ export function emptyDraft(): HookDraft {
     id: crypto.randomUUID(),
     name: "",
     enabled: false,
-    severities: HOOK_SEVERITIES.map((entry) => entry.id),
+    severities: HOOK_SEVERITIES.filter((entry) => entry.onForNewHook).map(
+      (entry) => entry.id,
+    ),
     actionType: "command",
     url: "",
     headersText: "",
