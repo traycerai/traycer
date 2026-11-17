@@ -333,11 +333,6 @@ interface HostCredentialAttempt {
 
 const attemptsByHostId = new Map<string, HostCredentialAttempt>();
 
-/**
- * A credential minted before its computer could be opened (see
- * {@link mintHostCredentialBeforeOpen}), held for the first transport that
- * opens the computer and asks to provision it.
- */
 const mintedBeforeOpenByHostId = new Map<
   string,
   {

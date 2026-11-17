@@ -73,7 +73,6 @@ function profileFields(input: {
   };
 }
 
-/** A 10.10 answer, upgraded by the real registry path to 10.11. */
 function upgradedAnswer() {
   const older = {
     providers: [

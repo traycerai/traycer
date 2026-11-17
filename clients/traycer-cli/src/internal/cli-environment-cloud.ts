@@ -17,37 +17,17 @@ import {
 import { cliCredentialsPath } from "../store/paths";
 import type { HostAuth } from "./host-auth";
 
-/**
- * The CLI's calls to authn's environment routes, on the stored sign-in the
- * command started with, so `runEnvironmentMove` and `recordMoveAcceptance`
- * run here as they do in the app.
- */
+/** On the stored sign-in the command started with, so the move runs here as in the app. */
 export interface CliEnvironmentCloud {
   readonly cloud: EnvironmentCloud;
-  /**
-   * Whether authn rejected the stored sign-in for good: it refused the one
-   * refresh, or refused the one resend after a refresh it accepted. A refresh
-   * that could not reach authn judges nothing.
-   */
+  /** It refused the one refresh, or the one resend after an accepted one; an unreachable refresh judges nothing. */
   readonly signInRejected: () => boolean;
 }
 
-/**
- * How this command's one refresh ended, judged under the credentials lock:
- * - `refreshed`: this command spent the refresh token and committed the pair;
- * - `not-own`: the stored sign-in is no longer the one this command holds (a
- *   sign-out, another sign-in, another process's refresh), so nothing is sent
- *   on it;
- * - `rejected`: authn refused the refresh;
- * - `unreachable`: nothing judged the sign-in.
- */
+/** `not-own`: no longer the sign-in this command holds (a sign-out, another sign-in, another process's refresh). */
 type OwnRefresh = "refreshed" | "not-own" | "rejected" | "unreachable";
 
-/**
- * The stored sign-in's user id and token, or null when there is none (signed
- * out, an empty token) or the file cannot be read now: a sign-in that cannot
- * be shown to be the same one is not.
- */
+/** Null when none or unreadable now: a sign-in that cannot be shown to be the same one is not. */
 function storedSignIn(): {
   readonly userId: string;
   readonly token: string;
@@ -65,23 +45,16 @@ function storedSignIn(): {
 }
 
 /**
- * One command's {@link EnvironmentCloud}, bound to `auth`, the sign-in it
- * started with. Its transport is the shared one, which never follows a
- * redirect; on a 401 it refreshes the stored sign-in once, under the
- * credentials lock, and sends that request once more on the refreshed token.
- * A 401 answers nothing authn took, so the resend repeats no write.
+ * Never follows a redirect. On a 401 it refreshes once under the credentials lock
+ * and resends once: a 401 answers nothing authn took, so the resend repeats no write.
  */
 export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
   const lease = new MutableBearerLease(auth.token, auth.userId);
   let refreshSpent = false;
   let rejected = false;
 
-  // The same sign-in, not only the same person: the stored token is the one
-  // this command holds, which moves only with this command's own refresh
-  // below. A sign-out and sign-in again, as anyone, writes a token this
-  // command never held. The stored file names no sign-in session, so another
-  // process's refresh reads as a change too: the command then stops rather
-  // than act on a sign-in it cannot show is its own.
+  // The same sign-in, not only the same person. The file names no session, so another
+  // process's refresh reads as a change: the command stops rather than act on it.
   const onOriginSignIn = (): boolean => {
     const stored = storedSignIn();
     return (

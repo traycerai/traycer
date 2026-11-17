@@ -82,7 +82,6 @@ function PublishedAuth(props: {
   return null;
 }
 
-/** The panel under the app's real host runtime with no host, signed in through its real AuthService. */
 async function renderHostless(
   status: "signed-in" | "unverified",
 ): Promise<void> {

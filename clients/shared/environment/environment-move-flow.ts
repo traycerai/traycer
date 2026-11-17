@@ -11,11 +11,7 @@ import type {
   EnvironmentOperationTarget,
 } from "@traycer/protocol/host/environment/move-contracts";
 
-/**
- * The two host calls a move or a give makes after the person's click, on the
- * computer that moves. Reading the plan is not one of them: it draws the
- * sheet and can never stage or end an attempt.
- */
+/** Reading the plan is not one of them: it can never stage or end an attempt. */
 export interface EnvironmentMoveHost {
   readonly stage: (
     request: EnvironmentMoveStageRequest,
@@ -25,11 +21,7 @@ export interface EnvironmentMoveHost {
   ) => Promise<EnvironmentMoveOutcomeAnswer>;
 }
 
-/**
- * What the person accepted: the computer, where it goes, and the drawn plan.
- * `personal` is the read of Personal the plan was drawn against, the same one
- * and never a newer or older copy; `null` for a give.
- */
+/** `personal` is the exact read the plan was drawn against; null for a give. */
 export interface EnvironmentMoveAcceptance {
   readonly hostId: string;
   readonly target: EnvironmentOperationTarget;
@@ -38,16 +30,7 @@ export interface EnvironmentMoveAcceptance {
   readonly personal: EnvironmentMovePersonal;
 }
 
-/**
- * - `started`: the computer has the acceptance and moves itself; what it
- *   answered at once is `outcome`, and `environment.status` carries it on.
- * - `plan_changed`: what the computer staged is not the list the person
- *   read, so nothing was accepted and the sheet reads the plan again.
- * - `not_awaiting`: the computer has no move waiting.
- * - `refused`: authn did not take the acceptance.
- * - `sign_in_changed`: the person signed out or switched while a call was
- *   out, so nothing more was sent and nothing is shown.
- */
+/** `plan_changed`: the computer staged a list other than the one read, so nothing was accepted. */
 export type EnvironmentMoveResult =
   | {
       readonly kind: "started";
@@ -69,7 +52,6 @@ function sameChoices(
   );
 }
 
-/** Whether the computer staged exactly what the person accepted. */
 function stagedAsAccepted(
   staged: EnvironmentMoveStageResponse,
   accepted: EnvironmentMoveAcceptance,
@@ -94,15 +76,8 @@ function isNotAwaiting(error: unknown): boolean {
 }
 
 /**
- * The person's click on a move or a give: the computer stages the accepted
- * list, the app records the acceptance at authn on the person's sign-in, and
- * then hands the computer that acceptance. The computer moves itself; the app
- * never asks it to record the consent.
- *
- * The sign-in is the click's, `cloud`'s: once any call answers, nothing more
- * is sent and nothing is reported unless that is still the sign-in.
- *
- * Throws what a call throws, other than the computer's `E_MOVE_NOT_AWAITING`.
+ * The computer moves itself; the app never asks it to record the consent. Once a
+ * call answers, nothing more is sent or reported unless `cloud`'s sign-in is current.
  */
 export async function runEnvironmentMove(
   host: EnvironmentMoveHost,

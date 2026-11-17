@@ -7,7 +7,6 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 
-/** A profile row with none of the 10.11 keys set, as a 10.10 computer sends it. */
 export function legacyProfile(input: {
   readonly profileId: string;
   readonly label: string;
@@ -37,7 +36,6 @@ export function legacyProfile(input: {
   };
 }
 
-/** A 10.11 row. Pass an empty list or `null` for a key the computer did not set. */
 export function pinProfile(input: {
   readonly profileId: string;
   readonly label: string;

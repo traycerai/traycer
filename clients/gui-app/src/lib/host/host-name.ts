@@ -52,7 +52,6 @@ export function quotedHostReference(
   return `${atSentenceStart ? "Host" : "host"} "${hostLabel}"`;
 }
 
-/** The computer-list label when the directory has no recognizable name. */
 export function computerNameFromLabel(
   label: string | null,
   hostId: string,

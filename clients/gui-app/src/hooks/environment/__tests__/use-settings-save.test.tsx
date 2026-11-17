@@ -307,7 +307,6 @@ interface MutableAuthnState {
   reviewPostGate: Deferred<EnvironmentTransportAnswer> | null;
   itemReadGates: Deferred<EnvironmentTransportAnswer>[];
   setupScripts: SetupScript[];
-  /** The host completes a setup script save on a computer bound to no configuration. */
   setupLocalOnly: boolean;
   originSignInChecks: number;
   itemReadResponsesReturned: number;
@@ -729,7 +728,6 @@ interface ShellCallbacks {
   readonly onError: (error: unknown) => void;
 }
 
-/** One shell command of the controller, run until its callbacks answer. */
 async function runShellCommand(
   invoke: (callbacks: ShellCallbacks) => void,
 ): Promise<void> {
@@ -751,10 +749,6 @@ function setRequest(value: string) {
   } as const;
 }
 
-/**
- * The editor's typed value: the hook reads it when the save is sent and never
- * holds it among the mutation's variables.
- */
 let typedValue: string | null = null;
 
 function useEnvOverrideEditor() {
@@ -764,7 +758,6 @@ function useEnvOverrideEditor() {
   );
 }
 
-/** The variables of a save of `value`, with `value` typed into the editor. */
 function setTarget(value: string) {
   typedValue = value;
   return {
@@ -1445,8 +1438,7 @@ describe("settings-save callers", () => {
         settingsSaveMemoryKey(ACCOUNT_B),
       ),
     );
-    // B's own session may start its base read during retargeting. Let that
-    // read start before checking whether A's later apply starts another one.
+    // B's own session may start its base read during retargeting; let it start first.
     await waitFor(() =>
       expect(itemReadCount()).toBeGreaterThan(readsBeforeSwitch),
     );
@@ -2378,8 +2370,7 @@ describe("settings-save callers", () => {
       ).toBe(true);
       expect(harness.queryClient.isFetching()).toBe(0);
     });
-    // A remembered save is reconciled as its host connects, before it is sent,
-    // so the host proposes only from its answer on.
+    // A remembered save is reconciled as its host connects, so the host proposes only from its answer on.
     const proposed = setupProposalForEdit(
       "00000000-0000-4000-8000-000000000051",
     );

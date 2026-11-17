@@ -117,7 +117,6 @@ export interface BuildRawHostMessengerForTargetParams<
    */
   readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
-  /** The person's host-only tokens: the only credential any host is sent. */
   readonly hostTokens: HostTokenSource;
   readonly requestId: RequestIdProvider;
   /** The signed-in user this messenger is built for (S1 cache key). */

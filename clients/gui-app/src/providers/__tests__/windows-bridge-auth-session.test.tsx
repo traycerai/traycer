@@ -21,7 +21,6 @@ const toast = vi.hoisted(() => ({
 
 vi.mock("sonner", () => ({ toast }));
 
-// The wake signal the bridge resends on while it holds the local computer.
 const wake = vi.hoisted((): { listener: (() => void) | null } => ({
   listener: null,
 }));
@@ -70,7 +69,6 @@ const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
 /** What the cross-window revoke channel says about a refusal. */
 type RevocationScope = "user-epoch" | null;
 
-/** What the next `restoreLocal` answers; `pending` waits for `resolveRestore`. */
 type RestoreAnswer = DesktopLocalAuthSessionRestoreResult | Error | "pending";
 
 type RenderWithFakesOptions = {
@@ -105,7 +103,6 @@ interface AuthSessionBridgeTestHarness {
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
-  /** What the next `set` answers; `pending` waits for `resolveSet`. */
   readonly answerSetWith: (
     answer: DesktopAuthSessionSetResult | "pending",
   ) => void;
@@ -113,7 +110,6 @@ interface AuthSessionBridgeTestHarness {
   readonly resolveRestore: (
     result: DesktopLocalAuthSessionRestoreResult,
   ) => void;
-  /** The session the sign-in service reports now (what a resend hands over). */
   readonly setCurrentSession: (snapshot: AuthSessionSnapshot) => void;
   readonly revalidate: Mock<() => Promise<LiveRevalidationOutcome | null>>;
   readonly revoke: Mock<
@@ -148,12 +144,10 @@ function renderWithFakes(
   let verificationRevokedListener:
     | ((rejectedToken: string, revocation: RevocationScope) => void)
     | null = null;
-  // Every write still waiting, oldest first: a window can have several.
   const pendingSets: Array<(resolution: AuthSessionSetResolution) => void> = [];
   let mainSnapshot = SIGNED_OUT_DESKTOP_SNAPSHOT;
   let setAnswer: DesktopAuthSessionSetResult | "pending" = setResult;
   let restoreAnswer: RestoreAnswer = "restored";
-  // Every restore still waiting, oldest first.
   const pendingRestores: Array<
     (result: DesktopLocalAuthSessionRestoreResult) => void
   > = [];
@@ -689,7 +683,6 @@ const refused = (
   reason: DesktopAuthSessionRefusalReason,
 ): DesktopAuthSessionSetResult => ({ outcome: "refused", reason });
 
-/** Every refusal that is a statement about the token, never a missing key source. */
 const TOKEN_REFUSALS: readonly Exclude<
   DesktopAuthSessionRefusalReason,
   "key-source-unavailable"
@@ -706,8 +699,7 @@ const TOKEN_REFUSALS: readonly Exclude<
 
 const RESEND_MS = 60_000;
 
-// What the sign-in service's `revalidateCurrentContext` answers, typed by its
-// own exported outcome so a renamed or removed outcome fails this file's compile.
+// Typed by the service's own outcome, so a renamed outcome fails this file's compile.
 const AUTHN_REFRESHED: LiveRevalidationOutcome = {
   kind: "valid",
   user: createAuthenticatedUserFixture(undefined),
@@ -748,7 +740,6 @@ async function tick(ms: number): Promise<void> {
   });
 }
 
-/** The window at a cold start with no network: main cannot reach its keys. */
 async function startOffline(
   options: RenderWithFakesOptions,
 ): Promise<AuthSessionBridgeTestHarness> {
@@ -1023,8 +1014,6 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       await settle();
       expect(vi.getTimerCount()).toBe(timersBeforeHold + 1);
       harness.answerSetWith(refused("bad-signature"));
-      // What the service projects when authn refuses the refresh: the session
-      // stays as the local plane's identity (`unverified`), not a sign-out.
       harness.revalidate.mockImplementation(() => {
         harness.setCurrentSession(UNVERIFIED_SNAPSHOT);
         harness.emitOutbound(UNVERIFIED_SNAPSHOT);
@@ -1055,7 +1044,6 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       await settle();
       expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
 
-      // The service demotes the session, then signs the same one in again.
       harness.emitOutbound(UNVERIFIED_SNAPSHOT);
       harness.emitOutbound(SIGNED_IN_SNAPSHOT);
       await settle();
@@ -1162,8 +1150,6 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     harness.emitOutbound(FRESH_SNAPSHOT);
     await settle();
 
-    // A fresh session's refusal: told, as any first refusal is, and not asked
-    // about again as a held one would be.
     expect(toast.warning).toHaveBeenCalledTimes(2);
     expect(harness.revalidate).toHaveBeenCalledTimes(1);
     const handedOver = harness.set.mock.calls.length;

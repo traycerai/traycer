@@ -113,8 +113,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null
       ? (hostBindingMock.current?.hostClient ?? null)
       : { getActiveHostId: () => hostId },
-  // No directory row, so a record that is this computer's Terminal login
-  // draws no computer name.
   useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 

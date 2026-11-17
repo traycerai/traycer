@@ -22,7 +22,6 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 
 const METHOD = "environment.move.start";
 
-/** What a move or a give changes: where the computer stands, and its plan. */
 const MOVE_READS = ["environment.status", "environment.move.plan"] as const;
 
 interface PressedMove {
@@ -30,12 +29,7 @@ interface PressedMove {
   readonly client: HostClient<HostRpcRegistry> | null;
 }
 
-/**
- * The click on a move or a give, on the computer `client` reaches: it stages
- * what the person accepted, records the acceptance at authn on their sign-in,
- * and hands the computer that acceptance (`runEnvironmentMove`). A failure
- * toasts `errorMessage`; `null` leaves it to the surface's own inline line.
- */
+/** A failure toasts `errorMessage`; `null` leaves it to the surface's inline line. */
 export function useEnvironmentMoveStartMutation(
   client: HostClient<HostRpcRegistry> | null,
   errorMessage: string | null,

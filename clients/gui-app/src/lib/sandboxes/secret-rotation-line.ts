@@ -120,9 +120,7 @@ export function grantRotationLine(
 }
 
 export interface SecretRotationProducerLine {
-  /** A worker class; unique within one rotation. */
   readonly key: string;
-  /** "postgres: 3 sessions closed". */
   readonly text: string;
 }
 
@@ -162,7 +160,6 @@ function workerClassLine(
     : `${workerClass}: ${proof}`;
 }
 
-/** The worker classes' lines in first-seen order, each class once. */
 function producerLines(
   producers: readonly WorkerProducer[],
 ): SecretRotationProducerLine[] {

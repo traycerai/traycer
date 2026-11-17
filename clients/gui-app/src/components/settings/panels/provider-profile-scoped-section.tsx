@@ -114,13 +114,7 @@ function ownLoginLabel(providerLabel: string, hostName: string | null): string {
     : `${providerLabel}'s own login on ${hostName}`;
 }
 
-/**
- * What the section's selection names. The selection is this page's own
- * state: a pin reaches it only through a focus intent. An alias selects its
- * row; an id the list does not resolve to a row - removed by a person or
- * unknown - shows the first row with none checked, as any id the page does
- * not list always has.
- */
+/** A pin reaches the selection only through a focus intent. */
 function settingsProfileSelection(
   profiles: readonly ProviderProfile[],
   removedProfiles: readonly RemovedProviderProfile[],
@@ -132,8 +126,7 @@ function settingsProfileSelection(
     : { pin: { kind: "unknown" }, profile: profiles[0] };
 }
 
-/** The dropdown's pin over the relabelled rows: the Terminal login's row is
- *  drawn under its own-login name, so a pin on it carries that name too. */
+/** The Terminal login's row is drawn under its own-login name, so a pin on it carries that name. */
 function labelledPin(
   pin: ProfilePinResolution,
   ownLogin: string,
@@ -596,11 +589,6 @@ function SelectedProfileRow(props: {
   );
 }
 
-/**
- * Sign in is offered on a row that reads signed out, and on a row the
- * computer says needs a sign-in or is waiting, where a sign-in also restores
- * it.
- */
 function profileOffersSignIn(
   state: ProviderCliState,
   profile: ProviderProfile,

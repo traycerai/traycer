@@ -15,16 +15,6 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import { providerProfileSchema } from "@traycer/protocol/host/provider-schemas";
 import { resolveUnavailableMethodDegrade } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
 
-/**
- * `providers.list@10.11` publishes four profile keys and `removedProfiles`.
- * `providers.list@10.12` adds optional `offersSignIns` on the envelope.
- * A 10.9 or 10.10 peer receives none of those keys; 10.11 retains the profile
- * keys and removed ids but strips `offersSignIns`. Every older major takes
- * the registry downgrade and receives none. A 10.11 client upgrades an older
- * host's answer to the documented defaults. A 10.12 client reads an older
- * answer as `offersSignIns: false`.
- * `providers.answerProfileName@1.0` stays off the released floor.
- */
 const METHOD = "providers.answerProfileName";
 const listRegistry = hostRpcRegistry["providers.list"];
 const listLine = listRegistry[10];

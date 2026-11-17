@@ -256,7 +256,6 @@ const TOOLBAR_DEFAULTS = vi.hoisted(
       modelSlug: "claude-sonnet",
       profileId: null,
     },
-    // No catalog answered yet.
     catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
     permission: "supervised",
     reasoning: "medium",

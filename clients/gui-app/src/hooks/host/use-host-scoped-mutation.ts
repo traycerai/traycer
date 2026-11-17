@@ -148,11 +148,9 @@ interface UseHostScopedMutationArgs<
    * serializes unrelated calls that happen to use the same hook.
    */
   readonly scope?: MutationScope | undefined;
-  /** See `UseHostMutationOptions.followSettingsSave`. */
   readonly followSettingsSave?:
     | SettingsSaveFollow<HostRpcRegistry, Method>
     | undefined;
-  /** See `UseHostMutationOptions.prepareRequest`. */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,

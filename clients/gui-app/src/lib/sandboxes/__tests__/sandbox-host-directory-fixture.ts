@@ -46,11 +46,6 @@ export function sandboxHostEntry(
   };
 }
 
-/**
- * A sandbox host's directory row for a sandbox the directory does not name an
- * owner for (the registry sent the row without `owner`): whose sandbox it is
- * is not known.
- */
 export function sandboxHostEntryWithoutOwner(
   hostId: string,
 ): RemoteHostDirectoryEntry {

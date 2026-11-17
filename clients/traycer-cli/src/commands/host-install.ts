@@ -279,13 +279,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
 
         const storeFormatFloor = await gateInstallStoreFormatFloor(ctx, args);
 
-        // `--no-service-register` must be truly bytes-only: no stop, no
-        // register/rewrite, no start - even when a service is already
-        // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
-        // does not satisfy that (it still rewrites and re-loads an EXISTING
-        // registration post-swap), so this skips the service lifecycle
-        // entirely and uses the same bytes-only shape `host ensure` uses
-        // for `registerService: false`.
+        // Bytes-only: `bootstrap: null` would still rewrite and re-load an existing
+        // registration post-swap, so the service lifecycle is skipped entirely.
         const handle: ServiceInstallLifecycleHandle | null =
           args.noServiceRegister
             ? null
@@ -331,16 +326,14 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
           async (capability) => {
             const verify = (): Promise<void> =>
               requireCliUpdateMutationCapability(capability, contenderOptions);
-            // The outer attempt capability intentionally spans staging. This
-            // preserves the existing no-download-under-cli-lock rule while
-            // refusing active/corrupt attempt state before the first byte.
+            // Spans staging on purpose: no download under the cli-lock, yet an active or
+            // corrupt attempt is refused before the first byte.
             const staged = await stageHostInstallSource({
               environment: ctx.runtime.environment,
               source,
               onProgress: (info) => ctx.progress(info),
               recordVersionOverride: null,
               verifyMutationCapability: verify,
-              // No attempt record to advance; see `hooks` above.
               beforeExtract: async () => {},
             });
             try {
@@ -348,10 +341,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                 capability,
                 contenderOptions,
                 async () => {
-                  // A desktop install never replaces a host a person started in a
-                  // terminal: refused before the busy probe and the commit's stop,
-                  // and the catch below scrubs the staged download. Bytes-only
-                  // (`--no-service-register`) stops nothing and is not refused.
+                  // A desktop install never replaces a host a person started in a terminal: refused
+                  // before the busy probe and the commit's stop. Bytes-only stops nothing.
                   if (!args.noServiceRegister) {
                     await refuseDesktopDisruptionOfForegroundRun(
                       "host install",
@@ -362,13 +353,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                   if (args.ifIdle) {
                     await assertHostNotBusy(ctx.runtime.environment);
                   }
-                  // Version hold recorded via the committer's post-swap observer,
-                  // at the true successful-swap boundary under this mutation lock
-                  // and keyed on the ACTUAL committed vs previous records: a `host
-                  // install --release X` below the prior install (the desktop's
-                  // rollback UI drives exactly this, ordinary AND bytes-only) is
-                  // held, bound to the committed `installId`. A forward/equal
-                  // install writes nothing.
+                  // The hold is recorded by the committer's post-swap observer under this lock, from
+                  // the actual committed and previous records: an install below the prior one is
+                  // held, bound to the committed `installId`.
                   return commitHostInstallSourceWithAttempt(
                     capability,
                     contenderOptions,
@@ -410,21 +397,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             handle !== null && handle.state.postSwapError !== null,
         });
 
-        // Post-install credential provisioning: leave the just-started host
-        // holding its own `aud: "host"` credential rather than waiting for the
-        // first minting client to happen to connect. Only where it can help:
-        //   - the service lifecycle actually started/restarted a host
-        //     (`postSwapAction`), cleanly - a host that failed its post-swap
-        //     start has nothing to dial;
-        //   - the pre-flight left us signed in (the mint spends the bearer).
-        // Deliberately NOT gated on output mode - `--json` is the automation
-        // surface that most needs a credentialed host, and a Desktop shellout
-        // racing the GUI's own mint resolves inside the probe (a superseded mint
-        // verifies the winner's credential rather than failing).
-        // Best-effort throughout: any failure is a warning, never a failed
-        // install - an unprovisioned host self-heals on the next minting client.
-        // A registration refused or kept disabled started no host, so there is
-        // nothing for the credential probe to dial.
+        // Only after a clean post-swap start, signed in. Not gated on output mode: `--json`
+        // automation most needs a credentialed host, and a race with the GUI's mint resolves
+        // inside the probe. Best-effort: a failure is a warning, never a failed install.
         const credentialProvision =
           preparedTeamToken === null
             ? await maybeProvisionCredential(
@@ -486,9 +461,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         if (handle !== null && handle.state.postSwapWarning !== null) {
           human = `${human}; ${handle.state.postSwapWarning.message}`;
         }
-        // Restate the unauthenticated warning on the terminal line - the
-        // pre-flight's copy printed before a potentially long download and
-        // may have scrolled away.
+        // Restated: the pre-flight's line, printed before a long download, may have scrolled away.
         if (authPreflight.state === "unauthenticated") {
           human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
         }
@@ -525,14 +498,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             credentialProvision,
           },
           human,
-          // A post-swap start that failed is a failed install to a shell: the
-          // bytes are committed but nothing is serving them, and a script that
-          // gates on the exit status (the dev-desktop loops) used to go on to
-          // report "service registered". The payload is unchanged - Desktop
-          // trusts a terminal `ok` line over a non-zero exit on both of its
-          // runners and reads `serviceLifecycle.postSwapError` exactly as before.
-          // Not `host apply`'s contract: that primitive's exit 0 answers "did the
-          // swap commit?" by design (see host-apply.ts).
+          // A failed post-swap start fails the install for a shell: the bytes are committed
+          // but nothing serves them. Not `host apply`'s contract, whose exit 0 means the swap committed.
           exitCode:
             (handle !== null && handle.state.postSwapError !== null) ||
             (args.team !== null &&

@@ -96,10 +96,8 @@ export type EnvironmentEffectiveRole = z.infer<
   typeof environmentEffectiveRoleSchema
 >;
 
-/** An environment role somebody holds. */
 export type GrantedEnvironmentRole = "owner" | "admin" | "editor" | "viewer";
 
-/** A decoded environment role, or `null` for a value that names no role. */
 export function grantedEnvironmentRole(
   role: string,
 ): GrantedEnvironmentRole | null {
@@ -553,16 +551,13 @@ export const environmentMembersV10 = defineRpcContract({
   responseSchema: environmentMembersResponseSchema,
 });
 
-/** A team member's role. */
 export const environmentMemberRoleSchema = lazySchema(() =>
   z.enum(["admin", "editor", "viewer"]),
 );
 export type EnvironmentMemberRole = z.infer<typeof environmentMemberRoleSchema>;
 
-/** A team-member role somebody holds. */
 export type GrantedTeamMemberRole = "admin" | "editor" | "viewer";
 
-/** A decoded team-member role, or `null` for a value that names no role. */
 export function grantedTeamMemberRole(
   role: string,
 ): GrantedTeamMemberRole | null {
@@ -843,18 +838,9 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
 });
 
 /**
- * `environment.previewLocalFacts@1.0`: this computer's own counts for a plan
- * (`plan`, by its profile) or a member (`member`) of an environment, or for
- * the computer itself (`computer`). For `computer`, the counts are the work
- * running on this computer under the computer's own owner: the team's on a
- * team's computer, the person's on a person's own computer. `activeTurns` is
- * the number of that owner's chats with a turn running on it, `terminals` the
- * number of that owner's terminal sessions running on it; read before that
- * work stops, when a member claims a team's computer and when a person gives
- * their computer to a team. A count the computer cannot read is null (not
- * known), never zero. `terminals` is always null for a `plan` subject.
- * Registered with the redesign's environment methods
- * (`redesign-rpc-methods.ts`). Not an agent capability.
+ * For `computer`, the work under its own owner, read before a claim or a give
+ * stops it. A count the computer cannot read is null, never zero; `terminals` is
+ * always null for a `plan`.
  */
 export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
   z.object({

@@ -23,11 +23,7 @@ import {
 } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * A team's chat auto-archive setting, read on the person's sign-in. `null`
- * data is a team that never saved one: off, nothing archived. A refused or
- * failed read is an error, with no words of the route's own.
- */
+/** `null` data: the team never saved one, so off. */
 export function useTeamChatAutoArchiveQuery(
   teamId: string | null,
 ): UseQueryResult<TeamChatAutoArchiveRecord | null> {
@@ -53,20 +49,15 @@ export function useTeamChatAutoArchiveQuery(
   );
 }
 
-/**
- * One save: the choice, and the sign-in that made it, read when the person
- * chose. Saves queue, so the one sent later must still go out as them.
- */
+/** Saves queue, so a later send still goes as the person who chose. */
 export interface TeamChatAutoArchiveSave {
   readonly request: TeamChatAutoArchiveSetRequest;
   readonly chosenBy: ChosenSignIn;
 }
 
 /**
- * Saves a team's setting. Last write wins on the server, so saves queue in
- * order (`teamChatAutoArchiveWriteScope`), and the saved record the server
- * answers becomes the read's entry. A save whose sign-in is gone by the time
- * its turn comes is not sent, and says nothing to whoever is signed in now.
+ * Last write wins on the server, so saves queue in order; one whose sign-in is gone
+ * by its turn is not sent.
  */
 export function useTeamChatAutoArchiveSetMutation(
   teamId: string,

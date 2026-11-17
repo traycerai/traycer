@@ -81,9 +81,7 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
       enabled: statusSupported === true && attemptsSupported === true,
     },
   });
-  // The secrets of the environment this host runs, read from authn on the
-  // person's sign-in, as the host read them when asked for its own. Only the
-  // host's status is asked of it, to name that environment.
+  // Only the host's status is asked of it, to name that environment.
   const secretsRead = statusSupported === true;
   const own = useHostOwnEnvironment(client, hostId, secretsRead);
   const list = useEnvironmentCloudQuery({

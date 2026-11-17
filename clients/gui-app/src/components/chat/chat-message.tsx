@@ -310,8 +310,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
       instanceId={message.id}
     />
   );
-  // Another person's row carries their picture; the viewer's own rows and an
-  // agent's do not (`senderUserId` is set only for another person).
+  // `senderUserId` is set only for another person.
   const overline =
     message.senderUserId === undefined ? (
       senderLine

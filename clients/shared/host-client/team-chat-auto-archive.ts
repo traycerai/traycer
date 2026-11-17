@@ -2,18 +2,13 @@ import { z } from "zod";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 
-/**
- * A team's chat auto-archive setting on traycer-server, on a person's sign-in:
- * `GET` and `PUT /api/traycer/chat-auto-archive/teams/:teamId`. Any seat that
- * reads the team's environment reads it, a Viewer included; an Admin or an
- * Editor writes it, last write wins. A Viewer's write, and anyone's read or
- * write outside the team, is a plain 403 with no sentence of its own.
- */
+// Any seat that reads the team's environment reads it; an Admin or Editor writes
+// it, last write wins. Every refusal is a plain 403 with no sentence.
 function teamChatAutoArchivePath(teamId: string): string {
   return `api/traycer/chat-auto-archive/teams/${encodeURIComponent(teamId)}`;
 }
 
-/** The idle threshold the route takes, in seconds, both ends included. */
+/** Seconds, both ends included. */
 export const TEAM_CHAT_AUTO_ARCHIVE_IDLE_SECONDS = {
   minSeconds: 1,
   maxSeconds: 31_536_000,
@@ -25,7 +20,6 @@ const teamChatAutoArchiveRecordSchema = z.object({
   enabled: z.boolean(),
   includeUserCreated: z.boolean(),
   idleSeconds: z.number().int().positive(),
-  /** Epoch milliseconds of the last accepted write. */
   updatedAt: z.number(),
 });
 
@@ -49,7 +43,7 @@ const teamChatAutoArchiveSetRequestSchema = z.strictObject({
     .max(TEAM_CHAT_AUTO_ARCHIVE_IDLE_SECONDS.maxSeconds),
 });
 
-/** A write the route takes, or null: a threshold outside it is never sent. */
+/** Null for a threshold outside the route's range: it is never sent. */
 export function parseTeamChatAutoArchiveSetRequest(
   value: unknown,
 ): TeamChatAutoArchiveSetRequest | null {
@@ -59,12 +53,11 @@ export function parseTeamChatAutoArchiveSetRequest(
 
 type TeamChatAutoArchiveFailure =
   | { readonly kind: "unauthorized" }
-  /** A Viewer's write, or a person outside the team. */
   | { readonly kind: "forbidden" }
   | { readonly kind: "failed" };
 
 export type TeamChatAutoArchiveReadResult =
-  /** `record` is null when the team never saved one: off, as today. */
+  /** `record` is null when the team never saved one: off. */
   | { readonly kind: "ok"; readonly record: TeamChatAutoArchiveRecord | null }
   | TeamChatAutoArchiveFailure;
 
@@ -80,7 +73,6 @@ type Answer =
     }
   | { readonly kind: "failed" };
 
-/** Sent once through the shell's transport, which never follows a redirect. */
 async function send(
   serverBaseUrl: string,
   bearerToken: string,
@@ -122,7 +114,6 @@ async function send(
   }
 }
 
-/** A 200's body, parsed; `undefined` when it is not JSON. */
 function bodyOf(text: string | null): unknown {
   if (text === null) return undefined;
   try {

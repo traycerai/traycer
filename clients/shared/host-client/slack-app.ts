@@ -108,10 +108,8 @@ function slackAppsUrl(serverBaseUrl: string, route: SlackAppRoute): string {
 }
 
 /**
- * The refusal codes the app branches on. Any other code is the server's
- * free text, which could hold anything the request carried, the register
- * call's two secrets included, so it never leaves this file: it reads as
- * `unrecognized`, which every caller shows as its generic line.
+ * Any other code is server text that could hold the register call's secrets, so
+ * it never leaves this file: it reads as `unrecognized`.
  */
 const KNOWN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
@@ -126,11 +124,7 @@ type PostResult<T> =
   | { readonly kind: "ok"; readonly value: T }
   | SlackAppFailure;
 
-/**
- * The platform `fetch` as the calls with no secret in their body send: the
- * bearer rides along, so a redirect is answered here, as a failure, and never
- * followed with it; a non-redirect answer is read whole.
- */
+/** The bearer rides along: a redirect is a failure, never followed. */
 const manualRedirectFetchTransport: EnvironmentTransport = async (request) => {
   const response = await fetch(request.url, {
     method: request.method,
@@ -139,8 +133,8 @@ const manualRedirectFetchTransport: EnvironmentTransport = async (request) => {
     redirect: "manual",
     signal: request.signal,
   });
-  // A late answer to a request already given up (a `fetch` that ignores its
-  // signal, as the phone's patched one does) is never read.
+  // A late answer to a request already given up (the phone's `fetch` ignores its
+  // signal) is never read.
   if (request.signal.aborted) {
     throw new Error("The request was given up before it answered.");
   }
@@ -205,8 +199,7 @@ async function post<T>(
   if (status === 401 || status === 403) return { kind: "unauthorized" };
   if (status < 200 || status >= 300) {
     const refusal = slackAppRefusalBodySchema.safeParse(parsedBody);
-    // Still `refused` for an unknown code, never `network-error`: the server
-    // answered, and an answer is not asked again (the app read's retry rule).
+    // The server answered, and an answer is not asked again: `refused`, not `network-error`.
     return refusal.success
       ? {
           kind: "refused",
@@ -230,10 +223,6 @@ async function post<T>(
   return { kind: "ok", value: parsed.data };
 }
 
-/**
- * An empty or non-JSON body (a proxy's HTML page) reads as `null`, as does a
- * failure's body over the transport's cap.
- */
 function parseJsonOrNull(text: string | null): unknown {
   if (text === null || text.length === 0) return null;
   try {
@@ -244,11 +233,7 @@ function parseJsonOrNull(text: string | null): unknown {
   }
 }
 
-/**
- * `POST /api/slack/apps/register`: stores the app's credentials; a new
- * registration replaces the old one. `transport` is the shell's, which never
- * follows a redirect: the body carries two secrets.
- */
+/** `transport` is the shell's, which never follows a redirect: the body carries two secrets. */
 export async function registerSlackAppViaHttp(
   serverBaseUrl: string,
   bearerToken: string,

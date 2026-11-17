@@ -86,9 +86,7 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
-// Identity-scoped: the saves this account made in a host's settings that it
-// expects authn to hold, so this account applies only its own holds. Wiped
-// on sign-out like the stores above.
+// Identity-scoped, so this account applies only its own holds; wiped on sign-out.
 export const settingsSaveMemoryKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.settingsSaveMemory, scopeBucket(identity));
 
@@ -528,9 +526,7 @@ export const PERSIST_STORES = [
     leaf: "team-continue-caution-seen",
     kind: "static",
   },
-  // The teammates' claims of a team computer each person has been told about
-  // on this device (`claimed-computer-notice-store.ts`): the notice is shown
-  // once per device.
+  // Each claim notice is shown once per device.
   {
     camelName: "claimNoticesTold",
     leaf: "claim-notices-told",

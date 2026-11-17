@@ -6,7 +6,6 @@ interface HostDoorStateStore {
   readonly byHost: ReadonlyMap<string, HostDoorState>;
 }
 
-/** Why this app cannot use each host right now, one state per host. */
 export const useHostDoorStateStore = create<HostDoorStateStore>(() => ({
   byHost: new Map(),
 }));
@@ -63,12 +62,10 @@ export function clearHostDoorStateOfKind(
     clearHostDoorState(hostId);
 }
 
-/** The state of one host outside React. */
 export function hostDoorStateFor(hostId: string): HostDoorState | null {
   return useHostDoorStateStore.getState().byHost.get(hostId) ?? null;
 }
 
-/** The state of one host; `null` for no host or a host with none. */
 export function useHostDoorState(hostId: string | null): HostDoorState | null {
   return useHostDoorStateStore((state) =>
     hostId === null ? null : (state.byHost.get(hostId) ?? null),

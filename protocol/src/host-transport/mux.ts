@@ -218,8 +218,8 @@ export interface EncodeMuxFrameInput {
 /**
  * `OPEN.authz.v` values. `1`: a host-agent attach grant (a host dialing another
  * of its owner's hosts; `bearer` is empty). `2`: a session grant minted beside
- * a client attach grant for a `kind: sandbox` target; `bearer` is empty, so no
- * user credential reaches the sandbox.
+ * a client attach grant; `bearer` is empty, so no user credential reaches the
+ * host.
  */
 export const OPEN_AUTHZ_HOST_AGENT_GRANT_VERSION = 1;
 export const OPEN_AUTHZ_SESSION_GRANT_VERSION = 2;
@@ -228,13 +228,7 @@ export const OPEN_AUTHZ_SESSION_GRANT_VERSION = 2;
 export type ReservedAuthzSlot = {
   readonly v: number;
   readonly grant: string;
-  /**
-   * On a host-agent grant (`v: 1`), the person the session is for, named in
-   * plain by the dialing host inside the session the receiving host
-   * terminates. The receiving host admits the name only when it matches the
-   * reference authn signed into the grant. Absent when the session names
-   * nobody and from a dialer that predates the key. Not read on `v: 2`.
-   */
+  /** Admitted only when it matches the reference authn signed into the grant; not read on `v: 2`. */
   readonly namedUserId?: string;
 } | null;
 
@@ -389,10 +383,7 @@ export interface WireRpcErrorDetails {
   readonly staleWrite?: EnvironmentStaleWrite;
   /** A transient refusal: the call may be sent again unchanged. */
   readonly retryable?: boolean;
-  /**
-   * Why the host refused this one call at its door, as on a local `/rpc`
-   * reply (`HostResponseError.doorReason`). Absent from an older host.
-   */
+  /** As on a local `/rpc` reply; absent from an older host. */
   readonly doorReason?: string;
 }
 

@@ -305,7 +305,6 @@ function face(): HTMLElement {
   return screen.getByTestId("auto-judge-model-face");
 }
 
-/** The corner accent dot the picker button draws on the closed face. */
 function withAliases(
   row: ProviderProfile,
   aliases: readonly string[],
@@ -908,7 +907,6 @@ describe("JudgeTab", () => {
       expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
         "Billed to your Claude Code account (work)",
       );
-      // Two rows: the closed face and the billed line both name the account.
       expect(face().textContent).toContain("Claude Sonnet · work");
     });
 

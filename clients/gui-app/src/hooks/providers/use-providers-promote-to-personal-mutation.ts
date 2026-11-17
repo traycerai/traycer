@@ -43,32 +43,23 @@ import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 
 const METHOD = "providers.nativeMutate";
 
-/**
- * The floor at which the host takes the app's `mcp_promote` intent on the
- * promote arm. Below it the arm drops `intentOperationId`, so no intent is
- * recorded and the call is today's.
- */
+/** Below it the arm drops `intentOperationId` and no intent is recorded. */
 const PROMOTE_INTENT_REQUIRED_HOST_VERSION: RequiredHostMethodVersion = {
   method: METHOD,
   version: { major: 1, minor: 5 },
 };
 
-/** The entry to add, as its row names it. */
 export interface PromoteToEnvironmentVariables {
   readonly providerId: ProviderId;
   readonly entryKind: "mcp" | "skills";
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly name: string;
-  /** The environment the caller is editing; null writes wherever this host writes. */
+  /** null writes wherever this host writes. */
   readonly expectedEnvironmentId: string | null;
 }
 
-/**
- * The click's answer: added, or the words of why not, shown beside the
- * button. `refreshLists` reads the lists again for an upload that may still
- * land, so it shows without a second press.
- */
+/** `refreshLists` reads again for an upload that may still land. */
 export type PromoteToEnvironmentOutcome =
   | { readonly kind: "added" }
   | {
@@ -94,11 +85,10 @@ type CapturedPromoteRequest =
       readonly error: unknown;
     };
 
-/** The intent the click recorded, to read back once the computer answers. */
 interface RecordedIntent {
   readonly environmentId: string;
   readonly operationId: string;
-  /** The click's sign-in, which the read back goes on too. */
+  /** The read back goes on the click's sign-in too. */
   readonly operation: EnvironmentCloud;
 }
 
@@ -114,7 +104,7 @@ interface RecordedIntent {
  * token against it, and the intent is read back. The click is one operation
  * on the sign-in current when it was pressed: both authn calls go on it, and
  * the upload is not asked for once that sign-in is gone. A skill is promoted
- * as today, with no intent.
+ * with no intent.
  *
  * A refusal is an answer, not a transport error: it comes back as
  * `refused` with its words, and only a failed send toasts.
@@ -212,8 +202,6 @@ export function useProvidersPromoteToPersonal(
         !outcome.refreshLists
       )
         return;
-      // The native lists (the row's mark) and the host's status (where the
-      // item now applies) both change, on the host the click was sent on.
       // A lost answer may follow a committed upload, so errors re-read too.
       for (const method of ["providers.list", "environment.status"] as const) {
         void queries.invalidateQueries({
@@ -243,8 +231,6 @@ export function useProvidersPromoteToPersonal(
       onMutate,
       onSuccess: (outcome, variables) => {
         if (outcome.kind === "refused" && !outcome.refreshLists) return;
-        // The entry joins the configuration, so the MCP servers and Skills
-        // pages' lists move too, on every host that read them.
         if (variables.expectedEnvironmentId !== null) {
           invalidateConfigurationReads(
             queries,
@@ -296,7 +282,6 @@ export function useProvidersPromoteToPersonal(
   };
 }
 
-/** Whether the host the request goes to takes the intent on the promote arm. */
 function takesIntent(client: HostRequester<HostRpcRegistry>): boolean {
   const hostId = client.getActiveHostId();
   if (hostId === null) return false;
@@ -311,12 +296,7 @@ function takesIntent(client: HostRequester<HostRpcRegistry>): boolean {
   );
 }
 
-/**
- * Records the intent in the environment this computer serves, for this
- * computer at its sharing generation. Answers that environment's id, or null
- * when the computer cannot name its generation or authn did not hold the
- * intent.
- */
+/** null when the computer cannot name its generation or authn did not hold the intent. */
 async function recordIntent(
   client: HostRequester<HostRpcRegistry>,
   operation: EnvironmentCloud,
@@ -339,7 +319,6 @@ async function recordIntent(
   return environmentId;
 }
 
-/** The intent's state, or null when it could not be read. */
 async function readIntentState(
   intent: RecordedIntent,
 ): Promise<McpPromoteIntentState | null> {
@@ -354,12 +333,7 @@ async function readIntentState(
   }
 }
 
-/**
- * What the person is shown for the intent, null when it could not be
- * recorded or read: added once the computer's upload was accepted against
- * it, and the failure line otherwise. A pending intent may still be used
- * a moment later, so its lists are read again.
- */
+/** A pending intent may still be used a moment later, so its lists are read again. */
 function intentOutcome(
   state: McpPromoteIntentState | null,
   environmentName: string,

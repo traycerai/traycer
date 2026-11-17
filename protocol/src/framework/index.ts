@@ -221,8 +221,6 @@ export {
   hostRestartIntentSchema,
 } from "./ws-protocol";
 
-// ---- Typed reasons at the host's door ----------------------------------- //
-
 export type { HostDoorReason, HostDoorReasonReading } from "./door-reason";
 
 export { HOST_DOOR_REASONS, readDoorReason } from "./door-reason";

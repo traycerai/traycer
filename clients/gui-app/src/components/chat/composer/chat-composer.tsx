@@ -527,8 +527,6 @@ function useChatComposerTopBanner(input: {
     hostId: input.hostId,
   });
   const topBannerKind = resolveComposerTopBannerKind({
-    // Account waits and timed routing share the fallback slot; a live
-    // traversal retains its own card and actions.
     fallbackVisible: accountWait !== null || traversalVisible,
     profileDisabled: input.profileDisabled,
     reauthVisible: input.reauthVisible,

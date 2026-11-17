@@ -659,28 +659,19 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
   return doorStateCovers(error);
 }
 
-/** Whether the window has the door cover of the host `error` was sent to on screen. */
 function doorStateCovers(error: HostRpcError): boolean {
   const hostId = hostOfFailedCall(error);
   return hostId !== null && isDoorCoverDrawn(hostId);
 }
 
-/**
- * Sign-in advice, which helps only a person who is signed out. Signed in, a
- * fresh credential was just refused, so the caller's own line is said.
- */
+/** Signed in, a fresh credential was just refused, so the caller's own line is said. */
 function signInAdvice(fallback: string): string {
   return useAuthStore.getState().status === "signed-out"
     ? SIGN_IN_AGAIN_MESSAGE
     : fallback;
 }
 
-/**
- * A host's refusal that its recognised reason decides, whatever code carries
- * it: one the host did not mark retryable. `null` with no reason, one this
- * app does not know, or a retryable refusal: then the code decides, as it
- * always has. Every dispatch in this file reads this before any code.
- */
+/** Not retryable; with no reason, an unknown one, or a retryable refusal the code decides. Read before any code. */
 function reasonedDoorRefusal(error: HostRpcError): FatalErrorDetails | null {
   const refusal = hostRefusalOf(error);
   if (refusal === null || refusal.retryable === true) return null;
@@ -688,11 +679,7 @@ function reasonedDoorRefusal(error: HostRpcError): FatalErrorDetails | null {
   return reason === "absent" || reason === "unrecognised" ? null : refusal;
 }
 
-/**
- * What a reasoned refusal says: sign-in advice for a refusal of the
- * credential, else the caller's `fallback`. The door's own notice says what
- * is wrong with the computer.
- */
+/** The door's own notice says what is wrong with the computer. */
 function reasonedDoorRefusalMessage(
   refusal: FatalErrorDetails,
   fallback: string,
@@ -700,12 +687,7 @@ function reasonedDoorRefusalMessage(
   return isCredentialRefusal(refusal) ? signInAdvice(fallback) : fallback;
 }
 
-/**
- * A card's headline for a refusal of the person's credential, or `null` when
- * the code's own arm decides. A recognised reason decides first; a reasonless
- * `UNAUTHORIZED` is a credential refusal. Signed out, the sign-in advice;
- * signed in, the card's `generic` line, as the toast's.
- */
+/** A recognised reason decides first; a reasonless `UNAUTHORIZED` is a credential refusal. */
 export function credentialRefusalHeadline(
   error: HostRpcError,
   generic: string,
@@ -826,8 +808,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (verdict !== null) {
     return verdict;
   }
-  // A start named an account a person removed: the pin's own words, never
-  // the computer's text, which carries the profile id.
+  // The computer's text carries the profile id; the pin's words replace it.
   if (error.code === "removed-by-person") return REMOVED_PROFILE_PIN_TEXT;
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";

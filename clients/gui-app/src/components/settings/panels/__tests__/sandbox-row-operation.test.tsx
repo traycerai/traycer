@@ -269,7 +269,6 @@ const FROZEN_DESTROY_CASE: VerbCase = {
   reached: "destroyed",
 };
 
-/** The page the row is listed under; whose credits it is on is `mocks.configuration`. */
 const LISTED_UNDER: SandboxPageConfiguration = { kind: "personal" };
 
 function Rows(): ReactNode {
@@ -687,8 +686,7 @@ describe("sandbox row operations", () => {
     const { answer, binding, client, main } = setup(testCase, {
       environmentId: "env-personal",
     });
-    // The runner host the strip mounts under signs in as the fixture user; a
-    // receipt belongs to the person signed in when the strip draws.
+    // A receipt belongs to the person signed in when the strip draws.
     const receiptUserId = AUTHENTICATED_USER_FIXTURE_ID;
     await screen.findByRole("region", { name: "build-box" });
     useNewConversationModalStore.getState().setContent("receipt-epic", {
@@ -731,8 +729,6 @@ describe("sandbox row operations", () => {
       <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />,
       client,
     );
-    // The strip's failure line reads whose sandbox it is from the person's
-    // host directory; this row names them as its owner.
     installHostDirectoryRows([sandboxHostEntry(main.hostId, null)]);
     const strip = screen.getByTestId("sandbox-stopped-line");
     await userEvent.click(within(strip).getByRole("button", { name: "Start" }));

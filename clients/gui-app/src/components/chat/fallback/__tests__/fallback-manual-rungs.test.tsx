@@ -469,11 +469,6 @@ function renderActions(turnId: string) {
 
 const BOT_ENVIRONMENT_ID = "env-a";
 
-/**
- * What a bot's surface does for the chats under it: the reader's right to
- * change the bot's environment, from the account's environment list, as the
- * context the failed turn's Switch reads.
- */
 function BotSurfaceRole(props: { readonly children: ReactNode }): ReactNode {
   const environments = useEnvironmentListQuery(true);
   return (

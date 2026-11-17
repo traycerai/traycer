@@ -46,7 +46,6 @@ function hasKnownCleanupFailure(
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.list">
   >({
     queryKey: hostQueryKeys.method(
-      // A named environment's list is the app's own read from authn.
       ENVIRONMENT_CLOUD_QUERY_SCOPE,
       "environment.secrets.list",
       { environmentId: subject.environmentId },
@@ -77,8 +76,6 @@ function hasKnownCleanupFailure(
  */
 export function useSecretRemovalRetry(): DetailsItemRetry {
   const queryClient = useQueryClient();
-  // One mutation keeps the reads and the destroy in sequence, with a shared
-  // pending and refusal state. Success marks every scope's secret reads stale.
   const retry = useSecretsOperationMutation<string | null, DetailsSubject>({
     mutationKey: settingsDetailsMutationKeys.secretRemovalRetry(),
     mutationFn: async (subject, send) => {

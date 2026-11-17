@@ -972,7 +972,6 @@ describe("attach grant providers on a frozen sandbox", () => {
     );
   }
 
-  /** A remote row carrying sandbox facts, owned as the arguments say. */
   function sandboxRow(
     owner: RemoteHostDirectoryEntry["owner"],
     team: { readonly id: string; readonly name: string } | null,

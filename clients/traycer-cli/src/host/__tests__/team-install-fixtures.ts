@@ -12,13 +12,8 @@ import {
   hostTeamInstallTokenPath,
 } from "../../store/paths";
 
-// What `host install --team` and `host ensure --team` share in their tests:
-// the sign-in's own record of the person's teams, the words each refusal
-// prints, the machine's host enrolment record and staged token, and authn's
-// answer to the token's mint. The test file that uses them redirects HOME
-// first, so these paths are its own temp home.
+// The test file that uses these redirects HOME first, so these paths are its temp home.
 
-/** A sign-in that belongs to the acme team. */
 export function signedInAcmeUser() {
   const base = createAuthenticatedUserFixture(undefined);
   return {
@@ -41,7 +36,6 @@ export function signedInAcmeUser() {
   };
 }
 
-/** The same sign-in, not a member of any team. */
 export function signedInNonMemberUser() {
   return {
     ...signedInAcmeUser(),
@@ -57,20 +51,17 @@ export const AUTHN_UNREACHABLE_SENTENCE =
 export const RETAINED_SIGN_IN_WARNING =
   "Your sign-in stays on this computer. Run `traycer logout` to remove it.";
 
-/** The machine already has a registered host: its enrolment record exists. */
 export function registerHostOnMachine(): void {
   const path = hostEnrollmentRecordPath("production");
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, "{}\n");
 }
 
-/** What this machine holds for the host's first start, or null. */
 export function stagedTeamTokenFile(): string | null {
   const path = hostTeamInstallTokenPath("production");
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
-/** The roads an attended `--team` run takes after its sign-in. */
 export const TEAM_INSTALL_ROADS = [
   { road: "a machine with no host yet", hostRegistered: false },
   { road: "a machine with a registered host", hostRegistered: true },
@@ -79,7 +70,6 @@ export const TEAM_INSTALL_ROADS = [
 export const MINT_URL = "https://authn.test/api/v3/hosts/team-install-tokens";
 export const MINTED_TOKEN = "minted-install-token";
 export const MINTED_ENVIRONMENT_ID = "environment-acme";
-/** The token file the host reads at its first start, for the minted token. */
 export const MINTED_TOKEN_FILE = `${JSON.stringify({
   token: MINTED_TOKEN,
   environmentId: MINTED_ENVIRONMENT_ID,
@@ -96,7 +86,6 @@ export function mintedAnswer(): Response {
   );
 }
 
-/** Each way the token's mint can fail, and the words the command stops with. */
 export const MINT_FAILURES = [
   {
     label: "authn does not know the team",
@@ -165,11 +154,7 @@ export interface MintRequest {
   readonly body: unknown;
 }
 
-/**
- * authn's answer to the command's mint: a response, or null when the request
- * never completes. The real mint runs against it, so what the command sends
- * and how it reads the answer are the real ones.
- */
+/** A response, or null when the request never completes. */
 export function stubMintAnswer(answer: () => Response | null): MintRequest[] {
   const requests: MintRequest[] = [];
   vi.stubGlobal(
@@ -190,7 +175,6 @@ export function stubMintAnswer(answer: () => Response | null): MintRequest[] {
   return requests;
 }
 
-/** What a device flow answers once the person has signed in. */
 export interface InlineSignIn {
   readonly token: string;
   readonly user: { id: string; email: string; name: string };
@@ -205,7 +189,6 @@ export function inlineSignIn(token: string): InlineSignIn {
   };
 }
 
-/** The credentials file a device flow leaves on the machine. */
 export function inlineSignInCredentials(token: string) {
   return {
     token,

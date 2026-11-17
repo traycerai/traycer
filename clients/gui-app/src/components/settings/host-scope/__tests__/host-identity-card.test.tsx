@@ -190,7 +190,6 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
   });
 
   it("names the unnamed team's frozen credits beside the state once the person's teams have answered", async () => {
-    // The person is signed in with no teams, so every team has answered.
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "viewer", username: "viewer" },

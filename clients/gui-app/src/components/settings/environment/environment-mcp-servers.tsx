@@ -586,12 +586,10 @@ function McpOpenEditor(props: {
   const source = useConfigurationSource();
   const { putItem } = useConfigurationMcpServerMutations();
   const put = useConfigurationMcpServerSave(() => UNCHANGED_CREDENTIAL);
-  // The server the draft was made against: what the draft is compared with,
-  // and the revision a save names. The draft and it are one snapshot: a
-  // refreshed server replaces both or neither.
+  // The draft and its baseline are one snapshot: a refreshed server replaces both or neither.
   const [baseline, setBaseline] = useState(props.server);
-  // Set once a save settles saved or refused as a revision conflict: the
-  // next server the list brings replaces the draft, edited or not.
+  // After a save settles saved or as a revision conflict, the next server replaces
+  // the draft, edited or not.
   const [adoptNext, setAdoptNext] = useState(false);
   const initial = endpointInitial(baseline);
   const [endpoint, setEndpoint] = useState(initial);
@@ -985,7 +983,6 @@ function useToolDraft(groups: readonly McpToolGroup[]): {
   readonly edited: ReadonlySet<string>;
   readonly setTool: (name: string, next: boolean) => void;
   readonly setAll: (next: boolean) => void;
-  /** Drops every edit: each tool reads as its group does now. */
   readonly reset: () => void;
 } {
   const signature = groups

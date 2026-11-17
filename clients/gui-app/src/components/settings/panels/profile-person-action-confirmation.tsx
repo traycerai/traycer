@@ -18,7 +18,6 @@ export interface ProfilePersonActionConfirmationProps {
   readonly onConfirm: () => void;
 }
 
-/** Personal and team actions share their confirmation, with each caller owning its write. */
 export function ProfilePersonActionConfirmation(
   props: ProfilePersonActionConfirmationProps,
 ): ReactNode {

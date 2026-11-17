@@ -40,7 +40,6 @@ export interface DeferredClaimRead {
   readonly signalAborted: boolean;
 }
 
-/** A held AuthService read that rejects when its TanStack query is cancelled. */
 export function deferredClaimRead(): DeferredClaimRead {
   let resolvePromise: (result: ClaimedComputersResult) => void = () => {
     throw new Error("deferred claim read has not initialized");

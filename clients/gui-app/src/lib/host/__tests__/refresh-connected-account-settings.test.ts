@@ -285,9 +285,7 @@ describe("refreshConnectedAccountSettings", () => {
     ) => {
       sendStarted.resolve();
       await sendGate.promise;
-      // The fake registry has only the refresh method. Parsing its concrete
-      // response schema proves the value; TS does not reduce its generic
-      // ResponseOfMethod mapping even with that one-method registry.
+      // TS does not reduce the generic ResponseOfMethod mapping, so the concrete schema proves the value.
       return hostAccountSettingsRefreshV10.responseSchema.parse(
         {},
       ) as ResponseOfMethod<RefreshRpcRegistry, Method>;

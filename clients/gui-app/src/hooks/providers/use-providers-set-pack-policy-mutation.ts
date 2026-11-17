@@ -15,7 +15,6 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 
-/** The item a pack save writes. */
 const PACK_SAVE_KINDS = ["pack_policy"] as const;
 
 type SetPackPolicyMutationResult = UseMutationResult<

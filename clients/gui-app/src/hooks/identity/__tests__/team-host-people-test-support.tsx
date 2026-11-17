@@ -60,22 +60,13 @@ export interface TeamPeopleHarnessOptions {
 }
 
 export interface TeamPeopleHarness {
-  /**
-   * The members reads the account service (authn) received, in order.
-   */
   readonly memberRequests: Array<{ environmentId: string }>;
-  /** The reads of the account's environment directory (traycer-server). */
   readonly environmentListRequests: number;
   readonly personReads: string[];
   readonly people: PersonAvatarHarness;
   readonly queryClient: QueryClient;
   readonly setPersonAnswer: (answer: unknown, status: number) => void;
   readonly wrap: (children: ReactNode, outer: BotMemberResolver) => ReactNode;
-  /**
-   * `wrap` with the provider's key given: a different key remounts
-   * `HostTeamPeopleProvider` under the same runtime, query client and sign-in,
-   * as a tile does when it closes and another opens.
-   */
   readonly wrapKeyed: (
     children: ReactNode,
     outer: BotMemberResolver,
@@ -160,9 +151,7 @@ export async function createTeamPeopleHarness(
           }),
         );
       }
-      // The viewer's account lists no team, so the environment list's role
-      // join sends nothing for the team's row and leaves it degraded; every
-      // members read that arrives is a read of the team's people.
+      // The account lists no team, so the role join sends nothing and every members read is the team's people.
       memberRequests.push({ environmentId });
       return Promise.resolve(
         options.members?.(environmentId) ?? defaultMembersPage,
@@ -285,7 +274,6 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-/** authn's members answer for a page of members, as the account service sends it. */
 function authnMembersAnswer(page: EnvironmentMembersResponseV12) {
   return {
     members: page.members.map((member) => ({

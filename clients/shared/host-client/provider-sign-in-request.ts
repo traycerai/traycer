@@ -4,41 +4,24 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { isRedirectAnswer } from "../auth/redirect-answer";
 import { PATH_ID_PATTERN } from "./path-id";
 
-/**
- * A person's sign-in request, recorded at authn by the person's own app or
- * CLI on its own session, between two `providers.awaitLogin` calls: the
- * computer uploads the completed sign-in only against it. The route, the body
- * and every answer this client reads live here, so a change to the route is
- * a change to this file.
- */
+// Recorded between two `providers.awaitLogin` calls; the computer uploads the
+// completed sign-in only against it.
 
-/** Bounds the record call, a single write of one row. */
 const SIGN_IN_REQUEST_FETCH_TIMEOUT_MS = 15_000;
 
 const PROVIDER_SIGN_IN_KIND = "provider_sign_in";
 
-/**
- * The record route's refusal for an operation id that names another request
- * (another person's, or a different body). An exact repeat answers 200.
- */
+/** An exact repeat answers 200; an id naming another request is this 409. */
 const DUPLICATE_OPERATION_CODE = "move_acceptance_conflict";
 
-/** What the record call answered. */
 export type SignInRequestRecordAnswer =
   | { readonly kind: "recorded" }
-  /** 409: the operation id names a request that is not this one. */
   | { readonly kind: "duplicate" }
-  /** 401: the session that sent it has ended. */
   | { readonly kind: "unauthorized" }
-  /** 403: the person may not sign in for this environment. */
   | { readonly kind: "forbidden" }
-  /** 404, any other answer, or no answer. */
   | { readonly kind: "failed" };
 
-/**
- * The record call on the person's own session. The app's auth service and the
- * CLI's own sign-in implement it, so no bearer passes anywhere else.
- */
+/** Implemented on the person's own session, so no bearer passes anywhere else. */
 export interface SignInRequestClient {
   recordSignInRequest(
     request: ProviderLoginSignInRequest,
@@ -47,11 +30,8 @@ export interface SignInRequestClient {
 }
 
 /**
- * How the recording step ended. `recorded`: await again on the same handle
- * with `recordedOperationId`. Otherwise the sign-in ends; the reason carries
- * no sentence, and each screen shows its own: on a team's dialog `forbidden`
- * is 3a, `unavailable` 3b and the others its "did not finish", and every
- * other screen shows its own "did not finish" for every reason.
+ * `recorded`: await again with `recordedOperationId`. Otherwise the sign-in ends;
+ * the reason carries no sentence.
  */
 export type SignInRecording =
   | { readonly kind: "recorded"; readonly recordedOperationId: string }
@@ -65,12 +45,8 @@ export type SignInRecording =
     };
 
 /**
- * Records `request` once. `recorded` holds every operation id this caller
- * has already recorded and sent back: a computer that answers the same id
- * again has ignored it, so the step ends instead of recording again. A 200,
- * the first time or an exact repeat, goes on to the next await. A duplicate-id
- * refusal names a request that is not this person's, so the step ends there
- * as `already-recorded` and no await carries that id.
+ * A computer that answers an id already recorded has ignored it, so the step ends
+ * instead of recording again; a duplicate-id refusal ends as `already-recorded`.
  */
 export async function recordSignInRequestOnce(
   client: SignInRequestClient,
@@ -159,9 +135,7 @@ async function post(
     if (isRedirectAnswer(response.status)) {
       return { kind: "response", status: response.status, body: null };
     }
-    // The status is the answer once it has arrived: a body that cannot be
-    // read or parsed (a proxy's page, a dropped stream, an empty body) reads
-    // as no body, so a 401 or a 403 is still classified as one.
+    // The status is the answer: an unreadable body still lets a 401 or 403 classify.
     let parsed: unknown = null;
     try {
       const text = await untilAborted(response.text(), abort.signal);
@@ -175,7 +149,6 @@ async function post(
   }
 }
 
-/** The record call on `bearerToken`'s session. Nothing is queued or retried. */
 export async function recordSignInRequestViaHttp(
   authnBaseUrl: string,
   bearerToken: string,

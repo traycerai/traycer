@@ -7,10 +7,7 @@ import {
   hostVersionNeedsUpdate,
 } from "../minimum-host-version";
 
-/**
- * Each case passes its own floor. The exported sentinel is not the assertion:
- * passing `"0.0.0"` as an argument checks the helper's admit-all arm.
- */
+// Each case passes its own floor, so the exported sentinel cannot decide them.
 
 const FLOOR = "2.0.0";
 

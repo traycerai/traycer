@@ -89,7 +89,7 @@ export const FRAME_TIMEOUT_MS = 15_000;
  *
  * The protocol (open → openAck → request → response, manifest negotiation,
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
- * also uses - the CLI no longer hand-rolls it. The host receives only this
+ * also uses. The host receives only this
  * CLI's host-only token for it (`cli-host-tokens.ts`), read from disk; the
  * stored sign-in (`resolveHostAuth`) is spent at authn alone. A host refusal
  * the shared auth-aware wrapper reads by its reason: a credential reason gets
@@ -273,14 +273,9 @@ const FAIL_FAST_DISPATCH: HostRpcDispatch = {
 };
 
 /**
- * {@link callHostRpcWithDispatch} for an agent's own commands. With an agent
- * session capability in the agent's environment the call presents it, and
- * neither the stored sign-in nor a host-only token is read; the host's
- * refusal of it ends the call, which recovers nothing. In a session of the
- * host's that carries none, nothing is presented in its place and the call
- * fails as it does with no credential. Outside any such session the call is
- * {@link callHostRpcWithDispatch} itself. Which methods a capability may call
- * is the host's list, not this one's.
+ * With a capability in the agent's environment the call presents it, reads neither
+ * the stored sign-in nor a host-only token, and recovers nothing; in a host session
+ * without one nothing is presented. Which methods it may call is the host's list.
  */
 export async function callAgentHostRpcWithDispatch<
   Method extends keyof HostRpcRegistry & string,
@@ -347,7 +342,6 @@ export async function callHostRpcWithAgentCredential<
   }
 }
 
-/** {@link callHostRpc} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
 export function callAgentHostRpc<Method extends keyof HostRpcRegistry & string>(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -355,7 +349,6 @@ export function callAgentHostRpc<Method extends keyof HostRpcRegistry & string>(
   return callAgentHostRpcWithDispatch(method, params, PLAIN_DISPATCH);
 }
 
-/** {@link callHostRpcFastFail} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
 export function callAgentHostRpcFastFail<
   Method extends keyof HostRpcRegistry & string,
 >(

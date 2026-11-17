@@ -50,7 +50,6 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: mocks.useHostMutation,
 }));
 
-// The settings-save memory is not what these wrappers' tests check.
 vi.mock("@/hooks/environment/use-settings-save", () => ({
   useSettingsSave: () => vi.fn(),
   useSettingsItemExists: () => vi.fn(),

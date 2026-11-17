@@ -21,11 +21,7 @@ export const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
   source: "Chat",
 });
 
-/**
- * `keepsLineBreaks` is the store's word that this notice was built from the
- * removed-account code (`ChatSessionStoreHandle.lineBreakNotices`), whose
- * text puts the app's words on the line after "Was removed".
- */
+/** `keepsLineBreaks`: built from the removed-account code, whose app words follow "Was removed" on the next line. */
 export function showErrorNoticeToast(
   notice: ChatErrorNotice,
   keepsLineBreaks: boolean,

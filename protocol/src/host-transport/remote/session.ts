@@ -208,7 +208,7 @@ function qosForStreamMethod(method: string): QosClassValue {
  * R4-E3):
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
- *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
+ *     → open{bearer:"", manifest, authz:{v:2, grant}, resume:null}  (host-only token, A2)
  *     → openAck{manifest, capabilities}  → compat mirror → ready
  *     → re-subscribe every live stream
  *
@@ -290,10 +290,8 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * checked by CODE rather than by any recovery flag because the two are
  * orthogonal: the same code arrives both retryable (the host's JWKS lookup
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
- * evidence. A refusal that carries a `doorReason` is the host's door answering
- * about the person, so it is credential plane too, whatever its code
- * (`keys_unavailable` rides `NETWORK_ERROR`, `membership_removed` a
- * team-membership code).
+ * evidence. A refusal carrying a `doorReason` is credential plane whatever its
+ * code (`keys_unavailable` rides `NETWORK_ERROR`).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
@@ -4605,13 +4603,10 @@ export class RemoteSession<
         entry.requestId,
         entry.method,
       );
-      // This one request refused at the door: the door's state, exactly as a
-      // refused open raises it.
       if (answered.doorRefusal !== null)
         this.options.auth.door?.refused(answered.doorRefusal);
-      // A transient refusal (a team member's admission the host cannot check
-      // now) is this call's no-dispatch attestation, as on a local `/rpc`
-      // reply: the caller may send it again, and nothing is minted for it.
+      // A transient refusal is this call's no-dispatch attestation: it may be sent again,
+      // and nothing is minted for it.
       const answer =
         wireError.retryable === true
           ? new RetryableTransportError({

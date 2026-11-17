@@ -67,9 +67,7 @@ const answers = vi.hoisted(() => ({
         Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
       >
     >(),
-  /** A team's own balance in millicredits as the cached read has it; unnamed is unknown. */
   teamBalancesMc: new Map<string, number>(),
-  /** What a fresh read of each team's balance answers at Send; unnamed is unknown. */
   freshTeamBalancesMc: new Map<string, number>(),
   catalogueError: false,
   catalogueFetching: false,
@@ -648,7 +646,6 @@ describe("useStagedSendSignInCheck", () => {
       [teamSubscription(0)],
     );
     answers.catalogue = QUOTED_CATALOGUE;
-    // A team's sandbox is checked against the team's own balance.
     answers.teamBalancesMc.set("team-1", 0);
     const stage = stageIn({ kind: "team", teamId: "team-1", teamName: "Acme" });
     const notice = checkFor("codex")(stage);
@@ -683,7 +680,6 @@ describe("useStagedSendSignInCheck", () => {
         data: user(stillShort ? 0 : 10),
         isError: false,
       });
-      // The team's own balance, as cached at the check and as read afresh.
       answers.teamBalancesMc.set("team-1", stillShort ? 10_000 : 0);
       answers.freshTeamBalancesMc.set("team-1", stillShort ? 0 : 10_000);
       const stage = stageIn({

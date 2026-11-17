@@ -1260,7 +1260,6 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
-      // The sign-in watcher reads the store once at install, separate from restore.
       expect(servingInstallRead).toBe(false);
       await installRead;
       tokenStore.readCount = 0;
@@ -1306,7 +1305,6 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
-      // The sign-in watcher reads the store once at install, separate from restore.
       expect(servingInstallRead).toBe(false);
       await installRead;
       tokenStore.readCount = 0;
@@ -1326,12 +1324,6 @@ describe("local auth-session restore", () => {
   });
 });
 
-/**
- * A cold start with no network, through main's own handlers: the real
- * `authSessionSet` with the real bearer verifier (its key source a fetch that
- * fails, then answers), the real `authSessionRestoreLocal` over a credentials
- * file double, and the real selection authority listing what main holds.
- */
 describe("an offline start", () => {
   const USER_ID = "user-a";
   const PROFILE = {
@@ -1410,8 +1402,6 @@ describe("an offline start", () => {
     const registryReadsAtStart = fetchRegisteredHostsMock.mock.calls.length;
 
     try {
-      // The ordinary hand-over: main cannot reach its keys, adopts nothing,
-      // and lists no computer at all.
       await expect(
         invokeHandler(RunnerHostInvoke.authSessionSet)(
           sender(101),
@@ -1428,11 +1418,9 @@ describe("an offline start", () => {
         "registry reads after the refusal",
       ).toBe(registryReadsAtStart);
 
-      // The fallback: the local computer only, from disk, no account call.
       await expect(
         restoreLocalHandler()(sender(101), { userId: USER_ID, token }),
       ).resolves.toBe("restored");
-      // The identity is the credentials file's, never the window's claim.
       expect(authSession.get()).toEqual({
         status: "unverified",
         token,
@@ -1449,14 +1437,11 @@ describe("an offline start", () => {
         fetchRegisteredHostsMock.mock.calls.length,
         "registry reads after the local restore",
       ).toBe(registryReadsAtStart);
-      // A second window is not signed out and lists the same computer.
       await expect(
         invokeHandler(RunnerHostInvoke.authSessionGet)(sender(202)),
       ).resolves.toMatchObject({ status: "unverified", token });
       expect(await listedHostIds(202)).toEqual(["local-host"]);
 
-      // The resend inside the verifier's cooldown is refused again, makes no
-      // new attempt on authn, and leaves the local hold as it is.
       const attemptsBefore = keys.attempts();
       await expect(
         invokeHandler(RunnerHostInvoke.authSessionSet)(
@@ -1473,7 +1458,6 @@ describe("an offline start", () => {
         verified: false,
       });
 
-      // The way back: the keys answer, the same session is handed over again.
       keys.answer();
       vi.setSystemTime(Date.now() + COOLDOWN_MS);
       fetchRegisteredHostsMock.mockResolvedValue({

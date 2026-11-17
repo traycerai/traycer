@@ -106,7 +106,6 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
   /** Whether the directory has a row for the composer's host. */
   directoryNamesHost: true,
-  /** Each team's own balance in millicredits; a team not named here is unknown. */
   teamBalancesMc: new Map<string, number>(),
 }));
 
@@ -862,7 +861,6 @@ describe("useSandboxStaging New rows", () => {
 
     it("names the OS and the full price, and whose credits, at a short balance", () => {
       withBalances(0, 0);
-      // A team's row is short against the team's own balance, not the member's.
       mocks.teamBalancesMc.set("team-1", 0);
       const { composer } = mount([LAPTOP]);
 
@@ -1265,8 +1263,6 @@ describe("useSandboxStaging New rows", () => {
     expect(
       within(setupLine).queryByText("Compute is charged while it is awake."),
     ).toBeNull();
-    // A team's credits are bought by its Admin only, and nothing here says
-    // this person is one.
     expect(screen.queryByTestId("consequences-add-credits")).toBeNull();
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "from $0.12 an hour while awake · uses acme's credits",

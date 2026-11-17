@@ -225,7 +225,6 @@ function bindingWith(fixture: OverviewHostFixture): HostBindingMock {
     directory: {
       getLocalEntry: () => null,
       list: () => Promise.resolve([]),
-      // The empty listing answers no row for any host.
       findById: () => null,
       onChange: () => ({ dispose: () => undefined }),
     },

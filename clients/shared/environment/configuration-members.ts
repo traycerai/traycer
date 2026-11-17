@@ -1,15 +1,5 @@
-/**
- * `environment.members`, `.members.seats`, `.members.invite`,
- * `.members.setRole`, `.members.remove` and `.members.noticeSeen` as the
- * app's own calls to authn's environment members routes. Each answers what
- * the host's forwarder answered for the same method (`configuration-
- * forwarding/members.ts` in the internal repository), so Members reads the
- * same shapes whether a host served it or authn did.
- *
- * `environment.members.removePreview` is not here: the member's running
- * turns and terminals are counted by a computer. What authn says a removal
- * changes for the team is `readConfigurationRemovalPreview`.
- */
+// The members methods answered by authn directly, in the shapes the host's
+// forwarder answered. `removePreview`'s running work is counted by a computer.
 import { z } from "zod";
 import type {
   EnvironmentMembersInviteRequest,
@@ -36,13 +26,8 @@ import {
 } from "./environment-cloud";
 import { authnMemberRoleSchema } from "./authn-environment-schemas";
 
-/** A page of rows larger than this is split by user id, as the host paged it. */
 const MEMBERS_PAGE_SIZE = 100;
 
-/**
- * authn's members answer, as much of it as these calls read. Not strict:
- * authn adds fields this app does not read.
- */
 const teamMembersSchema = z.object({
   members: z.array(
     z.object({
@@ -83,7 +68,6 @@ const seatSaveSchema = z.object({ receiptId: z.string().nullable() });
 
 const noticeSeenSchema = z.object({ legacyRoleNoticeSeenAt: z.string() });
 
-/** The person reading, as a Personal environment lists its one member. */
 interface ConfigurationReader {
   readonly userId: string;
   readonly displayName: string;
@@ -108,10 +92,7 @@ async function readTeamMembers(
   );
 }
 
-/**
- * The member a write names, read fresh at the write: a role change or a
- * removal is sent for the row authn lists now, never for one read earlier.
- */
+/** Read fresh at the write: never a row read earlier. */
 async function targetMember(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -150,11 +131,7 @@ function roleRefusal(
   return null;
 }
 
-/**
- * One page of the environment's members, ordered by user id, from `cursor`.
- * `personal` names the reader when the environment is their own: Personal
- * lists them alone, as the host answered it, and asks authn nothing.
- */
+/** Personal lists the reader alone and asks authn nothing. */
 export async function readConfigurationMembers(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -194,8 +171,7 @@ export async function readConfigurationMembers(
         inviteState: row.inviteState,
         invitedAddress:
           isAdmin && pending ? row.invitedAddress?.trim() || null : null,
-        // authn's own row email, as authn scoped it for this reader:
-        // passed through, never widened.
+        // authn's scoping for this reader: passed through, never widened.
         email: row.email.length === 0 ? null : row.email,
       };
     })
@@ -221,7 +197,7 @@ export async function readConfigurationMembers(
   };
 }
 
-/** Before an invite: a read that fails refuses, since null means a team on no paid plan. */
+/** A read that fails refuses: null means a team on no paid plan. */
 export async function readConfigurationSeats(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -246,8 +222,7 @@ async function invitedSeatDelta(
   try {
     return (await readConfigurationSeats(cloud, environmentId)).seats;
   } catch {
-    // The invitation already went out: a missing count must not ask the
-    // person to send it twice.
+    // The invitation already went out: a missing count must not ask to send it twice.
     return null;
   }
 }
@@ -319,25 +294,15 @@ export async function removeConfigurationMember(
   throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
 }
 
-/**
- * authn's removal preview, as much of it as the removal confirm reads. Not
- * strict, and nothing else required: authn answers more fields than the
- * confirm reads, and some of them are leaving.
- */
 const removalPreviewSchema = z.object({
   sandboxesToRekey: z.number().int().nonnegative(),
 });
 
-/** What authn says a member's removal changes for the team. */
 export interface ConfigurationRemovalPreview {
-  /** The team's sandboxes that get a replacement sign-in for its services. */
   readonly sandboxesToRekey: number;
 }
 
-/**
- * The removal preview for `userId`, for an admin. The member's seat is read
- * fresh, as a removal names it at the write.
- */
+/** The member's seat is read fresh, as a removal names it at the write. */
 export async function readConfigurationRemovalPreview(
   cloud: EnvironmentCloud,
   environmentId: string,

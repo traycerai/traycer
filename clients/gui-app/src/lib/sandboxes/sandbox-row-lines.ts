@@ -343,12 +343,7 @@ export function sandboxShapeAndCostLine(
   return sandboxRowShapeAndCostLine(summary, configuration);
 }
 
-/**
- * The same line for a row whose credits may not be the page's: `credits` is
- * whose credits the row is on, and `null` where that is not known leaves the
- * funding clause out (on an Automations row, everything but what it cannot
- * run).
- */
+/** `credits` null (unknown) leaves the funding clause out. */
 export function sandboxRowShapeAndCostLine(
   summary: SandboxSummary,
   credits: SandboxPageConfiguration | null,
@@ -438,12 +433,8 @@ export interface SandboxClockInput {
   /** A resumed host has not answered for this wake yet. */
   readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
-  /** The page's configuration, which the settings line names. */
   readonly configuration: SandboxPageConfiguration;
-  /**
-   * Whose credits the row is on, for the frozen cause and the storage clause:
-   * `null` where that is not known, which leaves both out.
-   */
+  /** `null` (unknown) leaves both out. */
   readonly credits: SandboxPageConfiguration | null;
   readonly cost: SandboxCost | null;
   /** The class's wake string, or `null` when the catalogue does not say. */
@@ -604,12 +595,7 @@ export function sandboxFrozenCause(
   return `${teamPossessive(configuration.teamName)} credits ran out.`;
 }
 
-/**
- * Whether a frozen row's remedy is adding credits: the person's own on
- * Personal; on a team's sandbox, the team's, which only its Admin may buy.
- * Everyone else is offered Resume. Never the person's own top-up for a
- * team's sandbox.
- */
+/** Never the person's own top-up for a team's sandbox: only the team's Admin may buy its credits. */
 export function sandboxFrozenOffersAddCredits(
   configuration: SandboxPageConfiguration,
   teamBillingAdmin: boolean,
@@ -806,7 +792,6 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
-/** A frozen row's cause, or nothing while whose credits ran out is not known. */
 function rowFrozenCause(input: SandboxClockInput): string | null {
   return input.credits === null ? null : sandboxFrozenCause(input.credits);
 }
@@ -1103,7 +1088,6 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  /** A frozen row offers adding credits; everyone else is offered Resume. */
   readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {

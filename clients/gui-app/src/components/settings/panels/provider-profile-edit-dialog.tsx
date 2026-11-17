@@ -667,12 +667,6 @@ function useProfileRename(
   };
 }
 
-/**
- * What Sign in again reads of a completed sign-in on a computer that offers
- * sign-ins by itself (`listOffersSignIns` of this host's cached list), or
- * null. `Add as a new profile` closes this dialog and opens Add for the same
- * provider on the same host, selecting the new profile here once it exists.
- */
 function useReauthSignInOutcomes(
   source: {
     readonly providerId: ProviderId;

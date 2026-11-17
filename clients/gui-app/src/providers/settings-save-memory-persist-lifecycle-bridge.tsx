@@ -16,10 +16,7 @@ export interface SettingsSaveMemoryPersistLifecycleBridgeProps {
   readonly children: ReactNode;
 }
 
-/**
- * Points the settings-save memory at the signed-in account, and wipes it on
- * sign-out: a save remembered for one account is never applied for another.
- */
+/** A save remembered for one account is never applied for another. */
 export function SettingsSaveMemoryPersistLifecycleBridge(
   props: SettingsSaveMemoryPersistLifecycleBridgeProps,
 ): ReactNode {

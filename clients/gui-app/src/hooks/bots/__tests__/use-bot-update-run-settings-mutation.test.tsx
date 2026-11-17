@@ -20,7 +20,6 @@ import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
-// The window's binding: only its session service is read by this write.
 const binding = vi.hoisted(
   (): {
     current: {

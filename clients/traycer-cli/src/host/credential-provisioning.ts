@@ -305,12 +305,9 @@ export async function provisionInstalledHostCredential(
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
-  // A recovery still in flight is waited for only as long as the bound has
-  // left, never past it. A CANCELABLE deadline, not `sleep()`: an uncleared
-  // `setTimeout` keeps the Node event loop alive, and the CLI exits by
-  // draining it rather than calling `process.exit`, so a plain race would
-  // hold `host install` open for the whole remaining budget every time the
-  // recovery won.
+  // A cancelable deadline, not `sleep()`: an uncleared `setTimeout` keeps the event
+  // loop alive and the CLI exits by draining it, so a plain race would hold `host
+  // install` open for the whole remaining budget.
   const waitForInFlightRevalidation = async (): Promise<void> => {
     if (inFlightRevalidation === null) return;
     const pending: Promise<RevalidateOutcome> = inFlightRevalidation;
@@ -361,9 +358,7 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
-    // The open presents this CLI's host-only token for the host, as every
-    // other CLI open does; the stored sign-in is spent at authn alone (the
-    // token's mint and its refresh, and the delegated credential's mint).
+    // The stored sign-in is spent at authn alone; the host sees this CLI's host-only token.
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.revalidateCurrentContext(),
@@ -394,16 +389,11 @@ export async function provisionInstalledHostCredential(
         recovery: HostTokenSessionRevalidator,
       ) => Promise<RevalidateOutcome>,
     ): Promise<RevalidateOutcome> => {
-      // Reaching this callback at all means the host answered and refused
-      // the token we presented - it was up and talking, whatever happens to
-      // the recovery below. Recorded before the early return so even a
-      // recovery the deadline cannot cover still counts as contact.
+      // The host answered. Recorded before the early return, so even a recovery the
+      // deadline cannot cover counts as contact.
       hostAnswered = true;
-      // Never START a recovery the deadline cannot cover. The CLI sets
-      // `process.exitCode` rather than calling `process.exit` (see
-      // `runner/exit.ts`), so the process waits for the event loop to
-      // drain: a mint or refresh begun as the budget ran out would keep
-      // `host install` alive past its advertised bound.
+      // Never start a recovery the deadline cannot cover: the CLI exits by draining the
+      // event loop, so a late mint or refresh would keep `host install` past its bound.
       if (remaining() <= 0 || endpoint === null) {
         return Promise.resolve<RevalidateOutcome>("rejected");
       }
@@ -549,10 +539,8 @@ export async function provisionInstalledHostCredential(
       }
       return { kind: "unreachable" };
     };
-    // How the probe ended is read only once a recovery still in flight has
-    // answered, or the bound has passed: a sign-in refused inside the bound
-    // is then reported as refused, not as an authorization that did not
-    // complete. A refusal landing after the bound is still not seen.
+    // Read once an in-flight recovery has answered or the bound passed, so a sign-in
+    // refused inside the bound reads as refused. One after the bound is not seen.
     const settleAfterRecovery =
       async (): Promise<HostCredentialProvisionOutcome> => {
         await waitForInFlightRevalidation();
@@ -803,11 +791,8 @@ export async function provisionInstalledHostCredential(
     if (poll !== null) {
       clearInterval(poll);
     }
-    // A revalidation only ever STARTS with budget left, so the remainder is
-    // the most a started rotation gets to land cleanly (a landed rotation
-    // leaves the credentials file consistent; an interrupted one leaves its
-    // spent-base marker armed for the next process to resolve). Whatever is
-    // still pending when the bound fires is cancelled just below.
+    // A revalidation only starts with budget left, so the remainder is the most a started
+    // rotation gets to land; an interrupted one leaves its marker for the next process.
     await waitForInFlightRevalidation();
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
@@ -829,10 +814,8 @@ export async function provisionInstalledHostCredential(
 }
 
 /**
- * A host-only token authn refused for good: a rejected or missing sign-in
- * needs `traycer login`; a person who is not a member of the computer's team
- * reads the membership refusal a door gives them; every other refusal (a
- * computer with no row, a frozen sandbox) means the handoff did not complete.
+ * A rejected or missing sign-in needs `traycer login`; a non-member reads the door's
+ * membership refusal; anything else is a handoff that did not complete.
  */
 function mintRefusalOutcome(
   failure: CliHostTokenFailure,

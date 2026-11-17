@@ -44,7 +44,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostBinding: () => hostBindingMock.current,
-    // Add a secret reads through the selected host's client.
     useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });
@@ -256,7 +255,6 @@ function outgoingSetOverrideMatches(
   );
 }
 
-/** Personal's secrets are read from authn; the fake serves them. */
 let fakeAuthn: FakeEnvironmentAuthn | null = null;
 
 /** The bare section reads and writes through the query client the app provides. */
@@ -489,7 +487,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         removed: [],
       }),
       "environment.review": () => ({
-        // The `@1.2` facts each row carries, none of them known here.
         entries: review.map((entry) => ({
           command: null,
           event: null,
@@ -965,7 +962,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         secretId: "sec-shadow",
         name: "R2 access",
         kind: "api_key",
-        // authn's secret row always names its protocol.
         protocol: "https",
         destinations: [],
         currentVersionId: "ver-shadow",

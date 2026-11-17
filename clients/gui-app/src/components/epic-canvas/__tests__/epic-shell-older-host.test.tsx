@@ -1,9 +1,3 @@
-/**
- * A task tab whose computer falls below the minimum host version, through the
- * real session controller, the real durable-stream opener (which refuses a row
- * below the floor) and the real `EpicShell`. Only the network boundary under
- * the opener, the canvas and the shell's own chrome are stand-ins.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -117,7 +111,6 @@ const directory = vi.hoisted(() => ({
       },
     },
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
-  // What the window's narration reads off the directory.
   hasConcludedDiscovery: () => true,
   getLocalHostId: (): string | null => null,
 }));
@@ -133,8 +126,6 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-// One client per host, answering the row the case published: the controller
-// reads the session host's floor off `getActiveHost()`.
 const sessionHostClients = vi.hoisted(
   () => new Map<string, Record<string, unknown>>(),
 );
@@ -162,7 +153,6 @@ vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
   useSelectionAuthorityAttached: () => true,
 }));
 
-// The real opener runs; what it is given below it is supplied here.
 vi.mock("@/providers/use-runner-host", async () => {
   const { MockRunnerHost } =
     await import("@traycer-clients/shared/host-client/mock/mock-runner-host");
@@ -200,8 +190,6 @@ vi.mock(
   },
 );
 
-// Counts every attempt to open a transport, whether the real opener refuses it
-// or not: "no further attempt" is the claim of the ladder cases.
 vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -223,7 +211,6 @@ vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
   };
 });
 
-// The jump behind "Update now", observed at the two seams it ends in.
 vi.mock(
   "@/components/settings/host-scope/carry-viewed-host-into-settings",
   () => ({
@@ -297,7 +284,6 @@ function remoteRow(
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
-/** The session worker's streams: opened and closed counts, and a snapshot to each. */
 function installStreams(): {
   readonly opened: () => number;
   readonly closed: () => number;
@@ -413,15 +399,13 @@ const READY_CONTROLLER: HostReadinessController = {
   hasBeenDefaultHostReady: true,
 };
 
-/** The tab on the window's own computer, with the window's cover mounted. */
 function renderTabOnTheWindowsComputer(): void {
   seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  // The window is attached to this computer and has been served by it: the
-  // drop below the floor then reads as a computer that stopped being usable,
-  // not as a first launch.
+  // Served before, so the drop below the floor reads as a computer that stopped
+  // being usable, not a first launch.
   act(() => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
@@ -447,9 +431,6 @@ function renderTabOnTheWindowsComputer(): void {
 }
 
 function renderTabOnAnotherComputer(seededOnTabComputer: boolean): void {
-  // The tab's own computer, not the window's: the create-host seed names it,
-  // and its first session is then on that computer. Without the seed the tab
-  // simply follows the effective computer.
   if (seededOnTabComputer) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
   else seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
@@ -466,10 +447,6 @@ function renderTabOnAnotherComputer(seededOnTabComputer: boolean): void {
   );
 }
 
-/**
- * A tab that follows the effective computer, and the move of that computer:
- * the re-point leaves the first computer as the tab's original host.
- */
 function renderFollowingTab(): { readonly moveTo: (hostId: string) => void } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -524,7 +501,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       return null;
     });
     installRows();
-    // Rows the controller resolves a client for before the hook ran.
     for (const hostId of [WINDOW_HOST_ID, TAB_HOST_ID]) {
       sessionHostClients.set(hostId, {
         request: vi.fn(),
@@ -558,8 +534,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
-    // The tab's first session was on this very computer, so there is no other
-    // computer to go back to: Update now is the card's only action.
     expect(
       within(card)
         .getAllByRole("button")
@@ -596,8 +570,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     });
     streams.deliverSnapshot(0);
     await waitForTaskShown();
-    // The effective computer moves: the tab is re-pointed to it, leaving the
-    // first computer as its original host.
     view.moveTo(TAB_HOST_ID);
     await waitFor(() => {
       expect(streams.opened()).toBe(2);
@@ -633,22 +605,17 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     expect(seams.openAttempts).toEqual([TAB_HOST_ID]);
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
-    // Two refusals, both local, before any dial: the run key's demand segment
-    // moves once after a failed rebuild that follows a release, and that move
-    // starts one more run (epic-session-controller.ts, the run key). Below the
-    // floor no ladder follows.
+    // Two local refusals before any dial: the run key's demand segment moves once
+    // after a failed rebuild that follows a release.
     const attemptsAtFailure = [...seams.openAttempts];
     expect(attemptsAtFailure).toEqual([TAB_HOST_ID, TAB_HOST_ID, TAB_HOST_ID]);
 
-    // The ladder's first rung would fall due after a minute; the card is still
-    // the answer then, and no transport was opened for it.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(seams.openAttempts).toEqual(attemptsAtFailure);
     expect(screen.getByTestId("epic-repoint-failure")).toBeTruthy();
 
-    // No later rung opens one either, up to and past the ladder's longest wait.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60_000);
     });
@@ -721,7 +688,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
       });
       expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
-      // An empty body, not the loading skeleton.
       expect(screen.queryByTestId("tile-canvas-loading")).toBeNull();
     });
   });

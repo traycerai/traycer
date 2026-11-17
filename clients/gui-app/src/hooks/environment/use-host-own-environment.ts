@@ -18,12 +18,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 const STATUS_PARAMS = {};
 
-/** {@link AddressedEnvironment}, and a way to ask again what could not be read. */
 export interface HostOwnEnvironment extends AddressedEnvironment {
-  /**
-   * Re-asks the reads that failed (the host's status, the environment list,
-   * a team's host list); a read that answered is not asked again.
-   */
+  /** A read that answered is not asked again. */
   readonly retry: () => void;
 }
 
@@ -31,16 +27,8 @@ const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 const NONE: AddressedEnvironment = { environmentId: null, resolved: true };
 
 /**
- * The environment `hostId` runs, as the app names it to authn: what a host
- * filled in for a secrets request that named none. The host's own status
- * says which kind it runs; Personal is the person's from `environment.list`,
- * and a team's is the one of the person's team environments whose authn host
- * list holds this host (authn lists a host under one environment only).
- *
- * `resolved` is false while that is not known yet, a team host list that
- * failed included. A host that runs none, or whose status cannot be read,
- * names none (`environmentId: null`, resolved): a secrets read naming none
- * fails, as the host's did.
+ * authn lists a host under one environment only. `resolved` is false while that
+ * is unknown; a secrets read naming no environment fails.
  */
 export function useHostOwnEnvironment(
   client: HostClient<HostRpcRegistry> | null,
@@ -69,8 +57,6 @@ export function useHostOwnEnvironment(
   const { isError: statusFailed, refetch: refetchStatus } = status;
   const { isError: listFailed, refetch: refetchList } = environments;
   const { retryFailed: retryHostLists } = hostLists;
-  // The environment list is one cache entry: Personal's id and the team ids
-  // are both read from it.
   const retry = useCallback(() => {
     if (statusFailed) void refetchStatus();
     if (listFailed) void refetchList();
@@ -93,7 +79,6 @@ export function useHostOwnEnvironment(
   return { ...own, retry };
 }
 
-/** What the host's status, and the reads it picks, name. */
 function ownEnvironmentFrom(facts: {
   readonly statusSupported: boolean | null;
   readonly statusFailed: boolean;
@@ -127,7 +112,6 @@ function teamEnvironmentIds(
     .map((environment) => environment.environmentId);
 }
 
-/** The team environment whose host list holds `hostId`, once that is known. */
 function teamEnvironmentHolding(
   teamIds: readonly string[],
   hostsByEnvironmentId: EnvironmentHostLists["hostsByEnvironmentId"],

@@ -6,11 +6,7 @@ import {
 } from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * The secrets of the environment a page names, read by the app itself from
- * authn; where it names none (a Local pick), the environment the host it
- * reads through runs.
- */
+/** Where the page names none (a Local pick), the environment its host runs. */
 export function useEnvironmentSecretsQuery(
   client: HostClient<HostRpcRegistry>,
 ) {

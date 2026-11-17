@@ -8,12 +8,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import type { HostRpcRegistry } from "@/lib/host";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
-/**
- * Whether `profileId` names an account a person removed on the host `client`
- * reaches. A seed keeps such an id (`resolveSeededProfileId`), so a surface
- * with no send-time gate of its own holds its start until the person picks an
- * account.
- */
+/** A seed keeps such an id, so a surface with no send-time gate holds its start until the person picks. */
 export function useProfilePinRemoved(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,

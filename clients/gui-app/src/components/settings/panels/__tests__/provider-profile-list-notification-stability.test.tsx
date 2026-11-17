@@ -278,7 +278,7 @@ function expectNoLoginRequests(harness: PickerHarness): void {
   expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(0);
 }
 
-// No observer-beside-Add case: ProviderProfileAddFlowHost observes providers.list at provider-profile-add-flow-host.tsx:56.
+// No observer-beside-Add case: ProviderProfileAddFlowHost observes providers.list itself.
 describe("provider list push stability while Add is open", () => {
   it.each([true, false, "absent"] as const)(
     "refetches identical list data once and keeps Add copy unchanged when offersSignIns is %s",

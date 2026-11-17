@@ -281,13 +281,8 @@ type ListedProvider =
 interface Scenario {
   /** What the first `providers.list` read answers (the command's own pre-flight). */
   listState: ListedProvider;
-  /**
-   * The whole `providers.list` envelope, when a test needs a key the provider
-   * row does not carry (`removedProfiles`). Null keeps the `{ providers:
-   * [listState], native: null }` answer.
-   */
+  /** For a key the provider row lacks (`removedProfiles`); null keeps the default answer. */
   listEnvelope: ProvidersListResponse | null;
-  /** A full answer for a later read, including one with no provider groups. */
   laterListEnvelope: ProvidersListResponse | null;
   /**
    * What every later `providers.list` read answers: the command's re-read when
@@ -3258,11 +3253,7 @@ describe("login against a 10.10 answer", () => {
   });
 });
 
-/**
- * The record is this computer's Terminal login, or it is not. When it is, that
- * row is the only one under the provider. When it is not, the Terminal login
- * is its own ambient row and the only row with the flag.
- */
+/** A Terminal-login record is the provider's only row; else that login is its own flagged ambient row. */
 function accountRows(
   otherNames: readonly string[] | null,
   terminalOnThisComputer: boolean,

@@ -9,13 +9,8 @@ import {
 } from "@/stores/epics/open-epic/chat-record-head";
 
 /**
- * Who started one chat, as the host that holds it says on the chat's row: a
- * user id, the literal `"system"`, or `null` when nothing says (an older host,
- * another computer's replica row, or no epic session to read).
- *
- * Keyed on the record identity and read off the epic session's starter plane,
- * as `useEpicChatRecordHead` reads the head; `epicId` guards against reading
- * one epic's table for another's chat.
+ * `null` when nothing says (an older host, another computer's replica row, no
+ * session). `epicId` guards against reading one epic's table for another's chat.
  */
 export function useEpicChatStarter(
   epicId: string,
@@ -42,12 +37,7 @@ export function useEpicChatStarter(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/**
- * {@link useEpicChatStarter} for a surface outside the task, which knows the
- * chat by id alone (a notification row): read from the task's live session
- * while one is open, else `null`. Asks the host for nothing. Two owners'
- * same-id chats that disagree say nothing.
- */
+/** Asks the host for nothing; two owners' same-id chats that disagree say nothing. */
 export function useOpenEpicChatStarter(
   epicId: string | null,
   chatId: string | null,

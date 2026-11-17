@@ -89,13 +89,8 @@ export interface ProfileDropdownEligibilityControls {
 
 interface ProfileDropdownProps {
   readonly providerLabel: string;
-  /** The provider's selectable profiles; whether to draw the dropdown at all
-   *  is the caller's gate (`profileDropdownShown`), not this component's. */
+  /** Whether to draw the dropdown at all is the caller's gate (`profileDropdownShown`). */
   readonly profiles: ReadonlyArray<ProviderProfile>;
-  /** What the selected or pinned id names in `profiles`
-   *  (`resolveProfilePin`): its row, an account a person removed (the
-   *  trigger says so and no row is checked), or an id the list does not
-   *  know (the trigger shows the first row and no row is checked). */
   readonly pin: ProfilePinResolution;
   readonly onSelectProfile: (profileId: string | null) => void;
   readonly onCreateProfile: (() => void) | null;
@@ -137,8 +132,6 @@ interface ProfileDropdownProps {
   /** Whether the terminal login carries its `Terminal` badge. Settings names
    *  that row in its label instead, and passes `false`. */
   readonly showTerminalBadge: boolean;
-  /** The name of the computer whose list this is, for the second line of a
-   *  record's row that is also its Terminal login; `null` when unknown. */
   readonly terminalComputerName: string | null;
 }
 
@@ -154,7 +147,6 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   return <ProfileDropdownView props={props} trigger={null} />;
 }
 
-/** The ordinary profile menu opened by an action with its own button label. */
 export function ProfileDropdownWithTrigger({
   trigger,
   ...props
@@ -189,9 +181,7 @@ function ProfileDropdownView({
   } = props;
   const rowIdPrefix = useId();
   const triggerId = `${rowIdPrefix}-trigger`;
-  // The row drawn checked: only the row the pin resolved to. A removed or
-  // unknown pin checks none, and the trigger draws the first row for an
-  // unknown one.
+  // A removed or unknown pin checks no row.
   const checkedProfile = pin.kind === "row" ? pin.profile : null;
   const triggerProfile = triggerRow(pin, profiles);
   const activeCommitId =
@@ -373,8 +363,6 @@ function ProfileDropdownView({
   );
 }
 
-/** The trigger's accessible name; `null` for a pin whose account a person
- *  removed. */
 function profileTriggerAccessibleLabel(
   providerLabel: string,
   profile: ProviderProfile | null,
@@ -386,8 +374,6 @@ function profileTriggerAccessibleLabel(
   return `${providerLabel} profile: ${profileDisplayLabel(profile)}${terminalBadgeSuffix(profile, showTerminalBadge)}${profile.enabled ? "" : ", Disabled"}`;
 }
 
-/** What the closed trigger draws: the pinned row, or "Was removed" with no
- *  dot and no badge for a pin whose account a person removed (`null`). */
 function ProfileTriggerContents(props: {
   readonly profile: ProviderProfile | null;
   readonly besideSwitch: boolean;
@@ -703,11 +689,7 @@ function ProfileShortcut(props: {
   );
 }
 
-/**
- * The trigger's row: the checked one, the first for an unknown pin, and none
- * for a removed account, which has no row (and nothing to switch on or off),
- * even when the provider has no row left.
- */
+/** None for a removed account, even when the provider has no row left. */
 function triggerRow(
   pin: ProfilePinResolution,
   profiles: readonly ProviderProfile[],

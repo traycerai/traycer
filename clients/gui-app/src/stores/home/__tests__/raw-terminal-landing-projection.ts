@@ -1,9 +1,4 @@
-/**
- * The per-window snapshot entries the landing writer emits for two raw
- * Terminal drafts: one whose account still follows the default, and one
- * whose account was chosen. The gui-app test asserts the writer output
- * equals this, and the desktop parser test reads the same entries.
- */
+// The desktop parser test reads these same entries.
 export const RAW_TERMINAL_FOLLOWS_DRAFT_ID = "draft-follows-default";
 export const RAW_TERMINAL_CHOSEN_DRAFT_ID = "draft-chosen-terminal";
 

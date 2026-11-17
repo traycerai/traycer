@@ -144,10 +144,6 @@ function studioAndLaptop(): EnvironmentHostRecordV12[] {
   ];
 }
 
-/**
- * The window views Laptop, the picker is drawn, then authn answers the next
- * host list read with `answer` and the read is made again.
- */
 async function viewLaptopThenReadHosts(
   environmentId: string,
   answer: EnvironmentTransportAnswer | null,
@@ -302,8 +298,7 @@ describe("useTeamViewingHost, the window's own host", () => {
     expect(picker.container.textContent).toBe("");
   });
 
-  // Each case has an environment of its own: the viewing host the person
-  // picked is remembered per environment for the whole file.
+  // The viewing host is remembered per environment for the whole file.
   it.each([
     ["a 403 without authn's code", "kept-403", authnAnswer(403, {})],
     ["a 404 without authn's code", "kept-404", authnAnswer(404, {})],

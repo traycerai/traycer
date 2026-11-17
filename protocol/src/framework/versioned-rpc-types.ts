@@ -42,9 +42,7 @@ export const RPC_ERROR_CODES = [
   "host-left-environment",
   "profile-account-changed",
   "signed-out-by-person",
-  // A start named a profile whose account a person removed. Additive and
-  // degrade-safe: old peers narrow the unknown code to RPC_ERROR while
-  // preserving the response status and message.
+  // Additive: an old peer narrows it to RPC_ERROR, keeping status and message.
   "removed-by-person",
   // A served legacy key mutation requires the client's direct-to-broker flow.
   "update-required",
@@ -115,12 +113,8 @@ export const RPC_ERROR_CODES = [
   "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
   "E_HOST_IS_SANDBOX",
   "E_HOST_IN_ANOTHER_TEAM",
-  // `environment.move.plan@2.0`, `.stage@1.0` and `.start@1.0` refused: this
-  // computer has no move waiting for the person's word, or the request names
-  // a target that is not the move's own. The app draws its own line from the
-  // code, so no message text is part of the contract. `move.accept@1.0` keeps
-  // its `{ outcome: "not_awaiting" }` arm instead. Same additive degrade story
-  // as E_INVALID_ARGUMENT.
+  // No move waiting, or the request names another target. The app draws its own
+  // line, so no message text is contract. Same additive degrade as E_INVALID_ARGUMENT.
   "E_MOVE_NOT_AWAITING",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may

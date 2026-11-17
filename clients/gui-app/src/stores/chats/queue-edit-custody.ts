@@ -109,7 +109,6 @@ export interface QueueEditRecord {
    * text is known saved, and by then the refusal's frame is gone.
    */
   readonly followUpReason: string | null;
-  /** The code the second frame's refusal came with. `null` unless refused. */
   readonly followUpCode: string | null;
   /**
    * Whether the edited text has already been handed back. A refused content
@@ -158,7 +157,6 @@ export type QueueEditSettlement =
       readonly cause: QueueEditReturnCause;
       /** The host's refusal. `null` for every cause but `refused`. */
       readonly hostReason: string | null;
-      /** The code the refusal came with. `null` for every cause but `refused`. */
       readonly hostCode: string | null;
     }
   /**
@@ -177,7 +175,6 @@ export type QueueEditSettlement =
       /** `true` for a refusal the host stated, `false` for one never answered. */
       readonly refused: boolean;
       readonly hostReason: string | null;
-      /** The code that came with {@link hostReason}. */
       readonly hostCode: string | null;
     }
   /**
@@ -198,7 +195,6 @@ export type QueueEditSettlement =
       readonly followUpRefused: boolean;
       /** The host's refusal of the second frame. `null` unless refused. */
       readonly hostReason: string | null;
-      /** The code that came with {@link hostReason}. `null` unless refused. */
       readonly hostCode: string | null;
     }
   /**

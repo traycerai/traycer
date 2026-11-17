@@ -131,7 +131,6 @@ function membersPage(member: {
   };
 }
 
-/** Publishes a page as the Members surface would have read it from authn. */
 function cacheMembers(page: EnvironmentMembersResponseV12): void {
   const keys = renderHook(
     () => useEnvironmentMembersPages(ENVIRONMENT_ID, false),
@@ -321,8 +320,6 @@ describe("<NotificationRow /> about a member's post", () => {
   });
 });
 
-// Board C30 row 24 governs when a notification may replace its server body:
-// the chat did not fail, its task is open in this session, a person started it.
 describe("NotificationRow started-by attribution", () => {
   const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
   let runnerHost: MockRunnerHost;
@@ -450,11 +447,7 @@ describe("NotificationRow started-by attribution", () => {
     };
   }
 
-  /**
-   * The row under the page harness's members read, over the session an open
-   * task has. The members sit above the session so a task opening or closing
-   * does not remount the read.
-   */
+  // The members sit above the session so a task opening or closing does not remount the read.
   function startedRowTree(
     row: MergedNotificationRow,
     taskIsOpen: boolean,
@@ -501,7 +494,6 @@ describe("NotificationRow started-by attribution", () => {
   }
 });
 
-/** The members the app has loaded from authn, as the bell's author avatar reads them. */
 function LoadedMembers(props: { readonly children: ReactNode }): ReactNode {
   const resolveMember = useLoadedEnvironmentMembers(ENVIRONMENT_ID, true);
   return (
@@ -536,7 +528,6 @@ async function waitForStarterStore(): Promise<StarterStore> {
   return handle.store;
 }
 
-/** The host's chat record for the task's chat, as its chat-records read fills the store. */
 function seedStarter(store: StarterStore, starterUserId: string): void {
   const record: ChatRecordSummaryV12 &
     Pick<ChatRecordSummaryV15, "starterUserId"> = {

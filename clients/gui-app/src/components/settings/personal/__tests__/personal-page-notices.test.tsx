@@ -11,10 +11,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The page's reads of Personal's id, notices and review sheet are the app's own
-// calls to authn through the real runtime's binding, with only its `auth`
-// swapped for the fake sign-in. The client is a real `HostClient` over an
-// in-memory messenger (`buildAccessHost`): only the host on the far side is faked.
 const hostMock = vi.hoisted((): { auth: AuthService | null } => ({
   auth: null,
 }));
@@ -136,10 +132,6 @@ interface FrameOptions {
   /** The host id the window addresses; the notice's host id is compared to it. */
   readonly windowHostId: string;
   readonly runnerHost: IRunnerHost | null;
-  /**
-   * Answers an authn request ahead of the host-backed answers below, or
-   * declines it with null.
-   */
   readonly onAuthnRequest:
     | ((
         request: EnvironmentTransportRequest,
@@ -155,7 +147,6 @@ const SHELL_PAGE: FrameOptions = {
   onAuthnRequest: null,
 };
 
-/** Reads and writes authn received for the page under test, in arrival order. */
 interface AuthnLog {
   readonly queryClient: QueryClient;
   readonly requests: EnvironmentTransportRequest[];
@@ -167,13 +158,7 @@ function authnLog(queryClient: QueryClient): AuthnLog {
   return { queryClient, requests: [], notices: 0, review: 0 };
 }
 
-/**
- * Personal's notices, review holds and Undo as authn answers them, from the
- * fake host's state: a notice's address is its place in the list (its
- * revision), an Undo is recorded among the host's writes so that the order of
- * "keep here, then undo everywhere" is observable, and a hold names the host
- * that proposed it.
- */
+// An Undo is recorded among the host's writes so "keep here, then undo everywhere" is ordered.
 function hostBackedAuthnAnswer(
   host: AccessHost,
   log: AuthnLog,
@@ -249,7 +234,6 @@ function hostBackedAuthnAnswer(
   return null;
 }
 
-/** The held value authn would carry for an entry, as its line is derived from it. */
 function heldValueOf(
   entry: EnvironmentReviewEntry | EnvironmentReviewEntryV12,
 ): unknown {
@@ -388,7 +372,6 @@ const PERSONAL_ENVIRONMENTS: EnvironmentDescriptorV11[] = [
   },
 ];
 
-/** authn refuses the Undo with a 403 whose body names `code`. */
 function renderUndoAuthnPage(code: string): EnvironmentTransportRequest[] {
   const host = hostWith({}, { notices: [noticeFixture({})] });
   return renderPage(host, {
@@ -426,10 +409,7 @@ function hostWith(
   });
 }
 
-/**
- * Waits until every read the page started has answered, so a NEGATIVE
- * assertion runs after the reads it depends on, not after a guessed delay.
- */
+// So a negative assertion runs after the reads it depends on, not a guessed delay.
 async function settled(log: AuthnLog): Promise<void> {
   await waitFor(() => {
     expect(log.queryClient.isFetching()).toBe(0);
@@ -770,8 +750,6 @@ describe("Keep this host's value", () => {
   });
 
   it("draws no row and no Keep for a change authn's list does not carry", async () => {
-    // authn lists a change only while no later change superseded it, so a
-    // superseded one is simply absent from its answer.
     const host = hostWith(
       {},
       { notices: [], envEntries: [{ key: "LOG_LEVEL", value: "debug" }] },
@@ -860,7 +838,6 @@ describe("a Personal page's 'needs you' rows", () => {
       within(rows[0]).getByRole("button", { name: "Review" }),
     ).toBeTruthy();
 
-    // A held command's Review opens the host's retrospective sheet.
     fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({

@@ -140,7 +140,6 @@ function answer(result: ClaimedComputersResult): Promise<unknown> {
   return Promise.resolve(result);
 }
 
-/** A read that answers nothing until its request is aborted. */
 function heldUntilAborted(
   _environmentId: string,
   signal: AbortSignal | null,
@@ -172,7 +171,6 @@ function mountWith(queryClient: QueryClient) {
   });
 }
 
-/** user-a's entry for Acme, which a claimed computer's cover reads too. */
 function claimedEntryKey(): readonly unknown[] {
   return authQueryKeys.claimedComputers(mocks.auth.current, "user-a", "env-a");
 }
@@ -218,8 +216,6 @@ describe("useClaimedComputerNotice", () => {
     );
     expect(mocks.read).toHaveBeenCalledWith("env-a", expect.any(AbortSignal));
 
-    // The next sign-in reads again: a claim made since is told, and the one
-    // already told is not.
     mocks.read.mockImplementation(() =>
       answer({ kind: "ok", claims: [LATER_CLAIM, CLAIM] }),
     );
@@ -306,12 +302,10 @@ describe("useClaimedComputerNotice", () => {
     const view = mount();
     await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
 
-    // A teammate claims host-1 after the sign-in read took its snapshot.
     mocks.hosts.current = { hosts: [] };
     mocks.hosts.updatedAt = 2;
     view.rerender();
 
-    // The departure's read starts once the sign-in read has answered.
     act(() => {
       finishSignIn({ kind: "ok", claims: [] });
     });
@@ -339,7 +333,6 @@ describe("useClaimedComputerNotice", () => {
       answer({ kind: "ok", claims: [CLAIM] }),
     );
     const queryClient = newQueryClient();
-    // A claimed computer's cover reads the team's entry before any answer.
     const other = queryClient.fetchQuery({
       queryKey: claimedEntryKey(),
       queryFn: ({ signal }) => mocks.read("env-a", signal),
@@ -367,7 +360,6 @@ describe("useClaimedComputerNotice", () => {
     mountWith(queryClient);
     await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
 
-    // The cover cancels the read out before its state, then reads.
     await act(async () => {
       await queryClient.cancelQueries({
         queryKey: claimedEntryKey(),
@@ -442,7 +434,6 @@ describe("useClaimedComputerNotice", () => {
     });
     view.rerender();
     await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(2));
-    // A's read answers after the switch, then B's own read answers.
     act(() => {
       finish({ kind: "ok", claims: [CLAIM] });
     });
@@ -489,7 +480,6 @@ describe("useClaimedComputerNotice", () => {
   });
 });
 
-/** The entry a read of the filters or key `argument` names, if it is one. */
 function keyOf(argument: unknown): readonly unknown[] | null {
   const key: unknown =
     typeof argument === "object" &&
@@ -510,7 +500,6 @@ describe("useClaimedComputerNotice beside a claimed computer's cover", () => {
       answer({ kind: "ok", claims: [CLAIM] }),
     );
     const queryClient = newQueryClient();
-    // Every way a reader could cancel, drop or overwrite an entry it shares.
     const writers = [
       vi.spyOn(queryClient, "setQueryData"),
       vi.spyOn(queryClient, "resetQueries"),
@@ -550,7 +539,6 @@ describe("useClaimedComputerNotice beside a claimed computer's cover", () => {
         id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
       }),
     );
-    // Each asked for its own read, after the other's.
     expect(mocks.read).toHaveBeenCalledTimes(2);
     expect(queryClient.getQueryData(claimedEntryKey())).toEqual({
       kind: "ok",

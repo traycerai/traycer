@@ -136,10 +136,6 @@ const LIST_KEY = [
   "invitation-user",
 ] as const;
 
-/**
- * Seeds the account's environment list and records, into `order`, the moment
- * the hook invalidates it, so a case can say what came first.
- */
 function watchListInvalidation(queryClient: QueryClient, order: string[]) {
   queryClient.setQueryData(LIST_KEY, { environments: [] });
   const invalidate = queryClient.invalidateQueries.bind(queryClient);
@@ -213,8 +209,7 @@ describe("invitation acceptance clears the local host door state", () => {
       mutation.value = result.current.mutateAsync({ environmentId: "team-1" });
       await vi.waitFor(() => expect(order).toEqual(["revalidate"]));
     });
-    // The account read is held: a list invalidation made alongside it, and not
-    // after its answer, would already be in `order` and invalidated.
+    // The account read is held: a list invalidation made alongside it would already be in `order`.
     expect(listInvalidated(queryClient)).toBe(false);
 
     await act(async () => {
@@ -231,8 +226,7 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(directoryRefresh).toHaveBeenCalledOnce();
     expect(mocks.refreshHostFleet).toHaveBeenCalledOnce();
-    // The list joins each row to the account's teams, so it is invalidated
-    // only after the account read has answered.
+    // The list joins each row to the account's teams, so it is invalidated after the account read.
     expect(order).toEqual(["revalidate", "invalidate-list"]);
     expect(listInvalidated(queryClient)).toBe(true);
   });
@@ -265,7 +259,6 @@ describe("invitation acceptance clears the local host door state", () => {
 
       expect(order).toEqual(["revalidate", "invalidate-list"]);
       expect(listInvalidated(queryClient)).toBe(true);
-      // The accept is never lost to the account read's failure.
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
     },
   );
@@ -363,8 +356,6 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(switchedDirectoryRefresh).not.toHaveBeenCalled();
     expect(mocks.refreshHostFleet).not.toHaveBeenCalled();
-    // Neither the failed accept nor the one answered after the switch read the
-    // account: the new account is told nothing.
     expect(mocks.revalidate).not.toHaveBeenCalled();
   });
 });

@@ -426,8 +426,7 @@ function ManualRungAffordances({
   useHoldFailedTurnRefusal({ hostId, chatId }, attempt.turnId);
   const chatSettings = useChatPersistedSettings({ epicId, chatId, hostId });
   const seedTuple = failedTurnSwitchSeed(attempt, chatSettings);
-  // On a bot's own chat a Switch writes the bot's run settings, which a team's
-  // Viewer may not change; the composer's banner reads the same answer.
+  // On a bot's chat a Switch writes the bot's run settings, which a team's Viewer may not change.
   const mayChangeBot = useBotTurnMayChange(epicId);
   // Any rung in flight for this chat - a bare button here or a pick in the
   // picker - quiets every control, so one press cannot race another.

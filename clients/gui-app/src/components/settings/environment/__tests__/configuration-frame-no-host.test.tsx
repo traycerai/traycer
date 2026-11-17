@@ -47,7 +47,6 @@ function json(body: unknown): Promise<Response> {
   );
 }
 
-/** The person's account, as authn validates the device sign-in's token. */
 const PROFILE = {
   user: {
     id: "user-1",
@@ -83,10 +82,6 @@ const PROFILE = {
   payAsYouGoUsage: { allowPayAsYouGo: false },
 };
 
-/**
- * traycer-server's directory names one team environment, authn answers its
- * reads, and every other request is the sign-in's validation.
- */
 function installCloud(): string[] {
   const sent: string[] = [];
   originalFetch = (globalThis as { fetch?: unknown }).fetch;
@@ -150,7 +145,6 @@ async function signedInService(): Promise<AuthService> {
   return service;
 }
 
-/** The window's binding, with the signed-in session in place of its own. */
 function SignedInBinding(props: {
   readonly auth: AuthService;
   readonly children: ReactNode;

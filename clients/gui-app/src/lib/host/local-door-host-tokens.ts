@@ -2,11 +2,8 @@ import type { HostTokenAccess } from "@traycer-clients/shared/auth/host-token-le
 import { mintHostCredentialBeforeOpen } from "@/lib/auth/host-credential-provisioning";
 
 /**
- * Host-only tokens for this computer's own door. A computer authn has no row
- * for refuses every token with a bare 404, so on that answer the computer's
- * own credential is minted first and the token asked for again; the transport
- * then opens, and provisions that credential. Local work runs from the open;
- * cloud work waits for the provisioning.
+ * authn refuses every token for a computer it has no row for with a bare 404, so
+ * the computer's own credential is minted first and the token asked again.
  */
 export function localDoorHostTokens(tokens: HostTokenAccess): HostTokenAccess {
   return {

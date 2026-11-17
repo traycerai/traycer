@@ -137,7 +137,6 @@ export interface WsStreamClientOptions<
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth?: LocalOpenAuth;
-  /** Told of every refusal this host sends at its door and of every open it admits. */
   readonly door?: SessionDoorObserver;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
@@ -3216,7 +3215,7 @@ class StreamSession<
     // dial carries. `isCredentialRefusal` decides by the `doorReason`, or by
     // `UNAUTHORIZED` from a host that sends none. Every other fatalError (e.g.
     // `INCOMPATIBLE` or a stream domain code such as `CHAT_INVALID`), and the
-    // no-revalidator case, stays terminal exactly as before.
+    // no-revalidator case, stays terminal.
     if (
       isCredentialRefusal(details) &&
       !this.usesSessionGrant &&

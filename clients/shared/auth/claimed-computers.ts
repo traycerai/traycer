@@ -1,12 +1,7 @@
 import { z } from "zod";
 import { composeRequestAbort, untilAborted } from "./request-abort";
 
-/**
- * authn's record of which of a team's computers a member claimed, kept 30
- * days: `GET /api/v3/environments/:environmentId/claimed-computers` on the
- * person's sign-in. Any accepted seat on the former team reads it; anyone
- * else reads 404 `environment_not_found`.
- */
+// Kept 30 days by authn; a non-member reads 404 `environment_not_found`.
 function claimedComputersPath(environmentId: string): string {
   return `api/v3/environments/${encodeURIComponent(environmentId)}/claimed-computers`;
 }
@@ -26,7 +21,6 @@ export type ClaimedComputer = z.infer<typeof claimedComputerSchema>;
 
 export type ClaimedComputersResult =
   | { readonly kind: "ok"; readonly claims: readonly ClaimedComputer[] }
-  /** Not a member of that team, or no such team: nothing to tell. */
   | { readonly kind: "not-found" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "failed" };
@@ -47,8 +41,7 @@ export async function fetchClaimedComputers(
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
         },
-        // A credential-bearing request never follows a redirect; a 3xx is
-        // an answered failure.
+        // Carries a credential: never follow a redirect.
         redirect: "manual",
         signal: abort.signal,
       }),

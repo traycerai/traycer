@@ -14,12 +14,10 @@ const SECRETS_PATH = "api/v3/environments/env-me/secrets";
 
 interface Personal {
   readonly me: { readonly status: number; readonly body: unknown };
-  /** Rows by kind; a kind not named answers no rows. */
   readonly rows: Readonly<Record<string, readonly unknown[]>>;
   readonly secrets: readonly unknown[];
 }
 
-/** authn at the transport, answering Personal's reads on the person's sign-in. */
 function personalCloud(personal: Personal): {
   readonly cloud: EnvironmentCloud;
   readonly requested: string[];

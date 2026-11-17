@@ -24,17 +24,10 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 
-// The team's setting is read from the account, not from a computer, so its
-// failure names no host.
+// Read from the account, not a computer, so its failure names no host.
 const TEAM_CHAT_AUTO_ARCHIVE_READ_ERROR = "Couldn't read this setting.";
 
-/**
- * Environment ▸ Storage ▸ Archived chats ▸ "Archive idle agents
- * automatically" for a team (board C24): the team's own setting, which every
- * computer of the team follows. Read on the person's sign-in; an Admin or an
- * Editor changes it, and anyone else sees its value with the controls greyed
- * out. A team that never saved one shows it off.
- */
+/** Every computer of the team follows it; an Admin or Editor changes it. Off until the team saves one. */
 export function TeamChatAutoArchiveRow(props: {
   readonly environmentId: string;
   readonly role: ConfigurationRole | null;
@@ -68,8 +61,7 @@ function TeamChatAutoArchiveRowBody(props: {
   const save = useQueuedAutoArchiveSave(
     current,
     (request, callbacks) => {
-      // A read answered, so a sign-in exists; it is taken now, at the
-      // choice, not when the queued save's turn comes.
+      // The sign-in is taken at the choice, not when the queued save's turn comes.
       if (auth === null) return;
       setPolicy.mutate({ request, chosenBy: auth.chosenSignIn() }, callbacks);
     },
@@ -100,7 +92,6 @@ function TeamChatAutoArchiveRowBody(props: {
   );
 }
 
-/** The saved setting, or off with the default threshold before any save. */
 function teamShownPolicy(
   record: TeamChatAutoArchiveRecord | null | undefined,
 ): ChatAutoArchiveSetRequest {

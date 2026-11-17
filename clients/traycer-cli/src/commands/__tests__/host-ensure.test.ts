@@ -81,11 +81,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // to pin how `host-ensure.ts` THREADS the callback and the result through
 // the two auth steps.
 
-// HOME is redirected to a private temp dir before anything reads it: the
-// command looks for this machine's host enrolment record and stages the team
-// token under `hostHomeDir()`, and `store/paths` binds `homedir()` at module
-// load. The dir is made inside the `node:os` factory, so it exists before the
-// first module that asks for `homedir()` is evaluated.
+// HOME points at a private temp dir made inside the `node:os` factory, before any
+// module asks for `homedir()`: `store/paths` binds it at module load.
 const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -134,8 +131,6 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
     >();
   return {
     ...actual,
-    // The sign-in's own record of the person's teams is read through this
-    // call; the order records when a command reads it.
     validateAuthTokenIdentityAccessOnly: (
       ...callArgs: Parameters<typeof mocks.validateIdentityMock>
     ) => {
@@ -406,9 +401,8 @@ function baseEnsureResult(
   };
 }
 
-// The sign-in pre-flight's prompt gate reads `process.stdout.isTTY` directly
-// (not through `ctx`), so a case that signs in inline sets it itself; the
-// original shape is restored after every case.
+// The prompt gate reads `process.stdout.isTTY` directly, not through `ctx`, so a
+// case that signs in inline sets it; the original is restored after every case.
 const originalStdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(
   process.stdout,
   "isTTY",
@@ -421,10 +415,8 @@ function setStdoutIsTTY(value: boolean): void {
   });
 }
 
-/** A device flow that signs the person in and leaves the sign-in on disk. */
 function inlineSignInDeviceFlow(token: string): () => Promise<InlineSignIn> {
   return async () => {
-    // The inline sign-in is now the one the command resolves.
     mocks.resolveHostAuthMock.mockResolvedValue({
       token,
       authnBaseUrl: "https://authn.test",
@@ -448,7 +440,6 @@ describe("buildHostEnsureCommand", () => {
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
     mocks.ensureHostMock.mockResolvedValue(baseEnsureResult({}));
-    // The signed-in person belongs to the acme team unless a case says not.
     mocks.resolveHostAuthMock.mockResolvedValue({
       token: "test-token",
       authnBaseUrl: "https://authn.test",
@@ -516,8 +507,6 @@ describe("buildHostEnsureCommand", () => {
       }),
       ctx.progress,
     );
-    // A member's team is found in the sign-in's list before ensure installs,
-    // registers or starts anything.
     expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThanOrEqual(
       0,
     );
@@ -564,7 +553,6 @@ describe("buildHostEnsureCommand", () => {
       expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
       expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
       expect(mocks.legacyHost).toBeNull();
-      // The list refused it first: no token was asked for or kept.
       expect(mintRequests).toEqual([]);
       expect(stagedTeamTokenFile()).toBeNull();
     },
@@ -628,8 +616,6 @@ describe("buildHostEnsureCommand", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    // The team is read from the sign-in's list twice: before anything is
-    // installed, and again by the transfer itself.
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
     expect(ctx.progress).not.toHaveBeenCalledWith(
@@ -693,8 +679,6 @@ describe("buildHostEnsureCommand", () => {
   describe("--team on a machine with no host yet", () => {
     it("mints by the resolved environment id and stages the token before ensure installs or starts anything, with no personal credential, transfer or restart", async () => {
       const mintRequests = stubMintAnswer(mintedAnswer);
-      // What the machine holds for the host's first start, read where ensure
-      // installs and starts the host.
       const tokenFileAtEnsure: (string | null)[] = [];
       mocks.ensureHostMock.mockImplementation(() => {
         tokenFileAtEnsure.push(stagedTeamTokenFile());
@@ -725,13 +709,10 @@ describe("buildHostEnsureCommand", () => {
         },
       ]);
       expect(tokenFileAtEnsure).toEqual([MINTED_TOKEN_FILE]);
-      // The team is found in the sign-in's list, then the token is minted:
-      // both before ensure installs, registers or starts anything.
       expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThan(-1);
       expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
         mocks.callOrder.indexOf("ensure-enter"),
       );
-      // The receipt is awaited after ensure, for the minted target.
       expect(mocks.callOrder.indexOf("team-token-wait")).toBeGreaterThan(
         mocks.callOrder.indexOf("ensure-exit"),
       );
@@ -749,7 +730,6 @@ describe("buildHostEnsureCommand", () => {
         teamBinding: null,
         teamInstallReceipt: receipt,
       });
-      // No personal credential, no transfer, no restart.
       expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
       expect(mocks.callOrder).not.toContain("credential-provision");
       expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
@@ -759,7 +739,6 @@ describe("buildHostEnsureCommand", () => {
           message: expect.stringContaining("Restarting Traycer"),
         }),
       );
-      // The token never leaves the command.
       expect(JSON.stringify(result)).not.toContain(MINTED_TOKEN);
       expect(
         JSON.stringify(vi.mocked(ctx.output.human).mock.calls),

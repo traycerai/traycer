@@ -1,10 +1,5 @@
-/**
- * What the app reads from authn itself, on the person's sign-in, before a
- * save made in a host's settings: the host's ownership generation and OS in
- * its environment, and the rows of the item the save writes. The app
- * recognises its own hold by these and by what it sent, never by anything a
- * host returned (`settings-save-mapping.ts` in the protocol).
- */
+// The app recognises its own hold by these reads and what it sent, never by
+// anything a host returned.
 import { z } from "zod";
 import {
   hostOsOfPlatform,
@@ -22,7 +17,6 @@ import {
   type EnvironmentCloud,
 } from "./environment-cloud";
 
-/** authn's host row with `include=binding`, as much as a save reads. Not strict. */
 const authnBoundHostsSchema = z.object({
   hosts: z.array(
     z.object({
@@ -33,18 +27,12 @@ const authnBoundHostsSchema = z.object({
   ),
 });
 
-/** The host a save is made on, as authn lists it in the environment. */
 export interface SettingsSaveHost {
   readonly sharingGeneration: number;
-  /** Null when authn does not know the host's platform. */
   readonly hostOs: HostOs | null;
 }
 
-/**
- * `hostId` in `environmentId` as authn lists it; null when authn does not
- * list it there or names no generation for it, so no save on it is
- * remembered.
- */
+/** Null when authn does not list it or names no generation, so no save on it is remembered. */
 export async function readSettingsSaveHost(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -68,7 +56,6 @@ export async function readSettingsSaveHost(
   };
 }
 
-/** Every row authn holds of `kind` in `environmentId`, every OS's. */
 export async function readSettingsItemRows(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -80,8 +67,7 @@ export async function readSettingsItemRows(
     `${environmentPath(environmentId)}/items?kind=${encodeURIComponent(kind)}`,
     null,
   );
-  // An authn older than this app has no route for a newer kind: it holds no
-  // row of it.
+  // An older authn has no route for a newer kind: it holds no row of it.
   if (
     answer.status === 400 &&
     errorBodyCode(answer.body) === "kind_not_item_route"

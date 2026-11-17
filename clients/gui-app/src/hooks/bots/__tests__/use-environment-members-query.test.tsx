@@ -39,10 +39,6 @@ afterEach(() => {
 
 const ENVIRONMENT = "env-team";
 
-/**
- * Members a page holds: the app pages authn's one list by user id, this many
- * to a page (`configuration-members.ts`).
- */
 const PAGE_SIZE = 100;
 
 function userIdOf(index: number): string {
@@ -78,7 +74,6 @@ function page(
   };
 }
 
-/** The pages of a roster by the cursor that asks for each, the first page's null. */
 function pagesOf(
   ids: readonly string[],
 ): Map<string | null, EnvironmentMembersResponseV12> {
@@ -93,19 +88,15 @@ function pagesOf(
   return pages;
 }
 
-/** Forty full pages, the chain a warm cache has to be followed through. */
 const FORTY_PAGE_ROSTER = userIds(40 * PAGE_SIZE);
 const LAST_FORTY_USER_ID = FORTY_PAGE_ROSTER[FORTY_PAGE_ROSTER.length - 1];
 
-/** The cursors the forty-page roster's pages are asked for by, in order. */
 function fortyPages(): Map<string | null, EnvironmentMembersResponseV12> {
   return pagesOf(FORTY_PAGE_ROSTER);
 }
 
-/** The roster authn answers with; a test changes it between reads. */
 interface Roster {
   ids: readonly string[];
-  /** A read of the list that is refused. */
   refused: boolean;
 }
 
@@ -139,7 +130,6 @@ function mountLoadedMembers(
 
 interface MountedMembers {
   readonly resolver: () => BotMemberResolver;
-  /** The cursor of every members page read started, in order. */
   readonly cursorsAsked: () => ReadonlyArray<string | null>;
   /** Re-renders the hook with another capability gate. */
   readonly setEnabled: (next: boolean) => void;
@@ -149,14 +139,12 @@ interface MountedMembers {
   ) => Promise<void>;
   /** Refetches the first page, as an invalidation would. */
   readonly refetchFirstPage: () => Promise<void>;
-  /** Every members page query the hook observes, by status. */
   readonly pageQueries: () => ReadonlyArray<{
     readonly status: string;
     readonly fetchStatus: string;
   }>;
 }
 
-/** The cursor a members page query names; undefined for any other query. */
 function cursorOf(queryKey: unknown): string | null | undefined {
   const key = JSON.stringify(queryKey);
   if (!key.includes("environment.members")) return undefined;
@@ -343,8 +331,6 @@ describe("useEnvironmentMembers", () => {
     roster.ids = [ids[0], joined, ...ids.slice(1)];
     await mounted.refetchFirstPage();
 
-    // The new first page and the new second page, which now holds the
-    // member the first page's end moved off.
     await waitFor(() => {
       expect(mounted.resolver()(joined)?.displayName).toBe(`Name of ${joined}`);
       expect(mounted.resolver()(ids[PAGE_SIZE - 1])?.displayName).toBe(
@@ -441,10 +427,8 @@ describe("useEnvironmentMembers", () => {
       ).toBe(true);
     });
 
-    // A page of members joined ahead of everyone: the refetched first page
-    // is all new members, the page after it holds the old first page's
-    // members, and that page ends where the old first page did, so the rest
-    // is cached.
+    // The page after the refetched first one ends where the old first page did, so the
+    // rest is cached.
     const joined = Array.from(
       { length: PAGE_SIZE },
       (_, index) => `user-00-new-${String(index).padStart(3, "0")}`,
@@ -487,15 +471,13 @@ describe("useEnvironmentMembers", () => {
       );
     });
 
-    // The second page now names the cursor that asked for it.
     await mounted.publish(
       new Map([
         [ids[PAGE_SIZE - 1], page([ids[PAGE_SIZE]], ids[PAGE_SIZE - 1])],
       ]),
     );
 
-    // Both pages are settled and no third page query exists, so nothing more
-    // can be asked.
+    // No third page query exists, so nothing more can be asked.
     await waitFor(() => {
       expect(mounted.pageQueries()).toEqual([
         { status: "success", fetchStatus: "idle" },

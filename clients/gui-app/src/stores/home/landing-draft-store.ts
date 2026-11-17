@@ -142,13 +142,7 @@ export interface LandingDraftTab {
    * pick of its own, so the draft's Send goes there even after a reload.
    */
   readonly returnedSandbox: StoredReturnedSandbox | null;
-  /**
-   * Nobody chose this draft's account: its settings came from the host's
-   * last-run settings, and its Terminal login starts on the default account
-   * (`useSignedOutTerminalDefaultAccount`) each time it is shown. Local to
-   * this device: a row that arrives without it, from the host or another
-   * window, counts as chosen and never moves.
-   */
+  /** Local to this device: a row that arrives without it counts as chosen and never moves. */
   readonly accountFollowsDefault: boolean;
   /**
    * The machine this draft was opened FOR, when the gesture that opened it
@@ -318,10 +312,7 @@ interface LandingDraftStoreState {
   setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
-  /**
-   * Record whether nobody chose the draft's account
-   * (`LandingDraftTab.accountFollowsDefault`). Local: nothing is published.
-   */
+  /** Local: nothing is published. */
   setDraftAccountFollowsDefault: (id: string, follows: boolean) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
@@ -2165,14 +2156,9 @@ function keptReturnedSandbox(
 }
 
 /**
- * Only this window's own write coming back keeps the row's account provenance:
- * a document on the same host line at the revision the row already holds. On a
- * clean row with the bit set, that revision is this window's own acknowledged
- * write: a dirty row only becomes clean through an acknowledgement, and
- * `landingDraftRememberSynced` clears the bit when one lands behind a newer
- * observed write. A newer revision is another window's or device's write, and a
- * cloud head (revision 0) proves nothing, so those count as chosen whatever
- * account they name: equal values are not an own echo.
+ * Only this window's own write echoing back keeps the provenance. A newer revision
+ * is another writer's, and a cloud head (revision 0) proves nothing: equal values
+ * are not an own echo.
  */
 function keptAccountFollowsDefault(
   existing: LandingDraftTab | undefined,

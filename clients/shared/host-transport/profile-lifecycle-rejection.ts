@@ -42,14 +42,8 @@ export function isProfileLifecycleRejection(
 }
 
 /**
- * True only for the code `removed-by-person` with the unknown-id sentence,
- * which is what the computer answers on a unary start that names an account a
- * person removed: the sentence it gives for an unknown id, under its own code.
- *
- * For the CLI's host-error mapper only, so that refusal prints exactly what an
- * unknown id prints today. The app must not use it: for this code the app
- * shows its own words (the profile pin's "Was removed"), never the computer's
- * sentence, which carries the profile id.
+ * For the CLI's mapper only, so the refusal prints what an unknown id prints. The
+ * app must not use it: the computer's sentence carries the profile id.
  */
 export function isRemovedProfileRefusal(
   code: string,

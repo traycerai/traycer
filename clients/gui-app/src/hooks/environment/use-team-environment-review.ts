@@ -41,7 +41,7 @@ import { useHostBinding } from "@/lib/host/runtime";
 const READ_METHOD = "environment.review";
 const APPLY_METHOD = "environment.review.applyChoice";
 
-/** Shared room content has no proposal or review workflow (T13 ruling 1). */
+/** Shared room content has no proposal or review workflow. */
 function included(entry: TeamReviewEntry): boolean {
   return (
     entry.entry.kind !== "skill" && entry.entry.kind !== "agent_selection_guide"

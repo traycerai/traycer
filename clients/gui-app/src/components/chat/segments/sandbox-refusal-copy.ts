@@ -76,7 +76,6 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
   },
 };
 
-/** Whether the block is a turn a sandbox's want of credits ended. */
 export function isSandboxFrozenRefusal(
   code: string | null,
   message: string,
@@ -86,11 +85,7 @@ export function isSandboxFrozenRefusal(
     : message.startsWith(`${SANDBOX_FROZEN}:`);
 }
 
-/**
- * That turn's copy on a team's sandbox. The title names the team for
- * everyone; the line under it tells only someone who can buy the team's
- * credits to add them.
- */
+/** Only someone who can buy the team's credits is told to add them. */
 export function teamFrozenRefusalCopy(
   copy: SandboxRefusalCopy,
   teamName: string,
@@ -105,11 +100,7 @@ export function teamFrozenRefusalCopy(
   };
 }
 
-/**
- * That turn's copy while whose sandbox it is is not known: the neutral
- * out-of-credits line names no account, and no remedy is told as the
- * reader's to take.
- */
+/** No remedy is told as the reader's. */
 export function unknownPayerFrozenRefusalCopy(
   copy: SandboxRefusalCopy,
 ): SandboxRefusalCopy {

@@ -156,16 +156,11 @@ export const NO_MATCH_ELSEWHERE_LINE =
 
 // ── Money ─────────────────────────────────────────────────────────────────
 
-/**
- * `Acme's`: whose credits a team's sandbox uses. A team's sandbox is paid
- * from the team's credits, whoever woke it, so every sentence about its
- * credits names the team.
- */
+/** A team's sandbox is paid from the team's credits whoever woke it, so every sentence names the team. */
 export function teamPossessive(teamName: string): string {
   return `${teamName}'s`;
 }
 
-/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
@@ -174,7 +169,6 @@ export function usesCreditsClause(
     : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -240,48 +234,33 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
-/**
- * Board C25's Alternative, waiting for the owner's ruling: said after a
- * team's frozen cause on its row, to a member who is not the team's Admin.
- * Not shown until it is ruled in; showing it is the one change of `shown`.
- */
+/** Not shown yet: `shown` is the one switch that shows it. */
 export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
   "Only team admins can add credits.";
 export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
   shown: false,
 };
 
-// ── Telling a member to add credits ───────────────────────────────────────
-//
-// Built to the Proposal of board C29, provisional until that board is ruled;
-// its Alternative takes these out and gives everyone today's sentences back.
-// Only a team's Admin can buy the team's credits, so on a team's sandbox
-// anyone else reads these in place of a sentence telling them to add credits.
-// The Admin and a Personal sandbox keep today's, except the chat's title,
-// which the team's Admin reads too. A wake refused by an older server, which
-// does not say whose credits were short, keeps today's sentence.
+// Only a team's Admin can buy its credits, so anyone else reads these instead of
+// being told to add credits. A wake refused by an older server, which does not say
+// whose credits were short, keeps the add-credits sentence.
 
-/** Under a message sent to a team's sandbox that is out of credits. */
 export function teamCreditsRanOutLine(teamName: string): string {
   return `${teamPossessive(teamName)} credits ran out.`;
 }
 
-/** After "Couldn't resume build-box." on a team's sandbox row. */
 export function teamSandboxOutOfCreditsLine(teamName: string): string {
   return `${SANDBOX_OUT_OF_CREDITS} ${teamPossessive(teamName)} bundle is out.`;
 }
 
-/** A chat's title when a team's sandbox ran out of credits mid-turn. */
 export function teamOutOfCreditsHeadline(teamName: string): string {
   return `Paused: ${teamName} is out of credits`;
 }
 
-/** The line under that title. */
 export function onceTeamHasCreditsLine(teamName: string): string {
   return `This sandbox ran out of credits, which ended the turn. Once ${teamName} has credits again, send a message to pick up where it stopped.`;
 }
 
-/** A team sandbox's create or wake refused for want of the team's credits. */
 export const TEAM_CREDITS_DONT_COVER_AN_HOUR =
   "The team's credits don't cover an hour of this sandbox.";
 
@@ -471,10 +450,7 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/**
- * Short for an hour of a team's sandbox, which the team's credits pay;
- * `null` names no amount.
- */
+/** `null` names no amount. */
 export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
@@ -487,7 +463,6 @@ export function teamCreditsShortLine(
   return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }
 
-/** The team's name where the configuration is a known team's, else `null`. */
 function knownTeamName(
   configuration: SandboxConfigurationCopy | null,
 ): string | null {
@@ -514,7 +489,6 @@ export function sandboxCreditShortLine(
   return potCreditShortLine(configuration, creditSource, shortfallMc, options);
 }
 
-/** The refusal's sentence once the owner is known, or for a team pot. */
 function potCreditShortLine(
   configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,

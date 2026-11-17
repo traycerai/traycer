@@ -195,7 +195,6 @@ describe("desktop bearer verifier", () => {
     expect(harness.urls).toHaveLength(1);
     expect(log.warn).toHaveBeenCalledTimes(1);
 
-    // And nothing at all until the cooldown has passed: no fetch, no warning.
     expect(await harness.verifier.verify(token, USER_ID)).toBe(
       "key-source-unavailable",
     );
@@ -354,9 +353,8 @@ describe("JWKS refresh failure logging", () => {
   );
 
   it("logs the abort of the real request timeout as a timeout", async () => {
-    // Node's AbortSignal.timeout rejects with its own TimeoutError. Fake timers
-    // do not drive that native timer, so the real signal is created with a 1 ms
-    // budget instead of waiting out the 3 s one, which is asserted as requested.
+    // Fake timers do not drive the native `AbortSignal.timeout`, so the real signal gets
+    // a 1 ms budget; the requested 3 s is asserted.
     const requestedMs: number[] = [];
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi

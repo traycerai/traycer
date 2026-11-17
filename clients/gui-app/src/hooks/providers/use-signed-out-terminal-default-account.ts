@@ -8,16 +8,8 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
 /**
- * Keeps a new-chat composer's `defaultAccount` on the account its unchosen
- * Terminal login starts on: the provider's one signed-in profile while the
- * Terminal login is signed out (`soleSignedInProfileForSignedOutTerminal`),
- * read from the `providers.list` of `client`, the host the chat is created on.
- *
- * The list decides only while it is current: its latest fetch succeeded, it
- * is not stale (`isStale` is the query's own staleness, which an invalidation
- * also sets), and no fetch is running. TanStack keeps the previous data
- * through a failed fetch and while any refetch runs, and that data may no
- * longer describe the host, so it moves nothing and the Terminal login shows.
+ * The list decides only while current: last fetch succeeded, not stale, nothing
+ * fetching. TanStack keeps old data through a failed fetch, which may no longer fit the host.
  */
 export function useSignedOutTerminalDefaultAccount(
   toolbarStore: ComposerToolbarStore,

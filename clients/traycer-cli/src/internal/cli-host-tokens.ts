@@ -34,20 +34,14 @@ import type { HostAuth } from "./host-auth";
 
 const LOCK_POLL_INTERVAL_MS = 50;
 
-/** The sign-in this process spends at authn, and the step that refreshes it. */
 export interface CliSignIn {
   readonly lease: BearerLease;
   /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
   readonly refresh: () => Promise<RevalidateOutcome>;
-  /**
-   * Cancels this process's own mints, so a mint a deadline abandons cannot
-   * keep the CLI from exiting. `null` for a caller that lives as long as its
-   * command.
-   */
+  /** Cancels this process's own mints, so an abandoned one cannot hold the CLI open; `null` lives as long as the command. */
   readonly signal: AbortSignal | null;
 }
 
-/** The stored sign-in's refresh under the credentials lock. */
 export interface SignInRevalidator {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
 }
@@ -87,15 +81,9 @@ export type CliHostBearer =
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
 
 /**
- * The CLI's host-only tokens: the only credential this CLI presents to a
- * host. They live in the `host-tokens` file beside the credentials file,
- * written under that file's lock and shared with the desktop on the same
- * machine. A command reads the token on disk and asks authn for nothing;
- * authn is asked only when none is held for the host or it has run out, at
- * `traycer login`, and once right after the sign-in itself was refreshed.
- *
- * The sign-in token is spent at authn only. Every use of the shared token
- * source is in this module.
+ * The only credential this CLI presents to a host. Kept in `host-tokens` beside the
+ * credentials file, under its lock, shared with the desktop. authn is asked only when
+ * none is held or it ran out, at `traycer login`, and once after a sign-in refresh.
  */
 export interface CliHostTokens {
   /** The token on disk, else one mint; a refused sign-in is refreshed once first. */
@@ -104,17 +92,11 @@ export interface CliHostTokens {
   mintFresh(hostId: string, signal: AbortSignal | null): Promise<CliHostBearer>;
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
-  /**
-   * A stream's recovery for `hostId`, read from the host's refusal. Its
-   * `admitted` is told of every admitted open, so a second refusal is final
-   * only between two admissions.
-   */
+  /** `admitted` hears every admitted open, so a second refusal is final only between two admissions. */
   streamRecovery(hostId: string): HostTokenSessionRevalidator;
   /**
-   * A long-lived stream's credential for `hostId`: the token on disk, or
-   * `null` while one is minted, which the transport waits out. A mint that
-   * cannot reach authn is waited out the same way; one refused for good goes
-   * to {@link onMintRefused}'s listeners.
+   * `null` while one is minted, or while authn cannot be reached, which the transport
+   * waits out; one refused for good goes to {@link onMintRefused}'s listeners.
    */
   streamBearer(hostId: string): BearerSourceProvider;
   /**
@@ -123,19 +105,13 @@ export interface CliHostTokens {
    */
   onMintRefused(listener: CliMintRefusalListener): () => void;
   /**
-   * Whether authn has rejected the stored sign-in for good: it refused the
-   * sign-in's refresh, or refused a mint again right after a refresh it
-   * accepted. Until either, a refused mint is the sign-in recovering, and a
-   * refresh that could not reach authn judges nothing.
+   * Authn refused the refresh, or a mint again right after an accepted refresh. Until
+   * then a refused mint is the sign-in recovering.
    */
   signInRejected(): boolean;
   /** The stored sign-in's refresh ahead of its expiry, judged as above. */
   refreshSignIn(): Promise<RevalidateOutcome>;
-  /**
-   * One fresh token for `hostId` after the sign-in was refreshed: `true` when
-   * one was minted. A mint refused for good goes to {@link onMintRefused}'s
-   * listeners like any other.
-   */
+  /** `true` when one was minted; a mint refused for good reaches the listeners like any other. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
 }
 
@@ -178,13 +154,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     }
     return outcome;
   };
-  // Every mint, a recovery's included, passes here, so a refusal for good is
-  // reported wherever it was asked. A token that could not be saved (the
-  // credentials lock stayed busy, or its write failed) is unavailable, as a
-  // mint that could not reach authn is: transient, never a rejected sign-in,
-  // and never a rejection for a caller that cannot handle one.
-  // A mint asked with no signal of its own (the shared recovery after a
-  // host's refusal asks so) is cancelled with this process's own mints.
+  // Every mint passes here, so a refusal for good is reported wherever asked. A token
+  // that could not be saved is transient like an unreachable authn, never a rejected
+  // sign-in. A mint with no signal of its own is cancelled with this process's mints.
   const source: HostTokenAccess = {
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
@@ -242,10 +214,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const streamBearers = new Map<string, BearerSourceProvider>();
   const minting = new Set<string>();
 
-  // authn refused the sign-in itself (401): it is refreshed once and the
-  // mint asked once more. Only a refresh authn refused, or a second 401,
-  // makes the sign-in rejected; a refresh that could not reach authn leaves
-  // it unjudged, which is authn unreachable, never a rejected sign-in.
+  // Refreshed once and asked once more. Only a refused refresh or a second 401 rejects
+  // the sign-in; an unreachable refresh leaves it unjudged.
   const recoverRefusedSignIn = async (
     hostId: string,
     first: CliHostTokenFailure,
@@ -330,11 +300,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         listeners.delete(listener);
       };
     },
-    // Called once per refresh, so it mints once per refresh, and through the
-    // reporting source, so authn's refusal for good ends the stream's
-    // command as a refused mint anywhere else does. A 401 on the first mint
-    // after the refresh authn accepted is a rejected sign-in; one that
-    // another mint got to first is recovered as any 401 is.
+    // Once per refresh, through the reporting source. A 401 on the first mint after an
+    // accepted refresh is a rejected sign-in; one another mint got to first recovers as any 401.
     renewAfterSignInRefresh: async (hostId) => {
       const renewed = await source.obtain(userId, hostId, true, signIn.signal);
       if (renewed.kind === "no-sign-in") report(hostId, renewed);
@@ -348,10 +315,6 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
 }
 
-/**
- * One command's hold on a host: the host-only token it presents, the tokens
- * it recovers through, and the stored sign-in they are bought with.
- */
 export interface CliHostSession {
   readonly bearer: OpenFrameBearerSource;
   /** The stored sign-in, for authn alone: never presented to a host. */
@@ -365,17 +328,9 @@ export type CliHostSessionResult =
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
 
 /**
- * The host-only token for `hostId`, bought with the stored sign-in `auth`:
- * the one on disk, or with `fresh` a new one whatever is on disk. The caller
- * disposes the session when its command ends, so a refresh's continuation
- * timer never outlives it.
- *
- * `signal` is the caller's own cancellation, or null for a session as long as
- * its command: it ends every mint the session makes, its recoveries
- * included, and the sign-in refresh's wait for the lock and its request. An
- * aborted refresh is the store's network-ambiguous case: the credentials file
- * is not written, and the armed marker settles a refresh token it may have
- * spent.
+ * Disposed when its command ends, so a refresh's timer never outlives it. `signal`
+ * ends every mint and the refresh's lock wait and request; an aborted refresh writes
+ * nothing, and the armed marker settles a refresh token it may have spent.
  */
 export async function openCliHostSession(
   auth: HostAuth,
@@ -419,7 +374,6 @@ export async function openCliHostSession(
   };
 }
 
-/** Like {@link openCliHostSession}, throwing the refusal as a command's error. */
 export async function requireCliHostSession(
   auth: HostAuth,
   hostId: string,
@@ -430,7 +384,6 @@ export async function requireCliHostSession(
   return result.session;
 }
 
-/** Signing out removes that person's host-only tokens with their sign-in. */
 export async function forgetCliHostTokens(userId: string): Promise<void> {
   await createSource(null).forgetUser(userId);
 }

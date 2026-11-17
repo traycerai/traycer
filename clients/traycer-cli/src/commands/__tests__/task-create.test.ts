@@ -204,7 +204,6 @@ function sentRequest(index: number) {
   return createEpicRequestSchemaV13.parse(call[1]);
 }
 
-/** An unnamed profile reads `providers.list` before `epic.create`. */
 function answerRpc(create: () => Promise<unknown> | unknown): void {
   rpcMock.mockImplementation((method) => {
     if (method === "providers.list") {
@@ -231,10 +230,7 @@ function answerFirstCreate(value: unknown): void {
   });
 }
 
-/**
- * The run's `providers.list` read fails, which keeps the Terminal login, and
- * its create goes through the real send path.
- */
+/** Fails the run's `providers.list` read, which keeps the Terminal login, and sends for real. */
 function delegateCreatesToRealSend(): void {
   const send = realSend.call;
   if (send === null) throw new Error("real send path not captured");
@@ -726,8 +722,7 @@ describe("task create: a refusal answered after an earlier send", () => {
   });
   it("keeps the intent when a sent attempt may have committed, so a rerun sends nothing", async () => {
     delegateCreatesToRealSend();
-    // The one attempt went out under the negotiated key and its answer was
-    // lost: the host may have committed the Task.
+    // Sent under the negotiated key with its answer lost: the host may have committed the Task.
     socketRequest.mockRejectedValueOnce(
       new RetryableTransportError({
         code: "RPC_ERROR",

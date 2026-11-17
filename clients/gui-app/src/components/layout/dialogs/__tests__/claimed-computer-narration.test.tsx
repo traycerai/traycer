@@ -318,9 +318,7 @@ function createClaimHarness(
       handlers: {},
     }),
   });
-  // The app reads the environment list itself: the directory through its
-  // session service, then authn's facts for each row (unread here, so the rows
-  // list degraded, which keeps their owner, label and id).
+  // authn's facts are unread here, so the rows list degraded.
   vi.spyOn(AuthService.prototype, "listEnvironments").mockImplementation(() => {
     environmentRequests += 1;
     if (environmentFails) return Promise.resolve({ kind: "unavailable" });
@@ -542,9 +540,8 @@ describe("claimed-computer narration consumers", () => {
         claim(TILE_HOST_ID, "Rao", "2026-11-10T00:00:00.000Z"),
       );
     queueClaimPlan(ENVIRONMENT_ID, answer);
-    // Two states are on one team's entry. The tile's state asked while the
-    // window's read was in flight, so it waits for that read and then reads
-    // again (a read begun before its claim may predate it).
+    // A read begun before its claim may predate it, so the tile's state waits for the
+    // window's read and reads again.
     queueClaimPlan(ENVIRONMENT_ID, bothClaims());
     const harness = createClaimHarness([
       organizationEnvironment(ENVIRONMENT_ID, ENVIRONMENT_LABEL),
@@ -815,8 +812,7 @@ describe("claimed-computer narration consumers", () => {
     ]);
     setHostClaimedState(TILE_HOST_ID);
     const secondAuthReference: AuthReference = { current: null };
-    // Added nodes are inspected as they land: the final DOM cannot show a
-    // name that was drawn and replaced.
+    // Inspected as nodes land: the final DOM cannot show a name drawn and replaced.
     let priyaDrawn = false;
     const scan = (records: readonly MutationRecord[]): void => {
       for (const record of records)

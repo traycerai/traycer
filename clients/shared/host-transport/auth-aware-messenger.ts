@@ -39,12 +39,9 @@ function readBearer(source: OpenFrameBearerSource): string | null {
 }
 
 /**
- * The retry, sent with the fresh host-only token, was refused again for a
- * reason a fresh token answers: that refusal goes to the revalidator once
- * more, as a stream's would, so the lease can raise the state that covers
- * the host. Its answer is not acted on, and the call is not sent a third
- * time. A refusal with no recognised reason, the server pool's among them, is
- * never asked twice: there a second ask would renew the sign-in again.
+ * A retry refused again for a reason a fresh token answers goes to the revalidator
+ * once more so the lease can raise a state; it is never sent a third time. With no
+ * recognised reason it is not asked twice: that would renew the sign-in again.
  */
 async function reportRefusedAgain(
   auth: AuthorityBoundAuthRevalidator,
@@ -112,9 +109,7 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * whose bearer is no longer current comes back `"superseded"`.
  *
  * A revalidation that rotated the bearer is followed by one more `request`
- * attempt, whose failure propagates. If that attempt is refused again for a
- * recognised credential reason, the refusal is first handed to the
- * revalidator once more (see `reportRefusedAgain`). One that did not rotate rethrows the
+ * attempt, whose failure propagates (see `reportRefusedAgain`). One that did not rotate rethrows the
  * original error; an abort during recovery rejects with
  * `HostRequestAbortedError`, and a superseded recovery with
  * `HostAuthoritySupersededError`.
@@ -141,12 +136,9 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       return await call();
     } catch (cause) {
       if (!(cause instanceof HostRpcError)) throw cause;
-      // The host's refusal, at the door or of this one request on a
-      // persistent session.
       const refusal = hostRefusalOf(cause);
-      // A host-only token's recovery decides by the refusal's `doorReason`
-      // whatever its code; the sign-in's takes `UNAUTHORIZED` alone, as it
-      // always has.
+      // A host-only token decides by `doorReason` whatever its code; the sign-in by
+      // `UNAUTHORIZED` alone.
       const refused =
         readsHostRefusal(auth) && refusal !== null
           ? isCredentialRefusal(refusal)
@@ -212,8 +204,8 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         throw cause;
       }
       const after = readBearer(authority.bearer);
-      // A host-only token is renewed under an unchanged sign-in lease, so its
-      // revalidator's "rotated" is itself the evidence of a new credential.
+      // A host-only token renews under an unchanged sign-in lease, so "rotated" is itself
+      // the evidence of a new credential.
       if (after === null || (after === before && !readsHostRefusal(auth))) {
         throw cause;
       }

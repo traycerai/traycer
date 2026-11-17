@@ -127,10 +127,7 @@ import {
   type NotificationFeedReplicaPage,
 } from "@/lib/view-replica/notification-feed-replica";
 
-/**
- * The host the cloud feed's stream is opened on: the pool's in a build with
- * a server pool, else the serving host's (`usePoolTierStreamClient`).
- */
+/** The pool's in a build with a server pool, else the serving host's. */
 function cloudFeedHostId(servingHostId: string): string {
   return readProcessHostRpcTierPlan().pool?.hostId ?? servingHostId;
 }
@@ -1225,9 +1222,7 @@ function NotificationsSessionBody(
       }
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
-      // The shared recovery contract, `onStreamAuthError`, for a stream that
-      // presented the sign-in only: the serving host's lanes present a
-      // host-only token, and the cloud feed rides the pool when there is one.
+      // For a stream that presented the sign-in only: the serving host's lanes present a host-only token.
       const onAuthError = signInRecoveryForStream(
         streamHostId,
         onStreamAuthError,

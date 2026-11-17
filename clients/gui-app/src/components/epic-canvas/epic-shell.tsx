@@ -358,13 +358,7 @@ function EpicRepointFailureCard(props: {
   );
 }
 
-/**
- * The failed card for a host below the version floor: what a chat tile draws
- * for that host, and no Retry, since no session may be opened to it. Rising
- * back above the floor rebuilds the session by itself. A tab's original host
- * is its own host unless it was re-pointed, and re-opening on the same
- * below-floor host would only draw this card again.
- */
+/** No Retry: rising above the floor rebuilds the session by itself. */
 function EpicOlderHostCard(props: {
   readonly hostId: string;
   readonly presentation: EpicSessionPresentation;

@@ -121,10 +121,7 @@ export interface DetailsEntry {
 export interface DetailsProviderContext {
   readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry>;
-  /**
-   * The app's own calls to authn's environment routes, bound to the sign-in
-   * current when this provider began: every read it makes goes on that one.
-   */
+  /** Every read it makes goes on the sign-in current when this provider began. */
   readonly environmentCloud: EnvironmentCloudSend;
   readonly queryClient: QueryClient;
 }

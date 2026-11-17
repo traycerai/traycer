@@ -94,9 +94,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-// The computer being claimed is asked through the card's own fake host, by the
-// binding's id-pinned requester as the hook resolves it, with no runtime
-// provider (the hook's own `useHostClient()` needs one).
+// Through the binding's id-pinned requester: the hook's own `useHostClient()` needs
+// a runtime provider.
 vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
   const { resolveNamedHostClient } =
     await import("@/lib/host/binding-host-client");
@@ -152,8 +151,6 @@ vi.mock(
   "@/components/settings/details/use-host-settings-details-subject",
   () => ({ useHostSettingsDetailsSubject: () => detailsMock.subject }),
 );
-// Whether this build reads host bindings from the pool: the no-binding export
-// stands in only where it does not.
 const poolMock = vi.hoisted((): { readsPool: boolean } => ({
   readsPool: false,
 }));
@@ -166,7 +163,6 @@ vi.mock(
     readsHostBindingsFromPool: () => poolMock.readsPool,
   }),
 );
-// The file a no-binding export saves, observed where it leaves the app.
 const saveMock = vi.hoisted(() => ({
   saveBlobToDisk:
     vi.fn<
@@ -762,8 +758,6 @@ describe("<HostOverviewSettingsCard />", () => {
     } as const;
     expect(calls.plans[0]).toEqual({ target, personal: null });
     expect(calls.stages).toEqual([{ target, keyChoices: [], personal: null }]);
-    // The card's own team list reads the team's hosts and members from authn;
-    // the one write it sends is the acceptance.
     const [reads, writes] = [
       authnFixture.requests.filter(({ method }) => method === "GET"),
       authnFixture.requests.filter(({ method }) => method !== "GET"),

@@ -161,8 +161,6 @@ function snapshotItem(
 }
 
 function renderSection(ui: ReactNode): void {
-  // One deferred inventory answer feeds the account reader's per-kind pages;
-  // each HTTP page and the transport's kind filtering still run normally.
   const itemReads = new Map<
     string,
     {

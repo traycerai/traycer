@@ -93,7 +93,6 @@ const mocks = vi.hoisted(() => ({
   pickerContexts: [] as MaxModeContext[],
   pickerDisabled: [] as boolean[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
-  // The environment list is the only fake input to the real role rule.
   environmentList: undefined as EnvironmentListResponseV11 | undefined,
   environmentListEnabled: [] as boolean[],
   updateTitle: vi.fn<(variables: object) => void>(),

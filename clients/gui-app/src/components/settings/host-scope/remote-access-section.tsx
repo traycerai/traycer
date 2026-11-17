@@ -43,7 +43,6 @@ export function RemoteAccessSection(props: {
     props.principal,
     true,
   );
-  // An Off pressed here, which the host has taken.
   const [lastAnswer, setLastAnswer] = useState<RemoteAccessState | null>(null);
   // Once the host reports `off`, the answer has done its job.
   if (lastAnswer === "turning_off" && props.status === "off") {

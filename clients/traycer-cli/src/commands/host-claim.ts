@@ -24,8 +24,6 @@ import type {
   CommandResult,
 } from "../runner/runner";
 
-// The confirm line is the app's claim sentence; the question, its answers,
-// the refusals and the help text are boards C17 and C30.
 const CLAIM_WORDS = {
   confirm: "This computer will become yours. The team will lose access to it.",
   question: "Claim it as your own? [y/N] ",
@@ -44,15 +42,12 @@ const CLAIM_WORDS = {
 } as const;
 
 export interface HostClaimArgs {
-  /** Skips the question, for scripts (board C17). */
   readonly yes: boolean;
 }
 
 /**
- * `traycer host claim`: makes the team computer this CLI runs on the signed-in
- * member's own. A claim revokes the host's sessions at authn, and on a machine
- * with only the CLI nothing else would give the now-personal host a
- * credential, so the command ends with the provisioning `traycer login` runs.
+ * A claim revokes the host's sessions at authn, and with only the CLI nothing else
+ * would credential the now-personal host, so this ends with `traycer login`'s provisioning.
  */
 export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
@@ -162,7 +157,6 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   };
 }
 
-/** The confirm, then the chats that will stop on a line of their own. */
 function confirmLines(running: RunningChats): string {
   const chats = runningChatsLine(running);
   return chats === null

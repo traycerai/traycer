@@ -24,7 +24,6 @@ export function FallbackPolicySummary(props: {
   readonly policy: FallbackPolicy;
   /** Rendered among the settings, where the team's page has always put it. */
   readonly accounts: ReactNode | null;
-  /** Safe display labels when the read uses independent structural row ids. */
   readonly tierLabels: Readonly<Record<string, string>> | null;
 }): ReactNode {
   const policy = props.policy;

@@ -1,9 +1,4 @@
-/**
- * A profile's rename or recolour, as it is sent to the host
- * (`providers.setEnabled@2.2`). The request takes the environment's copy of
- * the profile as its base: the host lays the new name or colour over it. The
- * request is built here alone, so a change to its shape changes no caller.
- */
+// The host lays the new name or colour over the environment's copy of the profile.
 import { harnessIdOfProvider } from "@traycer/protocol/host/environment/item-identity";
 import type {
   ProviderProfileAccentColor,
@@ -14,16 +9,8 @@ import type { SettingsItemExists } from "@/hooks/environment/use-settings-save";
 interface ProviderProfileSaveTarget {
   readonly providerId: ProvidersSetEnabledRequestV22["providerId"];
   readonly profileId: string;
-  /**
-   * The profile's `enabled` as the host's `providers.list` shows it. The
-   * request requires it, so a rename or recolour restates it unchanged and
-   * never enables a disabled profile.
-   */
+  /** Restated unchanged, so a rename never enables a disabled profile. */
   readonly enabled: ProvidersSetEnabledRequestV22["enabled"];
-  /**
-   * The environment profile the host's `providers.list` says this profile
-   * is (`environmentProfileId`); null for a profile only on this computer.
-   */
   readonly environmentProfileId: string | null;
 }
 
@@ -36,10 +23,8 @@ export type ProviderProfileSave = ProviderProfileSaveTarget &
       }
   );
 
-/** The `managed_profile` items rename and recolour are made over. */
 export const PROFILE_SAVE_KINDS = ["managed_profile"] as const;
 
-/** The request for `save`, naming the environment profile `providers.list` gave. */
 export function providerProfileSaveRequest(
   save: ProviderProfileSave,
 ): ProvidersSetEnabledRequestV22 {
@@ -64,11 +49,7 @@ export function providerProfileSaveRequest(
   };
 }
 
-/**
- * `request` as it is sent: it names the environment profile only when authn
- * holds exactly one `managed_profile` item for it. Otherwise the profile is
- * this computer's own and the app expects no proposal.
- */
+/** Names the environment profile only when authn holds exactly one `managed_profile` item for it. */
 export async function confirmEnvironmentProfile(
   request: ProvidersSetEnabledRequestV22,
   itemExists: SettingsItemExists,

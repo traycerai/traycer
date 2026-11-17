@@ -725,7 +725,6 @@ export function parseSlackAppDmsRequest(value: unknown): SlackAppDmsRequest {
   return checked.data;
 }
 
-/** The renderer-supplied run settings, against the protocol's own schema. */
 export function parseBotUpdateRunSettingsRequest(
   value: unknown,
 ): BotUpdateRunSettingsRequest {
@@ -739,7 +738,6 @@ export function parseBotUpdateRunSettingsRequest(
   return checked.data;
 }
 
-/** The renderer-supplied reply mode, against the protocol's own schema. */
 export function parseBotUpdateReplyModeRequest(
   value: unknown,
 ): BotUpdateReplyModeRequest {
@@ -753,7 +751,6 @@ export function parseBotUpdateReplyModeRequest(
   return checked.data;
 }
 
-/** The renderer-supplied delete, against the protocol's own schema. */
 export function parseBotDeleteRequest(value: unknown): BotDeleteRequest {
   const checked = botDeleteRequestSchema.safeParse(value);
   if (!checked.success) {

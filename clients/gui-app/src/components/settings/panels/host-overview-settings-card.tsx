@@ -392,8 +392,6 @@ function EnvironmentSourceControl(
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
-  // The same give card on every computer the person owns, at that computer
-  // or from another app, once its host plans a give (`plan@2.0`).
   const planVersion = useHostMethodSchemaVersion(
     props.hostId,
     "environment.move.plan",

@@ -53,7 +53,6 @@ const DEV_MANIFEST = {
 };
 
 type Opened = { readonly kind: "refused" };
-// Holds a recording at the opening boundary until teardown begins.
 const unanswered: ((answer: Opened) => void)[] = [];
 const open = vi.fn<(quality: string) => Promise<Opened>>();
 const reveal = vi.fn<(recordingId: string) => Promise<boolean>>();

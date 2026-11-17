@@ -105,7 +105,6 @@ interface RigOptions {
   readonly failAttempts: boolean;
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: SetupScript | null;
-  /** The host completes a write on a computer bound to no configuration. */
   readonly localOnly: boolean;
 }
 

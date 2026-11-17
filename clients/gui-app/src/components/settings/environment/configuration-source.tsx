@@ -4,7 +4,6 @@ import type {
   GrantedEnvironmentRole,
 } from "@traycer/protocol/host/environment/contracts";
 
-/** A role a configuration answers: one that may change it, or a Viewer's. */
 export type ConfigurationRole = GrantedEnvironmentRole | "viewer";
 
 export type ConfigurationSource =
@@ -20,19 +19,12 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `configurationRoleOf`'s answer. Read through
-       *  `mayChangeConfiguration`, never by comparing with `null`: a Viewer
-       *  changes nothing and is not absent. */
+      /** Read through `mayChangeConfiguration`, never against `null`: a Viewer is not absent. */
       readonly effectiveRole: ConfigurationRole | null;
-      /** `personalReadOnlyOnTeamComputer`'s answer for this page. */
       readonly transportReadOnly?: boolean;
     };
 
-/**
- * Personal is shown but never changed while the window's host is a team's
- * computer: Personal talks only to Personal. A team's own settings follow the
- * role authn answers, whichever computer the window is on.
- */
+/** Never changed while the window's host is a team's computer: Personal talks only to Personal. */
 export function personalReadOnlyOnTeamComputer(
   configuration: "personal" | "team",
   windowHostIsTeamComputer: boolean,
@@ -66,11 +58,7 @@ export function useConfigurationIsPersonal(): boolean {
   return source.kind === "pool" && source.configuration === "personal";
 }
 
-/**
- * Whether a role may change a configuration: Personal's owner, or a team's
- * Admin or Editor. A Viewer, and a role this app does not know, change
- * nothing.
- */
+/** A role this app does not know changes nothing. */
 export function mayChangeConfiguration(
   role: ConfigurationRole | null,
 ): boolean {
@@ -98,11 +86,6 @@ export function canManageTeamProviderAccounts(
   );
 }
 
-/**
- * Personal answers `owner`; a team answers the role the list names, Admin,
- * Editor or Viewer, and `null` where it names none of them. Read it through
- * `mayChangeConfiguration`.
- */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
 ): ConfigurationRole | null {

@@ -28,8 +28,6 @@ export function ProfileEditDialogPresentation(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly switchingAccount: boolean;
-  /** The sign-in under `switchingAccount` has ended on a sentence the person
-   *  reads and leaves: the dialog closes again, by its × too. */
   readonly signInSettled: boolean;
   readonly label: string;
   readonly onLabelChange: (label: string) => void;

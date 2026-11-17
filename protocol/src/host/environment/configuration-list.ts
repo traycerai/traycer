@@ -3,7 +3,6 @@ import type {
   EnvironmentDescriptorV11,
 } from "@traycer/protocol/host/environment/contracts";
 
-/** Fresh pool facts, read under the same caller that listed the configurations. */
 export interface ConfigurationListFacts {
   hosts(
     environmentId: string,
@@ -12,10 +11,6 @@ export interface ConfigurationListFacts {
     readonly providerHandle: string;
     readonly effectiveRole: "admin" | "editor" | "viewer";
   }>;
-  /**
-   * One row's facts could not be read; the row lists anyway, degraded. The
-   * caller logs it at the row.
-   */
   rowFailed(
     environmentId: string,
     facts: "hosts" | "team",
@@ -24,10 +19,8 @@ export interface ConfigurationListFacts {
 }
 
 /**
- * The configuration summary the app and the server pool each derive from
- * their own reads of the same facts. One row's refused facts never fail the
- * list: a row whose hosts are unread counts none, and a team whose role is
- * unread lists as a viewer (no edit control) with no provider handle.
+ * One row's refused facts never fail the list: unread hosts count none, and an
+ * unread team role lists as a viewer with no provider handle.
  */
 export function enrichConfigurationList(
   environments: readonly EnvironmentDescriptor[],

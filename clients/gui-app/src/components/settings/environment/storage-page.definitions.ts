@@ -58,7 +58,7 @@ export const STORAGE = defineSettingsSection("storage", {
     availableWhen: alwaysAvailable,
     keywords: ["archived", "archive"],
   },
-  // A team's own setting (board C24); Personal's is under General ▸ Agents.
+  // A team's own setting; Personal's is under General ▸ Agents.
   chatAutoArchive: {
     kind: "row",
     group: "archivedChats",

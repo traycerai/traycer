@@ -8878,14 +8878,9 @@ const deliveryWorktreeIntentFields = {
 };
 
 /**
- * Presence means the chat currently waits on an account with no deadline;
- * absence means today's card and picker exactly. A newer snapshot or
- * turn-state frame without the key clears the previous wait: readers replace
- * it on every such frame, never retain it with an `in` check.
- * `waiting-for-traycer` never moves a chat to another account by itself.
- * `source` is the row's own `profileId` or the removed entry's id, never an
- * alias, and is the pair the move methods take as their source. It is null
- * when the account cannot be resolved to exactly one row or removed entry.
+ * Absent means no wait: readers replace it on every snapshot and turn-state frame,
+ * never keep it. `source` is the row's `profileId` or the removed entry's id, never
+ * an alias; null when not exactly one.
  */
 export const chatAccountWaitSchema = lazySchema(() =>
   z.object({

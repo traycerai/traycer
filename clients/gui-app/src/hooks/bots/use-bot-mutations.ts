@@ -93,11 +93,7 @@ export function useBotCreateMutation(
   });
 }
 
-/**
- * Archives the bot. A repeat answers `deleted: false`, which is a success.
- * Every list is read again, and a surface showing the bot leaves it when
- * the list no longer carries it.
- */
+/** A repeat answers `deleted: false`, which is a success. */
 export function useBotDeleteMutation(): UseMutationResult<
   BotDeleteResponse | null,
   Error,
@@ -146,11 +142,8 @@ export function useBotUpdateTitleMutation(
 }
 
 /**
- * The harness, model, effort and profile the bot's next turn runs on. The
- * answer is laid over every view of the bot this app holds, since no host
- * re-sends one for a change it did not make, and every list is read again.
- * `null` is a write whose sign-in ended before the answer (`pressSignIn`):
- * nothing is laid over, read again or said.
+ * The answer is laid over every view of the bot: no host re-sends one for a change
+ * it did not make. `null`: the sign-in ended before the answer.
  */
 export function useBotUpdateRunSettingsMutation(): UseMutationResult<
   BotRunSettingsWrite | null,
@@ -183,11 +176,7 @@ export function useBotUpdateRunSettingsMutation(): UseMutationResult<
   });
 }
 
-/**
- * A run-settings write the server took, with the sign-in it was pressed
- * under: a later step on its answer (the fallback's retry) asks that sign-in
- * first.
- */
+/** A later step on its answer (the fallback's retry) asks that sign-in first. */
 export interface BotRunSettingsWrite {
   readonly bot: BotSetupRow;
   readonly signIn: PressSignIn;

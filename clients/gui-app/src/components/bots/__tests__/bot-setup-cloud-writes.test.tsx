@@ -460,9 +460,7 @@ describe("bot settings controls with an unavailable tab host", () => {
     queryClient.setQueryData(localList, { bots: [BOT], mainBotIds: {} });
     queryClient.setQueryData(secondList, { bots: [BOT], mainBotIds: {} });
     queryClient.setQueryData(BOT_SNAPSHOT_KEY, snapshot);
-    // The Usage group's thread list (#3900) is read from the tab's host, which
-    // is asleep here: the fixture answers it from the cache, so no request
-    // reaches the host and the sweep below reads an answered entry.
+    // The tab's host is asleep: the thread list is answered from the cache.
     queryClient.setQueryData(
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
         mockLocalHostEntry.hostId,

@@ -1189,8 +1189,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       );
     }
     const message = error?.message ?? "Unknown error";
-    // A start that names an account a person removed says the pin's words in
-    // place of the whole line: the computer's sentence carries the profile id.
+    // The computer's sentence carries the profile id, so the pin's words replace the line.
     const line = isRemovedProfileRefusalCode(error?.code ?? null)
       ? REMOVED_PROFILE_PIN_TEXT
       : `Failed to start terminal: ${message}`;

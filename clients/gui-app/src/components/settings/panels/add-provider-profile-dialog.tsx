@@ -152,7 +152,6 @@ export interface ProviderTargetLoginControls {
   readonly accentColor: ProviderProfileAccentColor;
 }
 
-/** Whether "Sign in" is held off: any one reason is enough. */
 function linkHeldOff(reasons: {
   readonly labelEmpty: boolean;
   readonly busy: boolean;
@@ -591,11 +590,7 @@ function ProviderProfileSignInDialog({
   );
 }
 
-/**
- * Whether this dialog reads a completed sign-in's `profileOutcome`: only on a
- * computer that offers sign-ins by itself, by the list `state` came from (read
- * from the cache its caller keeps, never fetched here).
- */
+/** Only on a computer that offers sign-ins by itself; read from the caller's cache, never fetched here. */
 function useAddProfileOutcomes(
   client: HostClient<HostRpcRegistry> | null,
   providerId: ProviderCliState["providerId"],
@@ -638,11 +633,7 @@ function AddProfileDialogHeader({
   );
 }
 
-/**
- * The × is held while a sign-in runs and its profile is set up, and returns
- * once a completed sign-in rests on a sentence the person reads: closing then
- * never cancels, since the sign-in is already done.
- */
+/** Closing after a completed sign-in never cancels: it is already done. */
 function dialogShowsCloseButton(
   flowState: ProviderProfileLoginFlowState,
 ): boolean {
@@ -817,13 +808,6 @@ function AddProfileAccountSection({
   );
 }
 
-/**
- * What the account section shows on a computer that offers sign-ins by
- * itself, where that differs from any other computer, or null: the profile an
- * existing account already has, the provider while the list catches up, and a
- * new profile's row while it is set up (`settingUp`: no duplicate notice,
- * naming step or failed recolor stands in front of it).
- */
 function signInAccountBody({
   providerId,
   flowState,
@@ -860,7 +844,6 @@ function signInAccountBody({
   }
 }
 
-/** The account card the add dialog starts on. */
 function SignInCard({
   disabled,
   onSignIn,
@@ -892,7 +875,6 @@ function SignInCard({
   );
 }
 
-/** A profile's name and dot with its provider, as the dialog's body. */
 export function ProfileAccountRow({
   providerId,
   profile,
@@ -922,11 +904,6 @@ export function ProfileAccountRow({
   );
 }
 
-/**
- * The body when Add finished as an account that already has a profile: that
- * profile's row and nothing else. `DuplicateAccountNotice` is the computer
- * that does not offer sign-ins by itself.
- */
 function AlreadySignedInBody({
   providerId,
   profile,
@@ -937,7 +914,6 @@ function AlreadySignedInBody({
   return <ProfileAccountRow providerId={providerId} profile={profile} />;
 }
 
-/** One footer sentence beside the footer's buttons. */
 function FooterSentence({
   children,
 }: {
@@ -953,12 +929,6 @@ function FooterSentence({
   );
 }
 
-/**
- * The footer a completed sign-in ends on, on a computer that offers sign-ins
- * by itself: `Signed in as` while a new profile finishes, `Already signed in
- * as` with Use and Sign in with another, or the wait for the list with Done.
- * Nothing on any other computer.
- */
 function AddProfileOutcomeFooter({
   flowState,
   sameAccountProfileId,
@@ -975,7 +945,6 @@ function AddProfileOutcomeFooter({
   readonly flowState: ProviderProfileLoginFlowState;
   readonly sameAccountProfileId: string | null;
   readonly offersSignIns: boolean;
-  /** No naming step and no failed recolor stands in front of it. */
   readonly showsSignedIn: boolean;
   readonly finalizing: boolean;
   readonly signInAgainDisabled: boolean;

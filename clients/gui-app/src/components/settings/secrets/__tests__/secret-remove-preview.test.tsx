@@ -181,7 +181,6 @@ function mountRow(
         ],
       }),
       "environment.host.list": () => ({ hosts: reads.hostList }),
-      // The servers' list joins each server's item, which none here has.
       "environment.configuration.items": () => ({ items: [] }),
       "environment.configuration.mcpServers.list": (request: unknown) => {
         reads.listed.push(request);

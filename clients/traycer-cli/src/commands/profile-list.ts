@@ -20,16 +20,12 @@ const PERSON_NOTICE_WORDS: Record<ProviderProfilePersonNotice, string> = {
   waiting: "Waiting for Traycer",
 };
 
-/**
- * Under a row whose account is also this computer's Terminal login. The CLI
- * only ever reaches the host on its own computer, so it names no computer.
- */
+/** The CLI only reaches the host on its own computer, so it names no computer. */
 const TERMINAL_ACCOUNT_LINE = "Terminal account on this computer";
 
 /**
  * The last three keys are present only when the computer says something
- * through them, so the row a computer that predates them answers with is
- * exactly the row it always was.
+ * through them, so a computer that predates them answers the row without them.
  */
 export interface ProfileListRow {
   readonly profileId: string;
@@ -39,12 +35,8 @@ export interface ProfileListRow {
   readonly enabled: boolean;
   readonly authStatus: ProviderProfile["auth"]["status"];
   readonly rateLimitStatus: ProviderProfile["rateLimitStatus"];
-  /** What the person is told in place of `authStatus`. */
   readonly personNotice?: ProviderProfilePersonNotice;
-  /**
-   * This computer's Terminal login is this row's account. Never on the
-   * Terminal login's own row, which is that login.
-   */
+  /** Never on the Terminal login's own row. */
   readonly terminalOnThisComputer?: true;
   /** The names the account had before it became one row; never empty. */
   readonly otherNames?: readonly string[];

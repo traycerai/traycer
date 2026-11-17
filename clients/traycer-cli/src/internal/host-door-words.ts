@@ -7,23 +7,15 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CliHostTokenFailure } from "./cli-host-tokens";
 
 /**
- * Every line the CLI prints when a host's door, or authn's mint of a host-only
- * token, refuses it. One place, so a ruling on any of them changes one line.
- *
- * Only words already in the CLI or ruled for it are here. A refusal the owner
- * has not yet worded prints its command's generic line, with no server text
- * from authn and never sign-in advice for a person who is signed in.
+ * A refusal with no worded line prints its command's generic line: no server text
+ * from authn, and never sign-in advice for a person who is signed in.
  */
 
 /** Printed only when this machine holds no usable sign-in. */
 export const SIGNED_OUT_MESSAGE =
   "traycer: not signed in - run `traycer login` to authenticate.";
 
-/**
- * authn rejected the stored sign-in for good: its refresh was refused, or a
- * mint was refused again after a refresh. The CLI's existing words
- * (`auth/link-phone-flow.ts`), never authn being unreachable.
- */
+/** A refused refresh, or a mint refused again after one; never authn unreachable. */
 export const STORED_CREDENTIAL_REJECTED_MESSAGE =
   "The stored credential was rejected. Run `traycer login` to re-authenticate.";
 
@@ -38,16 +30,11 @@ export const HOST_OWNERSHIP_UNCONFIRMED_MESSAGE =
 export const AUTHN_UNREACHABLE_MESSAGE =
   "Could not reach the authn service; check your network.";
 
-/** The owner's ruling 2 of 14 Nov: an older host, never a login. */
+/** An older host, never a login. */
 export const OLDER_HOST_MESSAGE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";
 
-/**
- * authn's refusals of a mint the owner has not worded yet: a computer that is
- * not this person's, a frozen sandbox, and authn unreachable. Nothing authn
- * sent is printed. Empty until ruled; the runner then prints `error: ` and the
- * code.
- */
+/** Nothing authn sent is printed. Empty, so the runner prints `error: ` and the code. */
 export const UNWORDED_MINT_REFUSAL_MESSAGE = "";
 
 export function signedOutCliError(): CliError {
@@ -78,18 +65,8 @@ export function olderHostCliError(): CliError {
 }
 
 /**
- * How a refusal by a host's door, once the call's one recovery is spent, is
- * told to the person:
- * - `sign-in-rejected`: a credential refusal after authn rejected the stored
- *   sign-in during this call's recovery. Only this case, and a machine with
- *   no sign-in at all, gives sign-in advice.
- * - `older-host`: no reason, on a non-retryable refusal of the token itself.
- * - `unworded`: every reason the owner has not worded. The command prints its
- *   own line for an unexpected host error, never sign-in advice and never the
- *   epic-access line.
- *
- * `null`: not the door's refusal; the command's own arms decide. A reason
- * decides ahead of the code that carries it.
+ * Only `sign-in-rejected`, and a machine with no sign-in, give sign-in advice.
+ * `null`: not the door's refusal. A reason decides ahead of the code that carries it.
  */
 export type HostDoorRefusalKind =
   | "sign-in-rejected"
@@ -105,15 +82,7 @@ export function hostDoorRefusalKind(
   return hostDoorStateOfRefusal(refusal) === "older-host" ? "older-host" : null;
 }
 
-/**
- * A command's line for a door refusal ({@link hostDoorRefusalKind}), or `null`
- * when the refusal is not the door's. `generic` is the command's own line for
- * an unexpected host error.
- *
- * The owner's board on the door's reasons words `not_admitted`,
- * `keys_unavailable`, `clock_skew`, `enrolment_broken`, `membership_removed`
- * and `host_claimed`; those arms go here, and print `generic` until then.
- */
+/** `generic` is printed for every reason with no words of its own yet. */
 export function hostDoorRefusalCliError<Generic extends Error>(
   refusal: FatalErrorDetails,
   signInRejected: boolean,

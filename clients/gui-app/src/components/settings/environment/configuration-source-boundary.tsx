@@ -129,8 +129,7 @@ export function ConfigurationSourceBoundary(props: {
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
-      // A team role is the list's answer, so a failed re-read makes it not
-      // known, whatever an earlier answer said. Personal's is not read.
+      // A failed re-read makes a team role unknown, whatever an earlier answer said.
       effectiveRole:
         listFailed && configuration === "team"
           ? null
@@ -404,7 +403,8 @@ function useGoneConfiguration(input: {
   // plain removal: the toast names the team, the selection moves to Personal,
   // and the Accept this page would have offered is not offered. The offer
   // returns without a reload, from the environment picker, bounded by that
-  // read's own staleness: the invitations read sets no `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
+  // read's own staleness: the invitations read sets no `staleTime`, so it
+  // takes the app's 60s default, and `TeamRows` lives in
   // the picker's dropdown content, which mounts afresh on each open. An open
   // within 60s of the racing reply is served that reply from cache and shows
   // the same list; the first open after that reads invitations again, and the

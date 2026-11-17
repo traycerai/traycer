@@ -695,8 +695,7 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     expect(screen.queryByText("Error")).toBeNull();
   });
 
-  // `renderRow` mounts the row with no transcript, so no host places the
-  // sandbox: the headline is the neutral one, not Personal's.
+  // No transcript, so no host places the sandbox: the neutral headline.
   it("recognises the same turn from the message prefix when the block has no code, with no transcript host to place it", () => {
     const root = renderRow({ code: null, message: RAW_MESSAGE });
 
@@ -790,11 +789,6 @@ describe("<ErrorSegment /> sandbox refusals", () => {
 
   const TRANSCRIPT_HOST_ID = "sandbox-host-acme";
 
-  /**
-   * The error row inside a transcript whose host is read from `rows` (the
-   * person's host directory), with no billing runtime: the cases here never
-   * reach a team's role read.
-   */
   function renderFrozenOnHostRows(
     rows: ReadonlyArray<HostDirectoryEntry>,
     input: { readonly code: string | null; readonly message: string },
@@ -840,8 +834,7 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     });
     const binding = createFakeSandboxBinding();
     billing.binding = binding;
-    // This file reads the sandbox binding as the host binding, so the list is
-    // served on it as well as on the runtime's own.
+    // This file reads the sandbox binding as the host binding, so the list is served on both.
     serveEnvironmentList(binding.auth, {
       answer: input.answer,
       environmentId: "env-acme",
@@ -1029,14 +1022,10 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     },
   );
 
-  // The chat error row tells a remedy as the reader's only when the person's
-  // host directory says whose sandbox froze. Every other state keeps the cut:
-  // the turn's ending and no remedy.
   const CUT_COPY = "This sandbox ran out of credits, which ended the turn.";
   const OUT_OF_CREDITS_HEADLINE = "This sandbox is out of credits.";
   const PERSONAL_HEADLINE = "Paused: account out of credits";
 
-  /** The row for a reader the app cannot place: the neutral headline over the cut. */
   function expectUnplacedRow(): void {
     expect(screen.getByText(OUT_OF_CREDITS_HEADLINE)).toBeTruthy();
     expect(screen.getByText(CUT_COPY)).toBeTruthy();

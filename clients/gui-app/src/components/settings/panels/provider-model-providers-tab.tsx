@@ -432,22 +432,17 @@ function useCustomProviderForm(
       if (token === null) return;
       setError(null);
       submittedAction.set({
-        // One shape, two verbs - the wire's own split. `updateCustom` is
-        // only reachable for a row the host flagged `configDeclaredCustom`,
-        // which is the same set of rows it will accept an update for.
+        // `updateCustom` is reachable only for a row the host flagged `configDeclaredCustom`,
+        // the set it accepts updates for.
         action: declaring ? "createCustom" : "updateCustom",
         modelProviderId: values.modelProviderId,
         name: values.name,
         baseUrl: values.baseUrl,
         models: values.models.map((model) => ({ ...model })),
         headers: values.headers.map((header) => ({ ...header })),
-        // Null means "leave whatever is stored alone" - the read side never
-        // carries a key back, so an edit that types nothing must not be
-        // read as clearing the credential.
+        // Null leaves the stored key alone: the read side never carries a key back.
         key: values.key,
-        // Same word, and the empty array is NOT the same as it: `[]` is the
-        // wire's clear signal, so an untouched form must send null rather
-        // than an empty list it happens to be holding.
+        // `[]` is the wire's clear signal, so an untouched form sends null.
         env: values.env === null ? null : [...values.env],
       });
       submittedValues.set(values);

@@ -93,8 +93,7 @@ vi.mock("@/lib/host/runtime", () => {
   };
 });
 
-// The build effect lists `hostTokens` by identity. A fresh source on every
-// read retriggers that effect for as long as the hook stays mounted.
+// The build effect lists `hostTokens` by identity; a fresh source per read would retrigger it.
 const runnerHost = vi.hoisted(() => ({
   hostTokens: null as HostTokenSource | null,
 }));
@@ -669,8 +668,6 @@ describe("useHostStreamClientFor", () => {
     const first = soleSurface.result.current;
     expect(transportSessions).toHaveLength(1);
 
-    // The only holder: the owner change reopens it, and the reopen builds a
-    // fresh transport with the host-only token.
     soleSurface.rerender({ target: teamEntry });
     const reopened = soleSurface.result.current;
     expect(reopened).not.toBe(first);
@@ -678,9 +675,7 @@ describe("useHostStreamClientFor", () => {
     expect(transportSessions[0].closeCalls).toBe(1);
     expect(opened[1]?.hostTokens).toBe(runnerHost.hostTokens);
 
-    // A stream another holder shares is not ended app-side: the client cache
-    // keys no owner, so the surface that moves takes the shared client back,
-    // and the host's close is what ends it.
+    // The client cache keys no owner, so a shared stream is ended by the host's close.
     const sibling = renderHook(
       ({ target }) => useHostStreamClientFor(target, null),
       { initialProps: { target: teamEntry } },

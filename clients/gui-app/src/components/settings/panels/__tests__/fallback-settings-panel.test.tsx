@@ -5449,8 +5449,7 @@ describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
       fallbackMocks.setMutateAsync.mock.calls[1][0].policy.graceWindowSeconds,
     ).toBe(11);
   });
-  // Restore and Reset are not followed saves; the abort they can meet is the
-  // transport's own, for a request it dropped before sending.
+  // Restore and Reset are not followed saves; their only abort is the transport's own.
   const unsentRestoreAndReset = [
     {
       name: "restore",

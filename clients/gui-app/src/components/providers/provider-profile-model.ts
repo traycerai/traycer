@@ -27,13 +27,7 @@ export function profileCommitId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
-/**
- * Whether the computer that answered this list offers sign-ins by itself in a
- * switched-on environment (`providers.list@10.12` `offersSignIns`). The one
- * condition every one-sign-in screen of the Providers page and the Add and
- * Sign in again dialogs decides on: false or absent, each of them is exactly
- * what it was before the key existed.
- */
+/** Every one-sign-in screen of Providers and the Add and Sign in again dialogs is drawn only when true. */
 export function listOffersSignIns(
   list: { readonly offersSignIns?: boolean } | undefined,
 ): boolean {
@@ -44,14 +38,13 @@ export function profileUsesRecord(profile: ProviderProfile): boolean {
   return profile.aliases !== undefined;
 }
 
-/** One account a person removed, as `providers.list` names it: ids only. */
 export type RemovedProviderProfile = NonNullable<
   ProvidersListResponse["removedProfiles"]
 >[number];
 
 const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
-/** The removed accounts of one provider; an older computer sends none. */
+/** An older computer sends none. */
 export function removedProfilesForProvider(
   list:
     | { readonly removedProfiles?: readonly RemovedProviderProfile[] }
@@ -66,23 +59,7 @@ export function removedProfilesForProvider(
   return forProvider.length === 0 ? NO_REMOVED_PROFILES : forProvider;
 }
 
-/**
- * What a stored profile id (a chat's pin, a fork's seed, a remembered pick)
- * names in one provider's list:
- *
- * - `row`: the one row listing the id, as its commit id or in `aliases` (the
- *   id a folded duplicate had). For the Terminal login (`null`): the ambient
- *   row, else the record's row this computer's Terminal login is
- *   (`terminalOnThisComputer`).
- * - `removed`: no row lists it and a person removed that account
- *   (`removedProfiles`).
- * - `unknown`: anything else, including an id more than one row lists, which
- *   is never guessed. Each caller keeps what it did for a missing id before
- *   aliases existed.
- *
- * A list from a computer that sends no aliases and no removed accounts
- * resolves exactly as an exact match on the commit id did.
- */
+/** An id more than one row lists is `unknown`, never guessed. */
 export type ProfilePinResolution =
   | { readonly kind: "row"; readonly profile: ProviderProfile }
   | { readonly kind: "removed" }
@@ -97,9 +74,6 @@ export function resolveProfilePin(
   pinnedId: string | null,
 ): ProfilePinResolution {
   if (pinnedId === null) return resolveTerminalPin(profiles);
-  // A row lists the id as its own id or as one of its aliases. Two rows
-  // listing it (two aliases, or one row's id and another's alias) is not
-  // guessed.
   const listing = profiles.filter(
     (profile) =>
       profileCommitId(profile) === pinnedId ||
@@ -113,10 +87,6 @@ export function resolveProfilePin(
   return removed ? REMOVED_PIN : UNKNOWN_PIN;
 }
 
-/**
- * The Terminal login (`null`): its own row, else the one record's row this
- * computer's Terminal login is.
- */
 function resolveTerminalPin(
   profiles: readonly ProviderProfile[],
 ): ProfilePinResolution {
@@ -131,16 +101,8 @@ function resolveTerminalPin(
 }
 
 /**
- * Whether the picker draws a provider's account dropdown, in place of its
- * status line:
- * - for a pin to a removed account, whatever the rows, so it reads "Was
- *   removed" rather than turning into the Terminal pin when a model is
- *   chosen;
- * - for a provider that can have profiles (`providerSupportsManagedProfiles`),
- *   from one account row, one row as for many (owner, 14 Nov);
- * - for any other provider, from two rows, as before.
- *
- * `providerId` is the provider CLI id (`claude-code`, not the harness id).
+ * Always for a removed pin, so it reads "Was removed" rather than becoming the
+ * Terminal pin when a model is chosen. `providerId` is the CLI id (`claude-code`).
  */
 export function profileDropdownShown(
   providerId: string | null,
@@ -153,17 +115,12 @@ export function profileDropdownShown(
   return profiles.length >= profileDropdownMinimumRows(providerId);
 }
 
-/**
- * The rows a provider needs before its account dropdown is drawn: one for a
- * provider that can have profiles, two for any other.
- */
 export function profileDropdownMinimumRows(providerId: string | null): number {
   return providerId !== null && providerSupportsManagedProfiles(providerId)
     ? 1
     : 2;
 }
 
-/** The row a stored id resolves to, or `null` when it resolves to no row. */
 export function resolvedProfileRow(
   profiles: readonly ProviderProfile[],
   removedProfiles: readonly RemovedProviderProfile[],
@@ -173,7 +130,6 @@ export function resolvedProfileRow(
   return resolution.kind === "row" ? resolution.profile : null;
 }
 
-/** What the computer tells the person about this account, or `null`. */
 export function profilePersonNoticeText(
   profile: ProviderProfile,
 ): string | null {
@@ -183,10 +139,6 @@ export function profilePersonNoticeText(
     : PERSON_NOTICE_TEXT[notice];
 }
 
-/**
- * The second line of a record's row that is also this computer's Terminal
- * login. The Terminal login's own row says what it is already.
- */
 export function profileTerminalAccountLine(
   profile: ProviderProfile,
   computerName: string | null,
@@ -199,10 +151,6 @@ export function profileTerminalAccountLine(
 
 const NO_OTHER_NAMES: readonly string[] = [];
 
-/**
- * The other names this account had before it became one row, until a person
- * picks one (`providers.answerProfileName`). An older computer sends none.
- */
 export function profileOtherNames(profile: ProviderProfile): readonly string[] {
   return profile.otherNames ?? NO_OTHER_NAMES;
 }

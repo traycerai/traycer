@@ -1,10 +1,3 @@
-/**
- * A team's auto-archive saves queue in order, so a save can be sent well after
- * the person chose it. The bearer is read when it is sent, from the one
- * `AuthService` that outlives an account switch: this pins that a save queued
- * under account A is never sent with account B's token, and that one queued
- * across A's own token refresh is still sent, with the refreshed token.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -69,7 +62,6 @@ function installFetch(
   };
 }
 
-/** The identity route's answer for the account the bearer belongs to. */
 function profileFor(userId: string): Response {
   return new Response(
     JSON.stringify({
@@ -147,16 +139,10 @@ interface MountedRow {
   readonly host: MockRunnerHost;
   readonly service: AuthService;
   readonly queryClient: QueryClient;
-  /** The Authorization header of every PUT, in the order sent. */
   readonly puts: string[];
-  /** Answers the first PUT, which is held until then. */
   readonly releaseFirstPut: () => void;
 }
 
-/**
- * Account A signed in on a real AuthService, the row mounted and read, and
- * A's two saves made: on (held at the server), then off, queued behind it.
- */
 async function mountWithQueuedSave(): Promise<MountedRow> {
   const puts: string[] = [];
   const firstPut: { release: (() => void) | null } = { release: null };

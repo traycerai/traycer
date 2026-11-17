@@ -629,8 +629,7 @@ describe("TeamPermissions", () => {
     legacyRoleNoticeSeenAt: null,
     legacyMembers: [],
   };
-  // The roster is read only once the environment list has a row for the
-  // team, so a case that names who may change the policy answers the list too.
+  // The roster is read only once the list has a row for the team.
   const listsTheTeam = () => ({
     environments: [
       {

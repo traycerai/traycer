@@ -1,6 +1,3 @@
-// Providers page section, through the real ProviderProfileScopedSection.
-// `offersSignIns` controls sign-in actions and no-home wording. The profile
-// row, including a no-home presence, is the prop.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );

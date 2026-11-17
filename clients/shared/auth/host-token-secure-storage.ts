@@ -15,10 +15,7 @@ function readTable(raw: string | null): HostTokenTable {
   }
 }
 
-/**
- * The host-only tokens in one secure-storage entry beside the sign-in
- * credentials. One runtime writes it, so updates are only ordered, not locked.
- */
+// One runtime writes it, so updates are ordered, not locked.
 export function createSecureStorageHostTokenPersistence(
   storage: ISecureStorage,
   key: string,

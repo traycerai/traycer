@@ -211,7 +211,6 @@ const taskSandboxTestState = vi.hoisted(
   (): {
     task: TaskSandboxHost | null;
     sandboxes: SandboxSummary[] | null;
-    /** The id of the person's own environment, once their list names it. */
     personalEnvironmentId: string | null;
   } => ({
     task: null,
@@ -247,7 +246,6 @@ vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
   };
 });
 
-/** The environment id a resting sandbox row carries when the cases mean it is the person's own. */
 const PERSONAL_SANDBOX_ENVIRONMENT = "env-personal";
 
 const directoryListTestState = vi.hoisted(() => ({
@@ -3059,9 +3057,6 @@ describe("<ChatTile />", () => {
   });
 
   it("keeps a resting footer to the state alone while the person's own environment is not known", async () => {
-    // The same suspended row as the owner's case above, but nothing says whose
-    // environment it is (the environment list names none), so the footer
-    // does not tell the next message's remedy as the viewer's.
     taskSandboxTestState.sandboxes = [
       sandboxSummaryFixture({
         hostId: HOST_ID,

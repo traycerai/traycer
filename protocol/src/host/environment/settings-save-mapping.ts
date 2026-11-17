@@ -1,40 +1,6 @@
-/**
- * Which environment item a save made in a host's settings becomes.
- *
- * The app remembers its edit from this and compares what it remembers with
- * the value authn holds through {@link canonicalSettingValue}. The function
- * reads its two arguments and nothing else: the request, and the rows of the
- * item the save is built over ({@link SettingsSaveBase}). The app pairs its
- * remembered edit with the live revision it read from authn itself, and
- * applies with the hold's revision and that remembered live revision as the
- * expected one; never a revision a host reported.
- *
- * A save that leaves its item as the base already holds it (a put equal to
- * the row it would write, a delete where there is no row) maps to
- * `local_only`: there is nothing to propose and nothing for the app to
- * remember. The host proposes nothing in that case either.
- *
- * For the shell methods and the two pack methods the request carries the
- * app's statement of the item it expects (`selection` for a shell save,
- * `policy` for a pack save). The host computes the item from its own config
- * exactly as today and proposes that; it never writes the stated value over
- * what it computes. When the two agree, which is whenever the app's read of
- * the computer is current, the app's remembered value matches the hold and
- * the save is confirmed without a click. When they differ, the computer keeps
- * its own value, the change is saved here and proposed, and it waits in the
- * review list for one click; no error is raised. An older caller that states
- * nothing keeps today's behaviour and the app expects nothing. Rename and
- * recolour keep the base-taking form.
- *
- * A save whose item a host can only build from what it alone holds is
- * `unmapped`, with the reason, and nothing may fill it from host state: the
- * app cannot say "this is what I sent" for it.
- *
- * A settings method absent from {@link SettingsSave} proposes nothing: it
- * changes this host only (log levels, worktrees, visualization, session
- * names, catalog, simulator, the local-override pair, and the provider
- * settings that stay on this computer).
- */
+// The app pairs an edit with the live revision it read itself, never one a host
+// reported. For a stated item (shell `selection`, pack `policy`) the host proposes
+// what it computes and never the stated value; a difference waits in review.
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import type {
@@ -75,10 +41,6 @@ import {
   type SettingValue,
 } from "@traycer/protocol/host/environment/settings-proposals";
 
-/**
- * One save, by the method that made it. Every method through which a
- * person's save in a host's settings becomes an environment item.
- */
 export type SettingsSave =
   | {
       readonly method: "config.shell.set";
@@ -163,11 +125,7 @@ const editAddressFields = {
   os: lazySchema(() => environmentOsSchema.nullable()),
 } as const;
 
-/**
- * The item a save becomes. A put carries its value and
- * {@link canonicalSettingValue} of it, the form the app remembers and
- * compares a held value against; a delete carries neither.
- */
+/** A put carries its value and its canonical text; a delete carries neither. */
 export const settingsItemEditSchema = lazySchema(() =>
   z.discriminatedUnion("operation", [
     z.object({
@@ -186,15 +144,7 @@ export const settingsItemEditSchema = lazySchema(() =>
 );
 export type SettingsItemEdit = z.infer<typeof settingsItemEditSchema>;
 
-/**
- * Why a save has no mapping. Closed: every method maps to a proposal, to
- * nothing, or to one of these.
- *
- * - `key_from_host_state`: the item's key is found only in the host's own
- *   records (its managed entries, its profile store).
- * - `host_os_unknown`: the item has per-OS rows and the OS of the host the
- *   save is made on is not known.
- */
+/** Closed: every method maps to a proposal, to nothing, or to one of these. */
 export const SETTINGS_SAVE_UNMAPPED_REASONS = [
   "key_from_host_state",
   "host_os_unknown",
@@ -204,51 +154,27 @@ export type SettingsSaveUnmappedReason =
 
 export type SettingsSaveMapping =
   | { readonly kind: "proposal"; readonly edit: SettingsItemEdit }
-  /**
-   * The app expects no proposal: the save changes this host only, or is
-   * refused, or its request states no item (a caller older than the field),
-   * or it leaves the item as the base already holds it.
-   */
   | { readonly kind: "local_only" }
-  /**
-   * A skill removed from this host's global settings. The host's managed
-   * entries decide whether it also deletes a leftover item of the retired
-   * `skill` kind, on its own token, as it does today. Either way there is no
-   * proposal and no hold, so the app remembers nothing.
-   */
+  /** Either way there is no proposal and no hold. */
   | { readonly kind: "retired_item_delete" }
-  /**
-   * Promoting an MCP server to the environment: neither a proposal nor a
-   * save on this host alone. Its form is not settled; nothing is built on it.
-   */
+  /** Its form is not settled; nothing is built on it. */
   | { readonly kind: "mcp_promotion" }
   | { readonly kind: "unmapped"; readonly reason: SettingsSaveUnmappedReason };
 
-/** The environment item whose rows a save is built over. */
 export interface SettingsItemAddress {
   readonly kind: string;
   readonly key: string;
 }
 
-/** One row the environment holds for a save's item. */
 export interface SettingsBaseRow {
   /** Null for a kind with no per-OS rows. */
   readonly os: EnvironmentOs | null;
   readonly value: SettingValue;
 }
 
-/**
- * What a save is built over besides its request.
- *
- * `rows` is every row of the item {@link settingsSaveBaseAddress} names,
- * every OS's, and is empty when the environment holds none or the save
- * names no item. The app passes the rows it read from authn on the person's
- * sign-in, never rows a host returned; the host passes the rows it received.
- * When the two differ, the edits differ and nothing is applied silently.
- */
+/** The app passes rows it read from authn, never rows a host returned; when they differ nothing is applied silently. */
 export interface SettingsSaveBase {
   readonly rows: readonly SettingsBaseRow[];
-  /** The OS of the host the save is made on; null when it is not known. */
   readonly hostOs: HostOs | null;
 }
 
@@ -291,14 +217,7 @@ function remove(
   };
 }
 
-/**
- * The one canonical text of an item value: JSON with every object's own keys
- * in code-unit order at every depth and no whitespace. Two values give the
- * same text exactly when they are the same JSON, whatever order their keys
- * were written in; every own key counts, `__proto__` included. It compares
- * the values it is handed: a parser that drops a key before the value
- * reaches it is outside what it can see.
- */
+/** Every object's own keys in code-unit order at every depth, `__proto__` included; no whitespace. */
 export function canonicalSettingValue(value: SettingValue): string {
   if (Array.isArray(value)) {
     return `[${value.map(canonicalSettingValue).join(",")}]`;
@@ -323,17 +242,13 @@ function objectOf(value: SettingValue): Record<string, SettingValue> | null {
     : null;
 }
 
-/**
- * The OS row a per-OS edit is written as: this host's own OS's row when the
- * environment holds one, else the `any` row, as a host reads its item.
- */
+/** This host's own OS's row when the environment holds one, else the `any` row. */
 function perOsRow(base: SettingsSaveBase): EnvironmentOs | null {
   const hostOs = base.hostOs;
   if (hostOs === null) return null;
   return base.rows.some((row) => row.os === hostOs) ? hostOs : "any";
 }
 
-/** The row of a kind with no per-OS rows. */
 function singleRow(base: SettingsSaveBase): SettingsBaseRow | null {
   return base.rows.find((row) => row.os === null || row.os === "any") ?? null;
 }
@@ -357,7 +272,6 @@ function perOsRemove(
 
 const SHELL: SettingsItemAddress = { kind: "shell", key: "shell" };
 
-/** The shell item a shell save leaves, as the app states it. */
 function shellEdit(
   selection: ConfigShellSelection,
   base: SettingsSaveBase,
@@ -375,7 +289,6 @@ function shellEdit(
   }
 }
 
-/** The pack policy a pack save leaves, as the app states it. */
 function packPolicyEdit(
   packId: string,
   policy: ProvidersPackPolicyStatement,
@@ -387,12 +300,7 @@ function packPolicyEdit(
   });
 }
 
-/**
- * The `managed_profile` item a rename or recolor is for, keyed by the
- * harness id and the environment profile the request names; null for a
- * removal (its key is the host's alone), an acknowledgement, or a profile the
- * request names no environment profile for.
- */
+/** null for a removal (its key is the host's alone), an acknowledgement, or no environment profile named. */
 function profileAddress(
   request: ProvidersSetEnabledRequestV22,
   action: ProviderProfileActionV22,
@@ -405,11 +313,7 @@ function profileAddress(
   };
 }
 
-/**
- * A rename or recolor: the environment's copy of the profile with the new
- * name or colour laid over it, every other field kept, `enabled` and the
- * broker's own fields included.
- */
+/** Every other field is kept, `enabled` and the broker's fields included. */
 function profileEdit(
   request: ProvidersSetEnabledRequestV22,
   base: SettingsSaveBase,
@@ -434,10 +338,6 @@ function profileEdit(
   );
 }
 
-/**
- * The item whose rows a save is built over, which the caller reads and
- * passes as {@link SettingsSaveBase.rows}; null when the save needs none.
- */
 export function settingsSaveBaseAddress(
   save: SettingsSave,
 ): SettingsItemAddress | null {
@@ -525,7 +425,6 @@ function nativeMutateEdit(
   });
 }
 
-/** The base row at `os`; for a kind with no per-OS rows, its one row. */
 function rowAt(
   base: SettingsSaveBase,
   os: EnvironmentOs | null,
@@ -535,7 +434,6 @@ function rowAt(
     : (base.rows.find((row) => row.os === os) ?? null);
 }
 
-/** A proposal that leaves its item as the base holds it, as `local_only`. */
 function unlessUnchanged(
   mapping: SettingsSaveMapping,
   base: SettingsSaveBase,
@@ -551,13 +449,8 @@ function unlessUnchanged(
 }
 
 /**
- * The item a save becomes, from its request and the rows it is built over.
- *
- * A proposal here is what the app expects to find held; it is never a
- * promise that the host proposes it. A host may propose nothing for a save
- * that maps to a proposal (the entry it changed was this host's own), and
- * then its save answer's `proposal` is null: the app may take that absence
- * as its cue to forget the edit, and never takes a value from a receipt.
+ * Never a promise the host proposes it: a null `proposal` in the save answer lets
+ * the app forget the edit. A value is never taken from a receipt.
  */
 export function settingsSaveItemEdit(
   save: SettingsSave,

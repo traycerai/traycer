@@ -177,10 +177,8 @@ export function createDesktopBearerVerifier(
       lastAttemptFailed = false;
       return;
     }
-    // A refresh that arrives while an attempt is running takes that attempt's
-    // answer. The cooldown below has already been stamped by it, so returning
-    // here instead would read a cold cache as an unavailable key source and
-    // refuse a valid bearer that the running fetch is about to verify.
+    // Joins the running attempt: its cooldown is already stamped, so returning here
+    // would read a cold cache as an unavailable key source and refuse a valid bearer.
     if (inFlight !== null) {
       await inFlight;
       return;

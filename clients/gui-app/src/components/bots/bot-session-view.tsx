@@ -113,7 +113,6 @@ export function BotSessionView(props: {
   readonly botId: string;
   /** The host serving the tab: the session is read through it. */
   readonly hostId: string;
-  /** The host that runs the bot; `null` when none does. */
   readonly boundHostId: string | null;
   readonly botTitle: string;
   readonly session: BotOpenSession;

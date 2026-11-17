@@ -68,7 +68,6 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useSandboxHostConfiguration: () => null,
-  // The staged target names the team, so the failure line never asks the directory.
   useSandboxHostPayer: () => null,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
@@ -96,8 +95,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-sandbox-list-query")
   >()),
-  // A row counts for a held Stop only when its read was sent after the Stop
-  // was asked for; this answer is always read just now.
+  // A row counts for a held Stop only when read after the Stop was asked.
   sandboxListReadSentAt: () => Date.now(),
   // The held message's sandbox is awake: Stop is offered on it.
   useSandboxList: () => ({
@@ -262,8 +260,6 @@ describe("pending chat Stop failures", () => {
     expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
       "fix the login bug",
     );
-    // A team's credits are bought by its Admin only; nothing here says this
-    // reader is one.
     expect(
       within(alert).queryByRole("button", { name: /add credits/i }),
     ).toBeNull();

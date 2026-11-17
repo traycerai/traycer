@@ -83,7 +83,6 @@ const queryClient = new QueryClient({
     mutations: { retry: false },
   },
 });
-/** The real AuthService and queries read one coherent fixture account. */
 class SandboxLayoutRunnerHost extends MockRunnerHost {
   override readonly environmentTransport = createFakeEnvironmentCloudTransport({
     environments: () => [PERSONAL_ENVIRONMENT],

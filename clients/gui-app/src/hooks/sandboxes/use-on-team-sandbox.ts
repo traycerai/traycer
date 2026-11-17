@@ -59,21 +59,14 @@ export function useSandboxHostConfiguration(
   return useDirectorySandboxConfiguration(hostId, false);
 }
 
-/**
- * Whose credits a sandbox host is on, from the directory: a team's by its
- * owner, the person's only when the row names them; `null` for a row with no
- * owner, a host that is not a sandbox, and while the directory cannot say.
- */
+/** `null` for a row with no owner, a host that is not a sandbox, and while the directory cannot say. */
 export function useSandboxHostPayer(
   hostId: string | null,
 ): StageConfiguration | null {
   return useDirectorySandboxConfiguration(hostId, true);
 }
 
-/**
- * `personalNeedsOwner` reads a sandbox row with no team owner as Personal
- * only when the row names the person as its owner.
- */
+/** `personalNeedsOwner`: Personal only when the row names the person as its owner. */
 function useDirectorySandboxConfiguration(
   hostId: string | null,
   personalNeedsOwner: boolean,

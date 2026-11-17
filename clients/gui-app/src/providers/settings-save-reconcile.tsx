@@ -15,10 +15,7 @@ import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id"
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import { useSettingsSaveMemoryStore } from "@/stores/settings/settings-save-memory-store";
 
-/**
- * Whether this window already holds a session to a remote `hostId` that is
- * ready and in use by something else. Reading it opens nothing.
- */
+/** Reading it opens nothing. */
 function useBorrowableRemoteSession(hostId: string): boolean {
   const subscribe = useCallback(
     (onStoreChange: () => void) =>
@@ -32,12 +29,7 @@ function useBorrowableRemoteSession(hostId: string): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/**
- * Reconciles one host each time this window is connected to it again for its
- * own reasons. A remote host counts only while another surface holds a ready
- * session to it; this machine's own host while it can be asked. Nothing here
- * opens or dials a connection: a host the window is not connected to waits.
- */
+/** Nothing here opens or dials a connection: a host the window is not connected to waits. */
 function HostReconcile(props: {
   readonly hostId: string;
   readonly localHostId: string | null;
@@ -57,10 +49,6 @@ function HostReconcile(props: {
   return null;
 }
 
-/**
- * Applies this account's remembered saves as their hosts connect. Watches
- * only the hosts a remembered save was made on.
- */
 export function SettingsSaveReconcile(props: {
   readonly coordinator: SettingsSaveCoordinator;
 }): ReactNode {

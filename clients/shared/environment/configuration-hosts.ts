@@ -1,11 +1,4 @@
-/**
- * `environment.host.list` as the app's own call to authn's environment
- * routes: the hosts of an environment, with whether each is reachable, when
- * it last reported, how it applied each item, and whether it still holds a
- * Local row. It answers the protocol's `@1.2` shape as the host's forwarder
- * built it (`listConfigurationHosts` in the internal repository), except
- * that the binding fields are authn's own: no host had to be asked.
- */
+// `environment.host.list` answered by authn directly: no host has to be asked.
 import { z } from "zod";
 import type {
   EnvironmentHostItemApply,
@@ -22,12 +15,8 @@ import {
   type EnvironmentCloud,
 } from "./environment-cloud";
 
-/**
- * authn's host row, as much of it as this read uses. Not strict: authn adds
- * fields this app does not read. The binding fields come with
- * `include=binding`; an authn that does not know it sends none of them, and
- * each then reads null.
- */
+// The binding fields come only with `include=binding`; an older authn sends none
+// and each reads null.
 const authnHostRowSchema = z.object({
   hostId: z.string().min(1),
   hostName: z.string().nullable(),
@@ -61,17 +50,9 @@ function reportedItemState(
 }
 
 /**
- * Every host authn lists for the environment, less those removed and not
- * seen since (`purgePending`). A failure is the settings mapping of every
- * other read here, except authn's two answers that the environment is not
- * this person's to read, which are `not_readable` with the words their
- * status already had, so the last list is not kept through them:
- * - 404 `environment_not_found`: no accepted seat, another person's
- *   Personal, or no such environment;
- * - 403 `environment_action_forbidden`: a seated person whose role does not
- *   allow the read.
- * The same statuses without authn's code are a malformed request and a plain
- * `forbidden`, as for every other call.
+ * authn's 404 `environment_not_found` and 403 `environment_action_forbidden` are
+ * `not_readable`, so the last list is not kept through them; the same statuses
+ * without the code are a malformed request and a plain `forbidden`.
  */
 export async function listConfigurationHosts(
   cloud: EnvironmentCloud,

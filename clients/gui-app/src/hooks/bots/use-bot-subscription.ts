@@ -145,11 +145,8 @@ function subscriptionKeyFor(
 }
 
 /**
- * Lays a bot write's answer over every view this app holds of the bot, through
- * whichever host it is served: the cached snapshot each surface reads, and the
- * last frame a later reader joins on. A host re-sends a snapshot only for a
- * change it made itself, and this write reached the server with no host in
- * the path.
+ * A host re-sends a snapshot only for a change it made, and this write reached the
+ * server with no host in the path.
  */
 export function applyBotSettingsToViews(
   queryClient: QueryClient,

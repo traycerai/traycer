@@ -111,8 +111,8 @@ const hostExtensions: AnyExtension[] = [
   TableKit,
   Image,
 ];
-// Its own `marked`: a manager built on the module singleton registers its
-// tokenizers and options there, for every file this worker runs after it.
+// Its own `marked`: the module singleton would carry these tokenizers into every
+// later file this worker runs.
 const hostManager = new MarkdownManager({
   extensions: hostExtensions,
   marked: createIsolatedMarked(),

@@ -47,20 +47,13 @@ export interface IHostDirectoryService {
 
 export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly runnerHost: IRunnerHost;
-  /**
-   * Each host a renewal asked for, and whether authn could not be reached for
-   * it (`delayed`): the host keeps the connection on its held token until a
-   * later renewal succeeds.
-   */
+  /** `delayed`: authn could not be reached; the host keeps its held token until a later renewal. */
   readonly onHostTokenRenewal: (hostId: string, delayed: boolean) => void;
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
   /**
-   * The messenger `HostClient.requestSingleAttemptFor` sends on: `messenger`
-   * without the layers that resend. `null` when `messenger` already sends
-   * once per call (a test fake). Required for the same reason
-   * `connectionRegistry` is: a shell that forgot it would retry a call its
-   * caller promised goes out once, silently.
+   * `null` only when `messenger` already sends once per call. Required so a shell
+   * cannot silently retry a call promised to go out once.
    */
   readonly singleAttemptMessenger: IHostMessenger<Registry> | null;
   /**
@@ -289,14 +282,12 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
         void this.directory.refresh();
       }),
     );
-    // A renewed host-only token reaches every open connection in place.
     const stopHostTokenChanges = this.runnerHost.hostTokens.subscribe(() => {
       this.hostClient.notifyBearerRotated();
     });
     this.disposables.push({ dispose: stopHostTokenChanges });
-    // The person's era advances the moment this app sees them sign out or be
-    // replaced, so a mint, an adoption or a state write for them that began
-    // before is dropped here, whichever process answers it.
+    // A mint, adoption or state write for a person that began before their era
+    // advanced is dropped here, whichever process answers it.
     const provider = this.requestContextProvider;
     const stopForgetting = forgetHostTokensOnSignOut(
       {
@@ -312,11 +303,8 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.disposables.push({ dispose: stopForgetting });
   }
 
-  /**
-   * Right after the sign-in token is refreshed, a fresh host-only token for
-   * this computer's own host and for every host with a live connection. Any
-   * other host's token is minted when it is next opened.
-   */
+  // Only this computer's host and hosts with a live connection; any other host's
+  // token is minted when it is next opened.
   private renewHostTokens(): void {
     const userId = this.requestContextProvider.current()?.identity.userId;
     if (userId === undefined) return;

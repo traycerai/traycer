@@ -19,7 +19,6 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
-/** The `providers.list` envelope a test's fake computer returns. */
 export interface ProfileListAnswer {
   providers: ProviderCliState[];
   native: null;
@@ -52,14 +51,12 @@ export interface ProfileListHost {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-/** A fake host whose `providers.list` returns the current answer on every read. */
 export function createProfileListHost(input: {
   readonly answer: ProfileListAnswer;
   readonly answerProfileName: (
     request: AnswerProfileNameRequest,
   ) => AnswerProfileNameResponse;
   readonly failSetEnabled: boolean;
-  /** When set, the list row after an answer uses this label, not the answer's. */
   readonly listLabelAfterAnswer?: string;
 }): ProfileListHost {
   const queryClient = createAppQueryClient();
@@ -208,7 +205,6 @@ export function createProfileListHost(input: {
   };
 }
 
-/** Readiness for a requester that already names its computer. */
 export function readinessFor(client: object | null): {
   readonly hostId: string | null;
   readonly requestContextUserId: string | null;

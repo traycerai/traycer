@@ -215,24 +215,12 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resolve so `model: ""` never reaches a draft.
    */
   readonly keptPickUnwritten: boolean;
-  /**
-   * The account an unchosen Terminal login is shown and run on: its
-   * provider's one signed-in profile while the Terminal login is signed out.
-   * `null` when there is none, and on every surface that never sets one. A
-   * presentation layer like a reroute: `values` keep the Terminal login, and
-   * no emit carries this account (`withoutDefaultAccount`).
-   */
+  /** A presentation layer: `values` keep the Terminal login, and no emit carries it (`withoutDefaultAccount`). */
   readonly defaultAccount: DefaultAccount | null;
-  /**
-   * A person chose this composer's account, so `defaultAccount` no longer
-   * applies. Set by an account commit (`commitProfileSelection`, or a
-   * `commitSelection` that changes the account); the surface restores it per
-   * draft.
-   */
+  /** Set by an account commit; the surface restores it per draft. */
   readonly accountChosen: boolean;
 }
 
-/** The profile an unchosen Terminal login of `harnessId` starts on. */
 export interface DefaultAccount {
   readonly harnessId: ProviderId;
   readonly profileId: string;
@@ -273,9 +261,9 @@ export interface ComposerToolbarActions {
   readonly setOnSettingsChange: (
     onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   ) => void;
-  /** Replace `defaultAccount`. Never emits: nobody edited anything. */
+  /** Never emits: nobody edited anything. */
   readonly setDefaultAccount: (account: DefaultAccount | null) => void;
-  /** Replace `accountChosen`. Never emits. */
+  /** Never emits. */
   readonly setAccountChosen: (chosen: boolean) => void;
 }
 
@@ -705,14 +693,12 @@ function catalogMatchesSelection(
   );
 }
 
-/** The default account while it applies: nobody chose this composer's account. */
 function presentedAccount(
   state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
 ): DefaultAccount | null {
   return state.accountChosen ? null : state.defaultAccount;
 }
 
-/** `values` with an unchosen Terminal login shown as the default account. */
 function presentedValues(
   values: ComposerToolbarValues,
   state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
@@ -745,10 +731,6 @@ function sameDefaultAccount(
   return a.harnessId === b.harnessId && a.profileId === b.profileId;
 }
 
-/**
- * The selection shows the default account, not one a person chose
- * (`withoutDefaultAccount`).
- */
 export function showsDefaultAccount(
   state: Pick<
     ComposerToolbarState,
@@ -765,10 +747,8 @@ export function showsDefaultAccount(
 }
 
 /**
- * `settings` (the composer's shown selection) as a surface stores them: a
- * default account is nobody's choice, so it is stored as the Terminal login
- * it stands in for. Every emit goes through this, and so does a submit that
- * records last-run settings.
+ * A default account is nobody's choice, so it is stored as the Terminal login it
+ * stands in for; every emit and last-run record goes through this.
  */
 export function withoutDefaultAccount(
   settings: ChatRunSettings,

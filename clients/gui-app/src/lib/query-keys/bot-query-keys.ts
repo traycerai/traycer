@@ -16,7 +16,6 @@ export const botQueryKeys = {
       "subscription",
       args.botId,
     ] as const,
-  /** Whether `queryKey` is {@link botQueryKeys.subscription}'s slot for `botId`, under any host. */
   isSubscriptionOf: (queryKey: readonly unknown[], botId: string) =>
     queryKey[0] === "host" &&
     queryKey[2] === "bot" &&

@@ -79,15 +79,13 @@ export function SecretsPage(props: {
   readonly hostId: string | null;
   /** In place of the list when there is no secret: the configuration's text. */
   readonly emptyText: string;
-  /** A host's name by its id, for a removal's per-host lines. */
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const configurationClient = usePoolTierHostClient(props.client);
   const list = useEnvironmentSecretsQuery(configurationClient);
-  // Retry asks again first for what naming the environment needed, so a
-  // list that could not be named is read once that answers.
+  // Retry first asks again for what naming the environment needed.
   const { retry: retryEnvironment } =
     useSecretsEnvironment(configurationClient);
   const { refetch: refetchList } = list;

@@ -87,9 +87,6 @@ export function useBotFailedRequest(args: {
   const supported = botSendTakes(sendVersion, BOT_CONVERSATION_RETRY_VERSION);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const signIn = useProviderSignIn(boundHostId);
-  // Whose credits the bot's sandbox is on: a team's names the team and tells
-  // only its Admin to add credits, and while it is not known its
-  // out-of-credits refusal tells no remedy as the reader's.
   const payer = useSandboxHostPayer(boundHostId);
   const buysTeamCredits = useTeamBillingAdmin(
     payer?.kind === "team" ? payer.teamId : null,
@@ -197,11 +194,6 @@ export function useBotFailedRequest(args: {
   );
 }
 
-/**
- * A sandbox's refusal in the words the error row gives it: on a team's
- * sandbox out of credits, the team's line, and cut as the row cuts it while
- * whose credits the sandbox is on is not known.
- */
 function refusalCopy(
   code: string | null,
   summary: string,

@@ -140,8 +140,7 @@ const SANDBOX = sandboxSummaryFixture({
   state: "awake",
   environmentId: "env-personal",
 });
-// The team the "team ... dialog" cases speak for: the configuration and the
-// row carry the same environment id, or the resolver reads the row as Personal.
+// The configuration and the row share this id, or the resolver reads the row as Personal.
 const TEAM_ENVIRONMENT_ID = "env-team-1";
 const TEAM_SANDBOX = sandboxSummaryFixture({
   displayName: NAME,
@@ -504,7 +503,6 @@ describe("sandbox confirm dialogs", () => {
         );
         render(<Dialog sandbox={TEAM_SANDBOX} open onOpenChange={vi.fn()} />);
 
-        // The row resolves to the team, not to Personal.
         expect(screen.getByTestId(dialogTestId).textContent).toContain(
           teamStorageLine,
         );

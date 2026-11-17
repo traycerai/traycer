@@ -7,7 +7,6 @@ export const unavailableSignInRequestClient: SignInRequestClient = {
   recordSignInRequest: () => Promise.resolve({ kind: "failed" }),
 };
 
-/** A real AuthService instance whose record port uses the shared fake fetch. */
 export function signInRequestAuthService(
   client: SignInRequestClient,
 ): AuthService {

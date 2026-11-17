@@ -51,7 +51,6 @@ function notice(overrides: Partial<EnvironmentNotice>): EnvironmentNotice {
   };
 }
 
-/** A held entry as the app reads it from authn, with its masked facts. */
 function reviewEntry(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
   return {
     entryId: "entry-1",

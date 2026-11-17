@@ -1,13 +1,5 @@
-/**
- * The app's side of a save made in a host's settings: it remembers what the
- * save will propose, and applies authn's hold of it once the host has
- * proposed it. No host commits a setting; the app that made the edit applies
- * its own hold (`settings-proposals.ts` in the protocol).
- *
- * Nothing here logs, reports or throws what it remembers: no value, no
- * digest, no item key, no environment or host id. A failure is a record kept
- * for the next try or a record forgotten, never an error a person reads.
- */
+// No host commits a setting: the app that made the edit applies its own hold.
+// Nothing here logs, reports or throws what it remembers.
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   applyHeldChange,
@@ -36,97 +28,52 @@ const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 /** An apply that went unanswered is tried once more at the same hold revision. */
 const TRIES_PER_HOLD_REVISION = 2;
 
-/**
- * How long a save the host does not list is kept. Another window may still
- * have it out: that window's answer comes within this time and reconciles it
- * there.
- */
+/** Another window may still have the save out; its answer comes within this time. */
 const UNLISTED_GRACE_MS = 60_000;
 
-/** Where a save is made, and what the person saw when they made it. */
 export interface SettingsSaveContext {
-  /**
-   * The account the save's preparation began for
-   * ({@link SettingsSaveCoordinator.account}, read before its first await).
-   */
+  /** Read before the preparation's first await. */
   readonly accountId: string;
   readonly environmentId: string;
   readonly hostId: string;
-  /** The host's sharing generation when the save is made. */
   readonly sharingGeneration: number;
-  /** The live item's revision read from authn when the person made the edit; null when there is none. */
   readonly expectedLiveRevision: number | null;
 }
 
-/** What the coordinator reaches outside itself. */
 export interface SettingsSaveCoordinatorPorts {
-  /** The signed-in account; null when nobody is. A change mid-run stops the run. */
   readonly accountId: () => string | null;
-  /** One authn operation on the current sign-in; null with no session service. */
   readonly cloud: () => EnvironmentCloud | null;
-  /**
-   * `environment.proposals` on `hostId`, over a connection this window
-   * already holds open for its own reasons, or null when it holds none. It
-   * never opens or dials one: a remote host only through a borrowed ready
-   * session (`tryAcquireReadyRemoteSession`), this machine's host through its
-   * own requester.
-   */
+  /** Never opens or dials a connection: a remote host only through a borrowed ready session. */
   readonly readProposals: (
     hostId: string,
   ) => Promise<EnvironmentProposalsResponse | null>;
   readonly now: () => number;
 }
 
-/** One remembered edit: its record's id, which is the edit's own identity. */
 export interface SettingsSaveTicket {
   readonly id: string;
 }
 
-/** What {@link SettingsSaveCoordinator.begin} did with a save. */
 export type SettingsSaveBeginning =
   | { readonly kind: "remembered"; readonly ticket: SettingsSaveTicket }
-  /** The save proposes nothing to remember; it is sent as it is. */
   | { readonly kind: "nothing_to_remember" }
-  /**
-   * The account changed since the save's preparation began: it is neither
-   * remembered nor sent.
-   */
   | { readonly kind: "account_changed" };
 
 export interface SettingsSaveCoordinator {
-  /**
-   * The account a save's preparation begins for: the signed-in one, while
-   * the memory is that account's. Null otherwise, and then nothing is
-   * remembered. A preparation that reads a different answer after any await
-   * is for an account that is no longer here.
-   */
+  /** A preparation that reads a different answer after any await is for an account no longer here. */
   readonly account: () => string | null;
-  /**
-   * Called before the save is sent: remembers a save that maps to a proposal
-   * and marks it sent, answering the ticket {@link settle} takes. `applied`
-   * is called once, if this window's apply of the save's own hold writes it;
-   * never for a hold applied elsewhere, a conflict, or a save forgotten.
-   */
+  /** `applied` is called once, only if this window's apply of the save's own hold writes it. */
   readonly begin: (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
     applied: () => void,
   ) => Promise<SettingsSaveBeginning>;
-  /**
-   * The save's send is over: `hostAnswered` when the host's answer proposed
-   * it, false when it was not proposed: it failed, nothing answered it, or
-   * the answer proposes nothing to a configuration. A proposed save's host is
-   * reconciled, which finds its proposal in `environment.proposals`; no save
-   * answer carries one.
-   */
+  /** A proposed save's host is reconciled through `environment.proposals`; no save answer carries it. */
   readonly settle: (
     ticket: SettingsSaveTicket,
     hostAnswered: boolean,
   ) => Promise<void>;
-  /**
-   * Applies what `hostId` has proposed of this account's remembered saves.
-   * Runs one at a time per host; a call while one runs waits for it.
-   */
+  /** One at a time per host; a call while one runs waits for it. */
   readonly reconcile: (hostId: string) => Promise<void>;
 }
 
@@ -160,12 +107,10 @@ function holdMatches(
   );
 }
 
-/** Whether the edit `id` is still remembered. */
 function isCurrent(id: string): boolean {
   return Object.hasOwn(useSettingsSaveMemoryStore.getState().records, id);
 }
 
-/** Whether this window has sent `id`'s save and not yet seen it answered. */
 function inFlight(id: string): boolean {
   return Object.hasOwn(useSettingsSaveMemoryStore.getState().inFlight, id);
 }
@@ -175,12 +120,6 @@ interface RememberedSave {
   readonly record: SettingsSaveMemoryRecord;
 }
 
-/**
- * The host's own records sorted by what its proposals list says of each:
- * those to forget (refused, or not listed while no save of theirs is out in
- * this window and older than {@link UNLISTED_GRACE_MS}), and those authn
- * holds, by environment. A queued one is in neither.
- */
 function sortByReceipt(
   mine: ReadonlyArray<readonly [string, SettingsSaveMemoryRecord]>,
   proposals: EnvironmentProposalsResponse,
@@ -216,7 +155,6 @@ export function createSettingsSaveCoordinator(
   ports: SettingsSaveCoordinatorPorts,
 ): SettingsSaveCoordinator {
   const running = new Map<string, Promise<void>>();
-  /** Each save begun in this window, by its record's id: who to tell it was applied. */
   const appliedListeners = new Map<string, () => void>();
   const store = () => useSettingsSaveMemoryStore.getState();
 
@@ -225,7 +163,6 @@ export function createSettingsSaveCoordinator(
     appliedListeners.delete(id);
   };
 
-  /** Drops the listeners of records forgotten elsewhere: replaced, or another account's memory. */
   const dropUnremembered = (): void => {
     for (const id of appliedListeners.keys()) {
       if (!isCurrent(id)) appliedListeners.delete(id);
@@ -241,11 +178,6 @@ export function createSettingsSaveCoordinator(
     }
   };
 
-  /**
-   * Applies `record`'s hold, if authn holds it: `applied` when this apply
-   * wrote it, `stays` when the record waits for another try, `decided`
-   * otherwise.
-   */
   const applyHold = async (
     cloud: EnvironmentCloud,
     id: string,
@@ -278,8 +210,7 @@ export function createSettingsSaveCoordinator(
   const reconcileOnce = async (hostId: string): Promise<void> => {
     const account = ports.accountId();
     if (account === null) return;
-    // The run's cloud is the sign-in it began on; once that sign-in ends, the
-    // run stops even where the account is the same.
+    // Once the run's sign-in ends, the run stops even where the account is the same.
     const cloud = ports.cloud();
     const sameAccount = (): boolean =>
       ports.accountId() === account &&
@@ -301,9 +232,8 @@ export function createSettingsSaveCoordinator(
     // connection.
     if (proposals === null || !sameAccount()) return;
 
-    // Every record below is the edit as it stood before the reads: a later
-    // save of the same item may have replaced it since, and then neither its
-    // apply nor its forgetting is this run's to do.
+    // A later save of the same item may have replaced a record since the reads; then
+    // neither its apply nor its forgetting is this run's.
     const sorted = sortByReceipt(mine, proposals, ports.now());
     for (const { id } of sorted.forget) {
       forget(id);
@@ -317,10 +247,6 @@ export function createSettingsSaveCoordinator(
     }
   };
 
-  /**
-   * Applies the holds of `saves`, proposed in `environmentId`; answers false
-   * once the account has changed, and the run stops.
-   */
   const applyProposed = async (
     cloud: EnvironmentCloud,
     environmentId: string,

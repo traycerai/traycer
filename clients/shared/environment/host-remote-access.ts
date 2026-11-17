@@ -1,13 +1,5 @@
-/**
- * Turning Remote access on for a computer, at authn on the person's own
- * sign-in: `PUT /api/v3/hosts/:hostId/remote-access`. The person's own
- * computer, or the owning team's Admin or Editor, may call it. The app sends
- * On only; Off stays the computer's own call (`host.remoteAccess.set@2.0`).
- *
- * The two shapes mirror authn's `hostRemoteAccessPutRequestSchema` and
- * `hostRemoteAccessPutResponseSchema`. What the computer does with the answer
- * is read from its own `environment.status`, not from this one.
- */
+// The app sends On only; Off stays the computer's own call (`host.remoteAccess.set@2.0`).
+// The computer's state is read from its `environment.status`, not this answer.
 import { z } from "zod";
 import {
   CLOUD_UNAVAILABLE_MESSAGE,
@@ -30,12 +22,6 @@ const hostRemoteAccessPutResponseSchema = z
   })
   .strict();
 
-/**
- * Turns Remote access on for `hostId`. Throws {@link EnvironmentCloudError}
- * for every answer other than authn's 200: nothing answered, the sign-in or
- * the role refused, the computer is not found (404) or is a sandbox (409),
- * or the cloud failed.
- */
 export async function turnOnHostRemoteAccess(
   cloud: EnvironmentCloud,
   hostId: string,

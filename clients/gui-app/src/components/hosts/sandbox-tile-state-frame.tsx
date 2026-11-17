@@ -128,7 +128,6 @@ function SandboxTileStateFrameInRuntime(props: {
   );
 }
 
-/** The one overlay a tile shows: its sandbox's state first, then its door cover. */
 function TileOverlay(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay | null;
@@ -150,12 +149,7 @@ function TileOverlay(props: {
   );
 }
 
-/**
- * Why a frozen sandbox's tile is covered, by whose credits it is on: the
- * Personal remedy only on the person's own sandbox, the team's line on a
- * team's named one, and the line with no remedy while it is not known whose
- * it is.
- */
+/** The Personal remedy only on the person's own sandbox; no remedy while it is not known whose. */
 function frozenCauseFor(payer: StageConfiguration | null): string {
   if (payer?.kind === "personal") return sandboxFrozenLine(null);
   if (payer?.kind === "team" && payer.teamName.length > 0) {

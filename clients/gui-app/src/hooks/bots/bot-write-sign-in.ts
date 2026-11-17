@@ -1,21 +1,13 @@
 import type { AuthService } from "@/lib/auth/auth-service";
 
-/**
- * The sign-in a direct bot write was pressed under. It has ended once the
- * person signs out, switches account or signs in again; a token rotation of
- * the same sign-in does not end it (`AuthService.getIdentityGeneration`).
- */
+/** A token rotation does not end it; signing out, switching or signing in again does. */
 export interface PressSignIn {
   readonly isCurrent: () => boolean;
 }
 
 /**
- * Captured synchronously by the public mutate call, before TanStack awaits
- * its hooks; checked before dispatch as well as after each answer.
- *
- * A write answered after its sign-in ended is abandoned: it publishes
- * nothing, reads nothing again, sends nothing more and says nothing, as an
- * abandoned save does.
+ * Captured synchronously before TanStack awaits its hooks; checked before dispatch
+ * and after each answer. An answer after the sign-in ended is abandoned silently.
  */
 export function pressSignIn(auth: AuthService): PressSignIn {
   const generation = auth.getIdentityGeneration();

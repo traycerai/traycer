@@ -894,8 +894,6 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
-  // The reader's standing on the bot's environment, for its settings and its
-  // failed turns' Switch, from the list the tab already reads.
   const mayChangeBot = useReaderMayChangeBot(subscription.snapshot);
 
   // A transient failure is also asked again on the tab's own backoff, since
@@ -1594,7 +1592,6 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
-  // Who wrote each channel row.
   const directory = useEnvironmentMemberDirectory(
     snapshot.bot.environmentId,
     true,

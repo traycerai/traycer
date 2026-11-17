@@ -447,8 +447,7 @@ function RulesEditor(props: {
   });
   const commit = (): void => {
     const body = joinAutoPolicySections(editor.sections);
-    // The sign-in's operation is taken now, at the press, not when a queued
-    // save's turn comes.
+    // The sign-in is taken at the press, not when a queued save's turn comes.
     if (binding === null) return;
     setPolicy.mutate(
       { request: { body }, operation: binding.auth.environmentCloud() },

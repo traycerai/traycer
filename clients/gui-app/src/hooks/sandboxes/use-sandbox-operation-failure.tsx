@@ -35,7 +35,6 @@ export interface SandboxOperationFailureProps {
   readonly onRetry: ((verb: SandboxRowVerb) => void) | null;
 }
 
-/** The refusal for want of credits a failed operation carries, else null. */
 function creditRefusalOf(
   error: unknown,
 ): Extract<SandboxControlFailure, { kind: "refused" }> | null {
@@ -54,8 +53,7 @@ export function useSandboxOperationFailure(
 ): ReactNode {
   const { operation, onRetry } = props;
   const hostConfiguration = useSandboxHostPayer(props.hostId ?? null);
-  // `null` while neither the surface nor the directory says whose sandbox it
-  // is: nothing is offered or said as the person's own until one does.
+  // Nothing is offered or said as the person's own until the surface or directory says whose it is.
   const configuration = props.configuration ?? hostConfiguration;
   const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
@@ -117,11 +115,6 @@ export function useSandboxOperationFailure(
   );
 }
 
-/**
- * A failure other than a credit refusal, worded for whether the person can
- * buy the team's credits (a team's sandbox out of credits names whose
- * bundle is out to anyone who cannot).
- */
 function operationFailureLine(
   operation: Extract<SandboxRowOperation, { kind: "failed" }>,
   name: string,

@@ -75,12 +75,7 @@ export function useRateLimitProfileSelection(
 /** Stable identity for a host with nothing checked, or no host at all. */
 const NO_HOST_SHOWN_PROFILES: StatusBarHostShownProfiles = {};
 
-/**
- * The usage surfaces resolve a remembered id to the row it names - its own,
- * the row it folded into as an alias, or the record's row that is the
- * Terminal login - and treat every other id as gone, removed by a person or
- * not, exactly as before. They read no removed accounts of their own.
- */
+// The usage surfaces read no removed accounts: every unresolved id is gone.
 const USAGE_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 /**
@@ -155,7 +150,6 @@ function resolveFallbackProfileId(
     USAGE_REMOVED_PROFILES,
     lastUsed,
   );
-  // The Terminal login's row, or the record's row that is the Terminal login.
   if (remembered && lastUsed === null && lastUsedRow !== null) {
     return profileCommitId(lastUsedRow);
   }

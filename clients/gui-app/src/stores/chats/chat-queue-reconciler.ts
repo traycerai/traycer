@@ -310,11 +310,7 @@ export interface UnrecoverableSend {
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
-  /**
-   * Whether `circumstance` came from the removed-account code. Set where the
-   * code is known and copied with the reason to the stash handoff, so no
-   * later reader has to decide it.
-   */
+  /** Set where the code is known and copied with the reason, so no later reader decides it. */
   readonly reasonIsRemovedProfile: boolean;
   /**
    * Everything said after the content losses. REQUIRED and not defaulted: the
@@ -413,7 +409,6 @@ export interface UnrecoverableSendPrompt {
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** The same account text the notice renders - `handedBack: false`. */
   readonly reason: string;
-  /** As {@link UnrecoverableSend.reasonIsRemovedProfile}. */
   readonly reasonIsRemovedProfile: boolean;
 }
 

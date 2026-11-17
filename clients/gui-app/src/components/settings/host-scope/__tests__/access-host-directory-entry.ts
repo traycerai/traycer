@@ -1,12 +1,7 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 
-/**
- * The directory entry the Access and setup tests' host has, in a module that
- * imports nothing at run time: a `vi.mock` factory for
- * `@/hooks/host/use-host-directory-entry` reads it, and the test support's own
- * imports reach that module, so a factory that imported the support would wait
- * on the module it is building.
- */
+// Imports nothing at run time: a `vi.mock` factory reads it, and a factory that
+// imported the test support would wait on the module it is building.
 
 export const ACCESS_HOST_ID = "host-a";
 export const ACCESS_HOST_NAME = "dev-box";

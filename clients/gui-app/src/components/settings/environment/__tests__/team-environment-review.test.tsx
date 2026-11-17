@@ -321,8 +321,6 @@ describe("Team Review through the addressed page", () => {
         (call) => call.method === "environment.review",
       ),
     ).toBe(false);
-    // The page frame reads its registered computers' status; Review itself
-    // asks no host anything.
     expect(
       harness.messenger.calls.filter(
         (call) => call.method !== "environment.status",

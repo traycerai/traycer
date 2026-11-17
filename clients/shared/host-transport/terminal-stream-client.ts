@@ -76,11 +76,7 @@ export interface TerminalStreamCallbacks {
       { readonly kind: "sessionUpdated" }
     >,
   ) => void;
-  /**
-   * `terminal.subscribe@1.8`: the people who have the terminal on screen, the
-   * whole set each time (it replaces the last). Never called on an older
-   * connection, whose set stays unknown.
-   */
+  /** The whole set each time; never called on an older connection, whose set stays unknown. */
   readonly onViewers: (
     frame: Extract<
       TerminalSubscribeServerFrameOnWire,

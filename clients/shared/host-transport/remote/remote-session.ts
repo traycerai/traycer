@@ -260,8 +260,7 @@ function createHostTokenRemoteSessionAuth(
     },
     readCredentialUpdateBearer: readHostToken,
     currentFingerprint: readHostToken,
-    // `undefined` too: an untyped caller can omit the option, and a wrapper
-    // over nothing would turn "no revalidator" into an endless retry.
+    // A wrapper over nothing would turn "no revalidator" into an endless retry.
     revalidateForReconnect:
       auth === null || auth === undefined
         ? null
@@ -271,8 +270,8 @@ function createHostTokenRemoteSessionAuth(
 }
 
 /**
- * The pool's `open` presents the user bearer, as a personal host's does, with
- * nowhere to put anything else: no `authz`, no session grant.
+ * The pool's `open` presents the user bearer, with nowhere to put anything
+ * else: no `authz`, no session grant.
  */
 function createClientPoolSessionAuth(
   bearer: BearerSourceProvider,

@@ -74,21 +74,14 @@ interface ProviderProfileReauthPanelProps {
     | null;
   readonly onCancel: () => void;
   readonly onDone: () => void;
-  /** Null on a computer that does not offer sign-ins by itself: a completed
-   *  sign-in's `profileOutcome` is then not read. */
   readonly signInOutcomes: ReauthSignInOutcomes | null;
 }
 
-/** A completed Sign in again on a computer that offers sign-ins by itself. */
 export interface ReauthSignInOutcomes {
-  /** The cached list a completed sign-in's profile is looked up in. */
   readonly reader: CachedProviderProfilesReader;
-  /** Leaves this sign-in for Add, on the same provider. */
   readonly onAddAsNewProfile: (
     reason: "account-mismatch" | "account-unproven",
   ) => void;
-  /** True while the sign-in rests on a sentence the person only reads and
-   *  leaves (the list has not caught up, or nothing was changed). */
   readonly onSettledChange: (settled: boolean) => void;
 }
 
@@ -278,12 +271,6 @@ export function ProviderProfileReauthPanel({
   );
 }
 
-/**
- * Where a completed Sign in again rests, on a computer that offers sign-ins
- * by itself: the list has not caught up yet, or the sign-in was another
- * account, or one that cannot be matched to this profile's account. In the
- * last two the profile is left as it was.
- */
 function ProviderProfileReauthOutcome({
   flowState,
   entryProfile,
@@ -344,7 +331,6 @@ function ProviderProfileReauthOutcome({
   );
 }
 
-/** Tells the dialog when the sign-in rests on a sentence the person leaves. */
 function useSettledReport(
   signInOutcomes: ReauthSignInOutcomes | null,
   flowState: ProviderProfileLoginFlow["state"],

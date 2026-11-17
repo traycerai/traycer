@@ -1,6 +1,3 @@
-// Sign in again, through the real ProfileEditDialog (startInReauth), over a
-// host client. offersSignIns on the seeded providers.list is the only switch.
-// Absent and false keep today's dialog. True reads profileOutcome.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
@@ -184,7 +181,6 @@ function asksToRecordSignIn(): AwaitResponse {
   };
 }
 
-/** Old keys say this profile is already signed in. */
 function signedInAwait(
   outcome: ProviderLoginProfileOutcome | null,
 ): AwaitResponse {
@@ -228,9 +224,7 @@ function renderReauth(input: {
   readonly offers: Offers;
   readonly outcome: ProviderLoginProfileOutcome | null;
   readonly holdAwait: boolean;
-  /** The await answer's rows include this profile, authenticated. */
   readonly echoedSignedIn: boolean;
-  /** Record the login-ownership manifest before the dialog mounts. */
   readonly ownership: boolean;
   readonly awaitAnswers: readonly AwaitResponse[];
 }) {

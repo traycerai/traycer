@@ -83,37 +83,17 @@ interface FakeConnection {
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
   /**
-   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
-   * `seq` due next on each client stream. The production host closes the
-   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
-   * frame skips or repeats one, so the fake fails the same way - into
-   * `errors`, which the suites assert empty. Without it a client that
-   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
-   * due) passed every test here and killed every real session on the first
-   * unsubscribe.
+   * As the host's `inboundSeqByStream`: a skipped or repeated seq closes the session
+   * (`SESSION_FRAME_SEQUENCE_MISMATCH`), so the fake fails into `errors` too.
    */
   readonly inboundSeqByStream: Map<number, number>;
-  /**
-   * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
-   * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
-   * fake sends a FATAL for a stream, every later CLIENT frame for that id -
-   * a SUBSCRIBE included - is dropped at ingest, and the harness refuses to
-   * send server frames for it. Without this the fake accepted a re-subscribe
-   * of a tombstoned id that the production host silently ignores, and a
-   * recovery test passed against a client that was in fact permanently dead.
-   */
+  /** As the host's `terminalStreamIds`: after a FATAL every later client frame for the id is dropped. */
   readonly terminalStreamIds: Set<number>;
   /** Serializes async frame handling so mux ordering matches the wire. */
   queue: Promise<void>;
   closed: boolean;
 }
 
-/**
- * The relay + host end of the wire, scripted per test via `decideOpen`. Runs a
- * REAL responder Noise-NK handshake against the session's initiator and
- * answers each in-channel `open{bearer}` with an `openAck` or a session-level
- * `fatal`, recording every bearer presented and the host token beside it.
- */
 function presentedGrant(authz: unknown): string {
   if (authz === null || typeof authz !== "object") return "";
   const grant: unknown = Reflect.get(authz, "grant");
@@ -131,65 +111,31 @@ type FakeUnaryError = {
 export class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
-  /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
-  /**
-   * The host-only token in `authz.grant` on every `open`, index-aligned with
-   * `openBearers`. A client open's bearer is empty; this is the credential.
-   */
+  /** A client open's bearer is empty; this is the credential. */
   readonly openGrants: string[] = [];
-  /**
-   * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
-   *
-   * Captured raw (`unknown`) rather than typed, deliberately: what a suite
-   * needs to prove is that the transport PUT IT ON THE WIRE, and a typed slot
-   * would let an absent field read as a shape mismatch rather than as the
-   * missing key it is.
-   */
+  /** Raw: an absent field must read as a missing key, not a shape mismatch. */
   readonly openIdentities: unknown[] = [];
-  /**
-   * The reserved `authz` slot on every `open`, index-aligned with
-   * `openBearers`. Raw for the reason `openIdentities` is.
-   */
   readonly openAuthz: unknown[] = [];
-  /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
-  /** Schema version carried beside each logical subscribe. */
   readonly subscribeSchemaVersions: unknown[] = [];
-  /** streamId of every logical subscribe, index-aligned with `subscribeParams`. */
   readonly subscribeStreamIds: number[] = [];
-  /** Every `credits` value from a CREDIT control frame the client sent. */
   readonly creditGrants: number[] = [];
-  /** Fired synchronously the instant a CREDIT frame is recorded - lets a test
-   * capture ordering evidence (e.g. "was the stream frame already delivered
-   * to the consumer?") at the exact tick the grant landed, not on a later poll. */
   onCreditGrant: (() => void) | null = null;
   streamManifest = buildStreamManifest(
     emptyStreamRegistry,
     SERVES_EVERY_INSTALLED_MAJOR,
   );
-  /**
-   * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
-   * stays empty (matching the empty client registries here); optional
-   * methods are the interesting surface - they must publish to the
-   * negotiated-manifest registry and must NEVER fatal the session, however
-   * unknown to the client they are.
-   */
+  /** Optional methods must publish to the negotiated registry and never fatal the session. */
   optionalRpcManifest: Record<string, { major: number; minor: number }> = {};
-  /** The FLOOR rpc manifest advertised in `openAck` (compat-checked). */
   floorRpcManifest: Record<string, { major: number; minor: number }> = {};
   /**
-   * When false the `openAck` omits `optionalRpc` entirely - the shape a peer
-   * built before the floor/optional split would send. `sessionManifestsSchema`
-   * requires the field, so this exercises the parse-rejection path rather
-   * than a silently half-understood manifest.
+   * False omits `optionalRpc`, as a peer before the floor/optional split sends; the
+   * schema requires it, so this exercises the parse rejection.
    */
   sendOptionalRpc = true;
-  /** The `capabilities` array this fake host advertises in `openAck` (T5). */
   openAckCapabilities: string[] = [];
-  /** Every mux frame decoded off the wire from the CLIENT, pre-reassembly - lets a test read `compressed` per frame exactly as the host would (T5). */
   readonly clientFrames: MuxFrame[] = [];
-  /** Every REQUEST frame the client sent: method + on-wire version + params. */
   readonly unaryRequests: {
     method: string;
     schemaVersion: unknown;
@@ -198,21 +144,13 @@ export class FakeRelayHost {
     callerAgentId: string | null;
     streamId: number;
   }[] = [];
-  /** Connection index for each recorded request, aligned with `unaryRequests`. */
   readonly unaryRequestConnectionIds: number[] = [];
-  /** Answers the next REQUEST with this result payload. */
   unaryResult: unknown = { ready: true };
-  /**
-   * When set, auto-RESPONSE carries this error envelope (and a null result)
-   * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
-   */
   unaryError: FakeUnaryError | null = null;
-  /** Per-request replies for a real retrying-messenger integration. */
   readonly unaryResponseQueue: Array<{
     readonly error: FakeUnaryError | null;
     readonly result: unknown;
   }> = [];
-  /** Per-request response override for integrated consumer tests. */
   unaryResponseFor:
     | ((request: { readonly method: string; readonly params: unknown }) => {
         readonly result: unknown;
@@ -223,74 +161,29 @@ export class FakeRelayHost {
         } | null;
       })
     | null = null;
-  /**
-   * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
-   * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
-   * stream-scoped FATAL) for that request's streamId instead of racing the
-   * harness's own reply.
-   */
   skipUnaryAutoRespond = false;
-  /**
-   * When true at a connection's open-ack, THAT connection answers nothing
-   * afterwards (no unary RESPONSE). A later attach is a new connection and
-   * answers normally unless this flag is still set at ITS open-ack.
-   */
+  /** Read at each connection's open-ack: a later attach answers normally unless still set. */
   silentAfterReady = false;
   private readonly silentConnections = new Set<FakeConnection>();
-  /**
-   * Withhold the auto-RESPONSE for these method names only; every other
-   * method (including the liveness probe) answers normally.
-   */
   silentMethods = new Set<string>();
-  /** Delay auto-RESPONSE delivery for timer-bound remote unary tests. */
   unaryResponseDelayMs: number | null = null;
-  /**
-   * Withhold the Noise responder message (msg1) after `attach_ack`, so the
-   * session sits in `handshaking`.
-   */
   stallNoiseReply = false;
-  /** Count of initiator Noise msg0 frames this fake has ingested. */
   noiseInitiatorMessages = 0;
-  /** Every auto-RESPONSE this fake actually put on the wire. */
   readonly unaryResponses: {
     method: string;
     error: FakeUnaryError | null;
   }[] = [];
-  /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
   readonly closesSent: number[] = [];
-  /**
-   * Every client frame the R-2 ingest check dropped (streamId + mux frame
-   * type). The production host logs these; recording them here is what lets
-   * a test observe "the client DID send X, and the host deliberately ignored
-   * it" - e.g. the belt-and-braces CLOSE a client sends for a stream the
-   * host already condemned with a FATAL.
-   */
   readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
-  /**
-   * Every `cloudAuthorized` value from a CLOUD_VERDICT_UPDATE control frame
-   * the client sent, decoded post-reassembly (the raw `clientFrames` log
-   * carries `json: null` for a chunked body - this is the actual payload,
-   * the way `subscribeParams` is for SUBSCRIBE).
-   */
+  /** Post-reassembly: `clientFrames` carries `json: null` for a chunked body. */
   readonly cloudVerdictUpdates: boolean[] = [];
-  /**
-   * The reassembled json of every CREDENTIAL_UPDATE control frame the client
-   * sent (raw, like `openAuthz`: the point is what the transport put on the
-   * wire). Post-reassembly for the reason `cloudVerdictUpdates` is.
-   */
   readonly credentialUpdates: unknown[] = [];
-  /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
     kind: "ack",
   });
-  /** Count of `relay-ping` keepalive frames received from the client. */
   pingCount = 0;
-  /**
-   * When false, pings are counted but never answered - the half-open-socket
-   * shape an OS suspend leaves behind (sends go out, nothing comes back),
-   * which is what the wake-probe tests need the wire to look like.
-   */
+  /** False: the half-open socket an OS suspend leaves, for the wake-probe tests. */
   answerPings = true;
 
   get hostStaticPublicKey(): Uint8Array {
@@ -331,7 +224,6 @@ export class FakeRelayHost {
     },
   };
 
-  /** Relay control frame: the host's leg of the tunnel went away/came back. */
   sendHostAttachment(state: "host_detached" | "host_attached"): void {
     const connection = [...this.connections]
       .reverse()
@@ -345,7 +237,6 @@ export class FakeRelayHost {
     });
   }
 
-  /** Relay control frame: the peer/session was killed for a relay reason. */
   sendRelayKill(type: "peer_gone" | "killed", reason: string): void {
     const connection = this.liveConnection();
     connection.socket.onmessage?.({
@@ -354,7 +245,6 @@ export class FakeRelayHost {
     });
   }
 
-  /** Server-side drop of the live socket (relay restart / network cut). */
   dropCurrentConnection(): void {
     const connection = [...this.connections]
       .reverse()
@@ -370,7 +260,6 @@ export class FakeRelayHost {
     });
   }
 
-  /** The current live connection - shared lookup for the raw-frame helpers below. */
   private liveConnection(): FakeConnection {
     const connection = [...this.connections]
       .reverse()
@@ -381,13 +270,7 @@ export class FakeRelayHost {
     return connection;
   }
 
-  /**
-   * Pushes a single logical STREAM_FRAME to the client through the REAL
-   * chunker (`OutboundChunkSource`, same as production `sendMux`) - a body
-   * over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically. Used
-   * by the C1 per-frame credit-accounting regression to drive a transfer
-   * long enough to cross `FINE_INBOUND_CREDIT_GRANT_BATCH` mid-flight.
-   */
+  /** Through the real chunker, so a large body spans many frames and crosses the credit batch. */
   async sendStreamFrame(
     streamId: number,
     envelope: Record<string, unknown>,
@@ -396,9 +279,7 @@ export class FakeRelayHost {
   ): Promise<void> {
     const connection = this.liveConnection();
     if (connection.terminalStreamIds.has(streamId)) {
-      // The real host tears its resolver down with the FATAL, so no server
-      // frame for a terminal id can exist. Loud rather than dropped: a test
-      // reaching here is asserting recovery on an id that never recovered.
+      // The real host tears its resolver down with the FATAL: no server frame for a terminal id exists.
       throw new Error(
         `test sent a server frame for tombstoned stream ${streamId}`,
       );
@@ -412,21 +293,12 @@ export class FakeRelayHost {
     });
   }
 
-  /**
-   * Sends a stream-scoped FATAL for `streamId` through the real chunker
-   * (`sendMux`, same path as `sendStreamFrame`) - lets a test simulate the
-   * host abandoning a pending unary request or a live subscription without
-   * ever answering it normally.
-   */
   async sendStreamFatal(
     streamId: number,
     details: FatalErrorDetails,
   ): Promise<void> {
     const connection = this.liveConnection();
-    // Mirrors `RemoteClientSession`: the host marks the stream terminal
-    // whenever it sends a FATAL - retryable or not - and its ingest drops
-    // every later client frame for the id, so a client re-open must arrive
-    // under a fresh id to be heard.
+    // The host tombstones a stream on any FATAL, so a re-open must use a fresh id.
     connection.terminalStreamIds.add(streamId);
     connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
@@ -438,13 +310,7 @@ export class FakeRelayHost {
     });
   }
 
-  /**
-   * Sends a stream-scoped CLOSE for `streamId` - the host ending a stream
-   * NORMALLY (resolver finished, entity gone benignly). Mirrors
-   * `RemoteClientSession.handleStreamClose`: a host-side CLOSE is a terminal
-   * path exactly like a FATAL, so the id is tombstoned here too and every
-   * later client frame for it is dropped at ingest.
-   */
+  /** A host-side CLOSE tombstones the id as a FATAL does. */
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();
     connection.terminalStreamIds.add(streamId);
@@ -459,13 +325,8 @@ export class FakeRelayHost {
   }
 
   /**
-   * Noise-encrypts one already-built `EncodeMuxFrameInput` WITHOUT delivering
-   * it - lets a test build several chunk sequences by hand, encrypt them in
-   * whatever order it chooses (the Noise send counter is reserved
-   * synchronously per call, so sequential `await`s here still produce a
-   * strictly increasing, decryptable counter sequence), and then hand the
-   * sealed bytes to `deliverToClient` in an INTERLEAVED order that differs
-   * from a naive "one sequence at a time" send.
+   * The Noise counter is reserved synchronously per call, so frames encrypted in any
+   * order still decrypt when delivered interleaved.
    */
   async encryptFrame(input: EncodeMuxFrameInput): Promise<Uint8Array> {
     const connection = this.liveConnection();
@@ -476,35 +337,15 @@ export class FakeRelayHost {
     return noise.encrypt(encodeMuxFrame(input), EMPTY_AD);
   }
 
-  /**
-   * Hands one already-Noise-sealed frame straight to the client's socket
-   * `onmessage` - the same call `deliverBinary` makes internally, exposed so
-   * a test can fire several of these back-to-back with NO await between
-   * them, matching production `onData`'s fire-and-forget per-message entry.
-   */
+  /** No await between calls, as production `onData` fires per message. */
   deliverToClient(bytes: Uint8Array): void {
     this.deliverBinary(this.liveConnection(), bytes);
   }
 
   private enqueue(connection: FakeConnection, data: string | Uint8Array): void {
-    // THE KEEPALIVE LANE DOES NOT QUEUE BEHIND THE MUX LANE. `handleClientSend`
-    // awaits a real WebCrypto decrypt for every data frame, and the queue is
-    // serial - so a ping sent while two frames are in flight is answered only
-    // after both decrypts resolve. Under `shouldAdvanceTime` that real latency
-    // becomes fake milliseconds, and on a loaded runner it can exceed the
-    // client's 12s awaiting-pong deadline: the socket fails 4004
-    // `relay-missed-pongs`, the session rebuilds mid-test, and whatever the
-    // test was actually pinning is lost to a teardown it never asked for.
-    // (Observed in CI on the D4 error-envelope control, never locally.) A real
-    // relay answers pings at its own edge, never behind the host's mux
-    // decryption, so this lane is the FAITHFUL order, not a convenience.
-    //
-    // A MICROTASK, never inline: `send` returning before its answer arrives is
-    // the one thing a real socket does guarantee, and the wake probe arms
-    // AFTER the forced ping is sent. Answering reentrantly inside `send`
-    // clears a probe that does not exist yet, leaves the armed one unanswered,
-    // and makes an answered arm look failed - which silently retires nothing
-    // and leaks the previous arm's policy into the next redial.
+    // Pings skip the mux queue: behind WebCrypto decrypts a ping can miss the 12s pong
+    // deadline; a real relay answers at its edge. A microtask, not inline: the wake
+    // probe arms after the ping is sent.
     if (typeof data === "string" && data === "relay-ping") {
       queueMicrotask(() => {
         this.answerKeepalivePing(connection);
@@ -536,12 +377,9 @@ export class FakeRelayHost {
       return;
     }
     if (typeof data === "string") {
-      // Pings never reach here - `enqueue` answers them off the queue, see
-      // its comment. `reauth` control frames need no ack for these tests.
       return;
     }
     if (connection.noise === null) {
-      // Handshake msg0: run the responder side and answer with msg1.
       const handshake = await createResponderHandshake(
         this.hostKeys,
         NOISE_PROLOGUE,
@@ -562,14 +400,10 @@ export class FakeRelayHost {
     }
     const muxBytes = await connection.noise.decrypt(data, EMPTY_AD);
     const frame = decodeMuxFrame(muxBytes);
-    // Recorded BEFORE the tombstone drop below: `clientFrames` is what the
-    // CLIENT put on the wire, and a frame the host then drops was still sent.
-    // Folding the drop in first would silently shrink the frame/compression
-    // accounting the transfer assertions read.
+    // Recorded before the tombstone drop: a frame the host drops was still sent.
     this.clientFrames.push(frame);
-    // R-2 ingest drop, same placement as the production host's `feedInbound`:
-    // BEFORE `accept()`, so a tombstoned id can neither seed a fresh
-    // reassembler accumulator nor smuggle a SUBSCRIBE through to the handler.
+    // Before `accept()`, as the host's `feedInbound`: a tombstoned id must not seed a
+    // reassembler or pass a SUBSCRIBE.
     if (connection.terminalStreamIds.has(frame.streamId)) {
       this.droppedTombstonedFrames.push({
         streamId: frame.streamId,
@@ -577,9 +411,7 @@ export class FakeRelayHost {
       });
       return;
     }
-    // H11 mirror, same placement and predicate as the production host's
-    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
-    // frames only (chunk sequences are ordered by the reassembler itself).
+    // As the host's `feedInbound`: unchunked frames only; the reassembler orders chunks.
     const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
     if (
       !frame.chunked &&
@@ -692,12 +524,8 @@ export class FakeRelayHost {
           }, responseDelayMs);
         });
       }
-      // AFTER the send resolves, so this records DELIVERY and not the
-      // intention to deliver. `sendMux` awaits WebCrypto encryption, and a
-      // test that waits on this entry and then jumps virtual time through a
-      // verdict window would otherwise race the threadpool: the frame lands
-      // after the jump, the verdict finds the counter unmoved, and a control
-      // manufactures the very silence drop it exists to disprove.
+      // After the send resolves, so this records delivery: `sendMux` awaits encryption,
+      // and a test that jumps virtual time on this entry would race it.
       return;
     }
     if (message.type === MuxFrameType.CLOSE) {
@@ -721,20 +549,13 @@ export class FakeRelayHost {
     this.openIdentities.push(message.json?.clientIdentity);
     this.openAuthz.push(message.json?.authz);
     if (this.stallOpens) {
-      // Freeze this attempt mid-flight (the session sits in its opening
-      // phase, its own phase timer pending) until the test releases it -
-      // the window the forced-intent ordering tests need to aim into.
-      // The host decides on the token in `authz`, which is what it verifies.
+      // The host decides on the token in `authz`.
       this.stalledOpens.push({ connection, bearer: grant, openIndex });
       return;
     }
     await this.respondToOpen(connection, grant, openIndex);
   }
 
-  /**
-   * When true, `open` frames are recorded but not answered until
-   * {@link releaseStalledOpens} runs - the in-flight-attach window.
-   */
   stallOpens = false;
   private readonly stalledOpens: Array<{
     connection: FakeConnection;
@@ -742,7 +563,6 @@ export class FakeRelayHost {
     openIndex: number;
   }> = [];
 
-  /** Answers every stalled open, in arrival order, with `decideOpen`'s verdict. */
   async releaseStalledOpens(): Promise<void> {
     const stalled = this.stalledOpens.splice(0);
     for (const open of stalled) {
@@ -820,5 +640,3 @@ export class FakeRelayHost {
     connection.socket.onmessage?.({ type: "binary", data: bytes });
   }
 }
-
-/** One recorded call to a `TransportEvidenceReporter` method, keyed by name. */

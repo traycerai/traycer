@@ -14,7 +14,7 @@ const noWait = create<{ accountWait: ChatAccountWait | null }>()(() => ({
   accountWait: null,
 }));
 
-/** The composer already observes this computer's provider list. Adds no list reader. */
+/** Adds no list reader: the composer already observes this computer's provider list. */
 export function useChatAccountWait(input: {
   readonly fallbackCardVisible: boolean;
   readonly providersList: ProvidersListResponse | undefined;

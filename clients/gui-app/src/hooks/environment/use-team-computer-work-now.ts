@@ -7,10 +7,6 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * The host read a confirm asks a team computer for its own running work, with
- * the request it sends for the subject the confirm names.
- */
 export type TeamComputerWorkNowRead =
   | {
       readonly method: "environment.members.removePreview";
@@ -28,19 +24,12 @@ export type TeamComputerWorkNowRead =
       ) => RequestOfMethod<HostRpcRegistry, "environment.previewLocalFacts">;
     };
 
-/** What both reads count; a count the computer cannot make is null. */
 export interface TeamComputerCounts {
   readonly activeTurns: number | null;
   readonly terminals: number | null;
 }
 
-/**
- * A confirm's running-work read: `pending` while the team's host list or the
- * chosen host's one answer is still out, then settled for the opening, with
- * the host it chose. A settled `answer` is null when no team host is the
- * window's, the host does not serve the read, could not be asked, or the read
- * failed.
- */
+/** `answer` is null when no team host is the window's, or it does not serve, could not be asked or failed. */
 export type TeamComputerWorkNow =
   | { readonly status: "pending" }
   | {
@@ -49,18 +38,12 @@ export type TeamComputerWorkNow =
       readonly answer: TeamComputerCounts | null;
     };
 
-/**
- * One opening of the confirm: the subject it names, the host asked for its
- * counts (null when none is), and a number telling this opening's request
- * from any earlier one's.
- */
 interface Opening {
   readonly subject: string | null;
   readonly hostId: string | null;
   readonly nonce: number;
 }
 
-/** The answer an opening's one request settled with; null when it failed. */
 interface Settled {
   readonly nonce: number;
   readonly answer: TeamComputerCounts | null;
@@ -69,12 +52,7 @@ interface Settled {
 const CLOSED: Opening = { subject: null, hostId: null, nonce: 0 };
 const PENDING = { status: "pending" } as const;
 
-/**
- * The opening this render is in: unchanged while the confirm names the same
- * subject, a new one once the team's host list has answered for a newly named
- * subject, closed when it names none. The window's own host is asked only
- * when it is one of the team's computers and can be asked at that moment.
- */
+// The window's own host is asked only when it is one of the team's computers and can be asked now.
 function openingFor(
   opening: Opening,
   subject: string | null,
@@ -108,11 +86,8 @@ function answeredTeamHostIds(
   return failed ? [] : null;
 }
 
-/**
- * The read's settled answer: null when it failed, or when it was never sent
- * and its host can no longer be asked (a disabled read would otherwise stay
- * out for good); undefined while out.
- */
+// Null when it failed, or was never sent and its host can no longer be asked (a
+// disabled read would stay out for good).
 function settledAnswer(
   query: {
     readonly isError: boolean;
@@ -127,21 +102,11 @@ function settledAnswer(
 }
 
 /**
- * The subject's running work for a confirm, counted by the window's own host
- * when that host is one of the team's computers (authn's list). The confirm
- * never dials another computer for it.
- *
- * Chosen once per opening, once the team's host list has answered, and asked
- * once: the choice and the settled answer hold for that opening whatever the
- * selection, the directory or the host's readiness do afterwards, and the
- * read is never retried, refetched or re-read by an invalidation. Pending
- * until then, so a confirm can hold its loading state rather than say the
- * work could not be counted while it is being counted; the wait is that one
- * answer.
+ * Never dials another computer. Chosen and asked once per opening; never retried,
+ * refetched or re-read by an invalidation.
  */
 export function useTeamComputerWorkNow(args: {
   readonly environmentId: string;
-  /** What the confirm names (a member, a plan); null while it is closed. */
   readonly subject: string | null;
   readonly read: TeamComputerWorkNowRead;
 }): TeamComputerWorkNow {
@@ -174,8 +139,7 @@ export function useTeamComputerWorkNow(args: {
     // Each opening is its own entry, so no answer from an earlier opening is
     // served to this one.
     cacheKeyIdentity: [current.nonce],
-    // A null host follows the window's selection; only a chosen team host is
-    // asked.
+    // A null host follows the window's selection.
     client: current.hostId === null ? null : hostClient,
     method: read.method,
     params: read.paramsFor(current.subject ?? ""),

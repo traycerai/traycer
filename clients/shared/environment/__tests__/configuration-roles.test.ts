@@ -15,7 +15,6 @@ const TEAM_ENVIRONMENT: EnvironmentDescriptor = {
   label: "acme",
 };
 
-/** authn at the transport: each path answers the body given for it. */
 function cloudAnswering(bodies: Readonly<Record<string, unknown>>): {
   readonly cloud: EnvironmentCloud;
   readonly requested: string[];
@@ -35,7 +34,6 @@ function cloudAnswering(bodies: Readonly<Record<string, unknown>>): {
   return { cloud, requested };
 }
 
-/** authn's members answer: the one member's role and the reader's own. */
 function membersAnswerOf(memberRole: unknown, readerRole: unknown): unknown {
   return {
     members: [
@@ -95,8 +93,7 @@ describe("a team role is Admin, Editor or Viewer", () => {
     expect(rowFailed).not.toHaveBeenCalled();
   });
 
-  // authn answers `null` for a seat stored on the retired Viewer role, on that
-  // member's row and on the reader's own.
+  // authn answers `null` for a seat stored on the retired Viewer role.
   it("reads a member stored on the Viewer role as a viewer, and the page still parses", async () => {
     const { cloud } = cloudAnswering({
       [MEMBERS_PATH]: membersAnswerOf(null, "admin"),

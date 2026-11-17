@@ -138,13 +138,10 @@ describe("<SandboxDetailsDrawerHost />", () => {
     const PERSONAL_ENV = "env-personal";
     const NEUTRAL = "Not enough credits to wake this sandbox for an hour.";
 
-    /** A refused wake for want of credits, from the pot `creditSource` names. */
     function openCreditRefusal(
       row: { readonly ownerKnown: boolean },
       failure: Partial<CreditRefusal>,
     ): HTMLElement {
-      // A row nobody started: its environment is the person's own (the
-      // mocked configurations have answered, and name no team) or none at all.
       const summary = sandboxSummaryFixture({
         id: "sbx-credit-refusal",
         state: "suspended",
@@ -309,8 +306,6 @@ describe("<SandboxDetailsDrawerHost />", () => {
       id: "sbx-started-by-agent",
       displayName: "Kept agent sandbox",
       state: "awake",
-      // Every listed team has answered and none holds this environment, so the
-      // row is the person's own and "Started by" reads "you".
       environmentId: "env-personal",
       burst: false,
       createdByAgentId: "agent-planner",

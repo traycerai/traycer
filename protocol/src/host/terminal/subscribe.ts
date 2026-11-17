@@ -88,15 +88,10 @@
  * 1.6-or-older connection must not send it (that host's frame schema cannot
  * parse it) and keeps the intent its open request carried.
  *
- * `terminal.subscribe@1.8`: adds the server frame `viewers`, the people who
- * have the terminal on screen: the distinct people holding at least one
- * `presentation` attachment, the receiver included, sorted by `userId`, `[]`
- * when nobody does. A `cache` attachment never counts, and an agent or a
- * host-to-host session is never in it. The host sends it to every 1.8
- * subscriber, `presentation` or `cache`, once after its first snapshot and
- * again whenever the set changes. No frame (an older host, or none yet) means
- * unknown, never nobody; each frame replaces the last whole, so the latest
- * frame is the set. Degrade: a 1.7-or-older connection never receives it.
+ * `terminal.subscribe@1.8`: adds the server frame `viewers`, the distinct people with a
+ * `presentation` attachment (receiver included, by `userId`); never a `cache` attachment,
+ * an agent or a host-to-host session. Sent after the first snapshot and on every change,
+ * each replacing the last; no frame means unknown, never nobody.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";

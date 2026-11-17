@@ -129,7 +129,6 @@ interface World {
   setAnswers: SetAnswer[];
   /** Per harness id: how many more `providers.setNativeMemory` calls fail. */
   nativeFailures: Map<string, number>;
-  /** What a failing `providers.setNativeMemory` call fails as. */
   nativeFailureKind: "refused" | "abandoned";
   /**
    * A landed `providers.setNativeMemory` changes what the next
@@ -202,7 +201,6 @@ export function deferred(): Deferred {
   return { promise, resolve };
 }
 
-/** Holds the real agent-memory mutation at MutationCache.onMutate. */
 export function holdAgentMemoriesSetMutation(): {
   readonly started: Promise<void>;
   readonly capture: () => MutationCapture | null;
@@ -227,7 +225,6 @@ export function holdAgentMemoriesSetMutation(): {
   };
 }
 
-/** The AuthService owned by the rendered HostRuntimeProvider. */
 export function fixtureAuthService(): AuthService {
   if (authService === null) {
     throw new Error("the Memory act host runtime has not mounted");
@@ -625,11 +622,6 @@ export function invalidateAllQueries(): Promise<void> {
   return queryClient.invalidateQueries();
 }
 
-/**
- * A session stored on the runner host, which the window's own `AuthService`
- * rehydrates and validates when the host runtime starts: the sign-in path of a
- * relaunch, with authn's identity answer faked at the runner host's edge.
- */
 function signInWindow(runnerHost: MockRunnerHost): void {
   runnerHost.tokenStoreEntries.set("traycer.token", {
     token: "t1",

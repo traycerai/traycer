@@ -14,11 +14,7 @@ export interface PersonIdentity {
   readonly avatarUrl: string | null;
 }
 
-/**
- * What a team host writes in a person column (who started a chat, who
- * granted access) when neither an actor nor a starter is known. It names no
- * one: never a member, never shown as an id.
- */
+/** Names no one: never a member, never shown as an id. */
 export const SYSTEM_ACTOR_ID = "system";
 
 export interface PersonIdentitySources {

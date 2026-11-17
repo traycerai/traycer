@@ -1,12 +1,3 @@
-/**
- * A team bot's settings by the reader's role. The tab opens the real settings
- * panel, and the panel is told whether the reader may change the bot's
- * environment by the tab's own rule over the environment list: the Model
- * group and Delete are drawn for an owner of Personal, an Admin or an Editor,
- * not for a Viewer or a team the list does not hold, and are drawn as before
- * until the list answers. The environment list is scripted at the boundary
- * the other tab cases script it at; the rule, the tab and the panel are real.
- */
 import {
   botListChangedMock,
   botListQueryMock,
@@ -56,16 +47,12 @@ import {
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
-// What the panel's own boundaries answer, and what its Apply was sent.
 const panel = vi.hoisted(() => ({
   stores: [] as ComposerToolbarStore[],
   applied: [] as object[],
-  /** What a write of the run settings is refused with; `null` is accepted. */
   runSettingsRefusal: null as Error | null,
 }));
 
-// The failed turn's card reads the chat's session store; the tab's channel
-// view below draws the real card for it.
 const failed = vi.hoisted(() => {
   type Slice = {
     lastFailedAttempt: LastFailedAttempt | undefined;
@@ -192,13 +179,9 @@ vi.mock(
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
 
-// The tab's other views are other suites' subjects; only the panel is real.
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
-// The real card of the failed turn is drawn where the channel would draw it: for
-// the bot's own chat (its id is the epic id, as `bot-failed-recovery.tsx` passes
-// it), and for a chat that is not a bot's.
 vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
@@ -236,8 +219,6 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
   BotThreadsView: () => null,
 }));
 
-// The failed-turn card's own boundaries, as its suite
-// (`fallback-manual-rungs.test.tsx`) doubles them.
 vi.mock("sonner", () => ({ toast: vi.fn() }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
@@ -279,7 +260,6 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
 }));
 
-// The panel's own boundaries.
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   ...botMutationsMock,
   useBotUpdateTitleMutation: () => ({
@@ -395,7 +375,6 @@ afterEach(() => {
   endBotTabSurfaceCase(queryClient);
 });
 
-/** The bot's environment as the environment list answers it for this reader. */
 function listAnswers(
   ownerKind: "organization" | "user",
   effectiveRole: EnvironmentEffectiveRole,
@@ -470,9 +449,6 @@ describe("a bot's settings panel by the reader's role", () => {
     ).toBeTruthy();
   });
 
-  // A list still being read shows the tab's connecting view and no panel; a
-  // list that failed with the bot listed leaves the tab open on it, with no
-  // answer for the panel to go by.
   it("draws the Model group and Delete, and no reply mode, while the list has not answered", async () => {
     mocks.state.environmentsStatus = "error";
     mocks.state.environmentsKept = false;

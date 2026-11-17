@@ -278,9 +278,6 @@ describe("wakeSandboxOnPick", () => {
     );
   });
 
-  // The wake tells the person's own top-up only when the directory row names
-  // them as its owner (the control is the case above): a row with no owner and
-  // no row at all say nothing about whose sandbox it is.
   it.each<readonly [string, HostDirectoryEntry | null]>([
     ["no directory row for the host", null],
     ["a directory row with no owner", sandboxHostEntryWithoutOwner(HOST_ID)],
@@ -399,8 +396,6 @@ describe("wakeSandboxOnPick", () => {
       { description: "Add 11 credits, then try again." },
     );
 
-    // Older servers omit the pot name. A known team gets the board's generic
-    // add-credits remedy.
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 10_100,

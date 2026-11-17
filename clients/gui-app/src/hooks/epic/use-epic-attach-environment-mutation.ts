@@ -103,13 +103,7 @@ interface EpicAttachmentContext {
 
 const METHOD = "epic.attachEnvironment";
 
-/**
- * One attachment: the task, the team, and the operation on the person's
- * sign-in taken when they pressed send (`AuthService.environmentCloud()`),
- * null with no session service. The cloud attachment is sent after the host
- * has answered, so it must still go out as them: not once that sign-in has
- * ended or been entered again.
- */
+/** Sent after the host answers, so it must still go as the presser: never once that sign-in has ended. */
 export interface EpicAttachment {
   readonly epicId: string;
   readonly teamId: string;
@@ -141,14 +135,7 @@ function attachmentFailure(kind: AttachmentFailureKind): HostRpcError {
   });
 }
 
-/**
- * Whether the sign-in a press was made on is still the current one: the
- * press's own operation when the app has a session service (a token rotation
- * keeps it; a sign-out, another account or the same account signing in again
- * ends it), else the same account. Every step an attachment's caller takes
- * after one of its waits asks this, so nothing continues, and nothing is said,
- * on a sign-in the person did not press on.
- */
+/** Every step after a wait asks this, so nothing continues or is said on a sign-in the person did not press on. */
 export function pressedSignInCurrent(
   operation: EnvironmentCloud | null,
   pressedBy: string | null,
@@ -157,10 +144,7 @@ export function pressedSignInCurrent(
   return (useAuthStore.getState().profile?.userId ?? null) === pressedBy;
 }
 
-/**
- * Its sign-in ended: nothing more is sent, and nothing is said.
- * `mayHaveDispatched` is whether the cloud attachment had gone out.
- */
+/** `mayHaveDispatched`: whether the cloud attachment had gone out. */
 function assertOriginSignIn(
   operation: EnvironmentCloud,
   mayHaveDispatched: boolean,
@@ -176,14 +160,8 @@ function assertOriginSignIn(
   });
 }
 
-/**
- * The cloud half, once the host has prepared the task: the team's
- * environment from the person's own list (as the host found it), then the
- * attachment, each sent only while the sign-in the person pressed on is
- * current, and checked before the bearer is read. Each answer is checked
- * again after its wait, so neither a refusal nor a success reaches a sign-in
- * that has ended.
- */
+// Each send only while the pressed sign-in is current, checked before the bearer is
+// read; each answer is checked again after its wait.
 async function attachOnSignIn(
   binding: HostRuntimeBinding<HostRpcRegistry>,
   attachment: EpicAttachment,
@@ -219,8 +197,7 @@ async function attachOnSignIn(
  * chat continues on one of them: `epic.attachEnvironment@2.0` on the
  * person's own host prepares the task (a local create still on its way to
  * the cloud is waited for, with the host's refusals), then the app attaches
- * it on the person's own sign-in. Unsupported is left to the caller, which
- * continues as before.
+ * it on the person's own sign-in. Unsupported is left to the caller.
  * `surface` is what asked for it: the new-agent modal and the fork dialog
  * tell a refusal here, while `landing` tells its own, once it knows where the
  * message went.

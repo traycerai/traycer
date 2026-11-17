@@ -48,7 +48,6 @@ export interface MembersListMember {
   readonly invitedAddress: string | null;
 }
 
-/** A member's running work, as a team computer counted it. */
 export interface MemberWorkNow {
   readonly activeTurns: number;
   readonly terminals: number;
@@ -62,17 +61,15 @@ export interface MemberWorkNow {
 export interface RemovePreviewModel {
   /** authn's: the team's sandboxes that get a replacement sign-in. */
   readonly sandboxesToRekey: number;
-  /** Null when no team computer counted it. */
   readonly workNow: MemberWorkNow | null;
 }
 
-/** The removal confirm's read: still being read, read, or refused. */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
   | { readonly status: "failed" };
 
-/** The members read: a failed read is never shown as an empty team. */
+/** A failed read is never shown as an empty team. */
 export type MembersReadState = "loading" | "failed" | "ready";
 
 /**

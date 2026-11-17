@@ -163,20 +163,14 @@ function hostTokenOf(value: unknown): HostToken {
 }
 
 /**
- * Main's host-only tokens, reached by every window. Main mints with its own
- * verified copy of the sign-in, coalesced per person, host and refresh, so no
- * channel here carries a sign-in token; each change goes to every window with
- * the host token, and a sign-out removes that person's tokens.
+ * Main mints with its own verified copy of the sign-in, coalesced per person, host
+ * and refresh, so no channel here carries a sign-in token.
  */
 function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   const tokens = bridge.hostTokens;
-  // A window asks for renewal as its sign-in refreshes, and can ask before
-  // the refreshed sign-in reaches this process. Then nothing is minted now and
-  // the ask is answered on this process's next sign-in change: one waiting
-  // ask per person, replaced by a newer one, which answers the older ask
-  // `already-current`.
-  // The ask keeps the era it was made in: one from before a sign-out is
-  // answered `superseded`, and never mints in the era after it.
+  // A window may ask before its refreshed sign-in reaches main: the ask then waits for
+  // main's next sign-in change, one per person, a newer one answering the older
+  // `already-current`. One from before a sign-out answers `superseded` and never mints.
   const waitingRenewals = new Map<string, () => void>();
   const renewOnNextSignIn = (
     userId: string,
@@ -209,10 +203,8 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   bridge.disposeFns.push(() => {
     for (const stop of Array.from(waitingRenewals.values())) stop();
   });
-  // Main's era is the only one: a window reads it here, and every write a
-  // window asks for names the era it began in. Each handler compares that era
-  // and starts the source's work in one step, and the source reads its own era
-  // as that work starts, so nothing begun in an earlier era is kept.
+  // Each handler compares the era a window names and starts the source's work in one
+  // step, so nothing begun in an earlier era is kept.
   bridge.handleSync(RunnerHostSync.hostTokensEra, (_event, userId: unknown) => {
     assertString(userId, "hostTokensEra.userId");
     return tokens.era(userId);
@@ -370,9 +362,8 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
  * happens only inside `tokenStore.rotate`, under the file lock.
  */
 /**
- * The sandbox control plane, the team environment, the secret decisions and
- * the executable-write grant: the IPC the gui-app's sandbox, environment and
- * bot surfaces call.
+ * The sandbox control plane, the team environment and the secret decisions:
+ * the IPC the gui-app's sandbox, environment and bot surfaces call.
  */
 function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   // The sandbox control plane. traycer-server's base URL is read from the
@@ -763,8 +754,7 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // A bot's settings, on the same server and with the same proxy token, sent
-  // through the transport that follows no redirect.
+  // The same server and proxy token, through the transport that follows no redirect.
   bridge.handleInvoke(
     RunnerHostInvoke.updateBotRunSettings,
     async (_event, bearerToken: unknown, request: unknown) => {

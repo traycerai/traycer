@@ -34,8 +34,7 @@ const createEpic = vi.hoisted(() =>
 const PLACEMENT_CLIENT = vi.hoisted(() => ({
   hostId: "host-test",
   getActiveHostId: () => "host-test",
-  // Absent from the dialable check: returning undefined skips it. The actions
-  // hook still calls the method, so it has to exist.
+  // Returning undefined skips the dialable check; the actions hook still calls it.
   getActiveHost: () => undefined,
 }));
 

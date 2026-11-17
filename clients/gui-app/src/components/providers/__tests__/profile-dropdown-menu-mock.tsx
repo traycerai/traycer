@@ -1,9 +1,6 @@
 import type { KeyboardEvent, ReactNode } from "react";
 
-/**
- * Radix menus do not open from a click in jsdom. The established passthrough
- * in `profile-dropdown.test.tsx` keeps every row in the document.
- */
+// Radix menus do not open from a click in jsdom.
 export function profileDropdownMenuMock(): {
   readonly DropdownMenu: (props: {
     readonly children: ReactNode;

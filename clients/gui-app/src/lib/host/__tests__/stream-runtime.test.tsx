@@ -110,9 +110,7 @@ vi.mock(
   },
 );
 
-// The release floor is "0.0.0" (it admits every host), so a row can only fall
-// below it where a case raises it. A getter, not a constant, so every case
-// that does not raise it keeps the real floor.
+// A getter, so every case that does not raise the floor keeps the real "0.0.0".
 const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
 
 vi.mock(
@@ -1049,9 +1047,7 @@ describe("HostStreamProvider", () => {
     expect(first).toBeInstanceOf(RemoteStreamClient);
     expect(reconnectSpy).not.toHaveBeenCalled();
 
-    // Only the owner moves: same host, user, key, relay and version. The
-    // client is kept, and its stream re-dials at once, so the host judges a
-    // fresh open against the computer's new owner.
+    // Only the owner moves: the client is kept, and its stream re-dials so the host judges the new owner.
     act(() => {
       directory.publish([team]);
     });
@@ -1063,8 +1059,6 @@ describe("HostStreamProvider", () => {
       wakeProbe: null,
     });
 
-    // The same owner again, then renamed: whose computer it is has not
-    // changed, so nothing re-dials.
     act(() => {
       directory.publish([{ ...team }]);
     });

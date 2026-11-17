@@ -48,11 +48,7 @@ import {
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 
-/**
- * The host methods whose reads and writes the app now makes itself, on the
- * person's sign-in, through authn's environment routes. Each answers the
- * protocol's response for that method, so a screen keeps its data contract.
- */
+/** Each answers the protocol's response for that method, so a screen keeps its data contract. */
 export type EnvironmentCloudMethod =
   | "environment.configuration.revision"
   | "environment.configuration.items"
@@ -96,11 +92,7 @@ type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
   request: RequestOfMethod<HostRpcRegistry, Method>,
 ) => Promise<EnvironmentCloudResponse<Method>>;
 
-/**
- * A secrets request names its environment for the app to send it to authn. A
- * null one names none (a computer that runs none, or one not yet told apart),
- * and is refused here, unsent, as a host with no environment refused it.
- */
+/** A null environment is refused here, unsent, as a host with no environment refused it. */
 function namedEnvironment(environmentId: string | null): string {
   if (environmentId === null) {
     throw new EnvironmentCloudError("invalid", SETTINGS_REFUSED_MESSAGE);
@@ -154,8 +146,7 @@ const CALLS: {
     readSecretVersions(cloud, namedEnvironment(request.environmentId), request),
   "environment.secrets.undo": (cloud, request) =>
     undoSecretVersion(cloud, namedEnvironment(request.environmentId), request),
-  // The latest version may remove a secret's current version, as the host
-  // allows on @1.1.
+  // The latest version may remove a secret's current version, as the host allows on @1.1.
   "environment.secrets.destroy": (cloud, request) =>
     destroySecretVersion(
       cloud,
@@ -169,10 +160,7 @@ const CALLS: {
     consentToSecret(cloud, namedEnvironment(request.environmentId), request),
 };
 
-/**
- * The code a host gave the same failure when it forwarded the call, so a
- * screen's existing handling (its toast, its inline line) reads it unchanged.
- */
+/** The code a host gave the same failure, so a screen's existing handling reads it unchanged. */
 const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "E_ROLE_FORBIDDEN",
@@ -183,7 +171,6 @@ const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
   no_response: "RPC_ERROR",
 };
 
-/** An environment call's failure as the `HostRpcError` the screen reads. */
 export function environmentCloudHostError(
   method: string,
   error: unknown,
@@ -199,18 +186,14 @@ export function environmentCloudHostError(
 }
 
 /**
- * One operation's sender. Every request it sends goes on the sign-in that was
- * current when the operation began, so an operation of several requests
- * never finishes on the next person's sign-in. Failures are the
- * `HostRpcError` a host gave; with no session service each request fails as a
- * host with no client does.
+ * Every request goes on the sign-in current when the operation began, so a
+ * multi-request operation never finishes on the next person's sign-in.
  */
 export type EnvironmentCloudSend = <Method extends EnvironmentCloudMethod>(
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
 ) => Promise<EnvironmentCloudResponse<Method>>;
 
-/** One moved method, sent on the person's sign-in. */
 export async function callEnvironmentCloud<
   Method extends EnvironmentCloudMethod,
 >(

@@ -4,20 +4,10 @@ import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useHostClient } from "@/lib/host";
 
-/**
- * Whose computer the surface's host is: a team's (a remote team row that is
- * not a sandbox, or this machine when the registry says it is a team's, the
- * person reaching it as a member, never as its owner), not a team's, or not
- * known yet: this machine while the registry has not answered, pending or
- * failed with no earlier answer.
- */
+/** `unknown` while the registry has not answered, pending or failed with no earlier answer. */
 export type WindowHostOwnership = "team" | "not-team" | "unknown";
 
-/**
- * Personal is never changed through a team's computer, and a call the
- * computer cannot check the caller's seat for is not offered through one;
- * a caller treats `unknown` as it treats `team` until the registry answers.
- */
+/** Callers treat `unknown` as `team` until the registry answers. */
 export function useWindowHostOwnership(): WindowHostOwnership {
   const client = useHostClient();
   const registered = useRegisteredHosts();

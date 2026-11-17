@@ -656,9 +656,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     await waitFor(() => {
       expect(host.paramsOf("host.remoteAccess.set")).toEqual([{}]);
     });
-    // The host took the Off, and its status read can still say `on` for a
-    // poll or two: the section says "turning off" from the taken Off, not
-    // from that read.
+    // The status read can still say `on` for a poll or two after the host took the Off.
     await waitFor(() => {
       expect(screen.getByTestId("remote-access-state").textContent).toBe(
         "Turning off. Other devices and agents are being disconnected.",

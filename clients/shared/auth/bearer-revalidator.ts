@@ -31,10 +31,6 @@ export interface AuthorityBoundAuthRevalidator {
   ): Promise<RevalidateOutcome | "superseded">;
 }
 
-/**
- * A unary revalidator that also reads the host's refusal it recovers from.
- * Optional on purpose: a revalidator for the sign-in token has no use for it.
- */
 export interface RefusalAwareAuthRevalidator extends AuthorityBoundAuthRevalidator {
   revalidateRefusedBearer(
     expected: OpenFrameBearerSource,
@@ -96,22 +92,11 @@ export type RevalidateOutcome =
  */
 export interface StreamAuthRevalidator {
   revalidateForReconnect(): Promise<RevalidateOutcome>;
-  /**
-   * Recovery from the host's own refusal. Every app revalidator implements
-   * it. Optional only because the CLI's revalidator
-   * (`traycer-cli/src/host/credential-provisioning.ts`) and its test's five
-   * bare calls predate it; it becomes required when the CLI moves to the
-   * host-only token.
-   */
   readonly revalidateRefused?: (
     refusal: FatalErrorDetails,
   ) => Promise<RevalidateOutcome>;
 }
 
-/**
- * Recovers through `auth`: from the host's refusal when there is one and
- * `auth` reads it, else as a renewal of a credential known to have run out.
- */
 export function revalidateStream(
   auth: StreamAuthRevalidator,
   refusal: FatalErrorDetails | null,

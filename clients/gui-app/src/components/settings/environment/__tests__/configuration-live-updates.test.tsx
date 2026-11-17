@@ -88,7 +88,6 @@ import {
 const POLL_MS = 5_000;
 const HOST_ID = mockLocalHostEntry.hostId;
 
-/** A host manifest that predates the revision method. */
 const ADVERTISED_BASE = {
   "environment.configuration.items": { major: 1, minor: 0 },
   "environment.secrets.list": { major: 1, minor: 0 },
@@ -154,9 +153,7 @@ interface World {
   versions: SecretVersion[];
   /** While set, reads of the items answer when it resolves. */
   heldItems: Deferred<{ items: EnvironmentConfigurationItem[] }> | null;
-  /** While set, reads of the secret list answer when it resolves. */
   heldSecrets: Deferred<SecretList> | null;
-  /** While set, item writes answer when it resolves. */
   heldWrite: Deferred<EnvironmentConfigurationItemWriteResponse> | null;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
 }
@@ -730,7 +727,6 @@ describe("returning to an earlier secret version", () => {
 });
 
 describe("a Variables page while its own write is in flight", () => {
-  /** Holds authn's answer to the write, apart from the read that observes it. */
   function holdWrite(
     world: World,
   ): Deferred<EnvironmentConfigurationItemWriteResponse> {

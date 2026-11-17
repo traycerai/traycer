@@ -39,12 +39,8 @@ import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinato
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Called just before a save is sent, with the host it is sent on and the
- * origin captured at the public press: remembers what the host save will
- * propose, so the app applies its own hold. A save sent on any host but the
- * requester's own is not followed. Once the sign-in it was pressed on has
- * ended, by a switch or by signing in again as the same person, the save is
- * not sent.
+ * Remembers what the host save will propose, so the app applies its own hold. Not
+ * followed on any host but the requester's; not sent once the pressed sign-in ended.
  */
 export type PrepareSettingsSave = (
   save: SettingsSave,
@@ -52,7 +48,6 @@ export type PrepareSettingsSave = (
   origin: SettingsSaveOrigin,
 ) => Promise<PendingSettingsSave>;
 
-/** Who is signed in now, as {@link useCloudChatViewerId} names them. */
 function signedInViewer(): string {
   return useAuthStore.getState().contextMetadata?.userId ?? "";
 }
@@ -63,12 +58,8 @@ const NOTHING_TO_FOLLOW: PendingSettingsSave = {
   failed: () => undefined,
 };
 
-/**
- * Read once per editor session and kept: the revision the person edits over
- * is the one read when the editor opened, so a newer value from another
- * device makes the hold a conflict that waits in the review list. Only the
- * session's own applied saves move it ({@link keepOwnWrite}).
- */
+// The revision edited over is the one read when the editor opened, so a newer value
+// from elsewhere makes the hold a conflict in the review list.
 const EDIT_BASE_READ = {
   staleTime: Number.POSITIVE_INFINITY,
   refetchOnWindowFocus: false,
@@ -76,7 +67,6 @@ const EDIT_BASE_READ = {
   retry: false,
 } as const;
 
-/** Whose base reads, in which environment and editor session. */
 interface EditBaseScope {
   readonly source: EnvironmentCloudSource | null;
   readonly environmentId: string;
@@ -84,11 +74,7 @@ interface EditBaseScope {
   readonly session: string;
 }
 
-/**
- * `read` on one sign-in of the viewer `base` names, for that viewer's cache:
- * a read begun once anyone else is signed in, or answered after the sign-in
- * it went out on ended, throws, and nothing is cached.
- */
+/** A read begun once anyone else is signed in, or answered after its sign-in ended, throws and caches nothing. */
 async function readForViewer<T>(
   source: EnvironmentCloudSource,
   viewerId: string,
@@ -105,7 +91,6 @@ async function readForViewer<T>(
   return answer;
 }
 
-/** authn's listing of the host a save is made on. */
 function saveHostQuery(base: EditBaseScope, hostId: string) {
   const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names; adding it
@@ -129,7 +114,6 @@ function saveHostQuery(base: EditBaseScope, hostId: string) {
   });
 }
 
-/** authn's rows of `kind`, as the person's edit is made over them. */
 function saveItemsQuery(base: EditBaseScope, kind: string) {
   const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names.
@@ -152,7 +136,6 @@ function saveItemsQuery(base: EditBaseScope, kind: string) {
   });
 }
 
-/** The row a per-OS edit writes, or a kind's one row. */
 function liveRowAt(
   rows: readonly AuthnItemRow[],
   os: EnvironmentOs | null,
@@ -169,23 +152,13 @@ interface SaveScope {
   readonly environmentId: string;
   readonly hostId: string;
   readonly viewerId: string;
-  /** The editor session whose base reads a save is made over. */
   readonly session: string;
   readonly ledger: SaveLedger;
 }
 
-/**
- * The order of an editor session's saves, as the person made them, and per
- * row the latest of them whose write moved the base. A delete is ordered the
- * same way as a put: an absent row says nothing of which save removed it.
- */
+/** A delete is ordered as a put: an absent row says nothing of which save removed it. */
 interface SaveLedger {
-  /** The next save's place. */
   readonly take: () => number;
-  /**
-   * Whether the save at `order` may move the base of `address`: no later save
-   * of the session moved it already. Records it when it may.
-   */
   readonly publish: (address: string, order: number) => boolean;
 }
 
@@ -202,12 +175,10 @@ function createSaveLedger(): SaveLedger {
   };
 }
 
-/** The row `edit` writes, as the ledger names it. */
 function rowAddress(edit: SettingsItemEdit): string {
   return JSON.stringify([edit.kind, edit.key, edit.os]);
 }
 
-/** Whether `row`, authn's row at `edit`'s address, is what `edit` wrote. */
 function isOwnWrite(row: AuthnItemRow | null, edit: SettingsItemEdit): boolean {
   if (edit.operation === "delete") return row === null;
   if (row === null) return false;
@@ -217,7 +188,6 @@ function isOwnWrite(row: AuthnItemRow | null, edit: SettingsItemEdit): boolean {
   );
 }
 
-/** `rows` with `edit`'s row as authn now holds it, `row`. */
 function withOwnWrite(
   rows: readonly AuthnItemRow[],
   edit: SettingsItemEdit,
@@ -232,15 +202,9 @@ function withOwnWrite(
 }
 
 /**
- * Once this window has applied a save of this session's own hold, moves the
- * base of its row to the row authn holds, when that row is still the one the
- * save wrote: the person has seen their own write, and their next edit is
- * made over it. Neither the send nor a reconcile that leaves the save queued
- * moves it. A row anyone else wrote leaves the base where the person last saw
- * it, whether the next edit began before this apply or after, so that edit
- * waits in the review list against the change instead of overwriting it. A
- * save whose read answers after a later save of this session moved the base
- * of the same row leaves it there.
+ * Only a row this session's own applied save wrote moves the base; a row anyone
+ * else wrote leaves it, so the next edit waits in review. A read answered after a
+ * later save moved the same row's base leaves it there.
  */
 async function keepOwnWrite(
   scope: SaveScope,
@@ -249,8 +213,7 @@ async function keepOwnWrite(
 ): Promise<void> {
   const { queryClient, environmentId, ledger } = scope;
   const { cloud, order } = operation;
-  // `cloud` is the sign-in the save was made on: a read on any later one is
-  // another person's view of the row.
+  // A read on any later sign-in is another person's view of the row.
   if (!cloud.onOriginSignIn()) return;
   const rows = await readSettingsItemRows(cloud, environmentId, edit.kind);
   const row =
@@ -265,18 +228,11 @@ async function keepOwnWrite(
   );
 }
 
-/** One save of an editor session, from its preparation to its apply. */
 interface SaveOperation {
-  /** The sign-in the save was pressed on. */
   readonly cloud: EnvironmentCloud;
-  /** Its place among the session's saves ({@link SaveLedger}). */
   readonly order: number;
 }
 
-/**
- * Remembers `save`, made for `accountId`, if it maps to a proposal; answers
- * how to follow it.
- */
 async function followSave(
   scope: SaveScope,
   operation: SaveOperation,
@@ -338,10 +294,6 @@ async function followSave(
   };
 }
 
-/**
- * Where the saves on `client`'s host are remembered, with authn's rows of
- * `kinds` read when each editor session begins; null while that is not known.
- */
 function useSaveScope(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
@@ -412,12 +364,8 @@ function useSaveScope(
 }
 
 /**
- * The save preparation for the host behind `client`, the requester the
- * caller sends its saves on. `kinds` are the item kinds the caller's saves
- * write, a constant of the caller's module; their rows are read from authn
- * when the editor opens. A host in no environment, a host authn does not
- * list, or a read that fails remembers nothing: the save still goes to the
- * host, and its hold waits for one click.
+ * A host in no environment, one authn does not list, or a failed read remembers
+ * nothing: the save still goes, and its hold waits for one click.
  */
 export function useSettingsSave(
   client: HostClient<HostRpcRegistry> | null,
@@ -438,9 +386,7 @@ export function useSettingsSave(
         return { kind: "abandoned", method: save.method };
       }
       if (scope === null) return NOTHING_TO_FOLLOW;
-      // The editor, and whatever the caller read from authn for this save,
-      // belong to `scope.viewerId`: a save prepared once anyone else is
-      // signed in is not sent, wherever it was going.
+      // A save prepared once anyone else is signed in is not sent.
       const isEditorsAccount = (): boolean =>
         signedInViewer() === scope.viewerId;
       if (!isEditorsAccount()) {
@@ -466,8 +412,7 @@ export function useSettingsSave(
       ) {
         return pending;
       }
-      // Pressed on a sign-in that has ended: it is not sent, and its record,
-      // if remembered in that account's memory, is not out.
+      // Pressed on a sign-in that has ended: not sent, and its remembered record is not out.
       if (pending.kind === "send") pending.failed();
       return { kind: "abandoned", method: save.method };
     },
@@ -475,15 +420,9 @@ export function useSettingsSave(
   );
 }
 
-/**
- * Whether the environment holds exactly one `kind` item keyed `key`, as authn
- * lists it on the person's sign-in. False when the host is in no environment,
- * or the read fails. A host may say which item to look for, never that it
- * exists.
- */
+/** A host may say which item to look for, never that it exists. */
 export type SettingsItemExists = (key: string) => Promise<boolean>;
 
-/** {@link SettingsItemExists} for `kind`, over the host behind `client`. */
 export function useSettingsItemExists(
   client: HostClient<HostRpcRegistry> | null,
   kind: string,

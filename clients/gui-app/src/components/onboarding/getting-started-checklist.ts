@@ -184,8 +184,6 @@ export function useGettingStartedFacts(): GettingStartedFacts {
     enabled: client !== null,
     subscribed: true,
   });
-  // The secrets of the environment the window's host runs, read from authn
-  // on the person's sign-in.
   const ownEnvironment = useHostOwnEnvironment(client, hostId, true);
   const secrets = useEnvironmentCloudQuery({
     method: "environment.secrets.list",

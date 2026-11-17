@@ -1,12 +1,5 @@
-/**
- * The environment list as the app reads it itself: traycer-server's directory
- * (the rows the shell's `listEnvironments` answers) joined with authn's reads
- * on the person's sign-in, by the protocol's one combining function
- * (`enrichConfigurationList`), as the host's `environment.list` joined them.
- *
- * Each authn read is parsed for the one field the join reads, and nothing
- * else: a host's `purgePending`, and the viewer's effective role.
- */
+// Each authn read parses only the field the join reads: a host's `purgePending`
+// and the viewer's role.
 import { z } from "zod";
 import {
   enrichConfigurationList,
@@ -39,16 +32,11 @@ const viewerRoleSchema = z.object({
   }),
 });
 
-/** A team the signed-in person belongs to, as their account names it. */
 export interface EnvironmentListTeam {
   readonly id: string;
   readonly slug: string;
 }
 
-/**
- * The directory's rows, or its failure as the caller's error, in the words a
- * settings call gives the same outcome.
- */
 export function environmentDirectoryRows(
   result: EnvironmentDirectoryResult,
 ): readonly EnvironmentDescriptor[] {
@@ -88,8 +76,8 @@ export function readEnvironmentList(
         hostReportsSchema,
       ).hosts,
     team: async (environment) => {
-      // Organization routes name a team by its slug, from the person's own
-      // account, never by the environment's id or its label.
+      // Organization routes name a team by its slug from the person's own account,
+      // never the environment's id or label.
       const team = teams.find((row) => row.id === environment.ownerId);
       if (team === undefined) {
         throw new EnvironmentCloudError("invalid", "This team is unavailable.");

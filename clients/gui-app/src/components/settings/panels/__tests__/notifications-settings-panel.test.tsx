@@ -438,8 +438,6 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
   });
 
-  // The tab's caller owns host scoping; render the real gate around the
-  // computer panel so these cases exercise its hidden Activity lifecycle.
   function renderScopedPanel(): {
     readonly client: HostClient<HostRpcRegistry>;
     readonly rerender: () => void;

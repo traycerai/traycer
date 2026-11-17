@@ -932,11 +932,7 @@ function UnstartedAutomationsRow(props: {
   );
 }
 
-/**
- * Whose credits a row speaks of: a team page's own team, or on Personal the
- * row's own reading. A row with no creator and no environment id is listed on
- * Personal, but who pays for it is not known (`null`).
- */
+/** A row with no creator and no environment id is listed on Personal, but its payer is unknown (`null`). */
 function useRowCredits(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
@@ -947,11 +943,7 @@ function useRowCredits(
     : sandboxConfigurationOf(summary, configurations);
 }
 
-/**
- * A frozen row's cause line, and whether its primary offers "Add credits":
- * Personal always, a team's only to the team's Admin. Neither while whose
- * sandbox it is is not known.
- */
+/** Add credits: Personal always, a team's only to its Admin; neither while ownership is unknown. */
 function useFrozenRowFacts(
   summary: SandboxSummary,
   credits: SandboxPageConfiguration | null,

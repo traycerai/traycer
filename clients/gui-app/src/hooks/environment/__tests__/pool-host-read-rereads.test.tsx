@@ -36,14 +36,11 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
 const REMOTE_HOST_ID = mockRemoteHostEntry.hostId;
 
-// A personal page reads its hosts from the host list; this window's own host
-// scope has no hosts here (the same stand-in as `team-page-frame-rereads`).
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { noHostsScopeModule } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return noHostsScopeModule();
 });
-// The runtime client and the client lookup by host id answer the harness's host.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -199,7 +196,6 @@ const SECRET_READS = [
   "environment.secrets.rotation",
 ] as const;
 
-/** How many times authn has been asked each secrets read. */
 function secretReadCounts(harness: TeamPageHarness): Record<string, number> {
   return Object.fromEntries(
     SECRET_READS.map((method) => [method, harness.paramsOf(method).length]),

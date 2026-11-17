@@ -263,10 +263,8 @@ export function useFallbackProfileLabels(
 }
 
 /**
- * An alias (`aliases`, `providers.list@10.11`) names the account of the row it
- * resolves to, so a chat pinned to a folded id shows that account's name and
- * not a prefix of its old id. An id two rows list, as aliases or as one row's
- * own id and another's alias, resolves to no row and keeps the prefix.
+ * An alias names the account of the row it resolves to; an id two rows list
+ * resolves to no row and keeps the prefix.
  */
 function withAliasLabels(
   list: ResponseOfMethod<HostRpcRegistry, "providers.list">,

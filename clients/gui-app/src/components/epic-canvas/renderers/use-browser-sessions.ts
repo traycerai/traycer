@@ -120,9 +120,7 @@ export function useBrowserSessions(
   );
   const ownerCoordinatorKey =
     owner === null ? null : browserSessionsCoordinatorKey(scope, owner);
-  // A held coordinator outlives a null transport key while its stream
-  // re-dials, but not a row below the version floor: an older host cannot own
-  // the stream.
+  // Not across a row below the version floor: an older host cannot own the stream.
   const coordinatorKey =
     ownerCoordinatorKey !== null &&
     (hostEntry === null ||

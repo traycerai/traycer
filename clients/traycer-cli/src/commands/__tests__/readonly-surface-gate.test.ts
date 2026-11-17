@@ -394,9 +394,6 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
           });
           return;
         }
-        // The full-surface route reaches its real consumer boundary rather
-        // than the readonly refusal. Agent commands consult the real session
-        // credential reader; other commands reach ordinary host auth.
         expect(thrown).not.toBeNull();
         expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
         if (commandPath.startsWith("agent ")) {

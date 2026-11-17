@@ -6,8 +6,7 @@ import { AddCreditsLink } from "@/components/composer/consequences-block";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-// The one case that runs the link over a real host runtime, so the file does
-// not replace the runner host the way `add-credits-link.test.tsx` does.
+// Runs over a real host runtime, so the runner host is not replaced.
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn<(url: string, kind: string) => void>(),
 }));
@@ -41,8 +40,6 @@ describe("<AddCreditsLink /> for a team's Admin", () => {
         hostId="billing-host"
         queryClient={undefined}
         onBinding={(binding) => {
-          // The team is the person's own: its environment, and its place in
-          // their account, which the billing page's address is built from.
           vi.spyOn(binding.auth, "getTeamEnvironment").mockResolvedValue({
             kind: "ok",
             environmentId: "env-pool",

@@ -19,9 +19,7 @@ const WRITE_FAILED_LINE = "Couldn't update Slack settings. Try again.";
 
 const SIGNED_OUT: SlackAppFailure = { kind: "unauthorized" };
 
-// Every write here answers `null` when the sign-in it was pressed under ended
-// before the server answered (`pressSignIn`): an abandoned write refreshes
-// nothing, starts no install wait and says nothing.
+// `null` when the pressed sign-in ended before the answer: nothing is refreshed or said.
 
 /** The bot's app read, refreshed after a write: the panel renders from it, never from the write's answer. */
 function useInvalidateBotSlackApp(botId: string): () => Promise<void> {

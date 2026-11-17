@@ -282,10 +282,7 @@ export type LinkLoginSignInResult =
  */
 const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
 
-/**
- * Who chose a write, and {@link AuthService.getIdentityGeneration} then, so a
- * write sent later can tell an ended sign-in from a refreshed token.
- */
+/** So a write sent later can tell an ended sign-in from a refreshed token. */
 export interface ChosenSignIn {
   readonly identityGeneration: number;
   readonly userId: string | null;
@@ -3249,21 +3246,18 @@ export class AuthService
     return result;
   }
 
-  /** The signed-in person's environments, from traycer-server's directory. */
   async listEnvironments(): Promise<EnvironmentDirectoryResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.listEnvironments(bearer);
   }
 
-  /** Saves the account's auto-approve policy on traycer-server, on the signed-in person's bearer. */
   async saveAutoPolicy(body: string): Promise<AutoPolicySaveResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.saveAutoPolicy(bearer, body);
   }
 
-  /** Attaches a task to a team's environment on traycer-server, on the signed-in person's bearer. */
   async attachTaskEnvironment(
     request: TaskEnvironmentAttachmentRequest,
   ): Promise<TaskEnvironmentAttachmentResult> {
@@ -3367,12 +3361,7 @@ export class AuthService
     return this.runnerHost.getSandboxCatalogue(bearer, context);
   }
 
-  /**
-   * A team's chat auto-archive setting on traycer-server, on the sign-in
-   * `era` names. A build that cannot reach traycer-server reads it as a
-   * failure; an era that is no longer the live one throws
-   * {@link SupersededAuthEraError}, before the request or after its answer.
-   */
+  /** An era no longer live throws {@link SupersededAuthEraError}, before the request or after its answer. */
   async getTeamChatAutoArchive(
     teamId: string,
     era: AuthEra,
@@ -3387,7 +3376,6 @@ export class AuthService
     return result;
   }
 
-  /** The sign-in a write is chosen under, read at the press. */
   chosenSignIn(): ChosenSignIn {
     return {
       identityGeneration: this.identityGeneration,
@@ -3396,15 +3384,9 @@ export class AuthService
   }
 
   /**
-   * Saves a team's setting with the bearer of the sign-in that made the
-   * choice. A save queued behind another one is sent later, so `chosenBy` is
-   * read when the person chose. A sign-in that has ended since throws
-   * {@link SupersededAuthEraError} instead of sending it as someone else; a
-   * same-user token refresh has not ended it, and the save goes out with the
-   * refreshed token. The user check covers a switch projected from another
-   * window, which leaves the identity generation where it was; the profile
-   * is committed with the bearer (`commitLiveCredential`), so it names the
-   * bearer's owner.
+   * A sign-in that has ended throws instead of sending as someone else; a same-user
+   * refresh has not. The user check covers a switch projected from another window,
+   * which leaves the identity generation unchanged.
    */
   async setTeamChatAutoArchive(
     teamId: string,
@@ -3675,11 +3657,7 @@ export class AuthService
     );
   }
 
-  /**
-   * A bot's settings on traycer-server with the person's bearer: the app's
-   * own call, with no host in the path. Signed out, it answers `no_response`
-   * without a request, as an environment call does.
-   */
+  /** Signed out, it answers `no_response` without a request. */
   async updateBotRunSettings(
     request: BotUpdateRunSettingsRequest,
   ): Promise<BotSetupWriteResult> {
@@ -3727,11 +3705,7 @@ export class AuthService
     );
   }
 
-  /**
-   * Someone who is or was a member of `environmentId`, from authn: the name
-   * and picture of a member who has left, whom the member directory no
-   * longer lists.
-   */
+  /** Still names a member who has left, whom the directory no longer lists. */
   async readEnvironmentPerson(
     environmentId: string,
     userId: string,
@@ -3930,11 +3904,7 @@ export class AuthService
     );
   }
 
-  /**
-   * Records the person's sign-in request on a verified session. A 401 hands
-   * the session to the shared revalidator, which is what any refused session
-   * gets: it rotates, or signs out and says the session expired.
-   */
+  /** A 401 hands the session to the shared revalidator: it rotates, or signs out. */
   async recordSignInRequest(
     request: ProviderLoginSignInRequest,
     signal: AbortSignal,
@@ -6528,12 +6498,8 @@ export class AuthService
   }
 
   /**
-   * One operation's calls to authn's environment routes
-   * (`@traycer-clients/shared/environment`), on this session's verified
-   * bearer: the one `cloudBearer()` answers, asked at each call. The
-   * operation is bound to the sign-in current now, the person and the
-   * identity generation: after a sign-out or a sign-in, as anyone, it sends
-   * nothing more. A same-user refresh keeps it.
+   * The bearer is asked at each call; after a sign-out or a sign-in, as anyone, the
+   * operation sends nothing more. A same-user refresh keeps it.
    */
   environmentCloud(): EnvironmentCloud {
     const userId = this.currentProfile?.userId ?? null;

@@ -79,19 +79,11 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
-/**
- * What a write's own invalidation must answer within. The boundary's revision
- * poll ticks every 5 seconds from the page's mount and the write is made within
- * a second of the initial reads, so a read inside this bound cannot have come
- * from the poll: a write that dropped its own invalidation fails here.
- */
+// The revision poll ticks every 5 s from mount and the write is made within a
+// second, so a read inside this bound cannot be the poll's.
 const OWN_INVALIDATION_WAIT_MS = 2_000;
-/**
- * The boundary's revision poll interval. The file fakes the interval timers
- * and lets them follow real time, so the poll ticks when a case advances the
- * clock by this much, and on its own only after this long in real time, which
- * no case here runs.
- */
+// The fake interval timers follow real time, so the poll ticks only when a case
+// advances the clock this far.
 const REVISION_POLL_MS = 5_000;
 type SecretReadMethod = (typeof SECRET_READS)[number];
 type Rotation = EnvironmentSecretsRotationResponse["rotation"];
@@ -106,7 +98,6 @@ interface SecretHostState {
   versions: SecretVersion[];
   removal: EnvironmentSecretRemovalV12 | null;
   rotation: Rotation;
-  /** authn's configuration revision: it moves on every committed change. */
   revision: number;
 }
 
@@ -303,7 +294,6 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
-/** Keeps each of the team's secret reads, authn's own, observed while an action runs. */
 function SecretReadProbe(): ReactNode {
   const list = useSecretsRead({
     method: "environment.secrets.list",
@@ -370,8 +360,6 @@ function mountPage(
       hostName={(hostId) => hostId}
     />
   );
-  // The boundary Settings mounts every team page in: its revision hook is what
-  // re-reads the reads a committed change moved.
   render(
     <ConfigurationSourceBoundary
       section={null}
@@ -406,15 +394,8 @@ function readCounts(
   };
 }
 
-/**
- * More reads of each secret method reached authn, and none reached a host.
- * The write's own invalidation re-reads the list and the versions, and (a
- * create or a replace) the rotation, inside {@link OWN_INVALIDATION_WAIT_MS}.
- * A Remove, an Undo and a removal retry invalidate only the list and the
- * versions: their rotation is re-read when the committed change moves authn's
- * revision, which the boundary sees on its next poll, so the case advances the
- * clock by one poll interval.
- */
+// A Remove, an Undo and a removal retry re-read the rotation only when authn's
+// revision moves, which the boundary sees on its next poll.
 async function expectAuthnReadsAfter(
   harness: TeamPageHarness,
   before: Record<SecretReadMethod, number>,
@@ -477,10 +458,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  // Only the interval timers, which the revision poll runs on, and they follow
-  // real time: Testing Library's `waitFor` polls on the same global
-  // `setInterval`, so a frozen one would stop it re-checking. The 5 s poll
-  // still cannot tick inside a wait of a couple of seconds.
+  // Only the interval timers, following real time: `waitFor` polls on the same
+  // `setInterval`, so a frozen one would stop it re-checking.
   vi.useFakeTimers({
     toFake: ["setInterval", "clearInterval"],
     shouldAdvanceTime: true,

@@ -44,7 +44,6 @@ const noteHostMembershipChanged = vi.hoisted(() =>
   vi.fn<(hostId: string) => void>(),
 );
 
-/** What the claimed computer answers `environment.previewLocalFacts` with. */
 const previewLocalFacts = vi.hoisted(
   (): {
     answer: () => { activeTurns: number | null; terminals: number | null };
@@ -56,8 +55,6 @@ vi.mock("@/lib/host/local-admission-invalidation", () => ({
   noteHostMembershipChanged,
 }));
 
-// The claimed computer's own requester: a real one over the page's messenger,
-// so the count is answered by `environment.previewLocalFacts` there.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => {
     if (hostId === null) return requireTeamHostClient();
@@ -162,9 +159,6 @@ function mountSection(
     "environment.list": () => ({ environments }),
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
-  // The account's teams as the app has them at sign-in: the environment list
-  // joins each team's handle from them, and a team with no handle is not
-  // among them.
   useAuthStore.setState({
     shareableTeams: environments.flatMap((row) =>
       row.providerHandle === null

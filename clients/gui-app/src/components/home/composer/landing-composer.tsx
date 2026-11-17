@@ -502,9 +502,8 @@ export function LandingComposer(props: LandingComposerProps) {
             },
     });
   }, [authority, draftId, setDraftSettings, toolbarStore]);
-  // Nobody chose the account of an unbound page, or of a draft whose settings
-  // came from the host's last-run settings: its Terminal login starts on the
-  // default account. A draft whose account a person chose keeps it.
+  // A draft whose account a person chose keeps it; otherwise its Terminal login
+  // starts on the default account.
   const draftAccountFollowsDefault = useLandingDraftStore(
     (state) =>
       draftId === null ||

@@ -89,7 +89,6 @@ class RelaySocket implements StreamWebSocketLike {
   }
 }
 
-/** A minimal encrypted relay host for tests of the real RemoteSession path. */
 export class RemoteMuxTestPeer {
   readonly opens: Record<string, unknown>[] = [];
   readonly credentialUpdates: Record<string, unknown>[] = [];

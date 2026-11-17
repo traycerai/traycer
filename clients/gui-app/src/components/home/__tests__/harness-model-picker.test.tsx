@@ -182,7 +182,6 @@ function mockHostClientKey(client: MockHostClient): string {
   return client.id;
 }
 
-/** Includes `removedProfiles` only when the fixture set the 10.11 key. */
 function providersListEnvelope(providers: readonly ProviderCliState[]) {
   const removedProfiles = queryMock.removedProfiles;
   if (removedProfiles === undefined) {
@@ -203,8 +202,7 @@ const queryMock = vi.hoisted(() => ({
   catalogHarnessesLoading: false,
   modelsLoading: false,
   providerStates: [] as ProviderCliState[],
-  // `undefined` omits the envelope key, the way a 10.10 computer does.
-  // An array, including an empty one, is the 10.11 key.
+  // `undefined` omits the key, as a 10.10 computer does; an array is the 10.11 key.
   removedProfiles: undefined as
     | ReadonlyArray<{
         readonly providerId: string;
@@ -405,8 +403,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
       },
     };
   },
-  // No directory row, so a record that is this computer's Terminal login
-  // draws no computer name.
   useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
@@ -3934,7 +3930,7 @@ describe("<HarnessModelPicker />", () => {
     // migration; it used to read the app-wide default's `providers.list`
     // unconditionally). Claude can have profiles, so the account dropdown
     // and its "Add a profile" row render from one row; this fixture keeps
-    // two profiles so the row this test clicks is the same one as before.
+    // two profiles, the shape the clicks below are written against.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -3978,9 +3974,6 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    // Target host: no OAuth login capability. The rail's visible profiles
-    // resolve through `runTargetHostId`. Claude draws the dropdown from one
-    // row; this fixture keeps two profiles, matching the sibling above.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",

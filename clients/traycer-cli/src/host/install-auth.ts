@@ -66,26 +66,19 @@ import { config } from "../config";
 import { probeHostHealth } from "../service/health-probe";
 
 // Install, ensure and service-install share the sign-in pre-flight and the
-// advisory post-start credential probe. Ensure probes only when it actually
-// starts a host; a bytes-only install starts nothing and leaves that step to
-// the later explicit start.
+// post-start credential probe, run only when a host was started.
 //
-// Explicit starts and service cycles reuse the probe with stored sign-in only,
-// without prompting. The supervisor entrypoint excludes invocations carrying
-// existing service identity flags. Legacy unlabelled service starts cannot be
-// distinguished from a manual start and use the same stored-sign-in-only rule.
-// The host receives only its delegated credential; the person's sign-in stays
-// at the CLI's authn boundary. A host already reporting active is not reminted.
+// Explicit starts and service cycles probe on the stored sign-in alone, without
+// prompting. The host receives only its delegated credential; one already active
+// is not reminted.
 //
 // Without --team, a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
 // warns and continues, and so does a declined or failed sign-in. A later
 // `traycer login` can authorize the installed host without a reinstall.
-// An attended team install requires sign-in before staging. On a machine with
-// no host identity the sign-in mints the team's install token, which is staged
-// before the service starts so the host's first start is as the team's; on a
-// machine whose host is registered it authorizes the give. A piped install
-// token instead authorizes the host directly, without reading the CLI sign-in.
+// An attended team install signs in before staging: with no host identity the
+// sign-in mints the team's install token, staged before the first start; with a
+// registered host it authorizes the give. A piped token reads no CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a
 // short-lived stream connection carrying the CLI mint flow
@@ -505,16 +498,13 @@ function teamSlugFromSelector(team: string): string {
 const NOT_A_TEAM_YOU_BELONG_TO =
   "Enter the slug of a team you belong to, as shown in its dashboard address.";
 
-/** Printed once a new computer has enrolled as the team's. */
 export function teamEnrolmentConfirmation(slug: string): string {
   return `This computer belongs to ${slug}.`;
 }
 
 /**
- * An attended `--team` run, after its sign-in. A machine with no host identity
- * yet enrols as the team's with a token this run mints; a machine whose host
- * is already registered takes the give, because authn refuses a token for a
- * host it knows and the token path carries no consent.
+ * No host identity yet: enrol with a token this run mints. A registered host takes
+ * the give: authn refuses a token for a host it knows, and the token path asks no consent.
  */
 export type AttendedTeamInstall =
   | {
@@ -604,10 +594,8 @@ async function attendedTeamInstallAfterSignIn(
 }
 
 /**
- * The enrolment record is written once the host has registered, as a
- * person's or a team's. Only its proven absence picks the token path: an
- * unreadable record takes the give, which asks for consent, rather than a
- * token authn would refuse for a known host.
+ * Only the record's proven absence picks the token path: an unreadable record takes
+ * the give, which asks consent, not a token authn would refuse for a known host.
  */
 async function hostIdentityMayExist(
   environment: Environment,
@@ -625,16 +613,13 @@ async function hostIdentityMayExist(
 }
 
 /**
- * The team `team` names among the sign-in's own teams: by environment id,
- * else by slug, with or without a `team/` prefix, and exactly one. Reads the
- * sign-in at authn only, so a team install can check it before anything is
- * installed.
+ * By environment id, else by slug with or without `team/`, and exactly one. Reads
+ * the sign-in at authn only, so it runs before anything is installed.
  */
 export async function resolveSignInTeam(
   team: string,
 ): Promise<SignInEnvironment> {
   const selector = teamSlugFromSelector(team);
-  // The teams the sign-in's own record lists, labelled by slug.
   const teams = (await readSignInEnvironments()).filter(
     (environment) => environment.ownerKind === "organization",
   );
@@ -798,10 +783,8 @@ export async function useInstalledHostTeam(
 }
 
 /**
- * The give through the move. The typed command is the person's acceptance:
- * the computer stages the give, the acceptance is recorded at authn on this
- * command's sign-in, and the computer is handed it and moves and restarts
- * itself. Only the confirmed team binding is returned.
+ * The typed command is the person's acceptance: the computer stages the give, the
+ * acceptance is recorded at authn on this sign-in, and the computer moves and restarts.
  */
 async function giveInstalledHostToTeam(
   endpoint: HostTransportEndpoint,
@@ -891,11 +874,7 @@ async function giveInstalledHostToTeam(
   return binding;
 }
 
-/**
- * What a failed acceptance at authn prints: a sign-in authn rejected after the
- * adapter's one refresh is the CLI's rejected-credential line; every other
- * failure (no answer, a redirect, a 403, a 5xx) is the transfer line.
- */
+/** A sign-in rejected after the one refresh is the rejected-credential line; any other failure the transfer line. */
 function acceptanceFailure(
   error: EnvironmentCloudError,
   signInRejected: boolean,
@@ -906,12 +885,9 @@ function acceptanceFailure(
 }
 
 /**
- * Waits across the computer's restart, on the health probe's own budget and
- * cadence (each try reads the pid record again, so it reaches the restarted
- * host), until the computer is explicitly in the team's environment. The
- * status's `move` only ends the wait early, when it says this attempt needs
- * a person; a host may never fill it. Null when the attempt needs a person or
- * the budget ran out, including a give the computer completes after it.
+ * Across the restart, on the health probe's budget (each try rereads the pid record),
+ * until the computer is in the team's environment. `move` ends the wait early only
+ * when the attempt needs a person; null then, or when the budget runs out.
  */
 async function awaitGivenBinding(
   hostId: string,

@@ -149,24 +149,13 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
   }
 }
 
-/**
- * Who reads a failure: whether they can buy the sandbox's credits, and the
- * team's name if it is a team's. Where the app does not know whose sandbox it
- * is, nobody can buy and there is no name.
- */
+/** Where ownership is unknown, nobody can buy and there is no name. */
 export interface SandboxFailureReader {
   readonly buysTeamCredits: boolean;
   readonly teamName: string | null;
 }
 
-/**
- * A failure's sentence as its reader reads it. Someone who cannot buy the
- * credits is not told to add them: a refusal for want of the team's credits
- * reads its first sentence alone, and a sandbox refused for being out of
- * credits says whose bundle is out, or, with no team's name to give, only
- * that it is out of credits. Every other failure, and every one read by
- * someone who can buy, is `message`, the sentence its error carries.
- */
+/** Someone who cannot buy the credits is never told to add them. */
 export function sandboxFailureMessageFor(
   failure: SandboxControlFailure,
   message: string,

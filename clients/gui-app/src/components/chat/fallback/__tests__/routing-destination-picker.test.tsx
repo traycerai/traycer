@@ -1996,9 +1996,8 @@ describe("RoutingDestinationPicker", () => {
             return;
           }
           unsubscribe();
-          // MutationCache reports success before mutateAsync's promise
-          // continuation runs. Two queued microtasks place the test after the
-          // picker's attached .then handler has either retried or returned.
+          // MutationCache reports success before mutateAsync's continuation runs; two
+          // microtasks put the test after the picker's `.then` handler.
           queueMicrotask(() => queueMicrotask(() => resolve()));
         });
       });

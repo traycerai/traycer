@@ -12,16 +12,9 @@ import {
 } from "../ipc-contracts/host-token-types";
 
 /**
- * The renderer's view of main's host-only tokens: every read is answered from
- * a copy main keeps current through its change events, and every mint
- * happens in main, with the verified sign-in main already holds.
- *
- * The era is main's alone. `era` reads it from main, each entry of the copy
- * carries the era main stored it in, and a read returns an entry only in the
- * era main last reported for that person. Every request names the era its
- * work began in, and an answer from an era this window has left is dropped.
- * Forgetting a person empties their copy at once, and nothing of theirs is
- * taken in again until main has answered that forget.
+ * Reads come from a copy main keeps current; every mint happens in main. An entry
+ * is read only in the era main last reported for its person, and an answer from an
+ * era this window has left is dropped. A forget takes nothing in until main answers it.
  */
 export function createDesktopHostTokenSource(
   bridge: HostTokensBridgeSurface,
@@ -81,8 +74,6 @@ export function createDesktopHostTokenSource(
     learn(userId, era);
     return era;
   };
-  // The answer belongs to the era the work began in, and this window is
-  // still in it.
   const stillIn = (userId: string, began: number, answered: number): boolean =>
     !forgetting.has(userId) &&
     issued(answered) === began &&

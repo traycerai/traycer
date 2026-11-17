@@ -157,7 +157,6 @@ function renderGuide(): RenderResult {
   return mountGuide().view;
 }
 
-/** What authn's review answers as Personal's holds for this case. */
 const authnHolds = vi.hoisted(
   (): { current: readonly Record<string, unknown>[]; reads: number } => ({
     current: [],
@@ -165,7 +164,6 @@ const authnHolds = vi.hoisted(
   }),
 );
 
-/** The review entry as authn lists it: a hold for an executable entry, else a link to make. */
 function authnReviewEntry(
   entry: EnvironmentReviewEntryV12,
 ): Record<string, unknown> {
@@ -655,7 +653,6 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // invitation is not the setup reminder's other wording.
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
-    /** This computer's `environment.status` answers whatever `answer` holds. */
     function computerWhoseStatusChanges(
       answer: () => EnvironmentStatusResponseV13,
     ): void {

@@ -3325,13 +3325,8 @@ export const providersListUpgradeV109ToV1010 = defineUpgradePath<
 });
 
 /**
- * `providers.list@10.11` - on the profile row, `aliases`, `personNotice`,
- * `terminalOnThisComputer` and `otherNames`; on the envelope,
- * `removedProfiles`.
- *
- * A MINOR with no `responseGrowthProjectionGated`: new KEYS only, stripped for
- * an older peer by the within-major re-parse through the frozen 10.10
- * projection and envelope.
+ * `providers.list@10.11`: new keys only, stripped for an older peer by the re-parse
+ * through the frozen 10.10 projection and envelope, so no `responseGrowthProjectionGated`.
  */
 export const providersListV1011 = defineRpcContract({
   method: "providers.list",
@@ -3346,9 +3341,7 @@ export const providersListUpgradeV1010ToV1011 = defineUpgradePath<
   from: { major: 10, minor: 10 },
   to: { major: 10, minor: 11 },
   upgradeRequest: (request) => request,
-  // A host below 10.11 folds nothing and removes nothing from the list: every
-  // row is its own account with no other id, no notice and no other name, and
-  // its Terminal login is the ambient row.
+  // A host below 10.11 folds and removes nothing.
   upgradeResponse: (response) => ({
     ...response,
     providers: response.providers.map((provider) => ({
@@ -3365,11 +3358,7 @@ export const providersListUpgradeV1010ToV1011 = defineUpgradePath<
   }),
 });
 
-/**
- * `providers.list@10.12` - whether this computer offers sign-ins by itself
- * in a profile-sync environment. A new optional envelope key, stripped by
- * an older peer's frozen response parse; no value-growth gate is needed.
- */
+/** `providers.list@10.12`: a new optional envelope key an older peer's frozen parse strips. */
 export const providersListV1012 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 12 } as const,
@@ -5132,10 +5121,7 @@ export const providersAwaitLoginUpgradeV23ToV24 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, profileOutcome: null }),
 });
 
-// v2.5 carries the sign-in request a caller records at authn on the person's
-// own session (`signInRequest`, on an unfinished answer only) and the id the
-// caller recorded (`recordedOperationId`). A 2.4 computer never asks for a
-// recording, and a 2.4 caller never records one.
+// A 2.4 computer never asks for a recording, and a 2.4 caller never records one.
 export const providersAwaitLoginV25 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 5 } as const,
@@ -5444,12 +5430,8 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
 });
 
 /**
- * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
- * `intentOperationId`, and the result gains the seven codes only that arm
- * answers (`providerNativeMutateErrorCodeSchemaV15`). Its entry declares
- * `responseGrowthProjectionGated`, since the host never answers the seven to
- * a `@1.4` caller. A `@1.5` request to a `@1.4` host is
- * re-parsed onto `@1.4`, whose non-strict arm strips the key.
+ * `responseGrowthProjectionGated`: the seven codes never reach a `@1.4` caller. A
+ * `@1.5` request re-parses onto `@1.4`, whose non-strict arm strips the key.
  */
 export const providersNativeMutateV15 = defineRpcContract({
   method: "providers.nativeMutate",
@@ -5592,14 +5574,8 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   responseSchema: providersSetPackPolicyResponseSchema,
 });
 
-// ── The pack policy a pack save leaves ─────────────────────────────────────
-//
-// A save made in a host's settings is proposed to the host's environment, and
-// the app recognises its own hold by the `pack_policy` item it states it
-// expects (`policy`, read by `settingsSaveItemEdit`). A caller older than
-// these minors states no policy: the upgrade fills null.
-// A newer request to an older host is re-parsed onto the older request,
-// whose non-strict object strips the key.
+// Pack policy: an older caller states none (the upgrade fills null); a newer request
+// to an older host re-parses onto it, whose non-strict object strips the key.
 
 export const providersUsePackVersionV12 = defineRpcContract({
   method: "providers.usePackVersion",
@@ -5930,11 +5906,8 @@ export const providersSignOutProfileV10 = defineRpcContract({
 });
 
 /**
- * Set an account's name everywhere and clear its other names (the row's
- * `otherNames`, `providers.list@10.11`). A new name at `@1.0`, registered
- * `degrade: unsupported` and off the released floor, so a host that predates
- * it refuses this call alone and the handshake with a released peer is
- * unchanged.
+ * Off the released floor (`degrade: unsupported`): an older host refuses this call
+ * alone, and the handshake with a released peer is unchanged.
  */
 export const providersAnswerProfileNameV10 = defineRpcContract({
   method: "providers.answerProfileName",
@@ -6001,11 +5974,8 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
-// v2.2 names the environment profile a rename or recolor is for
-// (`environmentProfileId`), so the app can state the `managed_profile` item
-// it expects and recognise its own hold. A 2.1 caller names none: the upgrade fills null, and the app expects no proposal. A 2.2
-// request to a 2.1 host is re-parsed onto the 2.1 request, whose non-strict
-// action objects strip the key. The response is unchanged.
+// A 2.1 caller names no environment profile: the upgrade fills null and the app
+// expects no proposal. A 2.2 request re-parses onto 2.1, whose actions strip the key.
 export const providersSetEnabledV22 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 2, minor: 2 } as const,
@@ -6042,10 +6012,8 @@ export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Bridges from v2.1 down to the frozen v1.0. Used directly by
-// `provider-profiles-compat.test.ts` to assert `profileAction` never reaches a
-// v1.0 caller; the registered `downgradePathsFromLatest` bridge is
-// `providersSetEnabledDowngradeV22ToV10` below.
+// Used directly by `provider-profiles-compat.test.ts`; the registered bridge is
+// `providersSetEnabledDowngradeV22ToV10`.
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
   typeof providersSetEnabledV21,
   typeof providersSetEnabledV10
@@ -6096,9 +6064,7 @@ export const providersSetEnabledDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-// The bridge major 2 registers from its latest minor to the frozen 1.0. 1.0
-// knows no profile action, so only `providerId` and `enabled` cross; v1.0's
-// strict request would refuse the whole call over any other key.
+// 1.0's strict request refuses any key but `providerId` and `enabled`.
 export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnabledV22,
   typeof providersSetEnabledV10
@@ -6122,11 +6088,8 @@ export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
   },
 });
 
-// The only `providers.setEnabled@2.2` any build carries is the one above. An
-// earlier 2.2 that carried an optional tri-state `mode` was withdrawn before
-// any release, so no released peer negotiates a different 2.2. A
-// `downgradePathsFromLatest` bridge starts at its line's latest minor, so a
-// new minor of major 2 brings its own bridge down to v1.0.
+// An earlier 2.2 with a `mode` was withdrawn before release, so no peer negotiates
+// another 2.2. A new minor of major 2 brings its own bridge down to v1.0.
 
 export const providersBeginApiKeyChangeV10 = defineRpcContract({
   method: "providers.beginApiKeyChange",
@@ -6478,7 +6441,6 @@ export const providersSetEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-/** `providers.setEnvOverride@2.2` retains its installed request line. */
 export const providersSetEnvOverrideV22 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 2, minor: 2 } as const,
@@ -6496,7 +6458,6 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-/** Projects the current provider variable request onto the strict 1.0 line. */
 export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnvOverrideV22,
   typeof providersSetEnvOverrideV10
@@ -10587,9 +10548,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
-    // The prepare without the cloud attachment, which the app then makes on
-    // the person's sign-in. No downgrade to `@1.0`: a prepare cannot be sent
-    // as an attachment, nor an attachment answered as a prepare.
+    // No downgrade to `@1.0`: a prepare cannot be sent as an attachment, nor an
+    // attachment answered as a prepare.
     2: {
       latestMinor: 0,
       versions: {
@@ -11366,9 +11326,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: epicListChatRecordsV15,
           upgradeFromPreviousVersion: epicListChatRecordsUpgradeV14ToV15,
-          // No `responseGrowthProjectionGated`, for 1.4's reason:
-          // `starterUserId` is an optional added key on the `snapshot` arm's
-          // rows, which zod strips for a 1.4 peer.
+          // No `responseGrowthProjectionGated`: zod strips the optional `starterUserId` for a 1.4 peer.
         },
       },
       downgradePathsFromLatest: {},

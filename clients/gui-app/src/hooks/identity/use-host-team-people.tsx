@@ -22,17 +22,9 @@ import {
 } from "@/stores/auth/auth-store";
 
 /**
- * The people of the team that owns `hostId`, for everything drawn inside:
- * the team's member directory (`environment.members`), consulted before any
- * directory a surface above already offers, and for an id no directory names
- * once the team's is complete, authn's person read, which still names someone
- * who has left the team. Both are read in the team's environment, which the
- * viewer's `environment.list` names; until it answers, and while its last
- * read failed, no member is read or named (the viewer and the task's
- * collaborators still are). A
- * host no team owns, or one whose owner cannot be read yet, passes the
- * surface above's directory through unchanged, so a personal computer asks
- * for nothing.
+ * Read in the team's environment, which `environment.list` names; until it answers,
+ * and after a failed read, no member is named. A host no team owns passes the
+ * surface's directory through, so a personal computer asks nothing.
  */
 export function HostTeamPeopleProvider(props: {
   readonly hostId: string;
@@ -55,11 +47,9 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
   const membersSupported =
     useHostMethodSupport(hostId, "environment.members") === true;
   const readsTeam = teamId !== null && cloudAuthorized && membersSupported;
-  // A team's environment is not the team: both reads below are addressed by
-  // the environment, which the viewer's environment list names for the team.
+  // A team's environment is not the team: both reads are addressed by the environment.
   const environments = useEnvironmentListQuery(readsTeam);
-  // A failed refetch keeps the last answer's data; it names no environment,
-  // so neither read below is sent with the id that answer gave.
+  // A failed refetch keeps the last data, so neither read is sent with that answer's id.
   const listed = environments.isError
     ? undefined
     : environments.data?.environments;
@@ -83,9 +73,7 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
     [team, outer, former],
   );
   if (!readsTeam) return outer;
-  // Until the list names the team's environment, or while its last read
-  // failed, no member of this host is known: the surface's own directory is
-  // not the team's people.
+  // The surface's own directory is not the team's people.
   if (listed === undefined) return nobodyKnown;
   // The list answered without the team: its directory is not the viewer's
   // to read, so the surface's own directory stands, as on a personal host.
@@ -98,10 +86,8 @@ function nobodyKnown(): null {
 }
 
 /**
- * The ids a surface asked about that no directory names, gathered during
- * render and published after it: a resolver is a plain function a render
- * calls, so it records the miss here and the provider asks authn on the next
- * render, never inside the one that missed.
+ * A resolver is a plain function a render calls, so it records the miss and the
+ * provider asks authn on the next render, never inside the one that missed.
  */
 class MissedPeople {
   private readonly ids = new Set<string>();
@@ -131,12 +117,7 @@ class MissedPeople {
   readonly read = (): ReadonlyArray<string> => this.published;
 }
 
-/**
- * authn's person read, in the team's environment, for each id its complete
- * directory does not name, asked once per id for the life of the session. A 404
- * `person_not_found`, or a read that failed, names nobody, and the surface
- * shows the id it has.
- */
+/** Asked once per id per session; a 404 `person_not_found` or a failed read names nobody. */
 function useFormerMembers(
   environmentId: string | null,
   readable: boolean,
@@ -188,10 +169,7 @@ function useFormerMembers(
   );
 }
 
-/**
- * The people the answered reads name, by id. Module-level so the query
- * observer keeps one result while the answers do not change.
- */
+/** Module-level so the observer keeps one result while the answers do not change. */
 function namedPeople(
   answers: ReadonlyArray<{
     readonly data: EnvironmentPersonResult | undefined;

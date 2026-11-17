@@ -2249,8 +2249,7 @@ async function runPendingDispatch(
       error instanceof HostRpcError &&
       error.code === "removed-by-person"
     ) {
-      // The account this send names was removed by a person: a retry cannot
-      // succeed, so it is refused and says why.
+      // A retry cannot succeed, so it is refused and says why.
       refusePendingDispatch(send, dispatch);
       toastFromHostError(error, REMOVED_PROFILE_PIN_TEXT);
     } else {
@@ -2547,9 +2546,8 @@ function pendingDispatchLineCopy(
 }
 
 /**
- * The dispatch's line. Out of credits on a team's sandbox, anyone who cannot
- * buy the team's credits is told whose ran out, not to add them. Nothing
- * while whose sandbox it is is not known.
+ * Anyone who cannot buy a team's credits is told whose ran out, not to add them.
+ * Nothing while ownership is unknown.
  */
 function PendingDispatchLine(props: {
   readonly kind: PendingSandboxSendRequest["kind"];
@@ -2597,8 +2595,6 @@ function PendingDispatchRemedy(props: {
       : sandboxConfigurationOf(props.row, configurations);
   const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
-  // A team's credits are offered to its Admin only, and nothing is offered
-  // while whose sandbox it is is not known; anyone else gets Details.
   const addCredits =
     useOffersAddCredits(configuration) && props.failure === "credits";
   if (props.failure === "settings" && props.row !== null)

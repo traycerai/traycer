@@ -175,12 +175,9 @@ export function WindowsBridgeAuthSessionBridge(
           // still this write's - a newer projection has already superseded it.
           const current = lastWrittenSerialized === serialized;
           if (current) lastWrittenSerialized = null;
-          // Main could not reach its signing keys (no network), so it lists
-          // no computer at all. The local computer needs no cloud verdict:
-          // restore it as an unverified session would, and hand this session
-          // over again until main verifies it. No toast: the app works, and a
-          // failed restore says so itself. Every other refusal is a statement
-          // about the token and adopts nothing.
+          // Main cannot reach its signing keys: restore the local computer as an unverified
+          // session would and hand this session over again until main verifies it. No toast;
+          // every other refusal adopts nothing.
           if (result.reason === "key-source-unavailable") {
             // A superseded write's answer decides nothing: the current
             // write's own answer takes the fallback, silently.
@@ -203,16 +200,9 @@ export function WindowsBridgeAuthSessionBridge(
             return;
           }
           if (heldLocally !== null && current) {
-            // A held session main now judges bad (its keys came back): told
-            // once per judged session, never on every tick. For a verdict
-            // authn can settle, ask it at once, as the start's own validation
-            // would: a refresh is handed over; a rejection demotes the session
-            // to unverified, the local computer only (signed out only when the
-            // stored session moved to another account, was deleted or was
-            // tombstoned, or the token store could not be used, which signs
-            // this window out and schedules recovery); an acceptance is handed
-            // over on the next tick; and an unreachable authn leaves the hold
-            // as it is.
+            // Told once per judged session. A verdict authn can settle is asked at once: a
+            // refresh is handed over, a rejection demotes to unverified (local only), an
+            // unreachable authn leaves the hold.
             if (judgedHeld === serialized) return;
             judgedHeld = serialized;
             if (

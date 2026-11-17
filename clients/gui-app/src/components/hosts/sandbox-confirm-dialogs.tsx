@@ -98,10 +98,7 @@ interface SandboxDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-/**
- * The configuration a dialog speaks for, or `null` while the app does not
- * know whose sandbox it is: the dialog then says nothing about whose credits.
- */
+/** `null` while ownership is unknown: the dialog then says nothing about whose credits. */
 function useDialogConfiguration(
   sandbox: SandboxSummary,
 ): SandboxPageConfiguration | null {
@@ -126,10 +123,6 @@ function useDialogSessions(
   ).report;
 }
 
-/**
- * `your credits` / `Acme's credits`: a team's sandbox is on the team's.
- * `null` where whose sandbox it is is not known.
- */
 function storageCredits(
   configuration: SandboxPageConfiguration | null,
 ): string | null {
@@ -407,8 +400,7 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
   const name = props.sandbox.displayName;
   const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
   const restsUntil = now + SANDBOX_DEFAULT_RESTING_MINUTES * MS_PER_MINUTE;
-  // A team's sandbox is paid by the team whoever keeps it. Whose it is not
-  // known, nothing is said about who pays or whose defaults it takes.
+  // A team's sandbox is paid by the team whoever keeps it.
   let payer: string | null = null;
   if (configuration !== null) {
     payer = configuration.kind === "personal" ? "you" : configuration.teamName;

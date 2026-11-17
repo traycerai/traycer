@@ -54,9 +54,8 @@ export function SandboxFailedChatActions(props: {
 /** The failed-create row's safe actions, shared by Settings and the chat slot. */
 export function SandboxFailedRowActions(props: {
   readonly summary: SandboxSummary;
-  /** Where Retry creates and what it names; `null` holds Retry back. */
+  /** `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
-  /** Whose credits the row is on, for its money remedies; `null` where not known. */
   readonly credits: SandboxPageConfiguration | null;
 }): ReactNode {
   const { summary, configuration, credits } = props;

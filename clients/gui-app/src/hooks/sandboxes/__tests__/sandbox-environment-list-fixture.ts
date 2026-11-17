@@ -8,7 +8,6 @@ export type SandboxBillingEnvironmentAnswer =
   | { readonly kind: "loading" }
   | { readonly kind: "failed" };
 
-/** The team the served environment belongs to, as the person's account names it. */
 export interface BillingTeam {
   readonly id: string;
   readonly slug: string;
@@ -34,13 +33,7 @@ function buildEnvironment(
   };
 }
 
-/**
- * Serves the account's environment list, and the cloud reads that join each
- * row's role, on `auth` (the one a surface reads through `useHostBinding()`):
- * the team's row at the role `answer` names, never answered while loading, and
- * a no-response while failed. A surface whose `useHostBinding` is mocked to a
- * fake binding serves it on that binding's auth.
- */
+/** A surface whose `useHostBinding` is mocked is served on that fake binding's auth. */
 export function serveEnvironmentList(
   auth: object,
   options: {
@@ -58,7 +51,6 @@ export function serveEnvironmentList(
       team,
     ),
   ];
-  // The join names the team by its slug from the person's own account.
   useAuthStore.setState({
     shareableTeams: rows.flatMap((row) =>
       row.ownerKind === "organization" && row.providerHandle !== null

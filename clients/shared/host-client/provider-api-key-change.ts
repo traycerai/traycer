@@ -200,7 +200,7 @@ export function isProviderKeyProviderId(
   return providerKeyProviderIdSchema.safeParse(providerId).success;
 }
 
-/** A single direct request on the person's session. Nothing is queued or retried. */
+/** Nothing is queued or retried. */
 export async function changeProviderKeyRecordViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
@@ -228,8 +228,7 @@ export async function changeProviderKeyRecordViaHttp(
         headers: {
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
-          // A clear has no body, and authn's JSON parser refuses a DELETE that
-          // declares one (FST_ERR_CTP_EMPTY_JSON_BODY): only a set declares it.
+          // authn refuses a DELETE that declares a JSON body and has none (FST_ERR_CTP_EMPTY_JSON_BODY).
           ...(change.action === "set"
             ? { "Content-Type": "application/json" }
             : {}),

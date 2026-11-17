@@ -5,24 +5,10 @@ import {
 } from "@traycer-clients/shared/environment/environment-cloud";
 
 /**
- * The phone's transport for the app's own calls to authn's environment routes.
- *
- * Capacitor's patched `fetch` ignores `redirect`: a POST, PUT or DELETE goes
- * to the native request with redirects followed (on iOS `URLSession.shared`,
- * which re-sends the method and body on a 307 or 308), and a GET goes through
- * the native proxy URL. Every method here, GET included, goes to the native
- * request itself with redirects disabled, so it is sent once and a 3xx comes
- * back as the answer, which every caller reads as a non-success, as on
- * desktop.
- *
- * The body goes as its JSON value, which the native layer serializes for the
- * `application/json` the request names. A failure rejects with nothing of the
- * request or its answer: no URL, header, body or token in its text.
- *
- * A failure's body cap is applied after the body arrives: the native request
- * reads the whole answer before it hands any of it back, and offers neither a
- * stream nor a size limit. A failure's body over the cap is then dropped, as
- * on desktop; a success is kept whole.
+ * Every method, GET included, goes to the native request with redirects disabled:
+ * Capacitor's patched `fetch` follows them. A failure rejects with nothing of the
+ * request or its answer in its text. The native layer has no stream or size limit,
+ * so a failure's body cap applies after the body arrives; a success is kept whole.
  */
 export const nativeEnvironmentTransport: EnvironmentTransport = async (
   request,
@@ -57,7 +43,6 @@ export interface NativeRequest {
   readonly data: unknown;
 }
 
-/** The answer as received, its body as text. */
 export interface NativeAnswer {
   readonly status: number;
   readonly headers: Readonly<Record<string, string>>;

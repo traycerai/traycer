@@ -383,7 +383,6 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-/** The real AuthService validates the stored fixture session before rendering. */
 function SignedIn(props: { readonly children: ReactNode }): ReactNode {
   const authStatus = useAuthStore((state) => state.status);
   return authStatus === "signed-in" ? props.children : null;
@@ -416,7 +415,6 @@ function Page(): ReactElement {
   );
 }
 
-/** Authn and the directory name the same person the stored session validates. */
 class CompactActionsRunnerHost extends MockRunnerHost {
   override readonly environmentTransport = createFakeEnvironmentCloudTransport({
     environments: () => [PERSONAL_ENVIRONMENT],

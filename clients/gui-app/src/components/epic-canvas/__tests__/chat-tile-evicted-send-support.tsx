@@ -156,8 +156,6 @@ export type ChatAccessFixture =
       readonly canAct: false;
     };
 
-// The admitted saved creator may act on the machine host. The pool's actual
-// snapshot stays viewer-only while the tile parks a message for that host.
 export const ADMITTED_SAVED_CREATOR_ACCESS: ChatAccessFixture = {
   role: "owner",
   ownerUserId: TEAM_ENVIRONMENT_OWNER_ID,
@@ -187,7 +185,6 @@ const SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
-/** What the composer holds: text, and an image only its hash names. */
 export function draftOf(text: string): JsonContent {
   return {
     type: "doc",
@@ -258,7 +255,6 @@ function seedDocWithChat(doc: Y.Doc): void {
 
 type SendFrame = Extract<ChatSubscribeClientFrame, { readonly kind: "send" }>;
 
-/** One chat stream the tile opened: the pool's first, then the host's. */
 interface ChatStream {
   readonly callbacks: ChatStreamCallbacks;
   readonly sent: ChatSubscribeClientFrame[];
@@ -289,7 +285,6 @@ export function sendFramesOf(stream: ChatStream): SendFrame[] {
   );
 }
 
-/** A stream opens and its peer's snapshot arrives. */
 export function openStream(
   stream: ChatStream,
   access: ChatAccessFixture,
@@ -543,7 +538,6 @@ function mountEvictedTile(source: ChatSourceFixture): Mounted {
   return { witnessClient, witness, queryClient };
 }
 
-/** The tile on the pool: the witness read the chat at rest and the pool's stream is up. */
 export async function mountOnThePool(
   access: ChatAccessFixture,
   source: ChatSourceFixture,
@@ -635,7 +629,6 @@ export async function answerHydrate(index: number): Promise<void> {
   });
 }
 
-/** The transcript's status label of a send that has not been accepted. */
 export function pendingRows(): HTMLElement[] {
   return screen.queryAllByText(/\bPending\b/);
 }

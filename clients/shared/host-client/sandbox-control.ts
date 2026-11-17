@@ -264,8 +264,7 @@ async function callWithSignal(
         headers,
         body: init.body,
         signal,
-        // The bearer rides in a header: a redirect is answered here, as a
-        // failure, and never followed with it.
+        // The bearer rides in a header: never follow a redirect.
         redirect: "manual",
       }),
       signal,
@@ -928,11 +927,7 @@ export const SANDBOXES_UNAVAILABLE_IN_STAGING =
 export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";
 
-/**
- * A frozen sandbox, said with no remedy: the wake toast's title, and the
- * whole sentence where the reader cannot buy its credits or the app does not
- * know the sandbox is the reader's own.
- */
+/** Said with no remedy, where the reader cannot buy credits or the sandbox may not be theirs. */
 export const SANDBOX_OUT_OF_CREDITS = "This sandbox is out of credits.";
 
 /**

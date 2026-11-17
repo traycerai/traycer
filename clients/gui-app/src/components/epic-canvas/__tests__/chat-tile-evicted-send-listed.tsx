@@ -5,7 +5,6 @@ import type {
 } from "@traycer/protocol/host/epic/chat-records";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
-/** The epic's chat list, which names this chat as one its host dropped. */
 export function ListedEvicted(props: {
   readonly children: ReactNode;
   readonly chatId: string;

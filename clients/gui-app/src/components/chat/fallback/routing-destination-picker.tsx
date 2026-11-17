@@ -798,14 +798,10 @@ function useRoutingVerbs(input: {
         // answer finds the announcer through the verb's own reporting when
         // nothing here is left to show it. A refused write leaves the row as
         // it was and is said inline; unmounted, there is no line to say it.
-        // The write is the app's own call to the server; only the retry
-        // needs this chat's host.
-        //
-        // Both steps belong to the sign-in of the press. A write answered
-        // after it ended comes back `null` and publishes nothing; the retry is
-        // sent only while that same sign-in is current, so a sign-out, an
-        // account switch or a sign-in again in between drops it silently. A
-        // token rotation of the same sign-in keeps it.
+        // The write is the app's own server call; only the retry needs this chat's
+        // host. Both belong to the sign-in of the press: a write answered after it
+        // ended returns `null` and publishes nothing, and the retry is sent only while
+        // that sign-in is current (a token rotation keeps it).
         void writeBot.mutateAsync(request.write).then(
           (written) => {
             if (written === null || !written.signIn.isCurrent()) return;
@@ -1486,11 +1482,7 @@ function selectionIsTuple(
   );
 }
 
-/**
- * Whether two profile ids name one account on the tab's host: the same id,
- * or ids that resolve to the same row - a pin to an id a row folded in as an
- * alias is that row, so picking the row is not a switch.
- */
+/** A pin to an id a row folded in as an alias is that row, so picking the row is not a switch. */
 type SameAccountResolver = (
   harnessId: GuiHarnessId,
   left: string | null,

@@ -7,12 +7,6 @@ import {
 } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 
-/**
- * A sandbox configuration reads the person's teams and environments through
- * queries, so a surface that resolves one needs a query client above it.
- * These render as `render` and `renderHook` do, over a fresh client with no
- * retries; the client is the render's wrapper, so a `rerender` keeps it.
- */
 function clientWrapper(): (props: {
   readonly children: ReactNode;
 }) => ReactNode {

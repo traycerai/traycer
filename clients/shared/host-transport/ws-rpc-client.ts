@@ -245,13 +245,8 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    */
   readonly clientIdentity: FirstPartyClientIdentity;
   readonly localOpenAuth?: LocalOpenAuth;
-  /** Told of every refusal a host sends at its door and of every open it admits. */
   readonly doorFor?: (hostId: string) => SessionDoorObserver;
-  /**
-   * The credential this client puts in every frame to `hostId` in place of
-   * the caller's sign-in lease: its host-only token, obtained before the
-   * request is sent. `null` when no token can be had now.
-   */
+  /** Replaces the caller's sign-in lease in every frame; `null` when no token can be had now. */
   readonly hostBearerFor?: (
     hostId: string,
     signIn: OpenFrameBearerSource,
@@ -426,8 +421,6 @@ export class WsRpcClient<
         releasedDuringLookup = false;
         return await pending;
       } catch (cause) {
-        // A persistent session refused this request at its token step: the
-        // door's state, exactly as a refused open raises it.
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
             cause.doorRefusal,
@@ -454,7 +447,6 @@ export class WsRpcClient<
     }
   }
 
-  /** The caller's request with its host-only token in place of the sign-in lease. */
   private async withHostBearer(
     hostBearerFor: NonNullable<WsRpcClientOptions<Registry>["hostBearerFor"]>,
     options: HostRequestOptions,
@@ -578,8 +570,7 @@ export class WsRpcClient<
         }
         continue;
       }
-      // The claim came after the token lookup, so a release in between found
-      // no slot to arm.
+      // A release between the token lookup and the claim found no slot to arm.
       if (releasedDuringLookup) this.sessions.armReleaseBeforeReady(sessionKey);
       return this.requestOnFreshSocket(
         method,

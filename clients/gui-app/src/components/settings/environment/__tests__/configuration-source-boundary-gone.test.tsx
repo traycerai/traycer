@@ -177,8 +177,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
     >();
   return {
     ...actual,
-    // The signed-in viewer, which a case changes under a mounted page; the
-    // other cases set none and read as this one.
     useCloudChatViewerId: () => actual.useCloudChatViewerId() || "user-me",
   };
 });
@@ -187,11 +185,6 @@ beforeEach(() => {
   hoisted.toasts.length = 0;
 });
 
-/**
- * Answers the invitations read, which goes to authn on every build. The page's
- * binding carries a real `AuthService`, so its one method is stood in for and
- * the query, cache and cancellation above it stay real.
- */
 function answerInvitations(
   read: () =>
     | EnvironmentInvitationsListResponse
@@ -391,7 +384,6 @@ async function expectOwnershipConsumers(options: {
     String(options.personalEditable),
   );
   expect(teamPage.getAttribute("data-can-edit")).toBe("true");
-  // Plans offers no Link action on any computer.
   expect(screen.queryByRole("button", { name: "Link a plan" })).toBeNull();
   const readOnlyLine = screen.queryByText(
     "You can see Personal's settings but not change them.",
@@ -1069,11 +1061,8 @@ describe("a team the environment list no longer carries", () => {
     }
   });
 
-  // An answer is evidence only about the entry that gave it, and the boundary
-  // is not keyed by the viewer: an account switch with Settings open keeps
-  // what the page held. The clock is frozen so that both viewers' membership
-  // answers carry one stamp, and only the invitations entry's identity tells
-  // the first viewer's answer from the second's.
+  // The clock is frozen so both viewers' answers carry one stamp; only the
+  // invitations entry's identity tells them apart.
   it("does not credit one viewer's invitations answer to the next viewer", async () => {
     const frozen = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
@@ -1115,7 +1104,6 @@ describe("a team the environment list no longer carries", () => {
       );
       await screen.findByTestId("probe");
 
-      // The first viewer is removed and invited back, and their entry answers.
       listed.current = [PERSONAL];
       invitedA.current = [INVITATION];
       await act(() =>
@@ -1127,8 +1115,6 @@ describe("a team the environment list no longer carries", () => {
         await screen.findByRole("button", { name: "Review" }),
       ).toBeTruthy();
 
-      // The second viewer signs in under the mounted page. Their list answers
-      // with no team, and their invitations entry has not answered.
       act(() => {
         useAuthStore.setState({
           contextMetadata: { userId: "user-b", username: "user-b" },
@@ -1151,16 +1137,12 @@ describe("a team the environment list no longer carries", () => {
         await screen.findByText("These settings are no longer available."),
       ).toBeTruthy();
 
-      // The first viewer's answer says nothing about the second's entry: no
-      // removal is claimed and the selection stays.
       expect(hoisted.toasts).toEqual([]);
       expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
         kind: "team",
         environmentId: "env-a",
       });
 
-      // Once the second viewer's own entry answers that nothing invites them,
-      // the removal is real.
       act(() => {
         readB.resolve({ invitations: [] });
       });

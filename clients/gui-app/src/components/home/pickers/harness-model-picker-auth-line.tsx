@@ -96,11 +96,6 @@ export function PickerProviderAuthLine(props: {
   }
 }
 
-/**
- * The set-up guidance under the account dropdown, when its selected row is the
- * signed-out Terminal account: the same steps the line above draws in that
- * state, without the status words, which the row already says.
- */
 export function PickerTerminalSetupGuidance(props: {
   readonly selectedProfile: ProviderProfile | null;
   readonly state: ProviderCliState | null;

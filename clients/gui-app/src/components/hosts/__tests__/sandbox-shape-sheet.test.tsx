@@ -118,8 +118,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
 }));
-// Each team's own balance in millicredits, as the sheet's check reads it: a
-// team not named here is unknown, which is never short.
+// A team not named here is unknown, which is never short.
 const teamBalancesMc = vi.hoisted(() => new Map<string, number>());
 vi.mock(
   "@/hooks/sandboxes/use-team-bundle-balances",

@@ -18,8 +18,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The app-wide host client is a real `HostClient` over an in-memory
-// messenger (`buildEnvironmentClient`): only the host on the far side is faked.
 const hostMock = vi.hoisted((): { client: unknown } => ({ client: null }));
 // A host that runs environments, the one the Personal mark is drawn on.
 vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
@@ -32,8 +30,6 @@ vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
   }),
 }));
 
-// Only the two sources of the served-environment role are faked; the shipped
-// useMayChangeServedEnvironment and role decoder stay in this test.
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => servedEnvironmentPermission.hostRead,
 }));
@@ -477,7 +473,6 @@ function renderPage(
     isPending: options.servedEnvironmentPending === "environment-list",
     isFetching: false,
     isError: false,
-    // `usePersonalEnvironment` reads `error` and destructures `refetch`.
     error: null,
     refetch: () => Promise.resolve(undefined),
   };
@@ -599,12 +594,8 @@ function skillsPage(): ReactNode {
   return <ProviderSkillsTab state={skillsState()} />;
 }
 
-/**
- * A team's computer makes the page read-only: once the frame's status read
- * answers, it wraps the page in an inert region, which remounts the page. A row
- * found before that is detached, so on a team the rows are found only after the
- * region is there. A personal host's page never remounts.
- */
+// On a team the page remounts inside an inert region once the status answers, so
+// rows are found only after it is there.
 async function pageSettled(): Promise<void> {
   if (!servedEnvironmentPermission.served.team) return;
   await waitFor(() => {

@@ -429,16 +429,11 @@ function setMcpServerEnabled(
   environmentId: string,
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
-  // This PATCH only keeps the current tool switches. The actual disable is
-  // the revision-guarded DELETE of the mcp_server item that follows.
+  // The actual disable is the revision-guarded DELETE of the mcp_server item that follows.
   context.mcpServerLists.delete(environmentId);
   return Promise.resolve(answer({ outcome: "saved" }, 200));
 }
 
-/**
- * The put's credential, read back from authn's wire body (`pat`,
- * `customHeaders`, `patSecretId`), which the put schema then checks.
- */
 function credentialOfBody(body: Record<string, unknown>): unknown {
   if (typeof body.patSecretId === "string") {
     return { kind: "secret", secretId: body.patSecretId };
@@ -451,7 +446,6 @@ function credentialOfBody(body: Record<string, unknown>): unknown {
   return { kind: "unchanged" };
 }
 
-/** An edit carries the providers it is off for in its item's value, not at the top. */
 function offForOfBody(body: Record<string, unknown>): unknown {
   const value = objectBody(objectBody(body.item)?.value);
   return value?.offFor ?? body.offFor ?? [];

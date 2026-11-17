@@ -47,12 +47,7 @@ export function resolveSenderLabel(
   );
 }
 
-/**
- * A user row's sender in a task chat: the viewer as "You", anyone else by the
- * name `identify` gives (the team's directory on a team host, a member who has
- * left included), else as {@link resolveSenderLabel}. "system" names no one,
- * so its label is empty: never a member, never an id.
- */
+/** "system" names no one: its label is empty, never a member or an id. */
 export function resolvePersonSenderLabel(
   sender: OpenUserMessageSender,
   context: SenderDisplayContext,
@@ -64,10 +59,6 @@ export function resolvePersonSenderLabel(
   return name ?? resolveSenderLabel(sender, context);
 }
 
-/**
- * The person a user row draws a picture of: a person other than the viewer,
- * never an agent and never "system".
- */
 export function otherPersonSenderId(
   sender: OpenUserMessageSender,
   profile: AuthProfile | null,

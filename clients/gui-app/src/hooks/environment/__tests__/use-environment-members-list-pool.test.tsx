@@ -95,10 +95,6 @@ const TEAM_ENVIRONMENTS: EnvironmentListResponseV11 = {
   ],
 };
 
-/**
- * Members a page holds: the app pages authn's one list by user id, this many
- * to a page (`configuration-members.ts`).
- */
 const PAGE_SIZE = 100;
 /** u-admin and these fill the first page; a member written later is on the second. */
 const FILLERS = Array.from(
@@ -170,14 +166,12 @@ describe("useEnvironmentMembersList", () => {
           ),
         ).toBe(true);
       });
-      // The member the write added is past the first page's end.
       expect(
         result.current.list.members.map(({ userId }) => userId),
       ).toHaveLength(PAGE_SIZE + 1);
       expect(harness.paramsOf("environment.members").length).toBeGreaterThan(
         readsBefore,
       );
-      // The read went to authn and to no host.
       expect(hostIdsOf(harness, "environment.members")).toEqual([]);
     };
 

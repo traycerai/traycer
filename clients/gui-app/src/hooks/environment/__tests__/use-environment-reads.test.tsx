@@ -22,7 +22,6 @@ import {
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
-// Personal's id is read from authn's environment list under the signed-in viewer.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -109,8 +108,6 @@ describe("a Personal revision change", () => {
       },
     };
     const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
-    // The environment list is the app's own read from authn; the harness
-    // serves it from the same handler, so a read of it is counted there.
     const harness = mountTeamPage(personalPoolSource(), handlers);
     recordNegotiatedHostManifest(HOST_ID, {
       "environment.status": { major: 1, minor: 1 },

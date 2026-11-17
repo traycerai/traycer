@@ -844,8 +844,6 @@ describe("AgentHoverTooltip host section", () => {
         complete: true,
         personalEnvironmentId: null,
       };
-      // A row nobody started: with every team answered and none holding its
-      // environment, it is the person's own.
       h.sandboxes = [
         sandboxRow({ environmentId: "env-elsewhere", createdBy: null }),
       ];

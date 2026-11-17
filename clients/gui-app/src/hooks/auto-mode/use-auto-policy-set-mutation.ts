@@ -44,11 +44,8 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 const METHOD = "autoPolicy.set";
 
 /**
- * One save: the policy, and the operation on the sign-in that made it, taken
- * when the person pressed Save or Reset (`AuthService.environmentCloud()`).
- * Saves queue, so the one sent later must still go out as them: it is not
- * sent once that sign-in has ended or been entered again, and a refreshed
- * bearer of the same sign-in sends it normally.
+ * Saves queue, so a later send still goes as the person who pressed: never once
+ * that sign-in has ended or been entered again; a refreshed bearer still sends it.
  */
 export interface AutoPolicySave {
   readonly request: AutoPolicySetRequest;
@@ -90,7 +87,6 @@ function saveFailure(kind: SaveFailureKind): HostRpcError {
   });
 }
 
-/** The server's epoch-millisecond stamp as the ISO string the host answered with. */
 function isoFromEpochMs(updatedAt: number): string | null {
   if (!Number.isFinite(updatedAt)) return null;
   const date = new Date(updatedAt);
@@ -99,27 +95,19 @@ function isoFromEpochMs(updatedAt: number): string | null {
 
 interface SignInSave {
   readonly binding: HostRuntimeBinding<HostRpcRegistry>;
-  /** The client today's `autoPolicy.set` is sent on, and its host. */
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly viewerId: string;
   readonly stream: StreamRuntimeBinding | null;
 }
 
-/**
- * The save on the person's own sign-in, then the refresh: first on the
- * computer the host's call would have gone to, when it is not one of the
- * window's own connections (the server pool), then once on each computer the
- * window is connected to. Every refresh has answered before this does, so the
- * policy read that follows is the saved one.
- */
+// Every refresh has answered before this does, so the policy read that follows is the saved one.
 async function saveOnSignIn(
   { binding, client, hostId, viewerId, stream }: SignInSave,
   save: AutoPolicySave,
 ): Promise<AutoPolicySetResponse> {
   const { onOriginSignIn } = save.operation;
-  // Its sign-in ended before its turn: not sent, and nothing is said to
-  // whoever is signed in now. Checked before the bearer is read.
+  // Checked before the bearer is read; nothing is said to whoever is signed in now.
   if (!onOriginSignIn()) {
     throw new HostRequestAbortedError({
       message: "The account changed before the save was sent",
@@ -131,9 +119,7 @@ async function saveOnSignIn(
   const result = await binding.auth.saveAutoPolicy(save.request.body);
   if (result.kind !== "ok") throw saveFailure(result.kind);
   const saved = { updatedAt: isoFromEpochMs(result.updatedAt) };
-  // Saved, but its sign-in ended while the save was out: no computer is asked
-  // to refresh on it, so none reads the account through whoever is signed in
-  // now. Each refresh after an await is checked again.
+  // No computer is asked to refresh on an ended sign-in; each refresh after an await checks again.
   if (!onOriginSignIn()) return saved;
   if (binding.directory.findById(hostId) === null) {
     await client
@@ -152,12 +138,11 @@ async function saveOnSignIn(
 /**
  * Saves the account's auto-mode policy.
  *
- * Where the computer this save goes to has completed its handshake and
- * advertises `host.accountSettings.refresh@1.0`, the app saves on the
- * person's own sign-in and then asks that computer, and each one it is
- * connected to, to refresh. Anywhere else (no handshake yet, the method
- * missing) the save is the host's `autoPolicy.set`, as before, so a computer
- * that cannot refresh keeps the policy it was told.
+ * Where the target computer has completed its handshake and advertises
+ * `host.accountSettings.refresh@1.0`, the app saves on the person's own sign-in
+ * and then asks that computer, and each one it is connected to, to refresh.
+ * Anywhere else the save is the host's `autoPolicy.set`, so a computer that
+ * cannot refresh keeps the policy it was told.
  *
  * Last-write-wins on the server, so the ORDER these reach it is the client's
  * job, and `autoPolicyWriteScope` is the thing that does it. `fifo` in the

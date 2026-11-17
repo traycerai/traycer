@@ -37,8 +37,6 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 
-// The settings-save memory is not what these outcome tests check; the save
-// is still sent through the real `sendFollowedSave`.
 vi.mock("@/hooks/environment/use-settings-save", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/environment/use-settings-save")

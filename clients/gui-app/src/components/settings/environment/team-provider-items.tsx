@@ -83,7 +83,6 @@ export function TeamPackItem(props: {
   );
 }
 
-/** The complete stored pack policy, without installing an editor or writes. */
 export function PackPolicyReadout(props: {
   readonly packId: string;
   readonly pinnedVersion: string | null;

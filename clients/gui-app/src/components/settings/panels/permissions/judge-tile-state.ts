@@ -317,8 +317,7 @@ export function judgeFaceAccount(
 ): ProviderProfile | null {
   const provider = providerForHarness(providers, selection.harnessId);
   if (provider === undefined) return null;
-  // A removed pin resolves to no row whether or not it is listed as removed,
-  // so the removed list cannot change what this names.
+  // A removed pin resolves to no row either way, so the removed list cannot change this.
   if (
     !profileDropdownShown(
       provider.providerId,

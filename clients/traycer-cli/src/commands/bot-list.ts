@@ -114,9 +114,8 @@ export function buildBotListCommand(): CommandFn {
 }
 
 /**
- * The sign-in's environments as this computer sees them, by authn's host
- * directory: on a team's computer, that team's environment alone; on a
- * personal computer, or one the directory has no row for, all of them.
+ * On a team's computer that team's environment alone; on a personal computer, or
+ * one authn's host directory has no row for, all of them.
  */
 async function environmentsOnThisComputer(
   signedIn: readonly SignInEnvironment[],

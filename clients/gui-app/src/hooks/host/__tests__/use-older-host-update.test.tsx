@@ -104,11 +104,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 
-/**
- * Real `useOlderHostUpdate` and real `useUpdateHostVersionPolicy`. The floor
- * this file installs is `"2.0.0"`. The action's detail carries a different
- * minimum so a passing assertion cannot be copied from the prop.
- */
+// The detail carries a different minimum from the floor so a passing assertion cannot be copied from the prop.
 
 const HOST_ID = "host-remote";
 const TEST_FLOOR = "2.0.0";

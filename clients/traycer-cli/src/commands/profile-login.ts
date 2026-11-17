@@ -97,7 +97,6 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
-  /** Records a sign-in request at authn on this CLI's own sign-in. */
   readonly signInRequests: SignInRequestClient;
 }
 
@@ -771,7 +770,7 @@ function acceptPastedCode(
  * asked for again a few times rather than read as a failure. An unfinished
  * answer carrying `signInRequest` is recorded at authn and asked again with
  * `recordedOperationId`; a recording that ends returns that answer, which
- * reads as today's "did not complete".
+ * reads as "did not complete".
  */
 async function awaitUntilSettled(
   io: ProfileLoginIo,

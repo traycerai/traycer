@@ -30,9 +30,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
-// The release floor is "0.0.0" (it admits every host), so a row can only fall
-// below it where a case raises it. A getter, so every case that does not raise
-// it keeps the real floor.
+// A getter, so every case that does not raise the floor keeps the real "0.0.0".
 const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
 vi.mock(
   "@traycer-clients/shared/host-client/minimum-host-version",
@@ -130,17 +128,8 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider opens its own durable transport through the REAL
-// `useDurableStreamTransportFactory` and `openDurableStreamTransport`, so a row
-// below the floor is refused by the opener exactly as in the app
-// (`buildHostStreamClient`). Only what sits below the opener is supplied here:
-// the runner host, the directory and the request context it reads, and the
-// network boundary (`createRemoteHostTransport`), whose stream client is the
-// inert one `fakeDurableStreamTransports().opener` mints (a case may replace
-// that opener to count or throw on the socket's creation).
-// The suite setup (`__tests__/test-browser-apis.ts`) mocks this module with the
-// fake opener for every file; naming it here with its original puts the real
-// hook back for this one.
+// The suite setup mocks this module for every file; naming it with its original
+// puts the real opener back here.
 vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
   importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
 );
@@ -196,8 +185,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     resolveSessionHostClient(hostId),
 }));
 
-// What the real opener reads off the app's directory and request context; the
-// members are filled in below, beside the row helpers they read.
 const openerDirectory = vi.hoisted(() => ({
   findById: (_hostId: string): unknown => null,
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
@@ -861,9 +848,6 @@ function ownerIdentityRemoteTarget(
   };
 }
 
-// A host whose row a case has not published still opens its transport, from a
-// current remote row; a published row (possibly below the floor) is what the
-// opener sees.
 openerDirectory.findById = (hostId) =>
   sessionHostRows.byHostId.get(hostId) ?? {
     ...ownerIdentityRemoteTarget("pubkey-default"),
@@ -888,8 +872,6 @@ function installOwnerIdentityRows(): (
 ) => void {
   const emitRowChanged = installOwnerIdentityRowSource();
   return (hostId, publicKey) => {
-    // `null` removes the row - a deregistration, after which the owner
-    // reading for that host is absent rather than rotated.
     if (publicKey === null) {
       sessionHostRows.byHostId.delete(hostId);
     } else {
@@ -903,7 +885,6 @@ function installOwnerIdentityRows(): (
   };
 }
 
-/** The real connection registry over `sessionHostRows`; returns the row-changed emit. */
 function installOwnerIdentityRowSource(): () => void {
   const listeners = new Set<() => void>();
   sessionHostRows.userId = OWNER_IDENTITY_FIXTURE_USER_ID;
@@ -2754,9 +2735,7 @@ describe("<TestEpicSessionTab />", () => {
   describe("a host whose row is below the minimum version", () => {
     interface FloorSession {
       readonly streams: ControlledStream[];
-      /** Publishes the host's row at `appVersion`, or removes it for `null`. */
       readonly publishRow: (appVersion: string | null) => void;
-      /** The mounted session's handle, once it has one. */
       readonly handle: () => OpenEpicStoreHandle | undefined;
     }
 
@@ -2830,13 +2809,9 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
-      // The opener refused the reacquire: no transport was minted below the
-      // floor. (The worker's own stream attach is not a session build, so the
-      // transports are what is counted.)
+      // The worker's own stream attach is not a session build, so transports are counted.
       const transports = fakeDurableStreamTransports().records;
       expect(transports).toHaveLength(1);
-      // Rising back to the floor mints exactly one more; the released stream is
-      // not closed a second time on the way.
       act(() => {
         publishRow("2.0.0");
       });
@@ -2852,8 +2827,7 @@ describe("<TestEpicSessionTab />", () => {
       act(() => {
         publishRow(null);
       });
-      // A round trip over the worker's bridge answers after any close the
-      // removal had sent, so the count below is read after it settled.
+      // A round trip over the worker's bridge answers after any close the removal sent.
       const mounted = handle();
       if (mounted === undefined) throw new Error("expected a mounted session");
       await mounted.encodeRootState();

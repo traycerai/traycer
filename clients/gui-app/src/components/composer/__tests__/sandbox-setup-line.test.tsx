@@ -345,8 +345,6 @@ describe("SandboxSetupLine's refusal for credits", () => {
         "Your acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
       ),
     ).toBeDefined();
-    // A team's credits are bought by its Admin only (board C25), and nothing
-    // here says this reader is one.
     expect(buttonLabels(line)).toEqual([
       "Use This computer",
       "Cancel the message",

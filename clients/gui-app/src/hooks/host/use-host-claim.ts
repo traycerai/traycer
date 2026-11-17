@@ -16,13 +16,7 @@ import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 
-/**
- * What one stored `host_claimed` state has read for one account: the teams
- * whose read is pending, answered or failed, and the consumers to tell when
- * one settles. A state raised again is a new object and reads every team
- * again; the same state, remounted, reads nothing more; another account reads
- * its own.
- */
+/** A state raised again is a new object and reads every team again; the same state remounted reads nothing more. */
 interface StateReads {
   readonly pending: Set<string>;
   readonly finished: Set<string>;
@@ -64,10 +58,7 @@ function readsOf(
   return reads;
 }
 
-/**
- * The live states on each team entry's read in flight, by the entry's query.
- * A state's end cancels the read only when no other state is on it.
- */
+/** A state's end cancels the read only when no other state is on it. */
 const statesOnRead = new WeakMap<object, Set<StateReads>>();
 
 function joinRead(query: object, reads: StateReads): void {
@@ -83,16 +74,12 @@ function leaveRead(query: object, reads: StateReads): void {
   statesOnRead.get(query)?.delete(reads);
 }
 
-/** Whether `reads` is the only state on `query`'s read in flight. */
 function aloneOnRead(query: object, reads: StateReads): boolean {
   const states = statesOnRead.get(query);
   return states !== undefined && states.size === 1 && states.has(reads);
 }
 
-/**
- * One team's claims entry, kept for the account. A read cancelled with the
- * state that started it is reverted, so nothing it saw is kept.
- */
+/** A read cancelled with the state that started it is reverted, so nothing it saw is kept. */
 function claimedComputersOptions(
   auth: AuthService | null,
   userId: string | null,
@@ -110,7 +97,6 @@ function claimedComputersOptions(
   });
 }
 
-/** Resolves once no read of `queryKey` is in flight. */
 function untilNoReadInFlight(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -125,16 +111,9 @@ function untilNoReadInFlight(
 }
 
 /**
- * Reads one team's entry for a state: `true` once a read the state may count
- * has answered, `false` if the state ended first; a throw otherwise. A read
- * already in flight when the state asks may predate its claim, so the state
- * waits for it and reads after it, never cancelling it. A read begun once the
- * state has asked counts for every state on it, and only its answer does:
- * a cancelled read that hands back the entry's earlier data is not one. A read
- * another reader replaced (a refetch of the entry) is followed to its
- * replacement.
+ * A read in flight may predate the claim, so the state waits for it and reads
+ * after, never cancelling it. A cancelled read that hands back earlier data is not an answer.
  */
-/** Whose read of a team's entry this is: a state, for one account. */
 interface TeamReadTarget {
   readonly queryClient: QueryClient;
   readonly auth: AuthService;
@@ -183,10 +162,8 @@ async function readTeamForState(
 }
 
 /**
- * Starts the state's read of one team, unless one is pending or settled. A
- * read cancelled with no replacement (every consumer unmounted, or the state
- * ended) is started again while the state is current and still has a
- * consumer: a remount that cancelled it may have run its effect first.
+ * A read cancelled with no replacement starts again while the state is current and
+ * has a consumer: a remount that cancelled it may have run its effect first.
  */
 function startTeamRead(target: TeamReadTarget, environmentId: string): void {
   const { reads } = target;
@@ -215,7 +192,6 @@ function startTeamRead(target: TeamReadTarget, environmentId: string): void {
   );
 }
 
-/** Records a team's read as settled for the state and re-renders every consumer of it. */
 function settle(
   reads: StateReads,
   outcome: "finished" | "failed",
@@ -227,12 +203,10 @@ function settle(
   for (const listener of reads.listeners) listener();
 }
 
-/** Whether the store still holds `state` for its host. */
 function isCurrentDoorState(state: HostDoorState): boolean {
   return useHostDoorStateStore.getState().byHost.get(state.hostId) === state;
 }
 
-/** The newest claim naming `hostId` across the teams' answers, by `claimedAt`. */
 function newestClaim(
   hostId: string,
   answers: ReadonlyArray<{
@@ -256,15 +230,8 @@ function newestClaim(
 }
 
 /**
- * Who claimed `hostId` and from which team, while its door answers
- * `host_claimed`, or `null` until every team's claims are read. Each team the
- * person belongs to has its claims read once per state, through
- * `AuthService.listClaimedComputers`, into that team's own entry
- * (`authQueryKeys.claimedComputers`), kept for the account and shared with
- * the team's screens. Once every team's read under this state has answered or
- * failed, the newest claim naming this computer across the answers gives the
- * claimant, from the entry as it now stands; the team's name is that team's.
- * A state's end cancels a read no other state is on.
+ * `null` until every team's claims are read, once per state; the newest claim
+ * naming this computer gives the claimant.
  */
 export function useHostClaim(
   hostId: string | null,
@@ -286,8 +253,6 @@ export function useHostClaim(
     claimedState === null || auth === null || userId === null
       ? null
       : readsOf(claimedState, auth, userId);
-  // Re-renders when any read of this state settles, whichever consumer of
-  // the state started it.
   const subscribe = useCallback(
     (listener: () => void) => {
       if (reads === null) return () => undefined;
@@ -299,8 +264,7 @@ export function useHostClaim(
     [reads],
   );
   useSyncExternalStore(subscribe, () => reads?.version ?? 0);
-  // The null-tolerant read: the window's narration mounts at the app root,
-  // where a tree with no host runtime is a legitimate answer.
+  // Null-tolerant: the window's narration mounts at the app root, where there may be no host runtime.
   const environments = useEnvironmentListQuery(claimed);
   const teams = useMemo(
     () =>
@@ -334,9 +298,7 @@ export function useHostClaim(
     };
     for (const team of teams) startTeamRead(target, team.environmentId);
     return () => {
-      // An unmount or remount keeps the state's reads; a state the store no
-      // longer holds ends them, but not a read another state or a team
-      // screen still needs.
+      // An unmount or remount keeps the reads; a state the store dropped ends them, unless another needs them.
       if (isCurrentDoorState(claimedState)) return;
       for (const environmentId of reads.pending) {
         const queryKey = authQueryKeys.claimedComputers(

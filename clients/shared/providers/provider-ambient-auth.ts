@@ -200,13 +200,8 @@ type DefaultAccountSources = {
 };
 
 /**
- * The account a new chat or agent starts on when nobody chose one and the
- * default would be the Terminal login: the provider's one enabled, signed-in
- * profile when the Terminal login shows as signed out
- * (`isProviderAmbientSignedOut`: its store is empty, its login expired or a
- * provider refused it), else `null` (the Terminal login, as before). Two
- * signed-in profiles, none, a signed-in Terminal login and an `unknown` or
- * `unavailable` Terminal verdict all stay `null`.
+ * When the Terminal login shows signed out and the provider has exactly one
+ * enabled, signed-in profile, that profile; else `null`.
  */
 export function soleSignedInProfileForSignedOutTerminal(
   provider: DefaultAccountSources,

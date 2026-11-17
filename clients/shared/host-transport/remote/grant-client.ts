@@ -439,10 +439,7 @@ function isSandboxFrozenRefusal(bodyText: string): boolean {
 /**
  * The fatal a frozen sandbox's refused mint ends the session on: the same
  * typed `SANDBOX_FROZEN` refusal the host itself answers a frozen sandbox's
- * calls with. Every surface prints its reason as it is, so the reason is
- * worded here for its reader: "your credits" only on a sandbox the person's
- * host directory names as their own, and the line with no remedy on a team's
- * sandbox, on a row with no owner, and where there is no directory to read.
+ * calls with. Every surface prints the reason verbatim, so it is worded for its reader.
  */
 function sandboxFrozenFatal(hostId: string): FatalErrorDetails {
   return {
@@ -629,7 +626,6 @@ export function createSandboxAttachGrantProvider(deps: {
   };
 }
 
-/** The attach-grant answer to `session_grant_version: 2`: the pass and the token both. */
 const relayPassWithHostTokenSchema = z.object({
   grant: z.string().min(1),
   expires_in: z.number(),
@@ -686,8 +682,7 @@ async function postHostRoute(
                 },
           ...(body === null ? {} : { body }),
           signal: abort.signal,
-          // The sign-in rides in a header, so a redirect is never followed:
-          // it would carry the sign-in to wherever the answer pointed.
+          // The sign-in rides in a header: never follow a redirect.
           redirect: "manual",
         }),
         abort.signal,
@@ -698,9 +693,7 @@ async function postHostRoute(
         detail: `the mint request never completed (${describeFetchFailure(error).classification})`,
       };
     }
-    // A redirect is an answer that minted nothing, refused like any status
-    // this route does not name. A browser reports it as an opaque response
-    // with status 0, which the range check below also refuses.
+    // A browser reports a redirect as status 0, which this range check also refuses.
     if (response.status < 200 || response.status >= 300)
       return {
         kind: "refused",
@@ -728,10 +721,8 @@ function hostTokenOf(seconds: number, token: string): HostToken {
 }
 
 /**
- * The local route's refusals. Only `team_membership_required` (403) says the
- * computer is a team's; a bare 404 covers every other computer the person may
- * not open. Nothing else is expected as a 403 here: one reads as not admitted
- * and its status is logged.
+ * Only `team_membership_required` (403) says the computer is a team's; a bare 404
+ * covers every other computer the person may not open.
  */
 function localMintRefusal(
   status: number,
@@ -752,7 +743,6 @@ function localMintRefusal(
   return { kind: "unavailable", detail: `authn answered HTTP ${status}` };
 }
 
-/** `POST /api/v3/hosts/:hostId/session-grant`: a local open's host-only token. */
 export async function mintHostTokenViaHttp(
   authnBaseUrl: string,
   hostId: string,
@@ -789,28 +779,16 @@ export type RelayPassMintOutcome =
       readonly grant: AttachGrant;
       readonly hostToken: HostToken;
     }
-  /** A bare 404, any computer this person may not open: refused as today. */
   | { readonly kind: "not-admitted"; readonly provision: AttachGrantProvision }
-  /**
-   * A 403 `team_membership_required`: authn admitted the person to a team's
-   * computer, then found their seat gone before it minted. Not a member, as
-   * the local mint says, refused as the 404 is.
-   */
+  /** authn admitted the person, then found their seat gone before it minted. */
   | { readonly kind: "not-a-member"; readonly provision: AttachGrantProvision }
-  /** authn could not be reached (a transport failure or a 5xx). */
   | { readonly kind: "unreachable"; readonly provision: AttachGrantProvision }
-  /**
-   * authn refused the sign-in (401). The caller refreshes it once and mints
-   * again, as the local door does; `provision` is today's answer otherwise.
-   */
   | {
       readonly kind: "sign-in-rejected";
       readonly provision: AttachGrantProvision;
     }
-  /** Every other refusal, handled exactly as a relay pass mint is today. */
   | { readonly kind: "as-today"; readonly provision: AttachGrantProvision };
 
-/** The refusal a relay pass mint ends a person's open on: no retry. */
 const MEMBERSHIP_REFUSED: AttachGrantProvision = {
   kind: "refused",
   fatal: TEAM_MEMBERSHIP_REQUIRED,
@@ -819,10 +797,8 @@ const MEMBERSHIP_REFUSED: AttachGrantProvision = {
 };
 
 /**
- * A remote open's one call: the relay pass and, beside it, the host-only
- * token (`session_grant_version: 2`). Never sends `purpose`. A revoked
- * computer (403) and an owner's computer with remote access off (403
- * `remote_access_off`) are answered as they are today.
+ * Never sends `purpose`. A revoked computer (403) and remote access off
+ * (403 `remote_access_off`) keep their own answers.
  */
 export async function mintRelayPassWithHostTokenViaHttp(
   authnBaseUrl: string,

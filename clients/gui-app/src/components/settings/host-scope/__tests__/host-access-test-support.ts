@@ -74,7 +74,6 @@ export interface AccessHostState {
   /** What `host.remoteAccess.set` answers. */
   remoteAccessAnswer: HostRemoteAccessSetResponseV20;
   remoteAccessError: HostRpcError | null;
-  /** What `host.status.refresh` answers. */
   statusRefreshError: Error | null;
   binding: EnvironmentHostBinding | null;
   /** What `environment.undo` answers. */
@@ -302,7 +301,6 @@ export type FakeEnvironmentCloudResponder = (
   request: EnvironmentTransportRequest,
 ) => FakeEnvironmentCloudAnswer | Promise<FakeEnvironmentCloudAnswer>;
 
-/** An authn transport fake that records the request without changing its path. */
 export function fakeEnvironmentCloud(
   answer: FakeEnvironmentCloudAnswer | FakeEnvironmentCloudResponder,
 ): FakeEnvironmentCloud {

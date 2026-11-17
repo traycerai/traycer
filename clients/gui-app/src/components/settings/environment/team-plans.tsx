@@ -98,10 +98,7 @@ export function TeamPlans(props: {
   );
 }
 
-/**
- * The turns running on the plan where the window's own team computer counted
- * them. No answer, or that computer's "cannot count", is no count.
- */
+/** No answer, or that computer's "cannot count", is no count. */
 function countedPlanWork(
   workNow: TeamComputerWorkNow,
 ): { readonly activeTurns: number; readonly hostId: string } | null {
@@ -129,9 +126,7 @@ function TeamPlanUnlink(props: {
     props.previewId,
   );
   const environmentId = source.kind === "pool" ? source.environmentId : "";
-  // The turns running on the plan, from the window's own team computer; the
-  // confirm waits for its one answer rather than say they could not be
-  // counted while they are being counted.
+  // The confirm waits for its one answer rather than say the turns could not be counted.
   const workNow = useTeamComputerWorkNow({
     environmentId,
     subject: props.plan.id,

@@ -282,11 +282,6 @@ function SandboxPersonalHeaderCost(props: {
   );
 }
 
-/**
- * Whose the page's sandbox is: a team's by its host owner, the directory's
- * owner or its environment; the person's by the owner or its environment;
- * else not known (a row known only from the sandbox list carries no owner).
- */
 function headerOwnership(
   teamOwned: boolean,
   ownerKind: HostScopeSandbox["ownerKind"],
@@ -305,8 +300,8 @@ export function SandboxHeaderNotices(props: {
 }): ReactNode {
   const { summary, state, frozen, teamOwned, ownerKind } = props.sandbox;
   const configurations = useSandboxConfigurations();
-  // A row known only from the sandbox list has no host owner to name its
-  // team; its environment names it once the person's teams have answered.
+  // A row known only from the sandbox list has no host owner; its environment names
+  // the team once the person's teams have answered.
   const listed =
     summary === null ? null : sandboxConfigurationOf(summary, configurations);
   const teamName =
@@ -528,7 +523,6 @@ function SandboxProvenance(props: {
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
-  // A team row's creator; a personal row is the viewer's own.
   const creator = props.teamOwned
     ? sandboxCreatorName(summary, props.viewerUserId)
     : null;

@@ -9,22 +9,12 @@ export const SETTINGS_SAVE_MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 /** How many saves are remembered at most; the oldest go first. */
 const SETTINGS_SAVE_MEMORY_CAP = 200;
 
-/**
- * One save this account made in a host's settings that it expects authn to
- * hold, for this account to apply. Never the value and never its canonical
- * text: a put is matched by {@link valueDigest} alone.
- */
+/** Never the value nor its canonical text: a put is matched by {@link valueDigest} alone. */
 export interface SettingsSaveMemoryRecord {
-  /**
-   * This edit's own identity, and its record's id. A later save of the same
-   * item replaces the record with its own, so work begun for the earlier edit
-   * finds nothing left to act on, and a row forgotten before never fences the
-   * new one out of storage.
-   */
+  /** A later save of the same item replaces the record, so work begun for the earlier edit finds nothing. */
   readonly editId: string;
   readonly environmentId: string;
   readonly hostId: string;
-  /** The host's sharing generation when the save was made. */
   readonly sharingGeneration: number;
   readonly kind: string;
   readonly key: string;
@@ -32,13 +22,9 @@ export interface SettingsSaveMemoryRecord {
   readonly operation: "put" | "delete";
   /** SHA-256 of the put value's canonical text; null for a delete. */
   readonly valueDigest: string | null;
-  /** The live item's revision read from authn when the person made the edit. */
   readonly expectedLiveRevision: number | null;
   readonly writtenAt: number;
-  /**
-   * A hold revision whose apply went unanswered, and how many times; null
-   * until one does. A new hold revision starts over.
-   */
+  /** A new hold revision starts over. */
   readonly unanswered: {
     readonly revision: number;
     readonly tries: number;
@@ -47,18 +33,11 @@ export interface SettingsSaveMemoryRecord {
 
 interface SettingsSaveMemoryState {
   readonly records: Readonly<Record<string, SettingsSaveMemoryRecord>>;
-  /**
-   * The records whose save this window has sent and not yet seen answered,
-   * with how many such saves each has. Never persisted: a restart has none.
-   */
+  /** Never persisted: a restart has none. */
   readonly inFlight: Readonly<Record<string, number>>;
-  /**
-   * Remembers `record` under its edit id, forgetting every earlier save of the
-   * same item on the same host.
-   */
+  /** Forgets every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
-  /** Counts an unanswered apply, only while `id` is still remembered. */
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
@@ -89,7 +68,6 @@ function newestWithin(
   );
 }
 
-/** The record remembered under `id`; null when there is none. */
 export function settingsSaveMemoryRecord(
   records: Readonly<Record<string, SettingsSaveMemoryRecord>>,
   id: string,
@@ -105,12 +83,7 @@ function without(
   return rest;
 }
 
-/**
- * The saves this account expects authn to hold. Kept per account, record by
- * record, so a window that read the store earlier never erases another
- * window's newer saves; the lifecycle bridge points it at the signed-in
- * account and wipes it on sign-out.
- */
+// Kept per account, record by record, so a window that read earlier never erases another window's newer saves.
 export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
   persist(
     (set) => ({

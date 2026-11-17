@@ -82,21 +82,12 @@ export function resolveTuiForkRejectionView(
   return null;
 }
 
-/**
- * The sentence the computer appends to a fork its late guard refused, saying a
- * folder prepared for the attempt was kept. The envelope carries only
- * `{ code, message }`, so the sentence is found by its text at the message's
- * end: if the computer's wording changes, the note is dropped, never replaced
- * by the rest of the message.
- */
+// The envelope carries only `{ code, message }`, so the sentence is found by its
+// text at the end: if the wording changes the note is dropped, never replaced.
 const FORK_REJECTION_WORKTREE_NOTE =
   "If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.";
 
-/**
- * A late-guard refusal for an account a person removed: the pin's words, and
- * as the note only the computer's worktree sentence. The computer's own
- * sentence names the profile id and is never shown for this code.
- */
+/** The computer's own sentence names the profile id and is never shown for this code. */
 function removedProfileRejectionView(
   error: unknown,
 ): TuiForkRejectionView | null {

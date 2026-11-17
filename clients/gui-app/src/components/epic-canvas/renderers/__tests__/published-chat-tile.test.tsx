@@ -219,9 +219,6 @@ function runtimeClient(): HostClient<HostRpcRegistry> {
 const collaboratorList = vi.hoisted((): { entries: CollaboratorEntry[] } => ({
   entries: [],
 }));
-// The account's environment host lists are the app's own read of authn on the
-// person's sign-in: a case that signs in mounts the page harness's fake authn,
-// and the tile renders inside the binding that carries it.
 const appHost = vi.hoisted(
   (): { hostsByEnvironmentId: Map<string, EnvironmentHostRecordV12[]> } => ({
     hostsByEnvironmentId: new Map(),
@@ -1493,7 +1490,6 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
 
   let hostListCalls: () => readonly unknown[] = () => [];
 
-  /** Signed in as the chat's owner, with authn answering the account's host lists. */
   function signInOnAppHost(): void {
     const harness = mountTeamPage(personalPoolSource(), {
       "environment.host.list": ({ environmentId }) => ({

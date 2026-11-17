@@ -299,14 +299,10 @@ export function addServerReach(): string {
   return "It reaches every provider on every host running this environment.";
 }
 
-/** The Secret option's line. */
 export const SECRET_OPTION_LINE =
   "Pick or add a secret. It is sent only to this server's address.";
 
-/**
- * Where an MCP server's token goes: Personal's computers receive it as a
- * value; a team's sentence is the one every team value shares.
- */
+/** Personal's computers receive it as a value; a team's sentence is the one every team value shares. */
 export function custodySentence(personal: boolean, name: string): string {
   return personal
     ? "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it."
@@ -364,18 +360,15 @@ export function addToConfigurationLabel(name: string): string {
   return `Add to ${name}`;
 }
 
-/** An "Add to <name>" that did not land, for any reason the person cannot act on. */
 export function addToConfigurationFailure(name: string): string {
   return `Couldn't add it to ${name}.`;
 }
 
-/** The refusals only the promote arm answers, coded and with no host words. */
 type PromoteRefusalCode = Exclude<
   ProviderNativeMutateErrorCodeV15,
   ProviderNativeMutateErrorCode
 >;
 
-/** What each coded promote refusal reads, with the environment's name. */
 const PROMOTE_REFUSALS: Readonly<
   Record<PromoteRefusalCode, (name: string) => string>
 > = {
@@ -397,11 +390,7 @@ function isPromoteRefusalCode(
   return Object.hasOwn(PROMOTE_REFUSALS, code);
 }
 
-/**
- * A promote refusal's words: the app's own for a coded one, the host's text
- * for the arm's uncoded refusals (an entry gone, a skill not ready, the
- * editor role, a name taken), and the failure line when there is neither.
- */
+/** The app's words for a coded refusal, the host's text for an uncoded one, else the failure line. */
 export function promoteRefusalText(
   code: ProviderNativeMutateErrorCodeV15,
   detail: string | null,

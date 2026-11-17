@@ -86,7 +86,6 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
   retry: retryNothing,
 };
 
-/** Where a page of members is cached: the app's own scope, by viewer. */
 function membersPageKey(
   environmentId: string,
   cursor: string | null,
@@ -101,13 +100,9 @@ function membersPageKey(
 }
 
 /**
- * How every surface reads pages of `environment.members`, so they all ask
- * for and cache the same pages: the app's own read of authn on the viewer's
- * sign-in, keyed by viewer so an account switch cannot serve the previous
- * viewer's invitedAddress rows. The id is never rewritten to Personal:
- * Personal's page lists the reader alone, as the host answered it, so a page
- * is asked for only once the account's environment list says whose
- * environment this is.
+ * Keyed by viewer, so an account switch never serves the previous viewer's
+ * invitedAddress rows. The id is never rewritten to Personal, whose page lists the
+ * reader alone, so a page is asked only once the environment list says whose it is.
  */
 export interface EnvironmentMembersPages {
   readonly viewerUserId: string;
@@ -115,7 +110,6 @@ export interface EnvironmentMembersPages {
     EnvironmentListResponseV11,
     HostRpcError
   >;
-  /** Whose environment it is; undefined until the list names it. */
   readonly ownerKind: EnvironmentDescriptorV11["ownerKind"] | undefined;
   readonly pageKey: (environmentId: string, cursor: string | null) => QueryKey;
   readonly pageOptions: (
@@ -124,11 +118,7 @@ export interface EnvironmentMembersPages {
   ) => UseQueryOptions<EnvironmentMembersResponseV12, HostRpcError>;
 }
 
-/**
- * The page reads for `environmentId`. With `fetchPages` false nothing is
- * asked, the environment list included: the pages are only observed as
- * another surface loaded them.
- */
+/** With `fetchPages` false nothing is asked, the environment list included. */
 export function useEnvironmentMembersPages(
   environmentId: string | null,
   fetchPages: boolean,
@@ -276,7 +266,6 @@ export function useEnvironmentMembersList(
         retry: retryNothing,
       };
     }
-    // Whose environment this is was not read, so no page could be asked.
     const listFailed = ownerKind === undefined && environments.isError;
     if (listFailed) {
       return {

@@ -55,18 +55,13 @@ export interface ProviderReauthGate {
   readonly reason: ProviderReauthReason | null;
   /** The matched profile's own label, when one was found (missing has none). */
   readonly profileLabel: string | null;
-  /**
-   * The chat is on the Terminal login (`null`) and the record's row that is
-   * this computer's Terminal login blocks it; `profileId` names that row so
-   * Sign in opens it.
-   */
+  /** `profileId` names the record's row that blocks the Terminal login, so Sign in opens it. */
   readonly terminalPinGatedByRecord: boolean;
 }
 
 /**
- * Whether the banner offers "Continue on Terminal account": never for the
- * provider's own sign-out, and never for a chat already on the Terminal login
- * that a record's row blocks, where continuing would change nothing.
+ * Never for the provider's own sign-out, nor for a Terminal chat a record's row
+ * blocks, where continuing would change nothing.
  */
 export function continueOnTerminalOffered(gate: ProviderReauthGate): boolean {
   return (
@@ -144,14 +139,11 @@ function deriveReauthReason(input: {
   readonly profileId: string | null;
   readonly state: ProviderCliState | null;
   readonly matchedProfile: ProviderProfile | null;
-  /** The pin names an account a person removed on this computer. */
   readonly pinRemoved: boolean;
 }): ProviderReauthReason | null {
   if (!input.enabled) return null;
   if (input.profileId === null && input.matchedProfile !== null) {
-    // The Terminal login is a record's row on this computer, and the turn
-    // runs in that record's folder: the row's own state decides, never the
-    // Terminal login's probe.
+    // The row's own state decides, never the Terminal login's probe.
     return profileRowNeedsSignIn(input.matchedProfile)
       ? "profile_unauthenticated"
       : null;
@@ -169,9 +161,8 @@ function deriveReauthReason(input: {
   }
   if (!input.settled) return null;
   if (input.matchedProfile === null) {
-    // A removed account is this computer's own evidence, not a guess about a
-    // default minted elsewhere, so it holds a fallback seed too: nothing
-    // starts on it, and nothing moves to the Terminal login unasked.
+    // A removed account is this computer's own evidence, so it holds a fallback seed
+    // too: nothing moves to the Terminal login unasked.
     return input.authoritative || input.pinRemoved ? "profile_missing" : null;
   }
   return profileRowNeedsSignIn(input.matchedProfile)
@@ -179,11 +170,7 @@ function deriveReauthReason(input: {
     : null;
 }
 
-/**
- * A row only a sign-in restores: its own probe is definitively signed out,
- * or the computer says it needs a sign-in. "Waiting for Traycer" resolves by
- * itself and never blocks a send.
- */
+/** "Waiting for Traycer" resolves by itself and never blocks a send. */
 function profileRowNeedsSignIn(profile: ProviderProfile): boolean {
   return (
     profile.auth.status === "unauthenticated" ||
@@ -235,8 +222,6 @@ function resolveProviderReauthGate(input: {
   });
   return {
     providerId,
-    // A Terminal pin gated by a record's row names that row, so the banner's
-    // Sign in opens it.
     profileId:
       profileId === null && matchedProfile !== null
         ? profileCommitId(matchedProfile)
@@ -250,13 +235,7 @@ function resolveProviderReauthGate(input: {
   };
 }
 
-/**
- * The row whose state gates the pin: the row a managed id or its alias
- * resolves to, or, for the Terminal login (`null`), the record's row that is
- * this computer's Terminal login. `null` otherwise - a removed or unknown id
- * (`profile_missing`), and a Terminal login with a row of its own, which the
- * provider-level probe reads.
- */
+/** `null` for a removed or unknown id, and for a Terminal login with its own row, which the provider probe reads. */
 function gatedProfileRow(
   pin: ProfilePinResolution | null,
   profileId: string | null,

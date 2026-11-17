@@ -1,12 +1,7 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { createAttachGrantProvider } from "../host-transport/remote/grant-client";
 
-/**
- * The fatal a session ends on when authn refuses the mint of a frozen
- * sandbox's grant, as the real grant client makes it: its `reason` is worded
- * from whatever directory row the host connection registry holds for
- * `hostId` now, so the caller installs that row first.
- */
+/** The reason is worded from the registry's row for `hostId`, so install that row first. */
 export async function refusedFrozenSandboxFatal(
   hostId: string,
 ): Promise<FatalErrorDetails> {

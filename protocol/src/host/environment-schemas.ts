@@ -358,20 +358,7 @@ export type EnvironmentStatusResponseV12 = z.infer<
   typeof environmentStatusResponseSchemaV12
 >;
 
-/**
- * Where a started move attempt stands (`environment.move.start` /
- * `.outcome`, `move-contracts.ts`), by one discriminant, `state`. `cause` and
- * `reason` are open strings: a value outside the known lists is valid.
- *
- * - `retry` causes known: `unavailable` (the host's), `move_upload_incomplete`
- *   (authn's full code).
- * - `needs_person` reasons known: authn's eight `operation_acceptance_invalid`
- *   reasons (`missing`, `ended`, `plan_hash_mismatch`,
- *   `manifest_hash_mismatch`, `ownership_generation_mismatch`,
- *   `target_mismatch`, `disclosure_mismatch`, `consumed`); and authn's
- *   conflict codes `move_acceptance_conflict` and `move_upload_limit_exceeded`,
- *   as full codes.
- */
+/** `cause` and `reason` are open strings: a value outside the known lists is valid. */
 export const environmentMoveAttemptOutcomeSchema = lazySchema(() => {
   const ids = {
     attemptId: z.string().min(1),
@@ -393,8 +380,7 @@ export type EnvironmentMoveAttemptOutcome = z.infer<
 >;
 
 /**
- * `environment.status@1.3` adds `move`: the started attempt's outcome, null
- * until a start and never `not_found`. A staged attempt that is never started
+ * Null until a start, never `not_found`; an attempt staged and never started
  * leaves it null. A `@1.2` answer upgrades with null.
  */
 export const environmentStatusResponseSchemaV13 = lazySchema(() =>
@@ -749,11 +735,7 @@ export type HostStatusRefreshRequest = z.infer<
   typeof hostStatusRefreshRequestSchema
 >;
 
-/**
- * Empty on purpose, and no result field is ever added: the answer means only
- * that this computer has tried to read its own row. The app reads
- * `environment.status` afterwards, the one place that state is read.
- */
+/** Empty on purpose, and no result is ever added: the app reads `environment.status` afterwards. */
 export const hostStatusRefreshResponseSchema = lazySchema(() =>
   z.object({}).strict(),
 );

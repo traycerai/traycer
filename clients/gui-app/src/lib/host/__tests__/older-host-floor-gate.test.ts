@@ -100,12 +100,6 @@ import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import type { WindowNarrationState } from "@/lib/host/window-narration";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-/**
- * Floor for this file is `"2.0.0"`. Below it, both builders return before any
- * socket class or remote transport is constructed. At it, a remote row builds
- * the remote transport and a local row builds the local socket classes.
- */
-
 const FLOOR_HOST = "host-floor";
 
 function remoteRow(appVersion: string | null): RemoteHostDirectoryEntry {

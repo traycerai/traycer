@@ -222,7 +222,6 @@ interface PickerBadgeProbeProps {
   ) => void;
 }
 
-/** The Codex picker's probe. */
 function PickerBadgeProbe(props: PickerBadgeProbeProps) {
   return <ProviderPickerBadgeProbe {...props} activeProviderId="codex" />;
 }

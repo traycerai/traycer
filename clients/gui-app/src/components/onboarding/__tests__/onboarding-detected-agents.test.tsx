@@ -383,7 +383,6 @@ vi.mock(
           isPending: false,
           isSuccess: fixtures.awaitLoginSuccess,
           data: fixtures.awaitLoginData,
-          // Keep the mocked result's reset behaviour aligned with React Query.
           reset: () => {
             fixtures.awaitLoginReset();
             fixtures.awaitLoginSuccess = false;
