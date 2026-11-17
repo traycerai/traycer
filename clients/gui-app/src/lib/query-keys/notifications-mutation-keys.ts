@@ -1,5 +1,4 @@
 export const notificationsMutationKeys = {
-  accountMatrix: () => ["account-notifications.matrix"] as const,
   accountHooks: () => ["account-notifications.hooks"] as const,
   markRead: () => ["notifications.markRead"] as const,
   resolve: () => ["notifications.resolve"] as const,

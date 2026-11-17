@@ -25,7 +25,7 @@ import { ConfigurationSourceContext } from "@/components/settings/environment/co
 import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { TeamNotificationHooksSettingsPanel } from "@/components/settings/environment/team-notification-hooks-settings-panel";
-import { useAccountNotificationMatrixSave } from "@/hooks/notifications/use-account-notification-settings";
+import { useAccountNotificationHooksSave } from "@/hooks/notifications/use-account-notification-settings";
 import { notificationsQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -271,38 +271,6 @@ afterEach(() => {
 });
 
 describe("notification save sign-in ownership", () => {
-  it("abandons an account matrix save after an account switch while Query onMutate is deferred", async () => {
-    const oldSession = signIn("session-a", "account-a");
-    useSignIn(oldSession);
-    const gate = deferred<void>();
-    const started = deferred<void>();
-    const client = makeMutationClient([gate], [started]);
-    accountPanel(client);
-    const invalidate = vi.spyOn(client, "invalidateQueries");
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Done In-app notifications" }),
-    );
-    await act(async () => started.promise);
-
-    oldSession.active = false;
-    const newSession = signIn("session-b", "account-b");
-    originFixtures.cloud = cloudFor(newSession);
-    gate.resolve(undefined);
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getByRole("switch", { name: "Done In-app notifications" })
-          .getAttribute("data-state"),
-      ).toBe("unchecked");
-    });
-    expect(originFixtures.requests).toEqual([]);
-    expect(originFixtures.refreshCalls).toBe(0);
-    expect(invalidate).not.toHaveBeenCalled();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
   it("abandons an account hook save after same-account re-entry without closing or reporting an error", async () => {
     const oldSession = signIn("session-a", "same-account");
     useSignIn(oldSession);
@@ -347,6 +315,7 @@ describe("notification save sign-in ownership", () => {
     const started = deferred<void>();
     const client = makeMutationClient([gate], [started]);
     accountPanel(client);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
     const manager = screen.getByTestId("cloud-notification-hooks-manager");
     fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog");
@@ -373,6 +342,7 @@ describe("notification save sign-in ownership", () => {
     );
     expect(originFixtures.requests).toEqual([]);
     expect(originFixtures.refreshCalls).toBe(0);
+    expect(invalidate).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBe(dialog);
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
@@ -418,17 +388,20 @@ describe("notification save sign-in ownership", () => {
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
 
-  it("continues an account matrix save through same-sign-in bearer rotation", async () => {
+  it("continues an account hook save through same-sign-in bearer rotation", async () => {
     const session = signIn("session-a", "account-a");
     useSignIn(session);
     const gate = deferred<void>();
     const started = deferred<void>();
     const client = makeMutationClient([gate], [started]);
     accountPanel(client);
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Done In-app notifications" }),
-    );
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "Build alerts revised" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
     await act(async () => started.promise);
     session.bearer = "rotated-token";
     gate.resolve(undefined);
@@ -463,10 +436,10 @@ describe("notification save sign-in ownership", () => {
         {props.children}
       </QueryClientProvider>
     );
-    const { result } = renderHook(() => useAccountNotificationMatrixSave(), {
+    const { result } = renderHook(() => useAccountNotificationHooksSave(), {
       wrapper,
     });
-    const request = { matrix: initialMatrix, revision: 7 };
+    const request = { hooks: [accountHook], revision: 7 };
     const firstCallbacks = {
       onSuccess: vi.fn(),
       onError: vi.fn(),

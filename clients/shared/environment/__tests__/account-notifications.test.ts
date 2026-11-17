@@ -8,7 +8,6 @@ import type {
 import {
   readAccountNotificationSettings,
   saveAccountNotificationHooks,
-  saveAccountNotificationMatrix,
 } from "../account-notifications";
 import type {
   AccountNotificationSettings,
@@ -23,6 +22,21 @@ const matrix = {
 };
 
 const settings: AccountNotificationSettings = { matrix, hooks: [] };
+
+const hooks: AccountNotificationSettings["hooks"] = [
+  {
+    id: "one",
+    name: "One",
+    enabled: true,
+    severities: null,
+    action: {
+      type: "http",
+      url: "https://hooks.example/one",
+      headers: {},
+    },
+    held: false,
+  },
+];
 
 function answer(status: number, body: unknown): EnvironmentTransportAnswer {
   return { status, text: JSON.stringify(body) };
@@ -114,31 +128,7 @@ describe("account notification settings transport", () => {
     });
   });
 
-  it("sends a matrix-only update without replacing the hooks column", async () => {
-    const response = row(settings, 9);
-    const { cloud, requests } = cloudWith([answer(200, response)]);
-
-    await saveAccountNotificationMatrix(cloud, { matrix, revision: 8 });
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.body).toEqual({ matrix, revision: 8 });
-  });
-
   it("sends a hooks-only update without replacing the matrix column", async () => {
-    const hooks: AccountNotificationSettings["hooks"] = [
-      {
-        id: "one",
-        name: "One",
-        enabled: true,
-        severities: null,
-        action: {
-          type: "http",
-          url: "https://hooks.example/one",
-          headers: {},
-        },
-        held: false,
-      },
-    ];
     const response = row({ ...settings, hooks }, 10);
     const { cloud, requests } = cloudWith([answer(200, response)]);
 
@@ -150,11 +140,7 @@ describe("account notification settings transport", () => {
 
   it("reads the current revision and retries a revision conflict exactly once", async () => {
     const current = row(settings, 12);
-    const requestedMatrix = {
-      ...matrix,
-      done: { renderer: false },
-    };
-    const updated = row({ ...settings, matrix: requestedMatrix }, 13);
+    const updated = row({ ...settings, hooks }, 13);
     const conflict = {
       code: "revision_conflict",
       current: row(settings, 12),
@@ -165,21 +151,15 @@ describe("account notification settings transport", () => {
       answer(200, updated),
     ]);
 
-    const result = await saveAccountNotificationMatrix(cloud, {
-      matrix: requestedMatrix,
+    const result = await saveAccountNotificationHooks(cloud, {
+      hooks,
       revision: 11,
     });
 
     expect(result).toEqual(updated);
     expect(requests.map(({ method }) => method)).toEqual(["PUT", "GET", "PUT"]);
-    expect(requests[0]?.body).toEqual({
-      matrix: requestedMatrix,
-      revision: 11,
-    });
-    expect(requests[2]?.body).toEqual({
-      matrix: requestedMatrix,
-      revision: current.revision,
-    });
+    expect(requests[0]?.body).toEqual({ hooks, revision: 11 });
+    expect(requests[2]?.body).toEqual({ hooks, revision: current.revision });
   });
 
   it.each([
@@ -201,8 +181,8 @@ describe("account notification settings transport", () => {
     async (status, body) => {
       const { cloud, requests } = cloudWith([answer(status, body)]);
 
-      const error = await saveAccountNotificationMatrix(cloud, {
-        matrix,
+      const error = await saveAccountNotificationHooks(cloud, {
+        hooks,
         revision: 2,
       }).catch((reason: unknown) => reason);
 

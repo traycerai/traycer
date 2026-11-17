@@ -675,7 +675,6 @@ describe("settings search", () => {
         "Save website sessions on this computer",
         "Bring in existing sessions",
         "Saved website sessions",
-        "In-app notifications",
         "Route automatically",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);

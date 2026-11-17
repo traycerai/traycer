@@ -7,16 +7,13 @@ import {
 } from "@tanstack/react-query";
 import {
   readAccountNotificationSettings,
-  saveAccountNotificationMatrix,
   saveAccountNotificationHooks,
 } from "@traycer-clients/shared/environment/account-notifications";
 import {
   EnvironmentCloudError,
   NEEDS_CONNECTION_MESSAGE,
-  type EnvironmentCloud,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type {
-  AccountNotificationMatrixPutRequest,
   AccountNotificationHooksPutRequest,
   AccountNotificationSettingsResponse,
 } from "@traycer-clients/shared/environment/account-notification-schemas";
@@ -66,13 +63,7 @@ export function useAccountNotificationSettings() {
 }
 
 /** Save on one sign-in, then ask its already-connected computers to refresh once. */
-function useAccountNotificationWrite<Request extends object>(
-  mutationKey: readonly string[],
-  write: (
-    cloud: EnvironmentCloud,
-    request: Request,
-  ) => Promise<AccountNotificationSettingsResponse>,
-) {
+export function useAccountNotificationHooksSave() {
   const source = useEnvironmentCloud();
   const viewerId = useCloudChatViewerId();
   const binding = useHostBinding();
@@ -89,9 +80,9 @@ function useAccountNotificationWrite<Request extends object>(
   const mutation = useMutation<
     AccountNotificationSettingsResponse,
     EnvironmentCloudError | HostRequestAbortedError,
-    Request
+    AccountNotificationHooksPutRequest
   >({
-    mutationKey,
+    mutationKey: notificationsMutationKeys.accountHooks(),
     mutationFn: async (request) => {
       const captured = origin.contextOf(request);
       requireNotificationWriteOrigin(captured, "notification-settings");
@@ -101,7 +92,7 @@ function useAccountNotificationWrite<Request extends object>(
           NEEDS_CONNECTION_MESSAGE.settings,
         );
       const { cloud } = captured;
-      const answer = await write(cloud, request);
+      const answer = await saveAccountNotificationHooks(cloud, request);
       if (captured.binding !== null && notificationWriteIsCurrent(captured)) {
         await refreshConnectedAccountSettings(
           captured.binding,
@@ -122,18 +113,4 @@ function useAccountNotificationWrite<Request extends object>(
     },
   });
   return origin.wrap(mutation);
-}
-
-export function useAccountNotificationMatrixSave() {
-  return useAccountNotificationWrite<AccountNotificationMatrixPutRequest>(
-    notificationsMutationKeys.accountMatrix(),
-    saveAccountNotificationMatrix,
-  );
-}
-
-export function useAccountNotificationHooksSave() {
-  return useAccountNotificationWrite<AccountNotificationHooksPutRequest>(
-    notificationsMutationKeys.accountHooks(),
-    saveAccountNotificationHooks,
-  );
 }
