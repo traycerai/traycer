@@ -279,6 +279,99 @@ interface ModelledEntry {
   mergedInto: string | null;
 }
 
+function readsIdentity(request: EnvironmentTransportRequest): boolean {
+  return (
+    "x-traycer-host-capabilities" in request.headers &&
+    request.headers["x-traycer-host-capabilities"]
+      .split(",")
+      .includes("managed_profile_identity")
+  );
+}
+
+function itemValue(entry: ModelledEntry, identity: boolean) {
+  const released = {
+    name: "Work account",
+    color: null,
+    harnessId: "claude",
+    accountIdentity: null,
+    needsLink: !entry.connected,
+    enabled: true,
+  };
+  if (!identity) return released;
+  return {
+    ...released,
+    bindingVersion: entry.bindingVersion,
+    custodyVersion: 1,
+    ...(entry.spendScopeKey === null
+      ? {}
+      : { spendScopeKey: entry.spendScopeKey }),
+    ...(entry.signedOutByPerson
+      ? { custodianSignOutCause: "signed-out-by-person" }
+      : {}),
+    ...(entry.mergedInto === null ? {} : { mergedInto: entry.mergedInto }),
+  };
+}
+
+function itemsAnswer(
+  entry: ModelledEntry,
+  request: EnvironmentTransportRequest,
+): EnvironmentTransportAnswer {
+  const identity = readsIdentity(request);
+  if (!identity && entry.mergedInto !== null) return json(200, { items: [] });
+  return json(200, {
+    items: [
+      {
+        kind: "managed_profile",
+        key: `claude:${ENTRY_PROFILE_ID}`,
+        os: "any",
+        value: itemValue(entry, identity),
+        revision: entry.bindingVersion,
+        updatedAt: 1,
+        writtenBy: { source: "broker", hostId: null, hostName: null },
+      },
+    ],
+  });
+}
+
+function connectionsAnswer(entry: ModelledEntry): EnvironmentTransportAnswer {
+  return json(200, {
+    connections: [
+      {
+        profileId: entry.connected
+          ? ENTRY_PROFILE_ID
+          : "1e2d3c4b-5a69-4788-9a0b-c1d2e3f4a5b6",
+        harnessId: "claude",
+        bindingVersion: entry.connected ? entry.bindingVersion : null,
+        kind: entry.connectionKind,
+        status: entry.connected ? "connected" : "absent",
+        linkedBy: null,
+      },
+    ],
+  });
+}
+
+function disconnectAnswer(
+  entry: ModelledEntry,
+  request: EnvironmentTransportRequest,
+): EnvironmentTransportAnswer {
+  const expected =
+    typeof request.body === "object" &&
+    request.body !== null &&
+    "expectedBindingVersion" in request.body
+      ? request.body.expectedBindingVersion
+      : null;
+  if (expected !== entry.bindingVersion)
+    return json(409, {
+      code: "binding-changed",
+      message: "The provider connection changed. Refresh and try again.",
+    });
+  const deleted = entry.connected;
+  entry.bindingVersion += 1;
+  entry.connected = false;
+  entry.signedOutByPerson = true;
+  return json(200, { disconnected: deleted });
+}
+
 /**
  * authn's routes for one entry, as the final tree serves them. The items GET
  * strips the binding fields unless the reader names `managed_profile_identity`
@@ -292,88 +385,13 @@ interface ModelledEntry {
 function modelAuthn(
   entry: ModelledEntry,
 ): (request: EnvironmentTransportRequest) => EnvironmentTransportAnswer {
-  let revision = entry.bindingVersion;
   return (request) => {
-    if (request.method === "GET" && request.url === ITEMS_URL) {
-      const identity =
-        "x-traycer-host-capabilities" in request.headers &&
-        request.headers["x-traycer-host-capabilities"]
-          .split(",")
-          .includes("managed_profile_identity");
-      if (!identity && entry.mergedInto !== null)
-        return json(200, { items: [] });
-      const released = {
-        name: "Work account",
-        color: null,
-        harnessId: "claude",
-        accountIdentity: null,
-        needsLink: !entry.connected,
-        enabled: true,
-      };
-      const value = identity
-        ? {
-            ...released,
-            bindingVersion: entry.bindingVersion,
-            custodyVersion: 1,
-            ...(entry.spendScopeKey === null
-              ? {}
-              : { spendScopeKey: entry.spendScopeKey }),
-            ...(entry.signedOutByPerson
-              ? { custodianSignOutCause: "signed-out-by-person" }
-              : {}),
-            ...(entry.mergedInto === null
-              ? {}
-              : { mergedInto: entry.mergedInto }),
-          }
-        : released;
-      return json(200, {
-        items: [
-          {
-            kind: "managed_profile",
-            key: `claude:${ENTRY_PROFILE_ID}`,
-            os: "any",
-            value,
-            revision,
-            updatedAt: 1,
-            writtenBy: { source: "broker", hostId: null, hostName: null },
-          },
-        ],
-      });
-    }
+    if (request.method === "GET" && request.url === ITEMS_URL)
+      return itemsAnswer(entry, request);
     if (request.method === "GET" && request.url === CONNECTIONS_URL)
-      return json(200, {
-        connections: [
-          {
-            profileId: entry.connected
-              ? ENTRY_PROFILE_ID
-              : "1e2d3c4b-5a69-4788-9a0b-c1d2e3f4a5b6",
-            harnessId: "claude",
-            bindingVersion: entry.connected ? entry.bindingVersion : null,
-            kind: entry.connectionKind,
-            status: entry.connected ? "connected" : "absent",
-            linkedBy: null,
-          },
-        ],
-      });
-    if (request.method === "DELETE" && request.url === CONNECTION_URL) {
-      const expected =
-        typeof request.body === "object" &&
-        request.body !== null &&
-        "expectedBindingVersion" in request.body
-          ? request.body.expectedBindingVersion
-          : null;
-      if (expected !== entry.bindingVersion)
-        return json(409, {
-          code: "binding-changed",
-          message: "The provider connection changed. Refresh and try again.",
-        });
-      const deleted = entry.connected;
-      revision += 1;
-      entry.bindingVersion = revision;
-      entry.connected = false;
-      entry.signedOutByPerson = true;
-      return json(200, { disconnected: deleted });
-    }
+      return connectionsAnswer(entry);
+    if (request.method === "DELETE" && request.url === CONNECTION_URL)
+      return disconnectAnswer(entry, request);
     return json(404, { code: "not_found" });
   };
 }
