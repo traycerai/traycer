@@ -241,7 +241,6 @@ describe("buildHostClaimCommand", () => {
     expect(events).toEqual(["ownership", "release", "provision"]);
   });
 
-  // The app's claim sentence, then the chats that will stop on their own line.
   const CONFIRM =
     "This computer will become yours. The team will lose access to it.";
   const confirmStates: ReadonlyArray<{

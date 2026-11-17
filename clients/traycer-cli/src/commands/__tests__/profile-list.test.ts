@@ -443,7 +443,6 @@ function listedResponse(
   });
 }
 
-/** The Terminal login as its own row. A folded record is never beside it. */
 const AMBIENT_TERMINAL: ListedProfileSpec = {
   profileId: "ambient",
   kind: "ambient",

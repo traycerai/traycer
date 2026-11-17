@@ -68,10 +68,8 @@ async function signedInUserId(): Promise<string | null> {
 }
 
 /**
- * A new sign-in buys a fresh host-only token for the host running here, if
- * one is, after the host was given its own credential; an account it replaced
- * loses its tokens. Best effort and silent: the sign-in already succeeded, and
- * the next command mints for itself if this did not.
+ * After the host was given its own credential; an account it replaced loses its
+ * tokens. Best effort and silent: the next command mints for itself.
  */
 async function mintHostTokenForNewSignIn(
   ctx: CommandContext,
@@ -82,7 +80,6 @@ async function mintHostTokenForNewSignIn(
     if (auth === null) return;
     if (previousUserId !== null && previousUserId !== auth.userId)
       await forgetCliHostTokens(previousUserId);
-    // No host running: nothing to mint for until one starts.
     const endpoint = await resolveEndpoint().catch(() => null);
     if (endpoint === null) return;
     const opened = await openCliHostSession(auth, endpoint.hostId, true, null);

@@ -22,22 +22,16 @@ import {
   hostTokenFailureCliError,
 } from "./host-door-words";
 
-/** One environment the sign-in lists, as the server describes it. */
 export type SignInEnvironment = Pick<
   EnvironmentDescriptor,
   "environmentId" | "ownerKind" | "ownerId" | "label"
 >;
 
-/** The label of every personal environment. */
 const PERSONAL_ENVIRONMENT_LABEL = "Personal";
 
 /**
- * Every environment the sign-in's own record lists, by the server's rule
- * (traycer-server `describeCallerEnvironments`): the personal one first, then
- * one per team ordered by label (the team's slug) and then id. A team the
- * record names no slug for (`teamSubscriptions`) is left out rather than
- * labelled with an id. A record that lists no environment yet (an older
- * authn) lists none here either.
+ * The server's rule: personal first, then teams by slug and id. A team the record
+ * names no slug for is left out rather than labelled with an id.
  */
 export function describeSignInEnvironments(
   user: AuthenticatedUser,
@@ -86,14 +80,7 @@ export function describeSignInEnvironments(
   return [...personal, ...teams];
 }
 
-/**
- * The environments of the person signed in on this machine, read from their
- * sign-in's record at authn when the command runs. Nothing is stored.
- *
- * The same rule as a mint's: a refused sign-in is refreshed once and asked
- * once more. Only a refresh authn refused, or a second refusal, is a rejected
- * sign-in; a refresh that could not reach authn is authn unreachable.
- */
+/** Read at authn when the command runs; nothing is stored. A refused sign-in is refreshed once, as a mint's. */
 export async function readSignInEnvironments(): Promise<
   readonly SignInEnvironment[]
 > {

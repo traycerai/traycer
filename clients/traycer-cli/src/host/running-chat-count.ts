@@ -14,11 +14,7 @@ export type RunningChats =
   | { readonly kind: "count"; readonly count: number }
   | { readonly kind: "unknown" };
 
-/**
- * This computer's chats with a turn running, under the computer's own owner,
- * from the `computer` subject of `environment.previewLocalFacts`. The host
- * does not read `environmentId` for that subject.
- */
+/** Under the computer's own owner, from the `computer` subject, which reads no `environmentId`. */
 export async function readRunningChatCount(
   endpoint: HostTransportEndpoint,
   auth: HostAuth,
@@ -36,11 +32,7 @@ export async function readRunningChatCount(
   return { kind: "count", count: facts.activeTurns };
 }
 
-/**
- * The line a claim's confirm and a give's disclosure print for the chats
- * that will stop, worded as the app's claim confirm words them. Nothing
- * running prints no line.
- */
+/** Worded as the app's claim confirm; nothing running prints no line. */
 export function runningChatsLine(running: RunningChats): string | null {
   switch (running.kind) {
     case "none":

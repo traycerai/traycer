@@ -366,12 +366,9 @@ function fingerprintOf(input: TaskCreateInput): string {
 }
 
 /**
- * With no `--profile`, nobody chose the account, so it is the host's default:
- * its Terminal login, or that provider's one signed-in profile when the
- * Terminal login shows as signed out. `--profile ambient` is the
- * Terminal login as chosen and is never moved. A list that cannot be read
- * leaves the Terminal login. Applied to what is sent, never to the
- * fingerprint, which records what the person asked for.
+ * Nobody chose, so the host's default: its Terminal login, or the provider's one
+ * signed-in profile when that login shows signed out. `--profile ambient` never
+ * moves. Applied to what is sent, never to the fingerprint.
  */
 async function withDefaultAccount(
   input: TaskCreateInput,

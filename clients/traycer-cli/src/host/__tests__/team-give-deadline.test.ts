@@ -20,16 +20,8 @@ import {
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
-// The give's readiness poll runs on the health probe's 45 s budget, and each
-// try bounds its host call with `AbortSignal.timeout(remainingMs)`. These
-// cases drive the real give (`useInstalledHostTeam`, the one transfer that
-// `host use`, `host install --team` and `host ensure --team` share) through
-// the real host call and the real host-only token open and recovery. Only the
-// edges are fakes: the host's websocket replies, authn's HTTP routes, the
-// token file, the clock and the native abort timer. The native
-// `AbortSignal.timeout` timer is not driven by fake timers, so it is replaced
-// by one that is, which aborts with the same `TimeoutError` at the same
-// requested time.
+// Fake timers do not drive the native `AbortSignal.timeout`, so it is replaced by
+// one they do, aborting with the same `TimeoutError` at the same requested time.
 
 const mocks = vi.hoisted(() => ({
   requestMock: vi.fn(),
@@ -203,7 +195,6 @@ const personalBinding = {
   canUnbind: false,
 };
 
-/** The sign-in's own record: Acme, listed by its slug. */
 function signInWithAcme() {
   const base = createAuthenticatedUserFixture(undefined);
   return {
@@ -413,11 +404,7 @@ interface GiveRun {
   readonly tokensAfterFirstCall: string;
 }
 
-/**
- * Runs the give on the fake clock until it settles, and reports when it did.
- * The first host call mints and saves the host-only token; the table is
- * recorded as it stands after that, to be compared with the end.
- */
+/** The table is recorded after the first host call's mint, to compare with the end. */
 async function runGive(): Promise<GiveRun> {
   let endedAtMs: number | null = null;
   let tokensAfterFirstCall = "";
@@ -536,7 +523,6 @@ describe("the team give's readiness poll", () => {
     expect(abortTimeoutRequests).toContain(1_000);
     expect(held[0].signal.aborted).toBe(true);
     expect(held[0].abortedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
-    // The try's own signal cancelled it, not the mint's 10 s request timeout.
     expect(held[0].reason).toMatchObject({ name: "AbortError" });
     expect(run.endedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
@@ -580,9 +566,6 @@ describe("the team give's readiness poll", () => {
     expect(held[0].abortedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
     expect(held[0].reason).toMatchObject({ name: "AbortError" });
     expect(run.endedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
-    // A mint the deadline cancelled is not a refusal: the give ends on the
-    // transfer line, not on the stored credential being rejected, and the
-    // token file keeps the token it held.
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 });

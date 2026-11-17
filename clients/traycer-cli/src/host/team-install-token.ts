@@ -159,8 +159,7 @@ export async function withTeamTokenInstall<T>(
 }
 
 /**
- * Stages a token this command minted on the person's sign-in, bound to the
- * environment id authn resolved the slug to, so the receipt is checked
+ * Bound to the environment id authn resolved the slug to, so the receipt is checked
  * against the team the host actually enrols with.
  */
 export async function withStagedTeamToken<T>(

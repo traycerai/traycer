@@ -248,8 +248,6 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
     >();
   return {
     ...actual,
-    // The sign-in's own record of the person's teams is read through this
-    // call; the order records when a command reads it.
     validateAuthTokenIdentityAccessOnly: (
       ...callArgs: Parameters<typeof mocks.validateIdentityMock>
     ) => {
@@ -601,10 +599,8 @@ function setStdoutIsTTY(value: boolean): void {
   });
 }
 
-/** A device flow that signs the person in and leaves the sign-in on disk. */
 function inlineSignInDeviceFlow(token: string): () => Promise<InlineSignIn> {
   return async () => {
-    // The inline sign-in is now the one the command resolves.
     mocks.resolveHostAuthMock.mockResolvedValue({
       token,
       authnBaseUrl: "https://authn.test",
@@ -675,7 +671,6 @@ describe("buildHostInstallCommand", () => {
       acceptStoreFormatLoss: false,
       site: "host install",
     });
-    // The signed-in person belongs to the acme team unless a case says not.
     mocks.validateIdentityMock.mockResolvedValue({
       kind: "valid",
       user: signedInAcmeUser(),
@@ -767,7 +762,6 @@ describe("buildHostInstallCommand", () => {
       }),
       ctx.progress,
     );
-    // A member's team is found in the sign-in's list before anything is staged.
     expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThanOrEqual(
       0,
     );
@@ -813,7 +807,6 @@ describe("buildHostInstallCommand", () => {
         exitCode: 1,
       });
 
-      // Nothing was staged, started or asked of a host.
       expect(mocks.callOrder).not.toContain("stage");
       expect(mocks.callOrder).not.toContain("commit");
       expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
@@ -823,7 +816,6 @@ describe("buildHostInstallCommand", () => {
       expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
       expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
       expect(mocks.legacyHost).toBeNull();
-      // The list refused it first: no token was asked for or kept.
       expect(mintRequests).toEqual([]);
       expect(stagedTeamTokenFile()).toBeNull();
     },
@@ -1050,8 +1042,6 @@ describe("buildHostInstallCommand", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    // The team is read from the sign-in's list twice: before anything is
-    // staged, and again by the transfer itself.
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
     expect(ctx.progress).not.toHaveBeenCalledWith(
@@ -1104,7 +1094,6 @@ describe("buildHostInstallCommand", () => {
     registerHostOnMachine();
     mocks.resolveHostAuthMock.mockResolvedValue(null);
     mocks.runDeviceAuthFlowMock.mockImplementation(() => {
-      // The inline sign-in is now the one the command resolves.
       mocks.resolveHostAuthMock.mockResolvedValue({
         token: "inline-team-token",
         authnBaseUrl: "https://authn.test",
@@ -1175,8 +1164,6 @@ describe("buildHostInstallCommand", () => {
         kind: "valid",
         user: signedInAcmeUser(),
       });
-      // What the machine holds for the host's first start, read where the
-      // command stages the bytes and where it starts the host.
       const tokenFileWhen: { at: string; file: string | null }[] = [];
       mocks.stageHostInstallSourceMock.mockImplementation(() => {
         tokenFileWhen.push({ at: "stage", file: stagedTeamTokenFile() });
@@ -1215,13 +1202,10 @@ describe("buildHostInstallCommand", () => {
         { at: "stage", file: MINTED_TOKEN_FILE },
         { at: "start", file: MINTED_TOKEN_FILE },
       ]);
-      // The team is found in the sign-in's list, then the token is minted:
-      // both before the first byte is staged.
       expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThan(-1);
       expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
         mocks.callOrder.indexOf("stage"),
       );
-      // The receipt is awaited after the host's start, for the minted target.
       expect(mocks.callOrder.indexOf("team-token-wait")).toBeGreaterThan(
         mocks.callOrder.indexOf("commit"),
       );
@@ -1239,7 +1223,6 @@ describe("buildHostInstallCommand", () => {
         teamBinding: null,
         teamInstallReceipt: receipt,
       });
-      // No personal credential, no transfer, no restart.
       expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
       expect(mocks.callOrder).not.toContain("credential-provision");
       expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
@@ -1249,7 +1232,6 @@ describe("buildHostInstallCommand", () => {
           message: expect.stringContaining("Restarting Traycer"),
         }),
       );
-      // The token never leaves the command.
       expect(JSON.stringify(result)).not.toContain(MINTED_TOKEN);
       expect(
         JSON.stringify(vi.mocked(ctx.output.human).mock.calls),

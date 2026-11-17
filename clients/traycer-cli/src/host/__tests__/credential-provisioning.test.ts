@@ -516,7 +516,6 @@ describe("provisionInstalledHostCredential", () => {
       "test-bearer-token",
       expect.anything(),
     );
-    // The mint is cancelled with the probe, and not with a signal of its own.
     expect(mocks.hostTokenMintMock.mock.calls[0][3]).toBe(probeSignal());
     expect(probeSignal().aborted).toBe(true);
     expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();

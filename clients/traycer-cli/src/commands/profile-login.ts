@@ -97,7 +97,6 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
-  /** Records a sign-in request at authn on this CLI's own sign-in. */
   readonly signInRequests: SignInRequestClient;
 }
 

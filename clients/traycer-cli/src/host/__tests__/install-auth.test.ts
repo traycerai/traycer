@@ -301,7 +301,6 @@ function movePlan() {
   });
 }
 
-/** The team a give call names, which the staged evidence has to repeat. */
 function movedTarget(params: unknown): {
   readonly environmentId: string;
   readonly teamId: string;
@@ -341,11 +340,9 @@ function moveOutcome(state: "running" | "done") {
   });
 }
 
-/** The computer's own running work, as `environment.previewLocalFacts` answers it. */
 let runningChatFacts: { activeTurns: number | null; terminals: number | null } =
   { activeTurns: 0, terminals: 0 };
 
-/** A computer that takes the give: it plans, stages, starts, and is then the team's. */
 function defaultMoveHostReply(
   method: string,
   params: unknown,
@@ -438,7 +435,6 @@ async function writeStoredCredentials(token: string): Promise<void> {
   );
 }
 
-/** The stored sign-in is the one the command pins: the give acts only on its own. */
 async function prepareTeamGive(token: string): Promise<void> {
   await writeStoredCredentials(token);
   mocks.resolveHostAuthMock.mockResolvedValue({
@@ -620,7 +616,6 @@ describe("install auth helpers", () => {
     mocks.callHostRpcAtResolvedEndpointMock.mockImplementation(
       defaultMoveHostReply,
     );
-    // The acceptance the give records at authn.
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(
@@ -813,8 +808,6 @@ describe("install auth helpers", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    // The plan is read before anything is printed, so a host that cannot
-    // transfer is refused with no disclosure and no restart line.
     expect(ctx.progress).not.toHaveBeenCalled();
     expect(legacyHost.requests).toEqual([]);
     expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
@@ -1055,7 +1048,6 @@ describe("install auth helpers", () => {
     expect(identityReads[0]).toBeLessThan(ownershipReads[0] ?? Infinity);
     expect(ownershipReads[0]).toBeLessThan(hostCallOrder[0] ?? Infinity);
     expect(ownershipReads[1]).toBeGreaterThan(hostCallOrder.at(-1) ?? Infinity);
-    // The sign-in is still stored at both owner checks, and cleared after.
     expect(credentialsAtOwnerChecks).toEqual([token, token]);
     expect(await readCredentialsFile(mocks.credentialsPath)).toBeNull();
   });
@@ -1143,7 +1135,6 @@ describe("install auth helpers", () => {
 
     expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
-    // The give is never sent twice: the lost start is followed on the poll.
     expect(hostCalls("environment.move.start")).toHaveLength(1);
     expect(
       [
@@ -1299,7 +1290,6 @@ describe("install auth helpers", () => {
 
     expect(hostCalls("environment.move.start")).toHaveLength(1);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    // The ownership read after the wait is never made for a wait that ran out.
     expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1360,8 +1350,6 @@ describe("install auth helpers", () => {
         );
       });
 
-    // The sign-in moved after the command pinned it, so the give is not
-    // confirmed as this command's: it fails closed.
     await expect(
       completeTeamInstall("acme", session, vi.fn()),
     ).rejects.toMatchObject({

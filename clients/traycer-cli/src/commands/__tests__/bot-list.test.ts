@@ -173,9 +173,7 @@ function signInUserFromDescriptors(
   });
 }
 
-/** Wires the sign-in identity, host RPC boundary, and stream client for `bot list`. */
 function stage(input: {
-  /** Environments carried by the sign-in identity response. */
   readonly environments: readonly EnvironmentDescriptor[];
   /** Host-side answer, deliberately independent from the sign-in record. */
   readonly hostEnvironments?: readonly EnvironmentDescriptor[];
@@ -249,7 +247,6 @@ beforeEach(() => {
     kind: "valid",
     user: signInUser({ personalEnvironmentId: null, teams: [] }),
   });
-  // No row for this computer: the sign-in's list is shown unchanged.
   hoisted.readHostOwnership.mockResolvedValue({ kind: "not-found" });
 });
 
@@ -775,7 +772,6 @@ describe("bot list", () => {
 
     it("reports the signed-out line when no sign-in is held at the directory read", async () => {
       stageThreeEnvironments();
-      // The sign-in read before it succeeds; the directory read finds no sign-in.
       hoisted.resolveHostAuth
         .mockResolvedValueOnce({
           token: "sign-in-bearer",
@@ -796,8 +792,6 @@ describe("bot list", () => {
     it("prints the door's own refusal, not the no-environments line, on a team's computer whose team the sign-in does not list", async () => {
       stageThreeEnvironments();
       ownedBy({ kind: "team", id: "team-not-listed", name: "outsiders" });
-      // The local open's mint answers `not-a-member`; `callHostRpc` then throws
-      // the CLI's own non-member line, which no `bot.list` answer replaces.
       hoisted.callHostRpc.mockRejectedValue(
         hostTokenFailureCliError({ kind: "not-a-member" }),
       );
@@ -1095,7 +1089,6 @@ describe("bot list on a host without bots", () => {
 
     await expectUpdateMessage(runList());
 
-    // The bot RPC failed first: no stream client was ever opened.
     expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
   });
 

@@ -34,22 +34,15 @@ export async function readProviderStates(): Promise<
   return (await readProvidersList()).providers;
 }
 
-/** The envelope includes whether this computer offers sign-ins. */
 export async function readProvidersList(): Promise<ProvidersListResponse> {
   return await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
   );
 }
 
-/** One provider as `providers.list` answers it, its rows with every list key. */
 export type ProviderListState = ProvidersListResponse["providers"][number];
 
-/**
- * The row of one provider that `id` names: the one row whose own `profileId` it
- * is or whose `aliases` (the ids of rows folded into it) hold it. An id that
- * more than one row lists is not guessed: null when no row or several rows list
- * it.
- */
+/** An id more than one row lists is not guessed: null when no row or several list it. */
 export function findProfileByIdOrAlias(
   profiles: readonly ProviderProfile[],
   id: string,
@@ -61,12 +54,7 @@ export function findProfileByIdOrAlias(
   return listing.length === 1 ? (listing[0] ?? null) : null;
 }
 
-/**
- * The listed row `id` names under `providerId`, read from `providers.list` the
- * moment before a change is sent. Null when the provider or the row is not
- * listed; the caller then sends `id` as typed, and the host's answer for a
- * missing profile is what the person sees.
- */
+/** Null when not listed: `id` goes as typed, and the host's answer is what the person sees. */
 export async function readListedProfile(
   providerId: ProviderId,
   id: string,
