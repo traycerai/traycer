@@ -21,7 +21,6 @@ import { isValidElement, type ReactNode } from "react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import { PushMuteReadsBridge } from "@/components/layout/bridges/push-mute-reads-bridge";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { doubleFor } from "@/components/settings/panels/__tests__/push-permission-double";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1233,10 +1232,12 @@ describe("NotificationEmissionController", () => {
     async function renderPhone(options: {
       readonly permission: "granted" | "denied";
       readonly muted: ReadonlyArray<"failure" | "info">;
-      readonly readsMounted: boolean;
+      /** Holds the muted-set read unanswered, as before it first lands. */
+      readonly readsHeld: boolean;
     }): Promise<PhoneRig> {
       const push = doubleFor(options.permission);
       push.setStoredMuted(options.muted);
+      if (options.readsHeld) push.holdReads();
       const base = createFakeRunnerHost({});
       const show = vi.fn<IRunnerHost["notifications"]["show"]>(() =>
         Promise.resolve("presented"),
@@ -1249,12 +1250,11 @@ describe("NotificationEmissionController", () => {
       render(
         <QueryClientProvider client={queryClient}>
           <RunnerHostProvider runnerHost={runnerHost}>
-            {options.readsMounted ? <PushMuteReadsBridge /> : null}
             <NotificationEmissionController />
           </RunnerHostProvider>
         </QueryClientProvider>,
       );
-      if (options.readsMounted) {
+      if (!options.readsHeld) {
         await waitFor(() => {
           expect(
             queryClient.getQueryData(
@@ -1284,7 +1284,7 @@ describe("NotificationEmissionController", () => {
       const { show } = await renderPhone({
         permission: "granted",
         muted: ["failure"],
-        readsMounted: true,
+        readsHeld: false,
       });
 
       arrive("muted");
@@ -1304,7 +1304,7 @@ describe("NotificationEmissionController", () => {
       const { show } = await renderPhone({
         permission: "denied",
         muted: ["failure"],
-        readsMounted: true,
+        readsHeld: false,
       });
 
       arrive("denied");
@@ -1320,7 +1320,7 @@ describe("NotificationEmissionController", () => {
       const { show } = await renderPhone({
         permission: "granted",
         muted: ["failure"],
-        readsMounted: false,
+        readsHeld: true,
       });
 
       arrive("unread-set");

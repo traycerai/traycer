@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
   displayAppLocalNotification,
   displayForwardedForegroundNotification,
@@ -6,6 +6,9 @@ import {
 } from "@/lib/notifications/notification-display";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationNotifies } from "@/hooks/notifications/use-notification-notifies";
+import { usePushMutedSeveritiesQuery } from "@/hooks/runner/use-push-muted-severities-query";
+import { usePushPermissionQuery } from "@/hooks/runner/use-push-permission-query";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   APP_LOCAL_NOTIFICATION_SEVERITY,
   useMergedNotificationsActions,
@@ -33,7 +36,8 @@ import {
 } from "@/lib/notifications/app-local-display-receipts";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
-export function NotificationEmissionController(): null {
+export function NotificationEmissionController(): ReactNode {
+  const { pushPermission } = useRunnerHost();
   const showNotification = useNotificationShow();
   const notifies = useNotificationNotifies();
   const { activate } = useNotificationActivation();
@@ -173,5 +177,17 @@ export function NotificationEmissionController(): null {
     return useAppLocalNotificationsStore.subscribe(scheduleDrain);
   }, [drainPendingNotifications, scheduleDrain]);
 
+  return pushPermission === null ? null : <PushMuteReads />;
+}
+
+/**
+ * Keeps the phone's push permission and muted set read for the whole session,
+ * not only while Settings → Alerts is open, because the toast gate
+ * (`useNotificationNotifies`) reads them at every arrival. Each read re-runs
+ * when the phone says it may have changed. Mounted only on a shell with push.
+ */
+function PushMuteReads(): null {
+  usePushPermissionQuery();
+  usePushMutedSeveritiesQuery();
   return null;
 }

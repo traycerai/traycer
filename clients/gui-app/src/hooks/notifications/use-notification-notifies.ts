@@ -21,8 +21,8 @@ export type NotificationNotifies = (
  * switch decides both the push while the app is away and the toast while it
  * is in front. Until that set is known, or while push is not on (when the
  * switches cannot be changed either), every kind interrupts, as it did before
- * the switches existed. `PushMuteReadsBridge` keeps the phone's two reads
- * current app-wide; this only reads what they cached.
+ * the switches existed. `NotificationEmissionController` keeps the phone's
+ * two reads current app-wide; this only reads what they cached.
  */
 export function useNotificationNotifies(): NotificationNotifies {
   const pushPermission = useRunnerHostOrNull()?.pushPermission ?? null;
