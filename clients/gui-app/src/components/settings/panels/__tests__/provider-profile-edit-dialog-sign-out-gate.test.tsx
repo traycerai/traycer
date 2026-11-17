@@ -5,6 +5,11 @@ import type {
   ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRecordClient } from "@traycer-clients/shared/host-client/profile-record-actions";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -46,6 +51,11 @@ const fixture = vi.hoisted(() => ({
   },
   supportChecks: [] as Array<{ hostId: string | null; method: string }>,
   openChanges: [] as boolean[],
+  authnRequests: [] as Array<{ method: string; url: string; body: unknown }>,
+  authnAnswer: (
+    _request: EnvironmentTransportRequest,
+  ): EnvironmentTransportAnswer => ({ status: 500, text: null }),
+  order: [] as string[],
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -54,6 +64,31 @@ vi.mock("@/lib/host", async (importOriginal) => {
     ...actual,
     useHostClient: () => fixture.client,
     useAuthService: () => fixture.auth,
+  };
+});
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  const cloud: EnvironmentCloud = {
+    authnBaseUrl: "https://authn.example.test",
+    bearer: { kind: "cloud", getBearerToken: () => "synthetic-person-session" },
+    transport: async (request) => {
+      fixture.authnRequests.push({
+        method: request.method,
+        url: request.url,
+        body: request.body,
+      });
+      fixture.order.push(`authn ${request.method}`);
+      return fixture.authnAnswer(request);
+    },
+    onOriginSignIn: () => true,
+  };
+  return {
+    ...actual,
+    useEnvironmentCloudOperation: () => () =>
+      actual.beginEnvironmentCloudOperation(() => cloud),
   };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -161,6 +196,7 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 }));
 
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 type CredentialHome = NonNullable<ProviderProfile["credentialHome"]>;
 
@@ -179,6 +215,46 @@ function credentialHome(
     observation: null,
     materialMatchesBinding: "yes",
   };
+}
+
+/** A brokered row admitted in an environment that is not a record. */
+function unmappedBrokeredProfile(
+  credentialIdentity: ProviderProfile["credentialIdentity"],
+): ProviderProfile {
+  return {
+    ...profile(
+      { kind: "admitted", bindingVersion: 7 },
+      {
+        ...credentialHome("brokered"),
+        environmentPresence: {
+          scope: "environment",
+          environmentId: "env-a",
+          state: "admitted",
+          retainedReason: null,
+          cause: null,
+        },
+      },
+    ),
+    environmentProfileId: "env-profile-1",
+    credentialIdentity,
+  };
+}
+
+const SPEND_SCOPED_IDENTITY: ProviderProfile["credentialIdentity"] = {
+  kind: "spend-scoped",
+  spendScopeKey: {
+    providerId: "claude-code",
+    accountId: "synthetic-account",
+    organizationId: null,
+  },
+  provenance: "synthetic",
+};
+
+const CONNECTION_URL =
+  "https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/env-profile-1";
+
+function json(status: number, body: unknown): EnvironmentTransportAnswer {
+  return { status, text: JSON.stringify(body) };
 }
 
 function profile(
@@ -304,6 +380,9 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.supportsSignOut = false;
     fixture.supportChecks = [];
     fixture.openChanges = [];
+    fixture.authnRequests = [];
+    fixture.order = [];
+    fixture.authnAnswer = () => ({ status: 500, text: null });
     fixture.offersSignIns = false;
     fixture.listScope = undefined;
     fixture.environments = undefined;
@@ -438,6 +517,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       providerId: "claude-code",
       profileId: "profile-work",
     });
+    expect(fixture.authnRequests).toEqual([]);
   });
 
   it("offers the record action without local credentials or legacy host support", async () => {
@@ -569,6 +649,166 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     await waitFor(() => expect(fixture.openChanges).toEqual([false]));
     expect(messenger.calls).toHaveLength(2);
+  });
+
+  describe("an unmapped brokered row", () => {
+    beforeEach(() => {
+      fixture.supportsSignOut = true;
+      useAuthStore.setState({ status: "signed-in" });
+    });
+
+    afterEach(() => {
+      useAuthStore.setState({ status: "signed-out" });
+    });
+
+    function installOrderedSignOutClient() {
+      const messenger = installSignOutClient();
+      messenger.setHandlers({
+        "providers.signOutProfile": () => {
+          fixture.order.push("host signOutProfile");
+          return { signedOut: true };
+        },
+      });
+      return messenger;
+    }
+
+    function confirmSignOut(): void {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Sign out on every host" }),
+      );
+      fireEvent.click(screen.getByTestId("confirm-action"));
+    }
+
+    it("disconnects at authn on the person's sign-in, then signs out on the host", async () => {
+      fixture.authnAnswer = () => json(200, { disconnected: true });
+      installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+      expect(fixture.authnRequests).toEqual([
+        {
+          method: "DELETE",
+          url: CONNECTION_URL,
+          body: { expectedBindingVersion: 7 },
+        },
+      ]);
+      expect(fixture.order).toEqual(["authn DELETE", "host signOutProfile"]);
+    });
+
+    it("disconnects a Claude setup token at its live connection's version", async () => {
+      fixture.authnAnswer = (request) =>
+        request.method === "GET"
+          ? json(200, {
+              connections: [
+                {
+                  profileId: "env-profile-1",
+                  harnessId: "claude",
+                  bindingVersion: 12,
+                  kind: "setup_token",
+                  status: "connected",
+                  linkedBy: null,
+                },
+              ],
+            })
+          : json(200, { disconnected: true });
+      installOrderedSignOutClient();
+      renderDialog(
+        unmappedBrokeredProfile({
+          kind: "unidentified",
+          provenance: "synthetic",
+          reason: "setup-token",
+        }),
+      );
+
+      confirmSignOut();
+
+      await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+      expect(fixture.authnRequests).toEqual([
+        {
+          method: "GET",
+          url: "https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections",
+          body: null,
+        },
+        {
+          method: "DELETE",
+          url: CONNECTION_URL,
+          body: { expectedBindingVersion: 12 },
+        },
+      ]);
+      expect(fixture.order).toEqual([
+        "authn GET",
+        "authn DELETE",
+        "host signOutProfile",
+      ]);
+    });
+
+    it("changes nothing when the disconnect fails", async () => {
+      fixture.authnAnswer = () => json(400, { code: "synthetic-refusal" });
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain("Couldn't sign out."),
+      );
+      expect(fixture.authnRequests).toHaveLength(1);
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
+    });
+
+    it("completes on a second Sign out when the host failed after the disconnect landed", async () => {
+      let disconnected = false;
+      fixture.authnAnswer = () => {
+        if (disconnected) return json(404, { code: "not_found" });
+        disconnected = true;
+        return json(200, { disconnected: true });
+      };
+      const messenger = installOrderedSignOutClient();
+      messenger.setHandlers({
+        "providers.signOutProfile": () => {
+          fixture.order.push("host signOutProfile");
+          throw new HostRpcError({
+            code: "RPC_ERROR",
+            message: "synthetic host failure",
+            requestId: "req-sign-out-host-failure",
+            method: "providers.signOutProfile",
+            fatalDetails: null,
+          });
+        },
+      });
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain("Couldn't sign out."),
+      );
+      expect(fixture.openChanges).toEqual([]);
+      await waitFor(() =>
+        expect(
+          screen.getByTestId<HTMLButtonElement>("confirm-action").disabled,
+        ).toBe(false),
+      );
+
+      messenger.setHandlers({
+        "providers.signOutProfile": () => {
+          fixture.order.push("host signOutProfile");
+          return { signedOut: true };
+        },
+      });
+      fireEvent.click(screen.getByTestId("confirm-action"));
+
+      await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+      expect(fixture.order).toEqual([
+        "authn DELETE",
+        "host signOutProfile",
+        "authn DELETE",
+        "host signOutProfile",
+      ]);
+    });
   });
 });
 
