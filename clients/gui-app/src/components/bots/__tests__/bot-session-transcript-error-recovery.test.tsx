@@ -12,14 +12,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_OUTDATED_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { HostRpcRegistry } from "@/lib/host";
 
 const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
-  hostClient: { getActiveHostId: () => "host-tab" } as {
-    readonly getActiveHostId: () => string | null;
-  } | null,
+  hostClient: null as HostRequester<HostRpcRegistry> | null,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -98,6 +99,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 // hooks only need to exist, never to be called, for this suite's assertion.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
+  useHostMethodSupport: () => true,
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
@@ -122,6 +124,7 @@ import {
 } from "@/components/bots/bot-identity-context";
 import {
   botReply,
+  hostClientLocatingOn,
   scriptedSession,
   sessionPrompt,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -250,13 +253,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   installLegendListViewportMetrics();
   mocks.sessions = {};
-  mocks.hostClient = { getActiveHostId: () => HOST_ID };
+  mocks.hostClient = hostClientLocatingOn(
+    { ...mockRemoteHostEntry, hostId: HOST_ID },
+    () => ({ turns: [] }),
+    [],
+  );
 });
 
 afterEach(() => {
   cleanup();
   getChatSessionRegistry().forceRelease(BOT_ID, TRUNK_ID, HOST_ID);
   mocks.sessions = {};
+  mocks.hostClient = null;
 });
 
 describe("a failed turn's error row, in a read-only bot session", () => {

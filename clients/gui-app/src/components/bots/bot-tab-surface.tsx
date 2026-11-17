@@ -1865,7 +1865,7 @@ function environmentBotsOf(
 function BotTabConnecting(): ReactNode {
   return (
     <div
-      className="flex h-full items-center justify-center text-muted-foreground"
+      className="flex size-full items-center justify-center text-muted-foreground"
       aria-busy="true"
       data-testid="bot-tab-connecting"
     >
