@@ -63,6 +63,10 @@ import {
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
 import {
+  DEFAULT_NOTIFICATION_NOTIFY,
+  type NotificationNotifyByEvent,
+} from "@/lib/notifications/notification-notify";
+import {
   DEFAULT_MIX_DIRECTOR,
   isMixDirectorId,
   type MixDirectorId,
@@ -366,6 +370,8 @@ export interface SettingsState {
   chatDockPanelHeight: number;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /** Which kinds of notification interrupt on this computer. */
+  notificationNotify: NotificationNotifyByEvent;
   /**
    * Whether the person wants the soundtrack on. A window's session follows it,
    * but not always at once: a launch or a sign-in opens the audio device on the
@@ -443,6 +449,10 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setNotificationNotifyForEvent: (
+    eventType: NotificationChimeEventType,
+    value: boolean,
+  ) => void;
   setSoundtrackEnabled: (value: boolean) => void;
   setSoundtrackDirector: (value: MixDirectorId) => void;
   setSoundtrackVolume: (value: number) => void;
@@ -494,6 +504,7 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "chatDockPanelHeight"
   | "notificationChimeSounds"
+  | "notificationNotify"
   | "soundtrackEnabled"
   | "soundtrackDirector"
   | "soundtrackVolume"
@@ -583,6 +594,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     chatDockPanelHeight: state.chatDockPanelHeight,
     notificationChimeSounds: state.notificationChimeSounds,
+    notificationNotify: state.notificationNotify,
     soundtrackEnabled: state.soundtrackEnabled,
     soundtrackDirector: state.soundtrackDirector,
     soundtrackVolume: state.soundtrackVolume,
@@ -640,6 +652,7 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       chatDockPanelHeight: CHAT_DOCK_PANEL_DEFAULT_HEIGHT_RATIO,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      notificationNotify: DEFAULT_NOTIFICATION_NOTIFY,
       soundtrackEnabled: false,
       soundtrackDirector: DEFAULT_MIX_DIRECTOR,
       soundtrackVolume: MIX_TUNING.volume.initial,
@@ -781,6 +794,18 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setNotificationNotifyForEvent: (eventType, value) => {
+        set((state) =>
+          state.notificationNotify[eventType] === value
+            ? state
+            : {
+                notificationNotify: {
+                  ...state.notificationNotify,
+                  [eventType]: value,
+                },
+              },
+        );
+      },
       setSoundtrackEnabled: (value) => {
         set((s) => ({
           soundtrackEnabled: value,
@@ -891,6 +916,9 @@ export const useSettingsStore = create<SettingsState>()(
           notificationChimeSounds: resolvePersistedNotificationChimeSounds(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
+          ),
+          notificationNotify: resolvePersistedNotificationNotify(
+            persisted.notificationNotify,
           ),
           soundtrackEnabled: persisted.soundtrackEnabled === true,
           soundtrackDirector: isMixDirectorId(persisted.soundtrackDirector)
@@ -1003,6 +1031,25 @@ function resolvePersistedNotificationChimeSounds(
     }
   }
 
+  return resolved;
+}
+
+/**
+ * Per kind, the stored switch when it is a boolean and the default otherwise:
+ * a blob written before the switches existed, or before a kind was added,
+ * takes that kind's default rather than turning it on or off by accident.
+ */
+function resolvePersistedNotificationNotify(
+  value: unknown,
+): NotificationNotifyByEvent {
+  const persisted = isRecord(value) ? value : {};
+  const resolved: Record<NotificationChimeEventType, boolean> = {
+    ...DEFAULT_NOTIFICATION_NOTIFY,
+  };
+  for (const eventType of NOTIFICATION_CHIME_EVENT_TYPES) {
+    const stored = persisted[eventType];
+    if (typeof stored === "boolean") resolved[eventType] = stored;
+  }
   return resolved;
 }
 

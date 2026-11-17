@@ -706,6 +706,7 @@ describe("live emission shows agent states only", () => {
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
   }
 

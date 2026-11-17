@@ -10,7 +10,7 @@ Traycer notifies you when an agent needs your approval or an answer, when someth
 | [Notification center](#notification-center) | The full list, opened from the bell in the app header. |
 | [Tab indicators](#tab-indicators) | A status icon on the Task and agent that the notification is about. |
 | [OS notifications](#os-notifications) | A system notification when no Traycer window has focus. |
-| [Phone](#push-notifications-on-your-phone) | A push notification from the mobile app, for the severities each host has turned on. |
+| [Phone](#push-notifications-on-your-phone) | A push notification from the mobile app, for the kinds turned on for that phone. |
 | [Sounds](#sounds) | A chime for each kind of notification. |
 | [Hooks](#hooks) | A script or URL the host calls, for your own automation. |
 
@@ -25,7 +25,7 @@ Each notification has a severity:
 | **Done** | Completed or intentionally stopped turns. |
 | **Info** | Updates that need nothing from you. |
 
-Each host creates its own notifications. Which severities a host creates is set per host in [Settings › Notifications](/settings/notifications). **Info** is off by default; the others are on.
+Each host creates its own notifications, of every severity. Which ones interrupt you is chosen on each computer and phone in [Settings › Alerts](/settings/alerts). On a computer, **Info** is off by default and the others are on; on a phone, all four are on. A notification that doesn't interrupt you still appears in the notification center and counts as unread.
 
 ## Notification Center
 
@@ -47,7 +47,7 @@ The buttons at the top of the center:
 | **Filter** | Filters **Recent activity** by **Unread only** and by category: **Task activity**, **Collaboration**, and **System issues**. It doesn't hide anything in **Needs attention**. |
 | **Mark all as read** | Marks every notification as read. |
 | **Clear notifications** | Asks to confirm, then clears the list. Cleared notifications don't come back. |
-| **Notification settings** | Opens [Settings › Notifications](/settings/notifications). |
+| **Notification settings** | Opens [Settings › Alerts](/settings/alerts). |
 
 While Traycer's cloud feed is connected, the center shows notifications from all of your hosts. If it can't reach the feed, it says so and shows the notifications already on this device until it reconnects.
 
@@ -67,7 +67,7 @@ An approval, question or browser indicator stays until you respond. A failure or
 
 ## OS Notifications
 
-The desktop app shows a system notification only when **every** Traycer window is unfocused. While you're working in a Traycer window, a new notification appears as a message inside the app instead.
+The desktop app shows a system notification only when **every** Traycer window is unfocused. While you're working in a Traycer window, a new notification appears as a message inside the app instead. Either way, only the kinds turned on under **Notify** in [Settings › Alerts](/settings/alerts) do.
 
 Click a system notification to open what it's about. A newer notification about the same Task or agent replaces the earlier one rather than stacking.
 
@@ -75,11 +75,11 @@ Banners, badges and sounds for system notifications are managed in your operatin
 
 ## Push Notifications On Your Phone
 
-The [mobile app](/account/mobile-app) can notify your phone of a host's notifications; which severities a host creates is set per host in [Settings › Notifications](/settings/notifications). In the mobile app, open **Settings › Alerts** and turn on **Push notifications** with **Enable**. If you turned notifications off for Traycer in the phone's settings, the row says so and offers **Open Settings**. A switch under the row for each severity chooses which kinds reach this phone; see [Alerts](/settings/alerts#this-phone).
+The [mobile app](/account/mobile-app) can notify your phone of a host's notifications. In the mobile app, open **Settings › Alerts** and turn on **Push notifications** with **Enable**. If you turned notifications off for Traycer in the phone's settings, the row says so and offers **Open Settings**. A **Push** switch for each severity chooses which kinds reach this phone, and which show a message inside the app while it is open; see [Alerts](/settings/alerts#push).
 
 ## Sounds
 
-The app plays a chime for each severity while a Traycer window has focus. Choose the chimes, or turn them off, in [Settings › Sounds](/settings/sounds). Chimes apply to every host.
+The app plays a chime for each severity while a Traycer window has focus, for the kinds that interrupt you. Choose the chimes, or turn them off, in [Settings › Alerts](/settings/alerts#chime). Chimes apply to every host.
 
 ## Hooks
 
