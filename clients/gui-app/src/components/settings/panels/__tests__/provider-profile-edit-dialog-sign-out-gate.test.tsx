@@ -1,6 +1,8 @@
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   ProviderCliState,
   ProviderProfile,
+  ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRecordClient } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -28,6 +30,8 @@ const fixture = vi.hoisted(() => ({
   hostId: "mock-local",
   supportsSignOut: false,
   offersSignIns: false,
+  listScope: undefined as ProvidersListResponse["scope"],
+  environments: undefined as EnvironmentListResponseV11 | undefined,
   bindingAnswer: "bound" as
     | "bound"
     | "own_settings"
@@ -98,8 +102,16 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
-    data: fixture.offersSignIns ? { offersSignIns: true } : undefined,
+    data: fixture.offersSignIns
+      ? { offersSignIns: true, scope: fixture.listScope }
+      : undefined,
   }),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-environment-list-query")
+  >()),
+  useEnvironmentListQuery: () => ({ data: fixture.environments }),
 }));
 vi.mock(
   "@/components/settings/personal/personal-page-context",
@@ -293,6 +305,8 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.supportChecks = [];
     fixture.openChanges = [];
     fixture.offersSignIns = false;
+    fixture.listScope = undefined;
+    fixture.environments = undefined;
     fixture.bindingAnswer = "bound";
     fixture.bindingRefetch.mockReset();
     fixture.auth.signOutProfileRecord.mockReset().mockResolvedValue({
@@ -555,5 +569,150 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     await waitFor(() => expect(fixture.openChanges).toEqual([false]));
     expect(messenger.calls).toHaveLength(2);
+  });
+});
+
+type EnvironmentPresence = CredentialHome["environmentPresence"];
+
+function environmentRow(
+  environmentId: string,
+  ownerKind: "user" | "organization",
+  label: string,
+): EnvironmentListResponseV11["environments"][number] {
+  return {
+    environmentId,
+    ownerKind,
+    ownerId: `owner-${environmentId}`,
+    roomId: `room-${environmentId}`,
+    label,
+    effectiveRole: ownerKind === "user" ? "owner" : "admin",
+    kind: ownerKind === "user" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: null,
+  };
+}
+
+function namingPresence(environmentId: string): EnvironmentPresence {
+  return {
+    scope: "environment",
+    environmentId,
+    state: "admitted",
+    retainedReason: null,
+    cause: null,
+  };
+}
+
+function recordRowWithFolder(presence: EnvironmentPresence): ProviderProfile {
+  return {
+    ...profile(undefined, {
+      ...credentialHome("self-sufficient"),
+      environmentPresence: presence,
+    }),
+    aliases: [],
+  };
+}
+
+const RECORD_ROW_WITHOUT_FOLDER: ProviderProfile = {
+  ...profile(undefined, undefined),
+  aliases: [],
+};
+
+describe("<ProfileEditDialog /> record sign-out and remove name the environment", () => {
+  beforeEach(() => {
+    fixture.client = null;
+    fixture.offersSignIns = true;
+    fixture.listScope = undefined;
+    fixture.environments = undefined;
+    fixture.bindingAnswer = "bound";
+  });
+
+  afterEach(() => {
+    cleanup();
+    fixture.client = null;
+  });
+
+  it.each([
+    {
+      name: "a team the row's presence names",
+      row: recordRowWithFolder(namingPresence("env-team")),
+      scope: undefined,
+      environmentName: "Acme",
+    },
+    {
+      name: "Personal when the row's presence names the person's own environment",
+      row: recordRowWithFolder(namingPresence("env-personal")),
+      scope: undefined,
+      environmentName: "Personal",
+    },
+    {
+      name: "Personal for a record row with a folder here whose presence names none",
+      row: recordRowWithFolder(null),
+      scope: "personal" as const,
+      environmentName: "Personal",
+    },
+    {
+      name: "Personal for a record row with a folder here that signed out locally",
+      row: recordRowWithFolder({
+        scope: "local",
+        state: "absent",
+        retainedReason: null,
+        cause: "signed-out-by-person",
+      }),
+      scope: "personal" as const,
+      environmentName: "Personal",
+    },
+    {
+      name: "Personal for a record row with no folder here on a Personal computer",
+      row: RECORD_ROW_WITHOUT_FOLDER,
+      scope: "personal" as const,
+      environmentName: "Personal",
+    },
+    {
+      name: "the fallback for a record row with no folder here on a team computer",
+      row: RECORD_ROW_WITHOUT_FOLDER,
+      scope: null,
+      environmentName: "this environment",
+    },
+  ])(
+    "titles Sign out with $name",
+    ({ row, scope, environmentName }) => {
+      fixture.listScope = scope;
+      fixture.environments = {
+        environments: [
+          environmentRow("env-personal", "user", "Personal"),
+          environmentRow("env-team", "organization", "Acme"),
+        ],
+      };
+      renderDialog(row);
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+      expect(
+        screen.getByText(/^Sign out of Work account in /).textContent,
+      ).toBe(`Sign out of Work account in ${environmentName}?`);
+    },
+  );
+
+  it("keeps the fallback when the row names an environment the list cannot read, even on a Personal computer", () => {
+    fixture.listScope = "personal";
+    fixture.environments = undefined;
+    renderDialog(recordRowWithFolder(namingPresence("env-team")));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(
+      screen.getByText(/^Sign out of Work account in /).textContent,
+    ).toBe("Sign out of Work account in this environment?");
+  });
+
+  it("names the same environment in the Remove body", () => {
+    fixture.listScope = "personal";
+    renderDialog(RECORD_ROW_WITHOUT_FOLDER);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
+
+    expect(
+      screen.getByText(/^Remove Work account from every list in /).textContent,
+    ).toContain("every list in Personal.");
   });
 });
