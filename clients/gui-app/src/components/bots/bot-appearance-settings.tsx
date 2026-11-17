@@ -46,14 +46,17 @@ const COLORS: readonly number[] = Array.from(
   (_, index) => index,
 );
 
-/** A part's name as its button reads it: "Blob", "Shades", "None". */
+/**
+ * A part's name as its button reads it: "Blob", "Shades", "None". The
+ * eyewear stored as `glasses` is drawn as wide eyes, and is named for that.
+ */
 function partName(part: string): string {
+  if (part === "glasses") return "Wide eyes";
   return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
 /**
- * A bot's icon, its colour, what it wears and its channel's background, in
- * its channel settings. Each part starts as the one the bot's id gives it.
+ * A bot's icon, its colour and what it wears, in its channel settings. Each part starts as the one the bot's id gives it.
  * Drawn where the tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
@@ -122,14 +125,6 @@ export function BotAppearanceSettings(props: {
         pending={saver.saving("accessory")}
         refusal={saver.refusal("accessory")}
         onChange={(accessory) => change({ accessory })}
-      />
-      <ColorSection
-        label="Background"
-        testId="bot-settings-background"
-        chosen={appearance.background}
-        pending={saver.saving("background")}
-        refusal={saver.refusal("background")}
-        onChange={(background) => change({ background })}
       />
     </>
   );

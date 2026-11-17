@@ -12,11 +12,15 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { HostRpcRegistry } from "@/lib/host";
 
 const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
+  hostClient: null as HostRequester<HostRpcRegistry> | null,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -49,7 +53,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 // vacuously absent regardless of the fix. A non-null stub makes it genuinely
 // reachable pre-fix.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ getActiveHostId: () => HOST_ID }),
+  useTabHostClient: () => mocks.hostClient,
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
@@ -106,6 +110,7 @@ import {
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
 import {
+  hostClientLocatingOn,
   scriptedSession,
   sessionPrompt,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -204,11 +209,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   installLegendListViewportMetrics();
   mocks.sessions = {};
+  mocks.hostClient = hostClientLocatingOn(
+    { ...mockRemoteHostEntry, hostId: HOST_ID },
+    () => ({ turns: [] }),
+    [],
+  );
 });
 
 afterEach(() => {
   cleanup();
   mocks.sessions = {};
+  mocks.hostClient = null;
 });
 
 describe("a failed worktree setup, in a read-only bot session", () => {

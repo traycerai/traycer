@@ -173,6 +173,26 @@ test("does not hold a row that was only clicked, once the pointer has left", asy
   await expect.poll(() => laneOf(watcher)).toBe("to-review");
 });
 
+test("keeps a task opened from To review there once it is read, until another task is opened", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const release = row(page, "release");
+  const at = await centreOf(release);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "release", "idle");
+
+  // Read, so its row no longer says "Done", and still where it was clicked.
+  await expect(release.getByTestId("side-tab-section-detail")).toHaveCount(0);
+  expect(await laneOf(release)).toBe("to-review");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(release)).toBe("idle");
+});
+
 test.describe("over a list that overflows", () => {
   test.use({ viewport: { width: 900, height: 700 } });
 

@@ -140,7 +140,6 @@ export type MascotTone =
   | "eye"
   | "white"
   | "lens"
-  | "bridge"
   | "leaf"
   | "stem"
   | "accessory";
@@ -326,7 +325,9 @@ type Stamp = readonly [number, number, MascotTone];
 /**
  * The face's cells over the body. The lens cells are the eye's own and the
  * cell inside each, so eyewear never widens the face; behind a dark lens the
- * eyes are hidden and its glint carries the pose instead.
+ * eyes are hidden and its glint carries the pose instead. `glasses` is drawn
+ * as wide eyes: a white around each pupil with nothing joining the two, and
+ * no white while the eye is shut.
  */
 function faceOf(
   eyes: MascotEyes,
@@ -362,9 +363,7 @@ function faceOf(
           [left + 1, y + 1, "eye"],
           [right - 1, y + 1, "eye"],
         ];
-    const frame = [...lenses("white"), ...bridge("bridge")];
-    if (shut) return [...frame, ...closed];
-    return blink ? frame : [...frame, ...pupils];
+    return shut || blink ? closed : [...lenses("white"), ...pupils];
   }
   if (eyewear === "shades") {
     const shift = glance || blink ? 1 : 0;
@@ -552,9 +551,19 @@ function smallFaceOf(
   if (eyewear === "visor") {
     return shut ? band("lens") : [...band("lens"), [2 + beat, "white"]];
   }
-  const eyes = smallEyesOf(shut, blink, beat === 1);
-  if (eyewear === "none") return eyes;
-  return [[1, "white"], [5, "white"], [3, "bridge"], ...eyes];
+  const glance = beat === 1;
+  const eyes = smallEyesOf(shut, blink, glance);
+  if (eyewear === "none" || shut || blink) return eyes;
+  const whites: ReadonlyArray<readonly [number, MascotTone]> = glance
+    ? [
+        [2, "white"],
+        [4, "white"],
+      ]
+    : [
+        [1, "white"],
+        [5, "white"],
+      ];
+  return [...whites, ...eyes];
 }
 
 /** What the small drawing carries, on its top row. */
@@ -630,7 +639,7 @@ interface MascotRamp {
   /** Darkest first: outline, shade, base, light, highlight. */
   readonly tones: readonly [string, string, string, string, string];
   readonly eye: string;
-  /** The white of an eye behind glasses, and a glint on a dark lens. */
+  /** The white of a wide eye, and a glint on a dark lens. */
   readonly white: string;
 }
 
@@ -664,9 +673,8 @@ function rampAround(hue: number, saturation: number, base: number): MascotRamp {
 export const DEFAULT_MASCOT_SHAPE: MascotShape = "blob";
 export const DEFAULT_MASCOT_RAMP: MascotRamp = rampAround(192, 32, 68);
 
-/** A dark lens, whatever the body's colour, and the bridge of a pair of glasses. */
+/** A dark lens, whatever the body's colour. */
 const LENS_COLOUR = hsl(220, 12, 7);
-const BRIDGE_COLOUR = hsl(220, 12, 14);
 const LEAF_COLOUR = hsl(128, 62, 56);
 const STEM_COLOUR = hsl(134, 55, 36);
 
@@ -715,8 +723,6 @@ function fillOf(tone: MascotTone, look: MascotLook): string {
       return look.ramp.white;
     case "lens":
       return LENS_COLOUR;
-    case "bridge":
-      return BRIDGE_COLOUR;
     case "leaf":
       return LEAF_COLOUR;
     case "stem":

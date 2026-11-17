@@ -30,7 +30,11 @@ import { StripNeedsYouChip } from "./strip-needs-you-chip";
 import { StripRowMotion } from "./strip-row-motion";
 import { StripSectionHeader } from "./strip-section-header";
 import { useStripSectionFolded } from "./strip-section-fold";
-import { holdInPlace, useStripSectionHolds } from "./strip-section-hold";
+import {
+  holdInPlace,
+  useOpenedSectionHold,
+  useStripSectionHolds,
+} from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
 import {
   sectionSegmentsOf,
@@ -62,7 +66,8 @@ import { StripSectionsContext } from "./strip-sections-context";
  *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
- * it. Arrivals in Needs you are announced, and while that section's header is
+ * it. A task opened from To review stays there while it is the current one,
+ * though opening it read it. Arrivals in Needs you are announced, and while that section's header is
  * out of view the header stuck on top holds a "↑ N need you" chip.
  */
 export function SideStripSections(props: {
@@ -79,9 +84,16 @@ export function SideStripSections(props: {
     props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
+  const opened = useOpenedSectionHold(
+    assigned,
+    controller.layoutItems,
+    controller.activeItemId,
+    holds,
+  );
+  // A row the person is on is held where it is drawn, over where it was opened.
   const sections = useMemo(
-    () => holdInPlace(assigned, holds),
-    [assigned, holds],
+    () => holdInPlace(assigned, opened === null ? holds : [opened, ...holds]),
+    [assigned, opened, holds],
   );
   const announcement = useNeedsYouAnnouncement(assigned);
   const slide = useMotionEnabled();

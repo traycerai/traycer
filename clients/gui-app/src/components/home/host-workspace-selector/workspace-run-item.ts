@@ -58,6 +58,11 @@ export interface WorkspaceRunItem {
   readonly removeDisabled: boolean;
   readonly removeDisabledReason: string | null;
   readonly removePending: boolean;
+  /**
+   * Set on a row whose removal is a plain removal on a surface that otherwise
+   * moves removed folders to Recent: the host has not confirmed this path.
+   */
+  readonly removeSkipsRecent?: boolean;
   readonly onSelectMode: (mode: WorkspaceRunMode) => void;
   readonly onEmit: (intent: WorktreeFolderIntent) => void;
   readonly onLocate: (() => void) | null;
