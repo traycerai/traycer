@@ -1,4 +1,3 @@
-import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type { HostTransportEndpoint } from "./host-messenger";
 import {
   LocalOpenAuth,
@@ -108,11 +107,6 @@ import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refus
  * about the values it wants. The ping loop is gated to ~25s per the tech
  * plan's decision #14; `pongTimeoutMs` is the "N missed pongs" cutoff.
  */
-export interface LocalMemberProvision {
-  readonly mint: (hostId: string) => Promise<MemberCredentialHandoff | null>;
-  readonly onSent: (credential: MemberCredentialHandoff) => void;
-}
-
 export interface WsStreamClientOptions<
   Registry extends VersionedStreamRpcRegistry,
 > {
@@ -143,7 +137,6 @@ export interface WsStreamClientOptions<
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth?: LocalOpenAuth;
-  readonly localMemberProvision?: LocalMemberProvision;
   /** Told of every refusal this host sends at its door and of every open it admits. */
   readonly door?: SessionDoorObserver;
   /**
@@ -618,7 +611,6 @@ export class WsStreamClient<
       endpoint: this.options.endpoint,
       bearer: this.bearer,
       localOpenAuth: this.options.localOpenAuth,
-      localMemberProvision: this.options.localMemberProvision,
       door: this.options.door,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
@@ -1652,7 +1644,6 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth: LocalOpenAuth | undefined;
-  readonly localMemberProvision: LocalMemberProvision | undefined;
   readonly door: SessionDoorObserver | undefined;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
@@ -2421,41 +2412,39 @@ class StreamSession<
     const pending = new AbortController();
     this.grantMintAbort = pending;
     try {
-      if (this.config.localMemberProvision === undefined) {
-        const readiness = await auth.ensureMemberReady(
-          selected,
-          bearer,
-          pending.signal,
-        );
-        if (
-          this.disposed ||
-          pending.signal.aborted ||
-          this.grantMintAbort !== pending
-        )
-          return;
-        if (readiness.kind === "reprobe") {
+      const readiness = await auth.ensureMemberReady(
+        selected,
+        bearer,
+        pending.signal,
+      );
+      if (
+        this.disposed ||
+        pending.signal.aborted ||
+        this.grantMintAbort !== pending
+      )
+        return;
+      if (readiness.kind === "reprobe") {
+        this.grantMintAbort = null;
+        if (this.grantReprobed) this.goTerminal(readiness.fatal);
+        else {
+          this.grantReprobed = true;
+          this.connect();
+        }
+        return;
+      }
+      if (readiness.kind !== "ready") {
+        if (!auth.requiresSessionGrant(selected.hostId)) {
           this.grantMintAbort = null;
-          if (this.grantReprobed) this.goTerminal(readiness.fatal);
-          else {
-            this.grantReprobed = true;
-            this.connect();
-          }
+          this.connect();
           return;
         }
-        if (readiness.kind !== "ready") {
-          if (!auth.requiresSessionGrant(selected.hostId)) {
-            this.grantMintAbort = null;
-            this.connect();
-            return;
-          }
-          this.grantMintAbort = null;
-          if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
-          else
-            this.dropAndReconnect(
-              readiness.retryCause ?? teamMembershipUnavailable(),
-            );
-          return;
-        }
+        this.grantMintAbort = null;
+        if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
+        else
+          this.dropAndReconnect(
+            readiness.retryCause ?? teamMembershipUnavailable(),
+          );
+        return;
       }
       const provision = await auth.mint(
         selected.hostId,
@@ -2677,7 +2666,7 @@ class StreamSession<
 
     const kind = parsed["kind"];
     if (kind === "openAck") {
-      this.handleOpenAckFrame(parsed, false);
+      this.handleOpenAckFrame(parsed);
       return;
     }
     if (kind === "fatalError") {
@@ -2796,46 +2785,7 @@ class StreamSession<
     this.emitServerFrame(envelope, data);
   }
 
-  private async provisionMemberBeforeSubscribe(
-    parsed: object,
-    socket: StreamWebSocketLike,
-    hostId: string,
-    provision: LocalMemberProvision,
-  ): Promise<void> {
-    let credential: MemberCredentialHandoff | null;
-    try {
-      credential = await provision.mint(hostId);
-    } catch {
-      credential = null;
-    }
-    if (
-      this.disposed ||
-      this.activeSocket !== socket ||
-      this.phase !== "awaitingOpenAck"
-    )
-      return;
-    if (credential === null) {
-      this.teardownSocket(1000, "member-provision-unavailable");
-      this.dropAndReconnect(teamMembershipUnavailable());
-      return;
-    }
-    if (
-      !this.sendControlText(socket, {
-        kind: "hostCredentialProvision",
-        ...credential,
-      })
-    ) {
-      this.onSendFailure(socket);
-      return;
-    }
-    provision.onSent(credential);
-    this.handleOpenAckFrame(parsed, true);
-  }
-
-  private handleOpenAckFrame(
-    parsed: object,
-    memberProvisionSent: boolean,
-  ): void {
+  private handleOpenAckFrame(parsed: object): void {
     if (this.phase !== "awaitingOpenAck") {
       this.teardownSocket(4003, "unexpected-openAck");
       this.onTransportDrop();
@@ -2858,30 +2808,6 @@ class StreamSession<
       STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
     );
     const hostCredentialState = ackParse.data.hostCredentialState;
-    if (
-      this.usesSessionGrant &&
-      this.config.localMemberProvision !== undefined &&
-      !memberProvisionSent
-    ) {
-      if (
-        !this.supportsHostCredentialProvision ||
-        this.openFrameHostId === null ||
-        this.activeSocket === null
-      ) {
-        this.teardownSocket(1000, "member-provision-unavailable");
-        this.dropAndReconnect(teamMembershipUnavailable());
-        return;
-      }
-      // Keep the original OPEN_ACK deadline armed while minting. No data
-      // method may start until the actual member frame is written first.
-      void this.provisionMemberBeforeSubscribe(
-        parsed,
-        this.activeSocket,
-        this.openFrameHostId,
-        this.config.localMemberProvision,
-      );
-      return;
-    }
     if (this.openAckTimer !== null) {
       clearTimeout(this.openAckTimer);
       this.openAckTimer = null;
@@ -2889,7 +2815,6 @@ class StreamSession<
     this.config.door?.admitted();
     if (
       this.usesSessionGrant &&
-      this.config.localMemberProvision === undefined &&
       this.openFrameHostId !== null &&
       this.openFrameBearer !== null
     ) {

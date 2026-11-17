@@ -133,7 +133,7 @@ export function buildRawHostMessengerForTarget<
     return null;
   if (isPoolHostDirectoryEntry(params.target)) {
     // The server pool: the same session as a host's, on a direct leg. What
-    // `open` presents (the user bearer, `authz: null`, no member credential)
+    // `open` presents (the user bearer, `authz: null`)
     // is fixed by the entry's kind here, before any byte is exchanged.
     const poolTransport = createPoolHostTransport<
       Registry,

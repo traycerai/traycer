@@ -329,7 +329,6 @@ describe("host-token renewal", () => {
       await vi.waitFor(() =>
         expect(relayPeer.credentialUpdates).toContainEqual({
           bearer: "relay-host-token-after-rotation",
-          memberCredential: null,
         }),
       );
 

@@ -393,7 +393,6 @@ export function createRemoteHostTransport<
         // verdict; a composition that should not make silence claims (a
         // host-to-host dialer) passes `null` at its own constructor.
         livenessProbe: HOST_STATUS_LIVENESS_PROBE,
-        mintMemberCredential: null,
       });
       // A renewed token reaches the open connection in place.
       const stopRenewals = options.hostTokens.subscribe((change) => {
@@ -427,7 +426,7 @@ export function createRemoteHostTransport<
 /**
  * What a session to the server pool needs from its caller. A subset of
  * {@link CreateRemoteTransportOptions}: no relay, no authn mint, no host key,
- * no member credential, and no evidence choice (see `createPoolHostTransport`).
+ * and no evidence choice (see `createPoolHostTransport`).
  */
 export interface CreatePoolTransportOptions<
   RpcRegistry extends VersionedRpcRegistry,

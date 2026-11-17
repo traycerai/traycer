@@ -25,11 +25,9 @@ import {
   NOISE_PROLOGUE,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   QosClass,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
-  type MemberCredentialHandoff,
 } from "@traycer/protocol/host-transport/mux";
 import {
   ChunkReassembler,
@@ -76,13 +74,6 @@ const FLOOR_RPC_MANIFEST = splitConnectionManifest(
   RELEASED_FLOOR_METHOD_NAMES,
   SERVES_EVERY_INSTALLED_MAJOR,
 ).manifest;
-
-const MEMBER_HANDOFF: MemberCredentialHandoff = {
-  token: "member-token",
-  refreshToken: "member-refresh-token",
-  familyId: "family-1",
-  provisionedAt: "2026-10-19T00:00:00.000Z",
-};
 
 type PeerMode = "relay" | "pool";
 type DialStep = "accept" | "refuse" | { readonly slowMs: number };
@@ -143,14 +134,11 @@ class WirePeer {
   /** Every text frame the client sent (keepalive pings, relay control). */
   readonly textFrames: string[] = [];
   readonly requests: { method: string; requestId: string }[] = [];
-  /** The json of every CREDENTIAL_UPDATE frame the client sent. */
-  readonly credentialUpdates: unknown[] = [];
   readonly errors: unknown[] = [];
   /** How the next dials go; an exhausted plan accepts. */
   dialPlan: DialStep[] = [];
   /** While set, every dial is refused (the socket closes without opening). */
   refuseAll = false;
-  openAckCapabilities: string[] = [];
   unaryError: { readonly code: string; readonly message: string } | null = null;
 
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
@@ -325,10 +313,6 @@ class WirePeer {
     connection: PeerConnection,
     message: ReassembledMessage,
   ): Promise<void> {
-    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
-      this.credentialUpdates.push(message.json);
-      return;
-    }
     if (message.type === MuxFrameType.REQUEST) {
       const json = message.json ?? {};
       const method = typeof json.method === "string" ? json.method : "";
@@ -370,7 +354,7 @@ class WirePeer {
             SERVES_EVERY_INSTALLED_MAJOR,
           ),
         },
-        capabilities: this.openAckCapabilities,
+        capabilities: [],
       },
       binary: null,
     });
@@ -516,10 +500,7 @@ function buildPoolSession(
   });
 }
 
-function buildRelaySession(
-  peer: WirePeer,
-  mint: ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null,
-): HostSession {
+function buildRelaySession(peer: WirePeer): HostSession {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "host-1",
@@ -542,7 +523,6 @@ function buildRelaySession(
     evidence: NO_TRANSPORT_EVIDENCE,
     clientIdentity: TEST_CLIENT_IDENTITY,
     livenessProbe: null,
-    mintMemberCredential: mint,
   });
 }
 
@@ -591,7 +571,7 @@ afterEach(() => {
 describe("a pool session on the one remote session wire", () => {
   it("reaches ready on the floor-only ack with the user bearer, while the relay open carries the host token", async () => {
     const relayPeer = new WirePeer("relay");
-    const relay = buildRelaySession(relayPeer, null);
+    const relay = buildRelaySession(relayPeer);
     const poolPeer = new WirePeer("pool");
     const pool = buildPoolSession(
       poolPeer,
@@ -619,42 +599,6 @@ describe("a pool session on the one remote session wire", () => {
       });
       expect(poolPeer.openPhaseFrames.length).toBeGreaterThan(0);
       expect(poolPeer.errors).toEqual([]);
-    } finally {
-      relay.close();
-      pool.close();
-    }
-  });
-
-  it("presents no authz and never requests or spends a member credential, even when the ack offers it", async () => {
-    const poolPeer = new WirePeer("pool");
-    poolPeer.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
-    const pool = buildPoolSession(
-      poolPeer,
-      new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
-    );
-    // The control: the same offer on a relay session with a minter wired
-    // DOES hand a credential over, so its absence below is the pool's
-    // doing and not the fake's.
-    const relayPeer = new WirePeer("relay");
-    relayPeer.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
-    const relay = buildRelaySession(relayPeer, () =>
-      Promise.resolve(MEMBER_HANDOFF),
-    );
-    try {
-      relay.start();
-      pool.start();
-      await vi.waitFor(() => expect(relay.isReady()).toBe(true), WAIT);
-      await vi.waitFor(() => expect(pool.isReady()).toBe(true), WAIT);
-      await vi.waitFor(
-        () => expect(relayPeer.credentialUpdates).toHaveLength(1),
-        WAIT,
-      );
-
-      expect(poolPeer.opens[0].authz).toBeNull();
-      expect(poolPeer.opens[0].capabilities).not.toContain(
-        SESSION_CAPABILITY_MEMBER_CREDENTIAL,
-      );
-      expect(poolPeer.credentialUpdates).toEqual([]);
     } finally {
       relay.close();
       pool.close();

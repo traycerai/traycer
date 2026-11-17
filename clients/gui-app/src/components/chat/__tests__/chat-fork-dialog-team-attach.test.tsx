@@ -1072,7 +1072,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
   });
   it("sends the attachment through the tab's own host when the app-wide host is a team host", async () => {
     // The person activated team host A; the source tab stays on their own
-    // host. The attachment is theirs to send, never A's member credential's.
+    // host. The attachment is theirs to send, never through A.
     dialogMocks.appWideHostId = TEAM_HOST_ID;
     await startFork();
 

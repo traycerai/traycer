@@ -724,7 +724,6 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       unaryResponseMs: 30_000,
       clientIdentity: TEST_CLIENT_IDENTITY,
       livenessProbe: null,
-      mintMemberCredential: null,
     });
     opened.push(session);
     return { session, evidence, grants: grants.calls };

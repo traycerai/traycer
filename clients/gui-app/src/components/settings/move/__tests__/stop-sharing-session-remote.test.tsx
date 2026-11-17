@@ -259,7 +259,6 @@ function makeHarness(
     evidence: NO_TRANSPORT_EVIDENCE,
     clientIdentity: TEST_CLIENT_IDENTITY,
     livenessProbe: null,
-    mintMemberCredential: null,
   });
   const remoteMessenger = new RemoteHostMessenger<
     HostRpcRegistry,

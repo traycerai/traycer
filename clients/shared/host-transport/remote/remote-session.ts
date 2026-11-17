@@ -176,9 +176,8 @@ export interface RemoteSessionOptions<
 
 /**
  * The client's options for a session to the server pool. The bearer source
- * serves `open` directly: there is no grant to mint, no session grant and no
- * member credential, so a pool session carries the user bearer and nothing
- * else.
+ * serves `open` directly: there is no grant to mint and no session grant, so
+ * a pool session carries the user bearer and nothing else.
  */
 export interface PoolSessionOptions<
   RpcRegistry extends
