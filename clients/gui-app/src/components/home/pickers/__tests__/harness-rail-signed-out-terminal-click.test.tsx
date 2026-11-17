@@ -44,6 +44,12 @@ const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
 }));
 
+// Its host-options read needs the runner-host provider; the mention it draws
+// is not what a click commits.
+vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
+  TerminalAccountFirstMention: () => null,
+}));
+
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useOnTeamSandbox: (): boolean => mocks.onTeamSandbox.current,
   useHostOwnerTeamId: (): string | null =>
