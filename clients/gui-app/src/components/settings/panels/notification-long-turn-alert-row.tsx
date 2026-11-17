@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,15 +38,19 @@ function isDurationUnit(value: string): value is DurationUnit {
   return value === "minutes" || value === "hours" || value === "days";
 }
 
-/** A host older than this setting does not serve it, so the row is not drawn. */
-export function NotificationLongTurnAlertRow(props: {
+/**
+ * The turn alert, in a card of its own. A host older than this setting does not
+ * serve it, and until the host answers there is nothing to show; in both cases
+ * neither the row nor its card is drawn, so the page never shows an empty card.
+ */
+export function NotificationLongTurnAlertCard(props: {
   readonly query: LongTurnAlertQuery;
   readonly setAlert: SetLongTurnAlertMutation;
 }) {
   const { data, error, isFetching, refetch } = props.query;
   if (error?.code === "E_HOST_UNSUPPORTED") return null;
   if (error !== null) {
-    return (
+    return wrapInCard(
       <SettingsRow
         row={HOST_NOTIFICATIONS.definitions.longTurnAlert}
         status="Couldn't load the turn alert."
@@ -61,12 +66,12 @@ export function NotificationLongTurnAlertRow(props: {
             Retry
           </Button>
         }
-      />
+      />,
     );
   }
   if (data === undefined) return null;
   const { thresholdMs } = data;
-  return (
+  return wrapInCard(
     <SettingsRow
       row={HOST_NOTIFICATIONS.definitions.longTurnAlert}
       control={
@@ -92,7 +97,21 @@ export function NotificationLongTurnAlertRow(props: {
           />
         )
       }
-    />
+    />,
+  );
+}
+
+function wrapInCard(row: ReactNode): ReactNode {
+  return (
+    <SettingsGroup
+      group={HOST_NOTIFICATIONS.definitions.longTurns}
+      showTitle={false}
+      tone="default"
+      dataTestId="notifications-long-turn-card"
+      fill={false}
+    >
+      {row}
+    </SettingsGroup>
   );
 }
 

@@ -6,6 +6,7 @@ import {
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
+import { DEFAULT_NOTIFICATION_NOTIFY } from "@/lib/notifications/notification-notify";
 import {
   DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_LINK_OPEN_SETTINGS,
@@ -43,6 +44,7 @@ function resetSettingsStore(): void {
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    notificationNotify: DEFAULT_NOTIFICATION_NOTIFY,
     startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
@@ -166,6 +168,69 @@ describe("useSettingsStore", () => {
 
     expect(useSettingsStore.getState().notificationChimeSounds).toEqual(
       DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    );
+  });
+
+  it("notifies for every kind but Info by default", () => {
+    expect(useSettingsStore.getState().notificationNotify).toEqual({
+      needs_action: true,
+      failure: true,
+      done: true,
+      info: false,
+    });
+  });
+
+  it("persists and rehydrates a changed Notify switch", async () => {
+    useSettingsStore.getState().setNotificationNotifyForEvent("info", true);
+    useSettingsStore.getState().setNotificationNotifyForEvent("failure", false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted).not.toBeNull();
+    useSettingsStore.setState({
+      notificationNotify: DEFAULT_NOTIFICATION_NOTIFY,
+    });
+    window.localStorage.setItem("traycer-gui-app:settings", persisted ?? "");
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationNotify).toEqual({
+      needs_action: true,
+      failure: false,
+      done: true,
+      info: true,
+    });
+  });
+
+  it("takes the defaults when a persisted blob predates the Notify switches", async () => {
+    await rehydrateFrom({ notificationChimeSounds: { failure: "classic" } });
+
+    expect(useSettingsStore.getState().notificationNotify).toEqual(
+      DEFAULT_NOTIFICATION_NOTIFY,
+    );
+  });
+
+  it("takes a kind's default when its persisted switch is not a boolean, and keeps the others", async () => {
+    await rehydrateFrom({
+      notificationNotify: {
+        needs_action: false,
+        failure: "yes",
+        done: 1,
+        info: true,
+      },
+    });
+
+    expect(useSettingsStore.getState().notificationNotify).toEqual({
+      needs_action: false,
+      failure: DEFAULT_NOTIFICATION_NOTIFY.failure,
+      done: DEFAULT_NOTIFICATION_NOTIFY.done,
+      info: true,
+    });
+  });
+
+  it("takes the defaults when the persisted value is not an object", async () => {
+    await rehydrateFrom({ notificationNotify: "all" });
+
+    expect(useSettingsStore.getState().notificationNotify).toEqual(
+      DEFAULT_NOTIFICATION_NOTIFY,
     );
   });
 

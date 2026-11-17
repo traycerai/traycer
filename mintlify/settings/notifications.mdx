@@ -1,25 +1,16 @@
 ---
 title: "Notifications (Host)"
 sidebarTitle: "Notifications"
-description: "Choose which notifications a host creates, and run a script or call a URL when they happen."
+description: "Get alerted when a turn runs long, and run a script or call a URL when a host creates a notification."
 ---
 
-**Notifications** settings decide which events a host turns into notifications, and what its automation receives. The page is in the Host group of Settings, so it applies to the host selected in the [host picker](/settings#host-picker). Each host keeps its own settings and hooks.
+**Notifications** settings decide when a host alerts you about a long turn, and what its automation receives. The page is in the Host group of Settings, so it applies to the host selected in the [host picker](/settings#host-picker). Each host keeps its own settings and hooks.
 
-For how notifications reach you (the notification center, tab indicators, OS and phone notifications), see [Notifications](/concepts/notifications). Chimes are chosen per app in [Sounds](/settings/sounds), and OS banners are managed in your operating system's notification settings.
+Which kinds of notification interrupt you, and their chimes, are chosen on each computer and phone in [Alerts](/settings/alerts). For how notifications reach you (the notification center, tab indicators, OS and phone notifications), see [Notifications](/concepts/notifications).
 
-## In-App Notifications
+## Long Turns
 
-Each severity has a switch:
-
-| Severity | Covers | Default |
-|---|---|---|
-| **Needs action** | Approvals and interviews, and browser steps only you can complete, such as a sign-in. | On |
-| **Failure** | Errored turns, stalls, crashes, and rate limits. | On |
-| **Done** | Completed or intentionally stopped turns. | On |
-| **Info** | Updates that need nothing from you. | Off |
-
-Turning a severity off stops the host creating that kind of notification at all. It no longer appears in the notification center, lights a tab indicator, alerts you, or runs a hook.
+**Alert when a turn runs longer than** sends you one notification when a turn runs past the time you set. Time waiting on your approval or answer doesn't count.
 
 ## Notification Hooks
 
@@ -163,7 +154,7 @@ The toolbar shows the exact path for the selected host. The file can be edited b
 | `id` | Required and unique within the file. |
 | `name` | Optional. The app shows the `id` when it's missing. |
 | `enabled` | Required. |
-| `severities` | Optional list of `needs_action`, `failure`, `done` and `info`. Leave it out to match every severity. A hook fires for a severity only while that severity is turned on under **In-app notifications**. |
+| `severities` | Optional list of `needs_action`, `failure`, `done` and `info`. Leave it out to match every severity. |
 | `action` | `{"type": "command", "command": …, "args": […]}` or `{"type": "http", "url": …, "headers": {…}}`. `args` and `headers` are optional. |
 
 Unknown fields are not allowed.

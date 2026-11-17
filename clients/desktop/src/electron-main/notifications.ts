@@ -24,6 +24,12 @@ export interface NativeNotificationOptions {
   readonly body: string;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  /**
+   * The caller's device does not let this kind interrupt: relay it to a
+   * focused window, whose inbox would otherwise miss it, and with no window
+   * focused show nothing. Never an OS notification.
+   */
+  readonly inboxOnly: boolean;
   readonly onClick: (() => void) | null;
   readonly onForegroundSuppressed: (() => void) | null;
 }
@@ -60,6 +66,13 @@ export function showNativeNotification(
     // Foreground suppression is an intentional delivery outcome. Remember an
     // exact key so another renderer cannot replay the same event after focus
     // changes; the suppression callback relays it to the foreground renderer.
+    rememberDeliveredNotificationKey(options.deliveryKey);
+    return "presented";
+  }
+  if (options.inboxOnly) {
+    // Nothing to present and nobody in front to relay to: the decision is
+    // made, so the key is spent like a presented one and no other window
+    // raises the banner this one was told not to.
     rememberDeliveredNotificationKey(options.deliveryKey);
     return "presented";
   }
@@ -124,6 +137,9 @@ export function showNativeFeedNotification(
     // Per-occurrence receipts above own deduplication. A batch key cannot
     // reconcile the same rows arriving separately or in different batches.
     deliveryKey: null,
+    // Every window reads the feed itself, so a kind it refuses never needs a
+    // relay; renderers send only the kinds that interrupt.
+    inboxOnly: false,
     onClick: () => onClick(display.payload),
     onForegroundSuppressed: () => {
       onForegroundSuppressed({ ...display, foregroundAppLocal: null });
@@ -196,6 +212,7 @@ export function showSimpleNotification(
     body,
     replaceKey: null,
     deliveryKey: null,
+    inboxOnly: false,
     onClick,
     onForegroundSuppressed: null,
   });

@@ -2266,6 +2266,13 @@ export interface INotificationSystemSettingsHost {
 export interface NotificationForegroundAppLocal {
   readonly userId: string;
   readonly entry: unknown;
+  /**
+   * The row's kind does not interrupt on this device (Settings → Alerts), so
+   * the request exists only to reach a focused sibling window's inbox: the
+   * shell relays it there and never raises an OS notification for it, and
+   * the window that receives it lists the row without a toast or a chime.
+   */
+  readonly inboxOnly: boolean;
 }
 
 /** Plain-data main -> renderer relay used instead of an OS notification while
