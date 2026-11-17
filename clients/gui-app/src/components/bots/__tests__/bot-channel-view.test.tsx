@@ -1682,9 +1682,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.state.realComposer = true;
     // The other channel already holds a draft of its own, which every typed
     // draft's seed (`seedId` 0) shares with the one typed below.
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, "conversation-later", {
+      text: "Draft for B",
+      content: null,
+      held: [],
+    });
     const held = Promise.withResolvers<BotConversationSendResponse>();
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
@@ -2677,5 +2679,92 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
 
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read (T186)", () => {
+  const STORED = "Words stored with an image";
+  const WAITING = {
+    [BOT_ID]: { "conversation-channel": { text: STORED } },
+  };
+
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  const channelBox = (): HTMLElement =>
+    within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
+
+  it("shows the stored text in a box that cannot be edited or sent, with a line saying it waits and a Discard draft button, in place of the composer", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+
+    mount({ openThreadPostId: null });
+
+    const input = screen.getByTestId("bot-channel-composer-input");
+    expect(input).toHaveProperty("value", STORED);
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Discard draft",
+      }),
+    ).toBeTruthy();
+    expect(mocks.sendAsync).not.toHaveBeenCalled();
+  });
+
+  it("gives an empty box to type in after a discard", async () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const user = userEvent.setup();
+    mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("bot-channel-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+    typeInto(channelBox(), "Typed after the discard");
+    expect(textOf(channelBox())).toBe("Typed after the discard");
+  });
+
+  it("gives the box with its whole draft once the images settle", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    act(() => {
+      useBotDraftsStore.setState({
+        boxesReading: {},
+        threadBoxes: {
+          [BOT_ID]: {
+            "conversation-channel": { text: STORED, content: null, seedId: 1 },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe(STORED);
+  });
+
+  it("leaves another conversation's box usable while this one waits", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    typeInto(channelBox(), "Typed beside a waiting box");
+    expect(textOf(channelBox())).toBe("Typed beside a waiting box");
   });
 });

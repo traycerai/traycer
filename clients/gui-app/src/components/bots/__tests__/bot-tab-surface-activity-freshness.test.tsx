@@ -51,6 +51,7 @@ import {
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import { postThread } from "./bot-turn-test-support";
 import {
+  admitBotDrafts,
   BOT,
   BOT_ID,
   BOUND_HOST,
@@ -243,7 +244,7 @@ const SUBSCRIPTION = {
   digests: null,
 } as const;
 
-beforeEach(() => {
+beforeEach(async () => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -264,6 +265,7 @@ beforeEach(() => {
     hasSnapshot: true,
     connectionState: "connected",
   });
+  await admitBotDrafts();
 });
 
 afterEach(() => {

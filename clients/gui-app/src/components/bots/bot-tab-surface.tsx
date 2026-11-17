@@ -93,6 +93,7 @@ import {
   type TracyChannelView,
 } from "@/lib/bots/tracy-place";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -194,6 +195,7 @@ export function BotTabSurface(props: {
 }): ReactNode {
   const { botId, hostId } = props;
   useClaimBotSurfaceFocus();
+  const admitted = useBotDraftsAdmitted();
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
@@ -213,7 +215,16 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <TracySurfaceShell botId={botId} hostId={hostId} />
+      {/* What the person has not sent, wherever this tree holds it - a box's
+          edit, a send that failed, quotes waiting for their box, a card's
+          answer - is the signed-in account's. At a change of account the
+          tree goes while the drafts store still holds the outgoing one's,
+          and the next account's starts once the store is its own (T186). */}
+      {admitted ? (
+        <TracySurfaceShell botId={botId} hostId={hostId} />
+      ) : (
+        <BotTabConnecting />
+      )}
     </TabHostProvider>
   );
 }

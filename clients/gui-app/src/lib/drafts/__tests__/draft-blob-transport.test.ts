@@ -105,8 +105,13 @@ const HOST = "host-blobs";
 const OWNER = "user-blobs";
 
 const liveLandingImageRoots = new Set<string>();
+/** Set while the image roots cannot be read, as the bot drafts' are when storage fails. */
+const unreadableRoots = { on: false };
 registerExtraImageRootSource({
-  hashes: () => [...liveLandingImageRoots],
+  hashes: () => {
+    if (unreadableRoots.on) throw new Error("the image roots cannot be read");
+    return [...liveLandingImageRoots];
+  },
 });
 
 /**
@@ -318,6 +323,7 @@ beforeEach(() => {
 afterEach(() => {
   resetDraftBlobTransportForTests();
   liveLandingImageRoots.clear();
+  unreadableRoots.on = false;
   // Belt and braces: a test that throws before its own release() would
   // otherwise leak a reservation into the next test's budget arithmetic.
   resetLandingImageBudgetReservationsForTesting();
@@ -459,6 +465,27 @@ describe("draft blob transport", () => {
 
     filler?.release();
     resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read (Tracy Bots T186)", async () => {
+    signedInAs(OWNER);
+    const bytes = pngBytesTagged(201);
+    const hash = await sha256HexOfBytes(bytes);
+    const request = ((method, _params) => {
+      expect(method).toBe("drafts.readBlob");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+    unreadableRoots.on = true;
+
+    const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+
+    expect(images.get(hash)?.bytes).toEqual(bytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+    expect(sessionImageBytes(hash)).toBeNull();
   });
 
   it("an overlapping corrupt reply for the same hash never under-charges the valid reply's reservation", async () => {
