@@ -668,30 +668,35 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
 });
 
 describe("<BotChannelSettingsPanel /> appearance", () => {
-  it("offers Icon, Colour and Background in Details when the host can change them", () => {
+  it("offers Icon, Colour, Eyewear and Accessory, and no Background, in Details when the host can change them", () => {
     mocks.appearanceSupport = true;
     mountPanel(BOT, true);
 
     for (const [testId, label] of [
       ["bot-settings-icon", "Icon"],
       ["bot-settings-colour", "Colour"],
-      ["bot-settings-background", "Background"],
+      ["bot-settings-eyewear", "Eyewear"],
+      ["bot-settings-accessory", "Accessory"],
     ] as const) {
-      expect(within(screen.getByTestId(testId)).getByText(label)).toBeTruthy();
+      expect(screen.getByRole("region", { name: label })).toBe(
+        screen.getByTestId(testId),
+      );
     }
+    expect(screen.queryByText("Background")).toBeNull();
     expect(mocks.supportQueries).toContainEqual({
       hostId: "host-1",
       method: "bot.updateAppearance",
     });
   });
 
-  it("draws none of the three when the host cannot change them", () => {
+  it("draws none of the four when the host cannot change them", () => {
     mocks.appearanceSupport = false;
     mountPanel(BOT, true);
 
     expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
     expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-eyewear")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-accessory")).toBeNull();
   });
 });
 

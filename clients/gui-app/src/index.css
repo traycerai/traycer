@@ -35,6 +35,47 @@
    `lib/animation/status-animation-clock.ts` instead. Do not add
    `animation:` back to these rules. */
 
+/* The title viewport is fixed; only overflowing text moves within it. */
+@utility soundtrack-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &[data-scrolling="true"] {
+    display: inline-block;
+    width: max-content;
+    overflow: visible;
+    animation: soundtrack-title-scroll var(--soundtrack-title-duration) linear
+      infinite alternate;
+  }
+
+  &[data-paused="true"] {
+    animation-play-state: paused;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &[data-scrolling="true"] {
+      display: block;
+      width: auto;
+      overflow: hidden;
+      animation: none;
+      transform: none;
+    }
+  }
+}
+
+@keyframes soundtrack-title-scroll {
+  0%,
+  20% {
+    transform: translateX(0);
+  }
+  80%,
+  100% {
+    transform: translateX(var(--soundtrack-title-offset));
+  }
+}
+
 /* Indeterminate progress: a segment sweeping across the track, for work that is
    RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
    animates regardless of the LazyMotion provider.
@@ -57,6 +98,7 @@
 
    `transform` only, so it composites without laying out - on the host-update bar
    this runs for minutes. */
+
 @keyframes host-progress-indeterminate {
   from {
     transform: translateX(-100%);

@@ -360,6 +360,17 @@ export interface EpicCanvasStore {
   readonly mobileSecondaryTileByTabId: Readonly<
     Record<string, MobileSecondaryTile | undefined>
   >;
+  /**
+   * The empty opener pane this session seeded for a tab that had no layout,
+   * per tab. A landing may still fill that pane once the task's records
+   * arrive; an empty pane from anywhere else (a closed last tile, a restored
+   * layout) is one the person left empty. Session-only (not in `partialize`),
+   * so a restored empty pane is never read as seeded, and removed for good by
+   * `retireSeededOpenerPane`.
+   */
+  readonly seededOpenerPaneIdByTabId: Readonly<
+    Record<string, string | undefined>
+  >;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
   /**
    * Terminal pending-create identities, keyed by canonical
@@ -560,6 +571,8 @@ export interface EpicCanvasStore {
   ) => NestedFocusTarget | null;
   /** Create an empty root pane when no saved layout exists. */
   ensureEmptyPaneInTab: (tabId: string) => void;
+  /** Stop treating a tab's seeded opener pane as an unanswered landing. */
+  retireSeededOpenerPane: (tabId: string) => void;
   /** Open the pane picker, reusing any blank tab in a populated pane. */
   openBlankTabInPane: (tabId: string, paneId: string) => void;
   prepareOpenBlankTabInPaneFocusTarget: (
@@ -1527,6 +1540,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         artifactTreeByEpicId: EMPTY_TREES,
         selfDeletedArtifactIds: new Set<string>(),
         mobileSecondaryTileByTabId: {},
+        seededOpenerPaneIdByTabId: {},
         pendingCreateArtifactIds: new Set<string>(),
         pendingCreateTerminalIdentities: new Set<string>(),
         preAckRootCreatesByEpic: {},
@@ -2231,7 +2245,39 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         ensureEmptyPaneInTab: (tabId) => {
-          set((state) => updateTabCanvas(state, tabId, ensureEmptyCanvasPane));
+          set((state) => {
+            const updated = updateTabCanvas(
+              state,
+              tabId,
+              ensureEmptyCanvasPane,
+            );
+            const seeded = updated.canvasByTabId?.[tabId]?.activePaneId;
+            if (updated === state || seeded === undefined || seeded === null) {
+              return updated;
+            }
+            return {
+              ...updated,
+              seededOpenerPaneIdByTabId: {
+                ...state.seededOpenerPaneIdByTabId,
+                [tabId]: seeded,
+              },
+            };
+          });
+        },
+
+        retireSeededOpenerPane: (tabId) => {
+          set((state) => {
+            if (state.seededOpenerPaneIdByTabId[tabId] === undefined) {
+              return state;
+            }
+            return {
+              seededOpenerPaneIdByTabId: Object.fromEntries(
+                Object.entries(state.seededOpenerPaneIdByTabId).filter(
+                  ([seededTabId]) => seededTabId !== tabId,
+                ),
+              ),
+            };
+          });
         },
 
         openBlankTabInPane: (tabId, paneId) => {

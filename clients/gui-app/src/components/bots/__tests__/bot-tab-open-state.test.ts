@@ -13,6 +13,7 @@ import type {
 import {
   botPausedCopy,
   botTabOpenState,
+  botTabReopenDelayMs,
   type BotTabPausedReason,
 } from "../bot-tab-open-state";
 
@@ -175,5 +176,23 @@ describe("botPausedCopy", () => {
       expect(copy.retry).toBe(false);
       expect(copy.text).not.toMatch(/back|away/i);
     }
+  });
+});
+
+describe("botTabReopenDelayMs", () => {
+  // [failures in a row, shortest wait, longest wait]: the base doubles from 5 s
+  // to a minute, drawn over its upper half; a count under 1 is the first.
+  it.each([
+    [0, 2_500, 5_000],
+    [1, 2_500, 5_000],
+    [2, 5_000, 10_000],
+    [3, 10_000, 20_000],
+    [4, 20_000, 40_000],
+    [5, 30_000, 60_000],
+    [6, 30_000, 60_000],
+    [50, 30_000, 60_000],
+  ])("after %i failures waits %i to %i ms", (failures, shortest, longest) => {
+    expect(botTabReopenDelayMs(failures, () => 0)).toBe(shortest);
+    expect(botTabReopenDelayMs(failures, () => 0.999999)).toBe(longest);
   });
 });

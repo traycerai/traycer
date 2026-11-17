@@ -1,6 +1,15 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  type RenderResult,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ChatFeedbackDraftDecideRequest,
@@ -8,15 +17,21 @@ import type {
 } from "@traycer/protocol/host/chat/feedback-draft";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { feedbackDraftMutationKeys } from "@/lib/query-keys";
+import {
+  feedbackDraftSessionId,
+  readFeedbackDraftDecision,
+  recordFeedbackDraftDecision,
+} from "@/lib/chats/feedback-draft-decisions";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 interface BoundaryState {
   row: MergedNotificationRow | null;
   originEntry: HostDirectoryEntry | null;
   supported: boolean | null;
-  data: ChatFeedbackDraftDecideResponse | undefined;
   client: HostClient<HostRpcRegistry> | null;
 }
 
@@ -25,7 +40,6 @@ const mocks = vi.hoisted(() => {
     row: null,
     originEntry: null,
     supported: true,
-    data: undefined,
     client: null,
   };
   return {
@@ -59,14 +73,17 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.state.client,
 }));
-vi.mock("@/hooks/chats/use-chat-feedback-draft", () => ({
-  useChatFeedbackDraftSupported: () => mocks.state.supported,
-  useChatFeedbackDraftDecideMutation: () => ({
-    data: mocks.state.data,
-    isPending: false,
-    mutate: mocks.mutate,
-  }),
-}));
+vi.mock("@/hooks/chats/use-chat-feedback-draft", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/chats/use-chat-feedback-draft")
+    >();
+  return {
+    ...actual,
+    useChatFeedbackDraftSupported: () => mocks.state.supported,
+    useChatFeedbackDraftDecideMutation: () => ({ mutate: mocks.mutate }),
+  };
+});
 
 import { NotificationRow } from "@/components/notifications/notification-row";
 
@@ -123,28 +140,72 @@ function buildRow(
   };
 }
 
+let queryClient = new QueryClient();
+
+function rowTree(
+  row: MergedNotificationRow,
+  onActivate: (row: MergedNotificationRow) => void,
+): ReactNode {
+  mocks.state.row = row;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ul>
+        <NotificationRow
+          feedId={row.feedId}
+          highlightRelocation={false}
+          onActivate={onActivate}
+          onAcknowledge={vi.fn()}
+        />
+      </ul>
+    </QueryClientProvider>
+  );
+}
+
 function renderRow(
   row: MergedNotificationRow,
   onActivate: (row: MergedNotificationRow) => void,
+): RenderResult {
+  return render(rowTree(row, onActivate));
+}
+
+/** The session the row's client resolves to: `null` while it has no request context. */
+function rowSessionId(): number | null {
+  const context = mocks.state.client?.getRequestContext() ?? null;
+  return context === null ? null : feedbackDraftSessionId(context);
+}
+
+/** A decision made on the draft at `chatId` of the row's host and epic. */
+function decideDraftIn(
+  chatId: string,
+  response: Promise<ChatFeedbackDraftDecideResponse>,
+): Promise<ChatFeedbackDraftDecideResponse> {
+  return queryClient
+    .getMutationCache()
+    .build(queryClient, {
+      mutationKey: feedbackDraftMutationKeys.decide({
+        hostId: ORIGIN_HOST_ID,
+        sessionId: rowSessionId(),
+        epicId: "epic-1",
+        chatId,
+        blockId: "block-1",
+      }),
+      mutationFn: () => response,
+    })
+    .execute(undefined);
+}
+
+/** A decision another surface (the draft's card) made on the row's draft. */
+function decideElsewhere(
+  response: Promise<ChatFeedbackDraftDecideResponse>,
 ): void {
-  mocks.state.row = row;
-  render(
-    <ul>
-      <NotificationRow
-        feedId={row.feedId}
-        highlightRelocation={false}
-        onActivate={onActivate}
-        onAcknowledge={vi.fn()}
-      />
-    </ul>,
-  );
+  void decideDraftIn("chat-1", response);
 }
 
 beforeEach(() => {
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
   mocks.state.supported = true;
-  mocks.state.data = undefined;
+  queryClient = new QueryClient();
   mocks.state.client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
@@ -157,7 +218,10 @@ beforeEach(() => {
   });
   mocks.mutate.mockClear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("<NotificationRow /> feedback draft rows", () => {
   it("sends the draft without diagnostics using a fresh action id per click and does not open the row", () => {
@@ -201,27 +265,147 @@ describe("<NotificationRow /> feedback draft rows", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
-  it("confirms a sent draft and withdraws Send", () => {
-    mocks.state.data = {
-      kind: "settled",
-      feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
-    };
+  it("confirms a draft sent from its card and withdraws Send", async () => {
     renderRow(buildRow({}), vi.fn());
-    expect(screen.getByText("Sent to the Traycer team.")).toBeTruthy();
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+      }),
+    );
+    expect(await screen.findByText("Sent to the Traycer team.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
-  it("shows why a send failed and keeps Send available", () => {
-    mocks.state.data = {
-      kind: "settled",
-      feedbackDraft: {
-        ...STAMP,
-        state: "failed",
-        failureReason: "Network unreachable",
-      },
-    };
+  it("ignores a sent decision on another chat's draft that shares the block id", async () => {
+    vi.useFakeTimers();
     renderRow(buildRow({}), vi.fn());
-    expect(screen.getByText(/Network unreachable/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+
+    await decideDraftIn(
+      "chat-2",
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+      }),
+    );
+    // Query notifies its observers on a timer; advance past it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.queryByText("Sent to the Traycer team.")).toBeNull();
+  });
+
+  it("withdraws Send for a draft skipped on its card", async () => {
+    renderRow(buildRow({}), vi.fn());
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "skipped", decidedAt: 6_000 },
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    });
+    expect(screen.queryByText("Sent to the Traycer team.")).toBeNull();
+  });
+
+  it("shows a draft as sent when a later failed answer lands before the earlier sent one", async () => {
+    renderRow(buildRow({}), vi.fn());
+    let resolveEarlier: (
+      response: ChatFeedbackDraftDecideResponse,
+    ) => void = () => {};
+    decideElsewhere(
+      new Promise((resolve) => {
+        resolveEarlier = resolve;
+      }),
+    );
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: {
+          ...STAMP,
+          state: "failed",
+          failureReason: "Network unreachable",
+        },
+      }),
+    );
+    expect(await screen.findByText(/Network unreachable/)).toBeTruthy();
+
+    resolveEarlier({
+      kind: "settled",
+      feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+    });
+
+    expect(await screen.findByText("Sent to the Traycer team.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByText(/Network unreachable/)).toBeNull();
+  });
+
+  it("holds Send while the card's decision is out", async () => {
+    renderRow(buildRow({}), vi.fn());
+    decideElsewhere(new Promise(() => {}));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+  });
+
+  it("shows why a send from the card failed and keeps Send available", async () => {
+    renderRow(buildRow({}), vi.fn());
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: {
+          ...STAMP,
+          state: "failed",
+          failureReason: "Network unreachable",
+        },
+      }),
+    );
+    expect(await screen.findByText(/Network unreachable/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("keeps the held decision on its draft once the row resolves, for the card whose transcript is still pending", () => {
+    const address = {
+      hostId: ORIGIN_HOST_ID,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "block-1",
+    };
+    const client = mocks.state.client;
+    if (client === null) throw new Error("the beforeEach builds a client");
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "token-a",
+        identity: { userId: "user-a", username: "a", providerHandle: null },
+      }),
+    );
+    const sessionId = rowSessionId();
+    if (sessionId === null) throw new Error("the client has a session");
+    const sent = { ...STAMP, state: "sent", decidedAt: 6_000 } as const;
+    recordFeedbackDraftDecision(queryClient, sessionId, address, sent);
+    const view = renderRow(buildRow({}), vi.fn());
+    expect(
+      readFeedbackDraftDecision(queryClient, sessionId, address)?.stamp,
+    ).toEqual(sent);
+
+    view.rerender(rowTree(buildRow({ resolvedAt: 5_000 }), vi.fn()));
+
+    expect(readFeedbackDraftDecision(queryClient, sessionId, address)).toEqual({
+      stamp: sent,
+      settled: { card: false, row: true },
+    });
   });
 });

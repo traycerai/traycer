@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -39,6 +39,8 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
+import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
@@ -53,7 +55,15 @@ import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -302,47 +312,56 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
     tiles: number | null;
-  }) => (
-    <div
-      data-testid="stub-channel"
-      data-tiles={String(props.tiles)}
-      data-host-id={props.hostId}
-      data-bound-host-id={props.boundHostId ?? "none"}
-      data-bot-title={props.botTitle}
-      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-land-on={props.landOn?.messageId ?? "none"}
-      data-land-on-thread={props.landOn?.threadId ?? "none"}
-      data-open-memory={String(props.openMemory !== null)}
-      data-trunk-chat-id={props.trunkChatId}
-      data-teammate-name={
-        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
-      }
-    >
-      <button
-        type="button"
-        data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      {props.setupHistory}
-      <MentionsProbe />
-      {/* The two boxes' places in the real view: the channel's own, and one
+  }) => {
+    // The real publisher, so the tab surface's own mount and unmount of this
+    // view is what the presence follows.
+    usePublishPresentedBotConversation(
+      props.botId,
+      null,
+      props.appConversationChatId,
+    );
+    return (
+      <div
+        data-testid="stub-channel"
+        data-tiles={String(props.tiles)}
+        data-host-id={props.hostId}
+        data-bound-host-id={props.boundHostId ?? "none"}
+        data-bot-title={props.botTitle}
+        data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
+        data-open-thread={props.openThread?.anchorMessageId ?? "none"}
+        data-land-on={props.landOn?.messageId ?? "none"}
+        data-land-on-thread={props.landOn?.threadId ?? "none"}
+        data-open-memory={String(props.openMemory !== null)}
+        data-trunk-chat-id={props.trunkChatId}
+        data-teammate-name={
+          props.resolveMember("user-teammate")?.displayName ?? "unresolved"
+        }
+      >
+        <button
+          type="button"
+          data-testid="stub-channel-open-memory"
+          onClick={() => props.onOpenMemory({ back: null })}
+        />
+        <button
+          type="button"
+          data-testid="stub-channel-open-turn"
+          onClick={() => props.onOpenTurn(REPLY_TURN, null)}
+        />
+        {props.setupHistory}
+        <MentionsProbe />
+        {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
-      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-        <textarea aria-label="Channel box" />
-      </div>
-      <section data-bot-thread-panel="">
         <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Thread box" />
+          <textarea aria-label="Channel box" />
         </div>
-      </section>
-    </div>
-  ),
+        <section data-bot-thread-panel="">
+          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+            <textarea aria-label="Thread box" />
+          </div>
+        </section>
+      </div>
+    );
+  },
 }));
 // The session view is driven in `bot-session-view.test.tsx`; here, what the
 // tab hands it and what its links do to the tab.
@@ -892,6 +911,33 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
   });
 
+  it("presents the channel to the notification presence on Messages, nothing on Activity, and the channel again on return", async () => {
+    const user = userEvent.setup();
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    onTestFinished(() => hasFocus.mockRestore());
+    render(surface());
+    const channelId = screen
+      .getByTestId("stub-channel")
+      .getAttribute("data-app-conversation-chat-id");
+    if (channelId === null || channelId === "none")
+      throw new Error("the bot has no channel conversation");
+
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+
+    await user.click(activityTab());
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(readFocusedHostNotificationPresenceEntity()).toBeNull();
+
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+  });
+
   /** The tab's words as a sighted person reads them: no screen-reader text. */
   function visibleTabText(): string {
     const copy = activityTab().cloneNode(true);
@@ -901,7 +947,7 @@ describe("<BotTabSurface /> views", () => {
     return copy.textContent;
   }
 
-  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+  it("rule 6: lists every row whatever puts a task there, and the tab carries no count", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       status: "signed-in",
@@ -968,15 +1014,10 @@ describe("<BotTabSurface /> views", () => {
       .dataset.rowIds?.split(",");
     expect(shown).toHaveLength(4);
     expect(shown).not.toContain("task-quiet");
-    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
-    expect(badge.textContent).toContain(String(shown?.length));
-    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
-    // jsdom joins the name's parts without the spaces a browser puts in.
-    expect(
-      screen.getByRole("tab", {
-        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
-      }),
-    ).toBe(activityTab());
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
+    expect(activityTab().textContent).not.toMatch(/\d|active/);
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 

@@ -75,11 +75,20 @@ import "@/index.css";
  * serve, so a stream client that delivers one snapshot is placed in the cache
  * the surface acquires from.
  *
+ * Two URL-query switches, read once at module load, serve other specs:
+ * `?snapshot=held` opens the `bot.subscribe` session but never delivers the
+ * snapshot, so the channel pane stays in its connecting state; `?form=desktop`
+ * skips the phone-form flags, so a wide window gets the desktop form. With
+ * neither, the page is the phone form with the snapshot delivered.
+ *
  * The drafts bridge the app mounts above every tab
  * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
  * the bot tab shows its tree only once the signed-in account's own drafts are
  * read (T186), here from the page's own storage.
  */
+const QUERY = new URLSearchParams(window.location.search);
+const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
+const DESKTOP_FORM = QUERY.get("form") === "desktop";
 
 const HOST_ID = "bot-compact-actions-menu-host";
 const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
@@ -88,8 +97,10 @@ const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
 const AUTHN_BASE_URL = "http://127.0.0.1:9";
 
 useSettingsStore.getState().setTheme("light");
-setPhoneLayoutOnly(true);
-setMobileApp(true);
+if (!DESKTOP_FORM) {
+  setPhoneLayoutOnly(true);
+  setMobileApp(true);
+}
 
 // The page offers only what the host advertised in its handshake; this
 // fixture's mock messenger makes none, so the methods are recorded here.
@@ -171,6 +182,7 @@ class SnapshotSession implements IStreamSession {
   sendClientFrame(): void {}
 
   onServerFrame(handler: ServerFrameHandler): void {
+    if (SNAPSHOT_HELD) return;
     queueMicrotask(() => handler(SNAPSHOT, null));
   }
 
@@ -183,6 +195,10 @@ class SnapshotSession implements IStreamSession {
   }
 
   requestReconnect(): void {}
+
+  hasSentOpenRequest(): boolean {
+    return true;
+  }
 }
 
 /** A stream client whose every subscribe is a `SnapshotSession`. */

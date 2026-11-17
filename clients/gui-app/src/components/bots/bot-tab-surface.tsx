@@ -18,7 +18,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -54,11 +53,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import {
-  BotLooksContext,
-  botLooksOf,
-  useChannelBackground,
-} from "@/hooks/bots/use-bot-appearance";
+import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -168,6 +163,7 @@ import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabOpenState,
+  botTabReopenDelayMs,
   type BotTabOpenFailure,
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
@@ -786,24 +782,34 @@ function BotTabBody(props: {
     useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
   const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
-  const sendOpen = useCallback(
-    () =>
-      openBot(
-        { botId },
-        {
-          onSuccess: (response) => {
-            setAnswer(response);
-            setOpenError(null);
-          },
-          onError: (error) =>
-            setOpenError({
-              message: error.message,
-              transient: isTransientCloudFailure(error),
-            }),
+  // Transient failures in a row, which set the wait before the tab's own
+  // re-ask below; and whether an open is on its way, set in the step that
+  // sends it, a task before React hears it is pending. Only the latest
+  // open's callbacks run, and `bot.open` is FIFO, so its settling clears it.
+  const transientFailures = useRef(0);
+  const openInFlight = useRef(false);
+  const sendOpen = useCallback(() => {
+    openInFlight.current = true;
+    openBot(
+      { botId },
+      {
+        onSuccess: (response) => {
+          openInFlight.current = false;
+          transientFailures.current = 0;
+          setAnswer(response);
+          setOpenError(null);
         },
-      ),
-    [botId, openBot],
-  );
+        onError: (error) => {
+          openInFlight.current = false;
+          const transient = isTransientCloudFailure(error);
+          transientFailures.current = transient
+            ? transientFailures.current + 1
+            : 0;
+          setOpenError({ message: error.message, transient });
+        },
+      },
+    );
+  }, [botId, openBot]);
   // An open the host failed only because it could not reach the cloud is
   // asked again once on each ring of that host's cloud-recovery doorbell. The
   // failure stands while a ring's open is in flight, so the hold does too. A
@@ -880,6 +886,25 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  // A transient failure is also asked again on the tab's own backoff, since
+  // the host owes no ring for a lone 5xx. Only while the surface and the
+  // window are in view, by the rule above; coming back into view re-opens.
+  // Each failure is a new `openError`, so each arms its own wait. An open
+  // sent since the wait was armed answers for it, even one whose pending
+  // state has not rendered yet; its own failure arms the next wait.
+  useEffect(() => {
+    if (openError?.transient !== true || openPending || !paneVisible) {
+      return undefined;
+    }
+    const timer = setTimeout(
+      () => {
+        if (openInFlight.current) return;
+        if (document.visibilityState === "visible") reopen();
+      },
+      botTabReopenDelayMs(transientFailures.current, () => Math.random()),
+    );
+    return () => clearTimeout(timer);
+  }, [openError, openPending, paneVisible, reopen]);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
@@ -1003,10 +1028,10 @@ function useBotTabRail(
 
 /**
  * How the channel's search opens: the header's button and ⌘F, on this bot,
- * while a host that takes it serves the tab (`null` otherwise). Each opening,
- * the column's box included, shows the channel it opened beside: Messages,
- * in place of a session or Threads. A session has its own find, and Threads
- * no channel, so ⌘F is theirs while they show.
+ * while a host that takes it serves the tab (`null` otherwise). Each opening
+ * shows the channel it opened beside: Messages, in place of a session or
+ * Threads. A session has its own find, and Threads no channel, so ⌘F is
+ * theirs while they show.
  */
 function useChannelSearchEntry(args: {
   readonly botId: string;
@@ -1026,7 +1051,7 @@ function useChannelSearchEntry(args: {
     showChannel();
   }, [opens]);
   const open = useCallback(
-    () => openBotSearch(botId, { kind: "bot", botId }, null),
+    () => openBotSearch(botId, { kind: "bot", botId }),
     [botId],
   );
   const paneVisible = usePaneVisible();
@@ -1846,7 +1871,7 @@ function environmentBotsOf(
 function BotTabConnecting(): ReactNode {
   return (
     <div
-      className="flex h-full items-center justify-center text-muted-foreground"
+      className="flex size-full items-center justify-center text-muted-foreground"
       aria-busy="true"
       data-testid="bot-tab-connecting"
     >
@@ -1903,10 +1928,11 @@ function ReopenFailureNotice(props: {
 }
 
 /**
- * An open that failed only because the host could not reach the cloud, which
- * that host's cloud-recovery doorbell asks again: no technical text. Retry
- * stays, since a host without the doorbell never rings, and is disabled while
- * an open is in flight, so a second press adds no second open.
+ * An open that failed only because the host got no verdict from the cloud,
+ * which that host's cloud-recovery doorbell and the tab's own backoff ask
+ * again: no technical text. Retry stays, to ask at once rather than after
+ * the wait, and is disabled while an open is in flight, so a second press
+ * adds no second open.
  */
 function OpenReconnecting(props: {
   readonly onRetry: () => void;
@@ -2137,7 +2163,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     props.level2 === "menu" || props.level2 === "bar"
       ? (botHeaderSlot?.target ?? null)
       : null;
-  const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
@@ -2196,12 +2221,9 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       ref={setHeader}
       hidden={threadHasFocus}
       data-testid="bot-channel-header"
-      data-channel-background={background.index}
-      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && titleTarget === null && "pt-3",
-        background.className,
       )}
     >
       {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
@@ -2215,13 +2237,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-tab-activity-count"
-            corner={null}
-            noun="active"
-          />
         </TabsTrigger>
       </TabsList>
     </header>

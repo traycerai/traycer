@@ -289,6 +289,18 @@ function rowOf(messageId: string): HTMLElement {
   return holder;
 }
 
+/**
+ * The row the person presses: the transcript wraps every row it draws in the
+ * element that watches it being read, and the row's own frame is inside it.
+ */
+function rowFrameOf(messageId: string): HTMLElement {
+  const frame = rowOf(messageId).querySelector(
+    "[data-bot-read-row]",
+  )?.firstElementChild;
+  if (!(frame instanceof HTMLElement)) throw new Error("no row frame");
+  return frame;
+}
+
 function createThreadOn(messageId: string): HTMLElement | null {
   return within(rowOf(messageId)).queryByRole("button", {
     name: "Create thread",
@@ -340,8 +352,7 @@ describe("Create thread on every row of a bot's channel", () => {
       const user = userEvent.setup();
       mocks.threadAnchors = anchorsNaming(["answer", "message"]);
       render(<MountedChannel />);
-      const row = rowOf(messageId).firstElementChild;
-      if (!(row instanceof HTMLElement)) throw new Error("no row frame");
+      const row = rowFrameOf(messageId);
 
       vi.useFakeTimers();
       fireEvent.pointerDown(row, {
