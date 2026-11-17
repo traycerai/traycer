@@ -2106,10 +2106,13 @@ type BotChannelHeaderProps = {
 function BotChannelActions({
   header: props,
   titleTarget,
+  titleRowHidden,
   settingsButtonRef,
 }: {
   readonly header: BotChannelHeaderProps;
   readonly titleTarget: HTMLDivElement | null;
+  /** The title row is not drawn now, so it holds no place for the playback controls. */
+  readonly titleRowHidden: boolean;
   readonly settingsButtonRef: React.RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { settingsOpen } = props;
@@ -2123,7 +2126,7 @@ function BotChannelActions({
   );
   return titleTarget === null ? (
     <>
-      <TracyPlaybackSlot />
+      {titleRowHidden ? null : <TracyPlaybackSlot />}
       {props.onOpenSearch === null ? null : (
         <TooltipWrapper
           label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
@@ -2297,6 +2300,7 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       <BotChannelActions
         header={props}
         titleTarget={titleTarget}
+        titleRowHidden={threadHasFocus}
         settingsButtonRef={settingsButtonRef}
       />
     </div>

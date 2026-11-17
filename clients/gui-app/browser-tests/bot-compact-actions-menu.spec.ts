@@ -790,18 +790,18 @@ test.describe("the playback controls across the Tracy tab's moves", () => {
 
     // Play still starts the title that was held still.
     await page.getByRole("button", { name: "Play" }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(
-          (titleSelector) =>
-            document
-              .querySelector(titleSelector)
-              ?.getAnimations({ subtree: true })
-              .at(0)?.playState,
-          TITLE,
-        ),
-      )
-      .toBe("running");
+    await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+    await nextFrames(page, 2);
+    expect(
+      await page.evaluate(
+        (titleSelector) =>
+          document
+            .querySelector(titleSelector)
+            ?.getAnimations({ subtree: true })
+            .at(0)?.playState,
+        TITLE,
+      ),
+    ).toBe("running");
 
     expect(failures).toEqual([]);
   });
@@ -934,16 +934,15 @@ test.describe("the playback controls across the Tracy tab's moves", () => {
   }) => {
     const { page } = await openAtHeader(context, SESSION);
     await focusToggle(page, "Pause");
-    await page.waitForFunction(
-      (titleSelector) =>
-        Number(
-          document
-            .querySelector(titleSelector)
-            ?.getAnimations({ subtree: true })
-            .at(0)?.currentTime,
-        ) > 1000,
-      TITLE,
-    );
+    // A place well into the title, set rather than waited for.
+    await page.evaluate((titleSelector) => {
+      const animation = document
+        .querySelector(titleSelector)
+        ?.getAnimations({ subtree: true })
+        .at(0);
+      if (animation === undefined) throw new Error("a running title is needed");
+      animation.currentTime = 1500;
+    }, TITLE);
     await recordContinuity(page);
     const before = (await readContinuity(page)).before;
     expect(before).toBeGreaterThan(1000);

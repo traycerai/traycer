@@ -2569,6 +2569,50 @@ describe("<BotTabSurface /> under the app header on a short viewport with the ke
   });
 });
 
+describe("<BotTabSurface /> beside the bots column with the keyboard up", () => {
+  let shell: ShellFormHarness;
+  beforeEach(() => {
+    shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    raiseNativeKeyboard(IPHONE_17);
+    focusTab(TRACY_REF);
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+  });
+  afterEach(() => {
+    shell.dispose();
+    restoreKeyboardEnvironment();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  });
+
+  it("keeps the music group out of the channel header's hidden title row while a thread's box has the focus, and returns it to the row when the focus leaves", () => {
+    render(surfaceUnderHeader(BOT_ID));
+    const header = screen.getByTestId("bot-channel-header");
+    expect(
+      within(header).getByRole("group", { name: "Music playback" }),
+    ).toBeTruthy();
+
+    act(() => screen.getByLabelText("Thread box").focus());
+    expect(header.hidden).toBe(true);
+    // `hidden` also counts a group the hidden row still holds.
+    const groups = screen.getAllByRole("group", {
+      name: "Music playback",
+      hidden: true,
+    });
+    expect(groups).toHaveLength(1);
+    expect(header.contains(groups[0] ?? null)).toBe(false);
+    expect(groups[0]?.closest("[hidden]")).toBeNull();
+
+    act(() => screen.getByLabelText("Channel box").focus());
+    expect(header.hidden).toBe(false);
+    expect(
+      within(header).getByRole("group", { name: "Music playback" }),
+    ).toBeTruthy();
+  });
+});
+
 describe("<BotTabSurface /> the one music group", () => {
   const GROUP = { name: "Music playback" } as const;
 

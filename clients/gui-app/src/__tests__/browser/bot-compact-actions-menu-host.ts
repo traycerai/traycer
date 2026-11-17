@@ -72,7 +72,8 @@ import { useTabsStore } from "@/stores/tabs/store";
  *
  * `?hostMethods=held` leaves the host's handshake unanswered until
  * `advertiseHostMethods` is called, and `hostGates` holds the lists' and
- * `bot.open`'s answers until the promise in it settles (a cold open's gates,
+ * `bot.open`'s answers until the promise in it settles and reports through
+ * `awaited` when a request begins to wait on one (a cold open's gates,
  * `tracy-tab-cold-open`). `window.__fixtureCommitted` is set by the first
  * commit of the content under `FixtureApp`.
  *
@@ -194,19 +195,24 @@ window.__botChannelProbe = {
   },
 };
 
-/** Holds an answer until its gate settles; a `null` gate answers at once. */
-function answerAfter<Answer>(
-  gate: Promise<void> | null,
-  answer: Answer,
-): Answer | Promise<Answer> {
-  return gate === null ? answer : gate.then(() => answer);
-}
-
 /** The answers a cold open holds: the lists', and `bot.open`'s. */
 export const hostGates: {
   lists: Promise<void> | null;
   open: Promise<void> | null;
-} = { lists: null, open: null };
+  /** Called when a request begins to wait on a gate that is held. */
+  awaited: (gate: "lists" | "open") => void;
+} = { lists: null, open: null, awaited: () => undefined };
+
+/** Holds an answer until its gate settles; a `null` gate answers at once. */
+function answerAfter<Answer>(
+  name: "lists" | "open",
+  answer: Answer,
+): Answer | Promise<Answer> {
+  const gate = hostGates[name];
+  if (gate === null) return answer;
+  hostGates.awaited(name);
+  return gate.then(() => answer);
+}
 
 // The page offers only what the host advertised in its handshake; this
 // fixture's mock messenger makes none, so the methods are recorded here.
@@ -475,14 +481,14 @@ export const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       "bot.list": () =>
-        answerAfter(hostGates.lists, { bots: [...BOTS], mainBotIds: null }),
+        answerAfter("lists", { bots: [...BOTS], mainBotIds: null }),
       "bot.open": (request) =>
-        answerAfter(hostGates.open, {
+        answerAfter("open", {
           bot: botOf(request.botId),
           outcome: { kind: "serve-here", claimed: null },
         }),
       "bot.conversation.list": (request) =>
-        answerAfter(hostGates.lists, {
+        answerAfter("lists", {
           conversations: [
             {
               conversationId: `channel-${request.botId}`,
@@ -494,7 +500,7 @@ export const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
           ],
         }),
       "environment.list": () =>
-        answerAfter(hostGates.lists, {
+        answerAfter("lists", {
           environments: [
             {
               environmentId: ENVIRONMENT_ID,

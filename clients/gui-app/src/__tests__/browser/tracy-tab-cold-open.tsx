@@ -26,20 +26,31 @@ import { ColdOpenFixture } from "./tracy-tab-cold-open-page";
  * - `snapshot`: the channel's snapshot (`?snapshot=held` holds it).
  *
  * The surface's code is held by the spec, which holds the request for its
- * module. The page is the phone's form, as the installed app is, so the title
+ * module. `reached` settles once a request waits on a gate, so a spec releases
+ * a gate only while the surface is blocked on it. The page is the phone's form, as the installed app is, so the title
  * row is the one the channel's header draws.
  */
 type Gate = "hostMethods" | "drafts" | "lists" | "open" | "snapshot";
 
+/** The gates that are a request waiting, so the page can tell it was reached. */
+type RequestGate = "drafts" | "lists" | "open";
+
 declare global {
   interface Window {
-    __coldOpenProbe?: { readonly release: (gate: Gate) => void };
+    __coldOpenProbe?: {
+      readonly release: (gate: Gate) => void;
+      /** Settles once a request waits on `gate`. */
+      readonly reached: (gate: RequestGate) => Promise<void>;
+    };
   }
 }
 
 interface Held {
   readonly opened: Promise<void>;
   readonly open: () => void;
+  /** Settles when something begins to wait on `opened`. */
+  readonly reached: Promise<void>;
+  readonly markReached: () => void;
 }
 
 function hold(): Held {
@@ -47,7 +58,11 @@ function hold(): Held {
   const opened = new Promise<void>((resolve) => {
     open = resolve;
   });
-  return { opened, open };
+  let markReached: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  return { opened, open, reached, markReached };
 }
 
 const drafts = hold();
@@ -56,17 +71,28 @@ const channelOpen = hold();
 
 hostGates.lists = lists.opened;
 hostGates.open = channelOpen.opened;
+hostGates.awaited = (gate) =>
+  (gate === "lists" ? lists : channelOpen).markReached();
 
 // The drafts the tab waits on are read when the account signs in; the read
 // begins once its gate opens.
 const rehydrate = useBotDraftsStore.persist.rehydrate;
-useBotDraftsStore.persist.rehydrate = () =>
-  drafts.opened.then(() => rehydrate());
+useBotDraftsStore.persist.rehydrate = () => {
+  drafts.markReached();
+  return drafts.opened.then(() => rehydrate());
+};
 
 useTracySurfaceStore.getState().openSurface(HOST_ID);
 useTracySurfaceStore.getState().selectChannel(BOT_ID);
 
+const requestGates: Readonly<Record<RequestGate, Held>> = {
+  drafts,
+  lists,
+  open: channelOpen,
+};
+
 window.__coldOpenProbe = {
+  reached: (gate) => requestGates[gate].reached,
   release: (gate) => {
     switch (gate) {
       case "hostMethods":

@@ -21,35 +21,42 @@ test.use({
   isMobile: false,
 });
 
+type Gate = "hostMethods" | "drafts" | "lists" | "open" | "snapshot";
+type RequestGate = "drafts" | "lists" | "open";
+
 declare global {
   interface Window {
     __coldOpenProbe?: {
-      readonly release: (
-        gate: "hostMethods" | "drafts" | "lists" | "open" | "snapshot",
-      ) => void;
+      readonly release: (gate: Gate) => void;
+      readonly reached: (gate: RequestGate) => Promise<void>;
     };
   }
 }
 
 const OPENING_HEADER = "bot-channel-opening-header";
 
-async function release(
-  page: Page,
-  gate: "hostMethods" | "drafts" | "lists" | "open" | "snapshot",
-): Promise<void> {
+/** Resolves once a request waits on the gate: the surface is blocked on it. */
+async function reached(page: Page, gate: RequestGate): Promise<void> {
+  await page.evaluate((name) => window.__coldOpenProbe?.reached(name), gate);
+}
+
+async function release(page: Page, gate: Gate): Promise<void> {
   await page.evaluate((name) => window.__coldOpenProbe?.release(name), gate);
 }
 
 test("a cold open draws one group in the reserved title row through every wait, and nothing under it moves", async ({
   page,
 }) => {
-  let moduleRequests = 0;
+  let moduleRequested: () => void = () => undefined;
+  const moduleRequest = new Promise<void>((resolve) => {
+    moduleRequested = resolve;
+  });
   let releaseModule: () => void = () => undefined;
   const moduleHeld = new Promise<void>((resolve) => {
     releaseModule = resolve;
   });
   await page.route("**/bot-tab-surface*", async (route) => {
-    moduleRequests += 1;
+    moduleRequested();
     await moduleHeld;
     await route.continue();
   });
@@ -62,22 +69,45 @@ test("a cold open draws one group in the reserved title row through every wait, 
   const group = opening.getByRole("group", { name: "Music playback" });
 
   // The surface's code is still on its way.
-  await expect.poll(() => moduleRequests).toBeGreaterThan(0);
+  await moduleRequest;
   await expect(group).toHaveCount(1);
   await expect(page.getByTestId("bot-tab")).toHaveCount(0);
 
-  const waits: ReadonlyArray<() => Promise<void>> = [
-    () => {
-      releaseModule();
-      return Promise.resolve();
+  // Each wait is released only once the surface is blocked on it: the module
+  // by its request, the host's methods by the surface drawing its connecting
+  // state, and the others by the request that waits on them.
+  const waits: ReadonlyArray<{
+    readonly blocked: () => Promise<void>;
+    readonly release: () => Promise<void>;
+  }> = [
+    {
+      blocked: () => moduleRequest,
+      release: () => {
+        releaseModule();
+        return Promise.resolve();
+      },
     },
-    () => release(page, "hostMethods"),
-    () => release(page, "drafts"),
-    () => release(page, "lists"),
-    () => release(page, "open"),
+    {
+      blocked: () =>
+        expect(page.getByTestId("bot-tab-connecting")).toBeVisible(),
+      release: () => release(page, "hostMethods"),
+    },
+    {
+      blocked: () => reached(page, "drafts"),
+      release: () => release(page, "drafts"),
+    },
+    {
+      blocked: () => reached(page, "lists"),
+      release: () => release(page, "lists"),
+    },
+    {
+      blocked: () => reached(page, "open"),
+      release: () => release(page, "open"),
+    },
   ];
-  for (const released of waits) {
-    await released();
+  for (const wait of waits) {
+    await wait.blocked();
+    await wait.release();
     await nextFrames(page, 3);
     await expect(opening).toBeVisible();
     await expect(page.getByTestId("bot-channel-header")).toHaveCount(0);
