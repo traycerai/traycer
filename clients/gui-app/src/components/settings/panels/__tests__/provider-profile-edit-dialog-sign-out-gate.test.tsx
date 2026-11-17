@@ -411,8 +411,8 @@ function disconnectAnswer(
  * connection row of the family, a pending reconnect included, re-puts each
  * item at a new version with `custodianSignOutCause`, kept while nothing
  * serves (harness-connections.ts:2700-2850, families.ts:559-638), and answers
- * whether a row was deleted. The connections list names the family by its entry id while it has a row, and a
- * fresh entry otherwise (:826-880).
+ * whether a row was deleted. The connections list names the family by its
+ * entry id while it has a row, and a fresh entry otherwise (:826-880).
  */
 function modelAuthn(
   family: ModelledFamily,
@@ -1113,6 +1113,29 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         expect(fixture.openChanges).toEqual([]);
       },
     );
+
+    it("changes nothing when this computer's binding moves after a setup token's connection read", async () => {
+      const answers = [
+        hostBinding("env-a", 3),
+        hostBinding("env-a", 3),
+        hostBinding("env-b", 4),
+      ];
+      fixture.hostBinding = () => answers.shift() ?? hostBinding("env-b", 4);
+      fixture.authnAnswer = modelAuthn(liveFamily(null));
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SETUP_TOKEN_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain(
+          "This connection changed. Refresh and try again.",
+        ),
+      );
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, CONNECTIONS_READ]);
+      expect(signOuts(messenger)).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
+    });
 
     it("changes nothing when this computer's binding moves during the sign-out", async () => {
       const answers = [hostBinding("env-a", 3), hostBinding("env-b", 4)];
