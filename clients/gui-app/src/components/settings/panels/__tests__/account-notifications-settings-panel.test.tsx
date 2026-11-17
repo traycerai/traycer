@@ -1,18 +1,11 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountNotificationSettingsResponse } from "@traycer-clients/shared/environment/account-notification-schemas";
+import { NEEDS_CONNECTION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 
 const hooks = vi.hoisted(() => ({
   response: null as AccountNotificationSettingsResponse | null,
-  matrixMutate: vi.fn(),
-  hooksMutate: vi.fn(),
 }));
 
 vi.mock("@/hooks/notifications/use-account-notification-settings", () => ({
@@ -22,13 +15,8 @@ vi.mock("@/hooks/notifications/use-account-notification-settings", () => ({
     isLoading: false,
     isFetching: false,
   }),
-  useAccountNotificationMatrixSave: () => ({
-    mutate: hooks.matrixMutate,
-    isPending: false,
-    error: null,
-  }),
   useAccountNotificationHooksSave: () => ({
-    mutate: hooks.hooksMutate,
+    mutate: vi.fn(),
     isPending: false,
     error: null,
     reset: vi.fn(),
@@ -53,47 +41,20 @@ const initialMatrix = {
 afterEach(() => {
   cleanup();
   hooks.response = null;
-  hooks.matrixMutate.mockClear();
-  hooks.hooksMutate.mockClear();
 });
 
 describe("account Notifications settings", () => {
-  it("shows the account defaults before a notification row has been saved", () => {
+  it("shows an empty hooks list before a notification row has been saved", () => {
     hooks.response = { revision: null, settings: null };
 
     render(<NotificationsSettingsPanel />);
 
-    expect(
-      screen
-        .getByRole("switch", {
-          name: "Needs action In-app notifications",
-        })
-        .getAttribute("data-state"),
-    ).toBe("checked");
-    expect(
-      screen
-        .getByRole("switch", {
-          name: "Failure In-app notifications",
-        })
-        .getAttribute("data-state"),
-    ).toBe("checked");
-    expect(
-      screen
-        .getByRole("switch", {
-          name: "Done In-app notifications",
-        })
-        .getAttribute("data-state"),
-    ).toBe("checked");
-    expect(
-      screen
-        .getByRole("switch", {
-          name: "Info In-app notifications",
-        })
-        .getAttribute("data-state"),
-    ).toBe("unchecked");
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    expect(within(manager).getByText("0 hooks")).toBeTruthy();
+    expect(screen.queryByText(NEEDS_CONNECTION_MESSAGE.settings)).toBeNull();
   });
 
-  it("opens and saves the account policy with no computer selected or online", () => {
+  it("opens the account page with no computer selected or online", () => {
     hooks.response = {
       revision: 4,
       settings: { matrix: initialMatrix, hooks: [] },
@@ -104,34 +65,13 @@ describe("account Notifications settings", () => {
     expect(screen.getByText("Notifications")).toBeTruthy();
     expect(
       screen.getByText(
-        "Which events you're told about, and what your automation receives. Choose chimes under Application → Sounds; manage banners in your operating system's notification settings.",
+        "What your automation receives when a host creates a notification. Choose which kinds interrupt you under Application → Alerts.",
       ),
     ).toBeTruthy();
-    const policy = screen.getByTestId("notifications-severity-policy");
-    const switches = within(policy).getAllByRole("switch");
-    expect(switches).toHaveLength(4);
-    expect(
-      screen.queryByRole("switch", {
-        name: "Alert when a turn runs longer than",
-      }),
-    ).toBeNull();
+    expect(screen.getByTestId("cloud-notification-hooks-manager")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
     expect(screen.queryByText(/notification-hooks\.json/)).toBeNull();
-
-    fireEvent.click(
-      within(policy).getByRole("switch", {
-        name: "Done In-app notifications",
-      }),
-    );
-
-    expect(hooks.matrixMutate).toHaveBeenCalledTimes(1);
-    expect(hooks.matrixMutate).toHaveBeenCalledWith({
-      matrix: {
-        ...initialMatrix,
-        done: { renderer: true },
-      },
-      revision: 4,
-    });
   });
 });

@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 describe("computer Notifications tab", () => {
-  it("keeps the account policy and account-only copy on the account page", async () => {
+  it("keeps the account-only copy on the account page", async () => {
     renderNotificationsSettings({
       hooksStatus: makeHooksStatus({ hooks: [] }),
       hooksStatusError: undefined,
@@ -116,10 +116,9 @@ describe("computer Notifications tab", () => {
     });
 
     await screen.findByTestId("notification-hooks-empty-state");
-    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     expect(
       screen.queryByText(
-        /Which events you're told about, and what your automation receives/,
+        "What your automation receives when a host creates a notification. Choose which kinds interrupt you under Application → Alerts.",
       ),
     ).toBeNull();
     expect(
@@ -184,7 +183,6 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     ).toBeTruthy();
     const manager = screen.getByTestId("notification-hooks-manager");
 
-    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     expect(
       within(manager).getByRole("heading", { name: "Notification hooks" }),
     ).toBeTruthy();
@@ -200,7 +198,7 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     ).toBe(true);
   });
 
-  it("shows a hooks query error without an account policy on the computer tab", async () => {
+  it("shows a hooks query error on the computer tab", async () => {
     renderNotificationsSettings({
       hooksStatus: undefined,
       hooksStatusError: "host offline",
@@ -210,7 +208,6 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(
       await screen.findByText("Couldn't load notification hooks"),
     ).toBeTruthy();
-    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
     const manager = screen.getByTestId("notification-hooks-manager");
     expect(
       within(manager).getByRole("heading", { name: "Notification hooks" }),

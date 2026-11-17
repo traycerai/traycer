@@ -3,13 +3,10 @@ import {
   accountNotificationSettingsResponseSchema,
   notificationHookRefusalSchema,
   accountNotificationSettingsConflictSchema,
-  accountNotificationMatrixPutRequestSchema,
-  type AccountNotificationMatrixPutRequest,
   type AccountNotificationHooksPutRequest,
   type AccountNotificationSettingsResponse,
 } from "./account-notification-schemas";
 import {
-  EnvironmentCloudError,
   errorBodyCode,
   parseSettings,
   sendSettings,
@@ -41,35 +38,16 @@ export function readAccountNotificationSettings(
   );
 }
 
-export function saveAccountNotificationMatrix(
-  cloud: EnvironmentCloud,
-  request: AccountNotificationMatrixPutRequest,
-): Promise<AccountNotificationSettingsResponse> {
-  const parsed = accountNotificationMatrixPutRequestSchema.safeParse(request);
-  if (!parsed.success)
-    throw new EnvironmentCloudError(
-      "invalid",
-      "The settings request was refused.",
-    );
-  return writeAccountNotificationSettings(cloud, parsed.data);
-}
-
-export function saveAccountNotificationHooks(
+/**
+ * The body names the hooks and no matrix, so authn leaves the stored matrix
+ * as it is. A stale row gets one fresh read and one retry.
+ */
+export async function saveAccountNotificationHooks(
   cloud: EnvironmentCloud,
   request: AccountNotificationHooksPutRequest,
 ): Promise<AccountNotificationSettingsResponse> {
   // The host's contribution is sent as answered. Authn, not this client,
   // judges its bounds; a 400 fails the same save without altering the list.
-  return writeAccountNotificationSettings(cloud, request);
-}
-
-/** Each arm replaces only its own column. A stale row gets one fresh read and one retry. */
-async function writeAccountNotificationSettings(
-  cloud: EnvironmentCloud,
-  request:
-    | AccountNotificationMatrixPutRequest
-    | AccountNotificationHooksPutRequest,
-): Promise<AccountNotificationSettingsResponse> {
   let answer = await sendSettings(
     cloud,
     "PUT",

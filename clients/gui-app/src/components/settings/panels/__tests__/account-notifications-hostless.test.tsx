@@ -5,14 +5,12 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_ACCOUNT_NOTIFICATION_MATRIX,
-  type AccountNotificationSettingsResponse,
-} from "@traycer-clients/shared/environment/account-notification-schemas";
+import type { AccountNotificationSettingsResponse } from "@traycer-clients/shared/environment/account-notification-schemas";
 import { NEEDS_CONNECTION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { authSessionForUser } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
@@ -23,11 +21,29 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const SETTINGS_PATH = "/api/v3/user/notification-settings";
 
-const SEVERITIES = ["needs_action", "failure", "done", "info"] as const;
+const storedMatrix = {
+  needs_action: { renderer: true },
+  failure: { renderer: false },
+  done: { renderer: false },
+  info: { renderer: true },
+};
+
+const storedHook = {
+  id: "build-alerts",
+  name: "Build alerts",
+  enabled: true,
+  severities: null,
+  action: {
+    type: "http" as const,
+    url: "https://hooks.example/builds",
+    headers: {},
+  },
+  held: false,
+};
 
 const accountResponse: AccountNotificationSettingsResponse = {
   revision: 7,
-  settings: { matrix: DEFAULT_ACCOUNT_NOTIFICATION_MATRIX, hooks: [] },
+  settings: { matrix: storedMatrix, hooks: [storedHook] },
 };
 
 interface SentRequest {
@@ -103,14 +119,14 @@ afterEach(() => {
 });
 
 describe("account notification settings with no computer connected", () => {
-  it("renders every severity switch from the account read", async () => {
+  it("renders the account's hooks from one account read", async () => {
     const sent = stubAuthn();
     await renderHostless("signed-in");
 
-    for (const severity of SEVERITIES)
-      expect(
-        await screen.findByTestId(`notifications-severity-${severity}`),
-      ).toBeTruthy();
+    const manager = await screen.findByTestId(
+      "cloud-notification-hooks-manager",
+    );
+    expect(within(manager).getByText("Build alerts")).toBeTruthy();
     expect(sent).toEqual([{ method: "GET", path: SETTINGS_PATH, body: null }]);
   });
 
@@ -122,30 +138,32 @@ describe("account notification settings with no computer connected", () => {
       await screen.findByText(NEEDS_CONNECTION_MESSAGE.settings),
     ).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByTestId("notifications-severity-done")).toBeNull();
+    expect(screen.queryByTestId("cloud-notification-hooks-manager")).toBeNull();
     expect(sent).toEqual([]);
   });
 
-  it("saves a switch to authn once", async () => {
+  it("saves a hook to authn once, with no host in the path and no matrix in the body", async () => {
     const sent = stubAuthn();
     await renderHostless("signed-in");
-    const done = await screen.findByTestId("notifications-severity-done");
-    await waitFor(() => expect(done).toHaveProperty("disabled", false));
+    const manager = await screen.findByTestId(
+      "cloud-notification-hooks-manager",
+    );
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "Build alerts revised" },
+    });
 
-    fireEvent.click(done);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 
+    // The hooks body is the whole write: authn leaves the stored matrix as it is.
     await waitFor(() =>
       expect(sent.filter((request) => request.method === "PUT")).toEqual([
         {
           method: "PUT",
           path: SETTINGS_PATH,
           body: {
-            matrix: {
-              ...DEFAULT_ACCOUNT_NOTIFICATION_MATRIX,
-              done: {
-                renderer: !DEFAULT_ACCOUNT_NOTIFICATION_MATRIX.done.renderer,
-              },
-            },
+            hooks: [{ ...storedHook, name: "Build alerts revised" }],
             revision: 7,
           },
         },

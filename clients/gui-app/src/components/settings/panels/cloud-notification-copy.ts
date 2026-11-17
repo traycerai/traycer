@@ -15,7 +15,7 @@ export const TEAM_NOTIFICATION_HOOKS_COPY = {
 
 export const ACCOUNT_NOTIFICATIONS_COPY = {
   description:
-    "Which events you're told about, and what your automation receives. Choose chimes under Application → Sounds; manage banners in your operating system's notification settings.",
+    "What your automation receives when a host creates a notification. Choose which kinds interrupt you under Application → Alerts.",
   computerHooks:
     "A hook that runs a script, or reads a value from a computer, is set on that computer.",
   localOnly: (variable: string) =>
