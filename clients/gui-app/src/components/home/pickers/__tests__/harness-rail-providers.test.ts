@@ -647,6 +647,71 @@ describe("resolveActiveProfileForHarness", () => {
   });
 });
 
+function signedOut(row: ProviderProfile): ProviderProfile {
+  return { ...row, auth: { ...row.auth, status: "unauthenticated" } };
+}
+
+describe("a signed-out Terminal login beside enabled, signed-in managed profiles", () => {
+  const terminal = signedOut(
+    profile("ambient", "ambient", "Claude Terminal account"),
+  );
+  const terminalSignedOutRow: HarnessOption = {
+    ...harness("claude"),
+    authStatus: "unauthenticated",
+  };
+
+  function railFor(profiles: readonly ProviderProfile[]) {
+    return visibleRailEntries({
+      harnesses: [terminalSignedOutRow],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set<GuiHarnessId>(["claude"]),
+      preparingByHarnessId: NO_PREPARING,
+      profilesByHarnessId: new Map([["claude", profiles]]),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
+    });
+  }
+
+  function landing(profiles: readonly ProviderProfile[]): string | null {
+    return resolveActiveProfileForHarness({
+      harnessId: "claude",
+      profiles,
+      removedProfiles: [],
+      browsedProfileId: null,
+      selectedProfileId: null,
+    });
+  }
+
+  it("does not dim the tab when exactly one managed profile is signed in, and a click lands on that profile", () => {
+    const profiles = [terminal, profile("work-uuid", "managed", "Work")];
+
+    expect(railFor(profiles)[0].degraded).toBe(false);
+    expect(landing(profiles)).toBe("work-uuid");
+  });
+
+  it("keeps the tab dimmed and landing on the Terminal login when two managed profiles are signed in", () => {
+    const profiles = [
+      terminal,
+      profile("a-uuid", "managed", "A"),
+      profile("b-uuid", "managed", "B"),
+    ];
+
+    expect(railFor(profiles)[0].degraded).toBe(true);
+    expect(landing(profiles)).toBeNull();
+  });
+
+  it("keeps the tab dimmed when the only managed profile is signed out too", () => {
+    const profiles = [
+      terminal,
+      signedOut(profile("work-uuid", "managed", "Work")),
+    ];
+
+    expect(railFor(profiles)[0].degraded).toBe(true);
+    expect(landing(profiles)).toBeNull();
+  });
+});
+
 describe("profileCommitId", () => {
   it("maps the ambient profile to the null commit id, not the wire sentinel", () => {
     expect(
