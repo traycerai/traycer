@@ -108,6 +108,8 @@ const fake = vi.hoisted(() => {
     shellLive: vi.fn<(live: boolean) => Promise<void>>(),
     // The text of every call send that left, in order.
     sentTexts: [] as string[],
+    // When set, a send answers only once it settles.
+    sendGate: { current: null as Promise<void> | null },
   };
 });
 
@@ -144,12 +146,16 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
       readonly request: { readonly text: string };
     }) => {
       fake.sentTexts.push(variables.request.text);
-      return Promise.resolve({
-        messageId: "m1",
-        requestId: "r1",
-        delivery: "written",
-        threadId: "t1",
-      } satisfies BotConversationSendResponse);
+      const gate = fake.sendGate.current;
+      return (gate ?? Promise.resolve()).then(
+        () =>
+          ({
+            messageId: "m1",
+            requestId: "r1",
+            delivery: "written",
+            threadId: "t1",
+          }) satisfies BotConversationSendResponse,
+      );
     },
   }),
   useBotOpenMutation: () => ({
@@ -510,6 +516,28 @@ function speak(text: string): void {
   });
 }
 
+/** The voice's acknowledgement begins: the person's open words become one send. */
+async function acknowledge(): Promise<void> {
+  act(() => {
+    engine().events?.onOutputTranscriptDelta("Okay.");
+  });
+  await settle();
+}
+
+/** A renewal's mint is out, held: the next mint the controller makes. */
+async function renewalWithMintHeld(): Promise<
+  Deferred<VoiceSessionMintFetchResult>
+> {
+  const held = deferred<VoiceSessionMintFetchResult>();
+  mint.mockImplementationOnce(() => held.promise);
+  act(() => {
+    engine().events?.onClosed("connection");
+  });
+  await settle();
+  expect(mint).toHaveBeenCalledTimes(2);
+  return held;
+}
+
 /** `signOut` has bumped the identity generation and waits on storage. */
 function startSignOutWaitingOnStorage(): Deferred<void> {
   const storage = deferred<void>();
@@ -557,6 +585,7 @@ beforeEach(async () => {
   fake.engines.length = 0;
   fake.connectGate.current = null;
   fake.sentTexts.length = 0;
+  fake.sendGate.current = null;
   fake.shellLive.mockReset();
   fake.shellLive.mockImplementation(() => Promise.resolve());
   fake.track.enabled = true;
@@ -860,5 +889,66 @@ describe("a call's one authority", () => {
         });
       },
     );
+
+    describe.each<{
+      readonly name: string;
+      readonly result: VoiceSessionMintFetchResult;
+    }>([
+      { name: "unavailable", result: { kind: "unavailable" } },
+      { name: "unauthorized", result: { kind: "unauthorized" } },
+      {
+        name: "network-error",
+        result: { kind: "network-error", detail: "offline" },
+      },
+    ])(
+      "a renewal whose mint answers $name after a revocation",
+      ({ result }) => {
+        it("sends none of the call's words, ends as session-changed and mints no more", async () => {
+          await dial();
+          speak("Hold the build");
+          const held = await renewalWithMintHeld();
+
+          startSignOutWaitingOnStorage();
+          held.resolve(result);
+          await settle();
+
+          const state = useVoiceSessionStore.getState();
+          expect(state.phase).toBe("idle");
+          expect(state.endReason).toBe("session-changed");
+          expect(fake.sentTexts).toEqual([]);
+          expect(mint).toHaveBeenCalledTimes(2);
+        });
+      },
+    );
+
+    it("sends the words and ends as connection when such a renewal fails under an intact authority", async () => {
+      await dial();
+      speak("Hold the build");
+      const held = await renewalWithMintHeld();
+
+      held.resolve({ kind: "unavailable" });
+      await settle();
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.endReason).toBe("connection");
+      expect(fake.sentTexts).toEqual(["Hold the build"]);
+    });
+
+    it("sends none of the words it harvested once the authority is revoked before the send in flight settles", async () => {
+      const gate = deferred<void>();
+      fake.sendGate.current = gate.promise;
+      await dial();
+      speak("First thing.");
+      await acknowledge();
+      expect(fake.sentTexts).toEqual(["First thing."]);
+      speak("Second thing");
+
+      await endCall();
+      startSignOutWaitingOnStorage();
+      gate.resolve();
+      await settle();
+
+      expect(fake.sentTexts).toEqual(["First thing."]);
+    });
   });
 });

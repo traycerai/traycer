@@ -418,6 +418,13 @@ export function CallController(): ReactNode {
    */
   const callAccountRef = useRef<string | null>(null);
   /**
+   * The sign-in the call was started under, which its last words are taken
+   * and sent under. Read when an end takes them, and carried by value from
+   * there, so a call started meanwhile cannot change what an earlier call's
+   * words go under.
+   */
+  const callAuthorityRef = useRef<VoiceCallAuthority | null>(null);
+  /**
    * What the call asks for its voice: settled as the call starts, frozen at
    * its first confirmed session, and read by every mint of the call.
    */
@@ -729,6 +736,12 @@ export function CallController(): ReactNode {
   const takeLastWords = useCallback(
     (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
       if (reason === "account" || reason === "session-changed") return null;
+      // Words go only under the sign-in session they were said under, whatever
+      // ended the call: once it is not the one signed in, none are taken.
+      const authority = callAuthorityRef.current;
+      if (authority === null || !auth.isVoiceCallAuthorityLive(authority)) {
+        return null;
+      }
       const store = useVoiceSessionStore.getState();
       const call = store.focus;
       const known = channelRef.current;
@@ -754,7 +767,14 @@ export function CallController(): ReactNode {
         const opened = inFlight === null ? null : await inFlight;
         let threadId = call.threadId ?? opened;
         for (const text of words) {
-          if (signedInAccount() !== account) return;
+          // The session can change while an earlier send is awaited: each
+          // send is checked as it goes. One already sent is not recalled.
+          if (
+            signedInAccount() !== account ||
+            !auth.isVoiceCallAuthorityLive(authority)
+          ) {
+            return;
+          }
           try {
             const response = await sendRef.current({
               hostId: known.hostId,
@@ -770,7 +790,7 @@ export function CallController(): ReactNode {
         }
       };
     },
-    [],
+    [auth],
   );
 
   /**
@@ -879,6 +899,18 @@ export function CallController(): ReactNode {
   }, [applyCapture, sayLine]);
 
   /**
+   * Why a call whose session was lost ends: its sign-in session changing,
+   * when that is so, and else the connection it was running on.
+   */
+  const lostSessionReason = useCallback(
+    (authority: VoiceCallAuthority): VoiceEndReason =>
+      auth.isVoiceCallAuthorityLive(authority)
+        ? "connection"
+        : "session-changed",
+    [auth],
+  );
+
+  /**
    * The call's voice, confirmed by a session's answer: every renewal asks for
    * exactly it from now on, and a saved voice the server replaced with its
    * default is said.
@@ -934,6 +966,11 @@ export function CallController(): ReactNode {
       const failAttempt = (): false => {
         attemptRef.current = null;
         attempt.cancelled = true;
+        // Whatever failed, an attempt whose sign-in session is gone ends for
+        // that reason.
+        if (!auth.isVoiceCallAuthorityLive(authority)) {
+          attempt.failure = "session-changed";
+        }
         let lastWords = NOTHING_LEFT;
         if (firstOpeningRef.current)
           refuseLocal(refusalFor(attempt.failure), null);
@@ -1134,7 +1171,10 @@ export function CallController(): ReactNode {
                 void remintRef.current(attempt);
                 return;
               }
-              void settleAttempt(attempt, finishLocal("connection"));
+              void settleAttempt(
+                attempt,
+                finishLocal(lostSessionReason(attempt.authority)),
+              );
             },
           },
         });
@@ -1186,6 +1226,7 @@ export function CallController(): ReactNode {
       ensureSpeech,
       finishLocal,
       freezeCallVoice,
+      lostSessionReason,
       mintAsync,
       queryClient,
       refuseLocal,
@@ -1216,7 +1257,7 @@ export function CallController(): ReactNode {
       shortSessionsRef.current =
         ran < SHORT_SESSION_MS ? shortSessionsRef.current + 1 : 0;
       if (shortSessionsRef.current >= MAX_SHORT_SESSIONS) {
-        void settleAttempt(old, finishLocal("connection"));
+        void settleAttempt(old, finishLocal(lostSessionReason(old.authority)));
         return;
       }
       ensureSpeech().handoff();
@@ -1235,7 +1276,14 @@ export function CallController(): ReactNode {
       }
       await connectEngine(old.authority);
     },
-    [clearTimers, connectEngine, ensureSpeech, finishLocal, settleAttempt],
+    [
+      clearTimers,
+      connectEngine,
+      ensureSpeech,
+      finishLocal,
+      lostSessionReason,
+      settleAttempt,
+    ],
   );
 
   const requestRemintWhenClear = useCallback(() => {
@@ -1432,6 +1480,7 @@ export function CallController(): ReactNode {
       const callVoices = readCallVoices(authority);
       const saved = useSettingsStore.getState().callVoice;
       callAccountRef.current = signedInAccount();
+      callAuthorityRef.current = authority;
       firstOpeningRef.current = true;
       shortSessionsRef.current = 0;
       closingRef.current = false;
