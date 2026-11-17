@@ -12,14 +12,17 @@ import {
   findStripItemForRef,
   flattenStripItemRefs,
   tabRefKey,
+  type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { inVisualOrder } from "@/stores/tabs/tab-visual-order-store";
+import { isTabCloseLocked } from "@/stores/tabs/tab-structural-lock";
 import {
   tabMatchesPath,
   tabResolveIntent,
   tabRequiresCloseConfirm,
 } from "@/stores/tabs/registry";
-import type { HeaderTab } from "@/stores/tabs/types";
+import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 import { useTabCloseCommand } from "@/components/layout/tabs/use-tab-close-command";
 import { useNeighborTabPicker } from "@/components/layout/tabs/use-neighbor-tab-picker";
 import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced-close-dialog";
@@ -41,6 +44,7 @@ export function useCloseTabFlow(): CloseTabFlow {
   const navigate = useNavigate();
   const organization = useOrganization();
   const closeTab = useTabCloseCommand();
+  const closeTabsInBulk = useCloseTabsInBulk();
   const picker = useNeighborTabPicker();
   const dialog = useUnsyncedCloseDialog();
   const windowsBridge = useWindowsBridge();
@@ -102,7 +106,6 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const closeOtherTabs = useCallback(
     (target: HeaderTab) => {
-      const skipped: HeaderTab[] = [];
       const layout = readTabStripLayout();
       const targetItem = findStripItemForRef(layout, {
         kind: target.kind,
@@ -110,53 +113,16 @@ export function useCloseTabFlow(): CloseTabFlow {
       });
       if (targetItem === null) return;
       const preserved = new Set(
-        flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
+        flattenStripItemRefs(targetItem).map(tabRefKey),
       );
       const candidates = getHeaderTabs().filter(
-        (other) => !preserved.has(`${other.kind}:${other.id}`),
+        (other) => !preserved.has(tabRefKey(other)),
       );
-      // Nothing here is ever prompted, so nothing here is ever confirmed.
-      const confirmed = new Set<string>();
-      const first = splitByUnsyncedEdits(candidates, confirmed);
-      skipped.push(...first.held);
-      // Read before the closes: once the tabs are gone the strip cannot say
-      // which tasks they were. Read from the tabs that will ACTUALLY close,
-      // so a tab already holding edits produces no removal at all.
-      const ungrouped = tasksUngroupedByClose(first.closing, organization);
-      const commit = (): void => {
-        const { closing, held } = splitByUnsyncedEdits(
-          first.closing,
-          confirmed,
-        );
-        batchHeaderTabRecovery(() => {
-          for (const other of closing) {
-            closeTab(other);
-            if (other.kind === "epic") {
-              Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-                target: "task",
-              });
-            }
-          }
-        }, layout);
-        warnAboutHeldTabs(skipped, false);
-        // Separate, because the reason differs: these lost their group
-        // before their edits appeared.
-        warnAboutHeldTabs(held, ungrouped.length > 0);
+      closeTabsInBulk(candidates, layout, () => {
         navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
-      };
-      // The ungroup is accepted before anything closes, exactly as it is for
-      // a single tab: a refused removal would otherwise leave the account
-      // holding memberships whose tabs are gone, and reopening one of them
-      // would bring its siblings back with it.
-      if (ungrouped.length === 0) {
-        commit();
-        return;
-      }
-      void removeTasksFromGroups(organization, ungrouped)
-        .then(commit)
-        .catch(() => undefined);
+      });
     },
-    [closeTab, navigate, organization],
+    [closeTabsInBulk, navigate],
   );
 
   const closeGroup = useCallback(
@@ -263,6 +229,123 @@ export function useCloseTabFlow(): CloseTabFlow {
       dialog.dialog,
       requestCloseTab,
     ],
+  );
+}
+
+/**
+ * The menu's "Close Tabs to the Right" (or "Below" on a side strip): closes
+ * every tab drawn after the target, as one bulk close.
+ */
+export function useCloseTabsAfter(): (target: HeaderTab) => void {
+  const navigate = useNavigate();
+  const closeTabsInBulk = useCloseTabsInBulk();
+  return useCallback(
+    (target: HeaderTab) => {
+      const layout = readTabStripLayout();
+      const activeItem = layout.items.find(
+        (item) => item.id === layout.activeItemId,
+      );
+      const activeKeys = new Set(
+        activeItem === undefined
+          ? []
+          : flattenStripItemRefs(activeItem).map(tabRefKey),
+      );
+      closeTabsInBulk(tabsDrawnAfter(target, layout), layout, (closed) => {
+        // The view stays where it is unless its own tab just closed; then it
+        // lands on the tab the menu was opened on, as Close Other Tabs does.
+        if (!closed.some((tab) => activeKeys.has(tabRefKey(tab)))) return;
+        navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
+      });
+    },
+    [closeTabsInBulk, navigate],
+  );
+}
+
+/**
+ * The tabs drawn after the target's strip item, in the order the person sees
+ * them: the Activity view's sections when the side strip draws those, the
+ * strip's own order otherwise. A split's other half belongs to the target's
+ * item and stays. Group boundaries do not stop it, as they do not stop Close
+ * Other Tabs, so a collapsed group further on closes with the rest. A tab
+ * that cannot close is left out, so the menu item is disabled when nothing
+ * after the target can close; the pinned Tracy entry is one of those.
+ */
+export function tabsDrawnAfter(
+  target: TabRef,
+  layout: PersistedTabStripLayout,
+): ReadonlyArray<HeaderTab> {
+  const targetItem = findStripItemForRef(layout, target);
+  if (targetItem === null) return [];
+  const ownItem = new Set(flattenStripItemRefs(targetItem).map(tabRefKey));
+  const drawn = inVisualOrder(getHeaderTabs());
+  const lastOwnIndex = drawn.findLastIndex((tab) =>
+    ownItem.has(tabRefKey(tab)),
+  );
+  if (lastOwnIndex < 0) return [];
+  return drawn.slice(lastOwnIndex + 1).filter((tab) => !isTabCloseLocked(tab));
+}
+
+/**
+ * The close behind every multi-tab menu gesture. Nothing in it is prompted:
+ * a tab holding unsynced edits is kept open and named in a toast instead,
+ * and a close-locked tab is left out entirely, at the gesture and again after
+ * the awaited ungroup, so it is never counted, ungrouped or navigated away
+ * from. `layout` is the strip as it stood at the gesture, which Reopen Closed Tab
+ * restores from. `afterClose` receives the tabs that actually closed.
+ */
+function useCloseTabsInBulk(): (
+  candidates: ReadonlyArray<HeaderTab>,
+  layout: PersistedTabStripLayout,
+  afterClose: (closed: ReadonlyArray<HeaderTab>) => void,
+) => void {
+  const organization = useOrganization();
+  const closeTab = useTabCloseCommand();
+  return useCallback(
+    (candidates, layout, afterClose) => {
+      // Nothing here is ever prompted, so nothing here is ever confirmed.
+      const confirmed = new Set<string>();
+      const first = splitByUnsyncedEdits(
+        candidates.filter((tab) => !isTabCloseLocked(tab)),
+        confirmed,
+      );
+      // Read before the closes: once the tabs are gone the strip cannot say
+      // which tasks they were. Read from the tabs that will ACTUALLY close,
+      // so a tab already holding edits produces no removal at all.
+      const ungrouped = tasksUngroupedByClose(first.closing, organization);
+      const commit = (): void => {
+        const { closing, held } = splitByUnsyncedEdits(
+          first.closing.filter((tab) => !isTabCloseLocked(tab)),
+          confirmed,
+        );
+        batchHeaderTabRecovery(() => {
+          for (const other of closing) {
+            closeTab(other);
+            if (other.kind === "epic") {
+              Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+                target: "task",
+              });
+            }
+          }
+        }, layout);
+        warnAboutHeldTabs(first.held, false);
+        // Separate, because the reason differs: these lost their group
+        // before their edits appeared.
+        warnAboutHeldTabs(held, ungrouped.length > 0);
+        afterClose(closing);
+      };
+      // The ungroup is accepted before anything closes, exactly as it is for
+      // a single tab: a refused removal would otherwise leave the account
+      // holding memberships whose tabs are gone, and reopening one of them
+      // would bring its siblings back with it.
+      if (ungrouped.length === 0) {
+        commit();
+        return;
+      }
+      void removeTasksFromGroups(organization, ungrouped)
+        .then(commit)
+        .catch(() => undefined);
+    },
+    [closeTab, organization],
   );
 }
 
