@@ -436,7 +436,7 @@ const cursors: Record<string, BotReadCursorReadResponse> = {
       "thread-ipad": { messageId: "ipad-r1", seq: NOW - 29 * MINUTE },
       "thread-policy": {
         messageId: "policy-r1",
-        seq: NOW - 3 * 24 * 60 * MINUTE,
+        seq: NOW - 3 * 24 * 60 * MINUTE + MINUTE,
       },
       ...fillerRead,
     },

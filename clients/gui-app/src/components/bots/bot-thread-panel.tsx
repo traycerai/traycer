@@ -57,7 +57,6 @@ import type {
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
-  BotTranscriptMark,
   QuestionAnswerSend,
   QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
@@ -130,8 +129,7 @@ export type BotThreadPanelThread =
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
  * card's post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
- * in full), and the reply its reading would acknowledge is marked
- * (`readMark`, `null` for none).
+ * in full).
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -139,7 +137,6 @@ export type BotThreadLayout =
       readonly kind: "card";
       readonly fold: BotTranscriptFold | null;
       readonly onShowPost: () => void;
-      readonly readMark: BotTranscriptMark | null;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -1095,10 +1092,7 @@ function KnownThread(
     [hasReplies, onCard, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
-    () =>
-      layout.kind === "card"
-        ? { fold: layout.fold, mark: layout.readMark }
-        : null,
+    () => (layout.kind === "card" ? { fold: layout.fold } : null),
     [layout],
   );
   return (
