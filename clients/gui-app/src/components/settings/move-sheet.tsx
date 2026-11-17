@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
-  MOVE_ACCEPTS_AS_SHOWN,
+  GUIDE_DIFFERS_NOTE,
   MOVE_DISCLOSURE,
   MOVE_DISCLOSURE_VERSION,
   MOVE_SECTIONS,
@@ -11,15 +11,15 @@ import {
   moveRowChoices,
   movesSectionRows,
   movesSummary,
-  guideDiffersNote,
   MOVE_SHEET_DESCRIPTION,
   notAwaitingLine,
-  nothingDeletedLine,
   nothingToMoveLine,
   PLAN_CHANGED_TEXT,
   planMovesASecret,
   planMovesNothing,
   rowsLeftHere,
+  STAYS_MCP_SERVERS_TITLE,
+  staysRowsByName,
   type MoveChoices,
   type MoveKeyChoice,
   type MovePlan,
@@ -41,13 +41,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
@@ -72,7 +72,8 @@ import {
  * one line and offers the same two: the computer moves to Personal all the
  * same, with an acceptance that carries no items.
  *
- * Mounted once, app-wide (`EnvironmentSheetsHost`); opened through
+ * A centred dialog: what moves as counts, and every row in one `Details`
+ * fold. Mounted once, app-wide (`EnvironmentSheetsHost`); opened through
  * `useMoveSheetStore`. While open it names the computers running Personal,
  * where the moved settings reach.
  */
@@ -80,13 +81,16 @@ export function MoveSheet(): ReactNode {
   const target = useMoveSheetStore((state) => state.target);
   const closeSheet = useMoveSheetStore((state) => state.closeSheet);
   return (
-    <Sheet
+    <Dialog
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) closeSheet();
       }}
     >
-      <SheetContent side="right" className="w-full sm:max-w-xl" showCloseButton>
+      <DialogContent
+        layout="banded"
+        className="flex max-h-[min(85dvh,44rem)] w-[min(92vw,40rem)] flex-col overflow-hidden sm:max-w-none"
+      >
         {target === null ? null : (
           <MoveSheetBody
             key={target.hostId}
@@ -94,8 +98,8 @@ export function MoveSheet(): ReactNode {
             onClose={closeSheet}
           />
         )}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -135,7 +139,10 @@ function MoveSheetBody(props: {
       refetchOnWindowFocus: false,
     },
   });
+  // Held here, above the `Details` fold, so a choice made inside it outlives
+  // the fold closing, and the fold's own state outlives a plan read again.
   const [choices, setChoices] = useState<MoveChoices>(() => new Map());
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [planChanged, setPlanChanged] = useState(false);
   const [notAwaiting, setNotAwaiting] = useState(false);
   const accept = useEnvironmentMoveStartMutation(
@@ -205,16 +212,23 @@ function MoveSheetBody(props: {
   const versionDiffers = disclosureDiffers(shownPlan);
   return (
     <>
-      <SheetHeader>
-        <SheetTitle>Move {target.hostName} to Personal?</SheetTitle>
-        <SheetDescription data-testid="move-sheet-description">
+      <DialogHeader>
+        <DialogTitle>Move {target.hostName} to Personal?</DialogTitle>
+        <DialogDescription data-testid="move-sheet-description">
           {MOVE_SHEET_DESCRIPTION}
-        </SheetDescription>
-      </SheetHeader>
+        </DialogDescription>
+      </DialogHeader>
       <div
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4"
+        className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pb-5"
         data-testid="move-sheet"
       >
+        {shownPlan === null ? null : (
+          <MovePlanSummary
+            plan={shownPlan}
+            hostName={target.hostName}
+            choices={choices}
+          />
+        )}
         {supported === false || versionDiffers ? (
           <p className="text-ui-sm text-muted-foreground">
             {needsUpdateSubtitle(target.hostName)}
@@ -262,16 +276,17 @@ function MoveSheetBody(props: {
           </p>
         ) : null}
         {shownPlan === null ? null : (
-          <MovePlanRows
+          <MovePlanDetails
             plan={shownPlan}
-            hostName={target.hostName}
             choices={choices}
             reachedHostNames={reachedHostNames}
             onChoose={choose}
+            open={detailsOpen}
+            onOpenChange={setDetailsOpen}
           />
         )}
       </div>
-      <SheetFooter className="flex-row justify-end gap-2">
+      <DialogFooter>
         <Button
           type="button"
           variant="ghost"
@@ -286,7 +301,7 @@ function MoveSheetBody(props: {
           pending={accept.isPending}
           onAccept={send}
         />
-      </SheetFooter>
+      </DialogFooter>
     </>
   );
 }
@@ -352,12 +367,39 @@ function HostListReadFailed(props: {
   );
 }
 
-function MovePlanRows(props: {
+/** What moves, as counts: or, for a plan that moves nothing, that line. */
+function MovePlanSummary(props: {
   readonly plan: MovePlan;
   readonly hostName: string;
   readonly choices: MoveChoices;
+}): ReactNode {
+  const moving = movesSectionRows(props.plan, props.choices);
+  // Every Moves row left on this computer: no box, as no Moves section.
+  if (!planMovesNothing(props.plan) && moving.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-1 rounded-md border px-3 py-2">
+      <h3 className="font-medium text-ui-sm">Moves to Personal</h3>
+      {planMovesNothing(props.plan) ? (
+        <p className="text-ui-sm" data-testid="move-sheet-nothing-to-move">
+          {nothingToMoveLine(props.hostName)}
+        </p>
+      ) : (
+        <p className="text-ui-sm" data-testid="move-sheet-moves-summary">
+          {movesSummary(moving)}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Every row, closed under `Details`: the sheet's one fold. */
+function MovePlanDetails(props: {
+  readonly plan: MovePlan;
+  readonly choices: MoveChoices;
   readonly reachedHostNames: readonly string[];
   readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const { plan, choices } = props;
   const { rows } = plan;
@@ -366,113 +408,111 @@ function MovePlanRows(props: {
   const leftHere = rowsLeftHere(plan, choices);
   const storesASecret = planMovesASecret(plan, choices);
   return (
-    <>
-      {plan.guideDiffers ? (
-        // Above Moves, in no section and with no choice: the move never puts
-        // this guide over Personal's.
-        <p
-          className="text-ui-sm text-muted-foreground"
-          data-testid="move-sheet-guide-differs"
+    <Collapsible open={props.open} onOpenChange={props.onOpenChange}>
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-testid="move-sheet-details"
         >
-          {guideDiffersNote(props.hostName)}
-        </p>
-      ) : null}
-      {movesNothing ? (
-        <p className="text-ui-sm" data-testid="move-sheet-nothing-to-move">
-          {nothingToMoveLine(props.hostName)}
-        </p>
-      ) : null}
-      {moving.length === 0 ? null : (
-        <MovesSection rows={moving} onChoose={props.onChoose} />
-      )}
-      {MOVE_SECTIONS.map((section) => {
-        // Stays lists the rows the person left here after the plan's own.
-        const stays = section.rows === "staysOnThisComputer";
-        const sectionRows = rows[section.rows];
-        const chosen = stays ? leftHere : [];
-        // A sheet that moves nothing says so in its own line instead.
-        const hidden =
-          sectionRows.length + chosen.length === 0 &&
-          (section.empty === null || movesNothing);
-        return hidden ? null : (
-          <MoveSection
-            key={section.rows}
-            testId={`move-sheet-${section.rows}`}
-            title={section.title}
-            initiallyOpen={stays}
-            rows={sectionRows}
-            chosen={chosen}
-            onTakeBack={(row) => props.onChoose(moveItemChoiceKey(row), null)}
-            empty={section.empty ?? ""}
-            detailSeparator={section.detailSeparator}
-          />
-        );
-      })}
-      {movesNothing ? null : (
-        <>
-          <p className="text-ui-sm" data-testid="move-sheet-nothing-deleted">
-            {nothingDeletedLine(props.hostName)}
+          <ChevronRight className="size-3.5" aria-hidden />
+          Details
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-4 pt-2">
+        {moving.length === 0 ? null : (
+          <MovesSection rows={moving} onChoose={props.onChoose} />
+        )}
+        {MOVE_SECTIONS.map((section) => {
+          // Stays lists the rows the person left here after the plan's own.
+          const stays = section.rows === "staysOnThisComputer";
+          const sectionRows = rows[section.rows];
+          const chosen = stays ? leftHere : [];
+          // A sheet that moves nothing says so in its own line instead.
+          const hidden =
+            sectionRows.length + chosen.length === 0 &&
+            (section.empty === null || movesNothing);
+          return hidden ? null : (
+            <MoveSection
+              key={section.rows}
+              testId={`move-sheet-${section.rows}`}
+              title={section.title}
+              rows={sectionRows}
+              namesMcpServers={stays}
+              chosen={chosen}
+              onTakeBack={(row) => props.onChoose(moveItemChoiceKey(row), null)}
+              empty={section.empty ?? ""}
+              detailSeparator={section.detailSeparator}
+            />
+          );
+        })}
+        {plan.guideDiffers ? (
+          // In no section and with no choice: the move never puts this guide
+          // over Personal's.
+          <p
+            className="text-ui-sm text-muted-foreground"
+            data-testid="move-sheet-guide-differs"
+          >
+            {GUIDE_DIFFERS_NOTE}
           </p>
+        ) : null}
+        {movesNothing ? null : (
           <div className="flex flex-col gap-1">
-            <p
-              className="text-ui-sm text-muted-foreground"
-              data-testid="move-sheet-disclosure"
-            >
-              {disclosureText(storesASecret, props.reachedHostNames)}
-            </p>
+            {storesASecret ? (
+              <p
+                className="text-ui-sm text-muted-foreground"
+                data-testid="move-sheet-disclosure"
+              >
+                {`${MOVE_DISCLOSURE} ${moveRecipientSentence(props.reachedHostNames)}`}
+              </p>
+            ) : null}
             <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
           </div>
-        </>
-      )}
-    </>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
-/**
- * Who receives what: the custody sentence and its recipient boundary when
- * this move stores a provider key; then that Move accepts the list as shown.
- */
-function disclosureText(
-  storesASecret: boolean,
-  reachedHostNames: readonly string[],
-): string {
-  if (storesASecret) {
-    return `${MOVE_DISCLOSURE} ${moveRecipientSentence(reachedHostNames)} ${MOVE_ACCEPTS_AS_SHOWN}`;
-  }
-  return MOVE_ACCEPTS_AS_SHOWN;
-}
-
-/** Moves as counts, with `Show all <n>` opening every row and its choices. */
+/** Moves with its count: every row by name, each with its choice. */
 function MovesSection(props: {
   readonly rows: readonly MovesSectionRow[];
   readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
 }): ReactNode {
   return (
     <section className="flex flex-col gap-1" data-testid="move-sheet-moves">
-      <h3 className="font-medium text-ui-sm">Moves</h3>
-      <p className="text-ui-sm" data-testid="move-sheet-moves-summary">
-        {movesSummary(props.rows)}
-      </p>
-      <Collapsible>
-        <CollapsibleTrigger asChild>
-          <Button type="button" variant="ghost" size="sm">
-            <ChevronRight className="size-3.5" aria-hidden />
-            Show all {props.rows.length}
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <ul className="flex flex-col gap-2 pl-6">
-            {props.rows.map((entry) => (
-              <MovesRow
-                key={`${entry.row.kind}:${entry.row.key}:${entry.row.os ?? ""}`}
-                entry={entry}
-                onChoose={(choice) => props.onChoose(entry.choiceKey, choice)}
-              />
-            ))}
-          </ul>
-        </CollapsibleContent>
-      </Collapsible>
+      <SectionTitle
+        title="Moves to Personal"
+        count={props.rows.length}
+        testId="move-sheet-moves-count"
+      />
+      <ul className="flex flex-col gap-2">
+        {props.rows.map((entry) => (
+          <MovesRow
+            key={`${entry.row.kind}:${entry.row.key}:${entry.row.os ?? ""}`}
+            entry={entry}
+            onChoose={(choice) => props.onChoose(entry.choiceKey, choice)}
+          />
+        ))}
+      </ul>
     </section>
+  );
+}
+
+/** A section's title and its count. */
+function SectionTitle(props: {
+  readonly title: string;
+  readonly count: number;
+  readonly testId: string;
+}): ReactNode {
+  return (
+    <h3 className="font-medium text-ui-sm">
+      {props.title}{" "}
+      <span className="text-muted-foreground" data-testid={props.testId}>
+        {props.count}
+      </span>
+    </h3>
   );
 }
 
@@ -509,67 +549,79 @@ function MovesRow(props: {
 }
 
 /**
- * A section after Moves, collapsed to its count. `chosen` are Moves rows the
- * person left on this computer only, listed after the section's own rows
- * with the pressed `Leave on this computer only` that takes the choice back.
+ * A section after Moves, with its count. `chosen` are Moves rows the person
+ * left on this computer only, listed after the section's own rows with the
+ * pressed `Leave on this computer only` that takes the choice back.
+ * `namesMcpServers` draws the section's MCP servers on one line, by name.
  */
 function MoveSection(props: {
   readonly testId: string;
   readonly title: string;
-  readonly initiallyOpen: boolean;
   readonly rows: readonly MoveRow[];
+  readonly namesMcpServers: boolean;
   readonly chosen: readonly MoveRow[];
   readonly onTakeBack: (row: MoveRow) => void;
   readonly empty: string;
   readonly detailSeparator: string | null;
 }): ReactNode {
   const count = props.rows.length + props.chosen.length;
+  const { mcpServerNames, others } = props.namesMcpServers
+    ? staysRowsByName(props.rows)
+    : { mcpServerNames: [], others: props.rows };
   return (
     <section className="flex flex-col gap-1" data-testid={props.testId}>
-      <h3 className="font-medium text-ui-sm">{props.title}</h3>
+      <SectionTitle
+        title={props.title}
+        count={count}
+        testId={`${props.testId}-count`}
+      />
       {count === 0 ? (
         <p className="text-ui-sm text-muted-foreground">{props.empty}</p>
       ) : (
-        <Collapsible defaultOpen={props.initiallyOpen}>
-          <CollapsibleTrigger asChild>
-            <Button type="button" variant="ghost" size="sm">
-              <ChevronRight className="size-3.5" aria-hidden />
-              {count === 1 ? "1 item" : `${count} items`}
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ul className="flex flex-col gap-1 pl-6">
-              {props.rows.map((row) => (
-                <li
-                  key={`${row.kind}:${row.key}:${row.os ?? ""}`}
-                  className="text-ui-sm"
-                >
-                  <MoveRowText row={row} separator={props.detailSeparator} />
-                </li>
+        <ul className="flex flex-col gap-1">
+          {mcpServerNames.length === 0 ? null : (
+            <li
+              className="text-ui-sm"
+              data-testid={`${props.testId}-mcp-servers`}
+            >
+              <span>{STAYS_MCP_SERVERS_TITLE}</span>{" "}
+              {mcpServerNames.map((name, index) => (
+                <Fragment key={`${String(index)}:${name}`}>
+                  {index === 0 ? null : ", "}
+                  <span className="text-muted-foreground">{name}</span>
+                </Fragment>
               ))}
-              {props.chosen.map((row) => (
-                <li
-                  key={`chosen:${row.kind}:${row.key}:${row.os ?? ""}`}
-                  className="flex flex-col gap-1 text-ui-sm"
-                  data-testid="move-sheet-left-here-row"
+            </li>
+          )}
+          {others.map((row) => (
+            <li
+              key={`${row.kind}:${row.key}:${row.os ?? ""}`}
+              className="text-ui-sm"
+            >
+              <MoveRowText row={row} separator={props.detailSeparator} />
+            </li>
+          ))}
+          {props.chosen.map((row) => (
+            <li
+              key={`chosen:${row.kind}:${row.key}:${row.os ?? ""}`}
+              className="flex flex-col gap-1 text-ui-sm"
+              data-testid="move-sheet-left-here-row"
+            >
+              <span>{moveRowLabel(row)}</span>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  aria-pressed
+                  onClick={() => props.onTakeBack(row)}
                 >
-                  <span>{moveRowLabel(row)}</span>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      aria-pressed
-                      onClick={() => props.onTakeBack(row)}
-                    >
-                      Leave on this computer only
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </CollapsibleContent>
-        </Collapsible>
+                  Leave on this computer only
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

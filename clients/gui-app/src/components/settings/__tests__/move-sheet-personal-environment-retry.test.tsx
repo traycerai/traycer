@@ -202,6 +202,6 @@ describe("MoveSheet retry while Personal is unresolved", () => {
           .hasAttribute("disabled"),
       ).toBe(false);
     });
-    expect(screen.getByTestId("move-sheet-moves")).toBeTruthy();
+    expect(screen.getByTestId("move-sheet-moves-summary")).toBeTruthy();
   });
 });

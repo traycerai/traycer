@@ -315,6 +315,33 @@ async function settle(): Promise<void> {
   await advanceLegendListTime(50);
 }
 
+function detailsToggle(): HTMLElement {
+  return screen.getByRole("button", { name: "Details" });
+}
+
+function toggleDetails(): void {
+  fireEvent.click(detailsToggle());
+}
+
+/** What each Moves row's name reads as, without its choice button. */
+function movesRowTexts(): (string | null)[] {
+  return screen
+    .queryAllByTestId("move-sheet-moves-row")
+    .map((entry) => entry.querySelector("span")?.textContent ?? null);
+}
+
+function describedRow(
+  kind: string,
+  key: string,
+  label: string,
+  detail: string,
+) {
+  return { kind, key, os: null, label, detail };
+}
+
+const CUSTODY =
+  "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
+
 beforeEach(() => {
   installLegendListTestClock();
   useMoveSheetStore.setState({ target: null });
@@ -330,24 +357,6 @@ afterEach(() => {
 });
 
 describe("<MoveSheet />", () => {
-  it("shows the disclosure and Move to Personal for the current disclosure version", async () => {
-    const harness = mount({ plans: [FIRST_PLAN] });
-    await settle();
-
-    expect(screen.getByTestId("move-sheet-disclosure").textContent).toContain(
-      "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.",
-    );
-    expect(screen.getByTestId("move-sheet-accept").textContent).toContain(
-      "Move to Personal",
-    );
-    expect(harness.plans).toEqual([
-      {
-        target: { kind: "personal", environmentId: ENVIRONMENT_ID },
-        personal: null,
-      },
-    ]);
-  });
-
   it("asks for an update and stages nothing for an unsupported disclosure version", async () => {
     const harness = mount({
       plans: [
@@ -368,26 +377,36 @@ describe("<MoveSheet />", () => {
     ).toBe(false);
   });
 
-  it("draws the plan's rows: Moves, Stays with a key-shaped value, Already in Personal (empty)", async () => {
+  it("titles the dialog and gives it one description line", async () => {
     mount({ plans: [FIRST_PLAN] });
     await settle();
 
     expect(screen.getByText("Move Old laptop to Personal?")).toBeTruthy();
     expect(screen.getByTestId("move-sheet-description").textContent).toBe(
-      "It then uses your Personal settings, the same ones every computer and sandbox running Personal uses. You can move it back any time.",
+      "It will use your Personal settings. Nothing is deleted from this computer, and you can move it back any time.",
     );
-    expect(screen.getByTestId("move-sheet-nothing-deleted").textContent).toBe(
-      "Everything also stays on Old laptop; nothing is deleted.",
-    );
-    expect(screen.queryByTestId("move-sheet-nothing-to-move")).toBeNull();
-    const moves = screen.getByTestId("move-sheet-moves");
-    expect(moves.textContent).toContain("Moves");
+  });
+
+  it("shows only the counts line and the two buttons while Details is closed", async () => {
+    mount({ plans: [FIRST_PLAN] });
+    await settle();
+
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
       "2 variables",
     );
-    expect(
-      within(moves).getByRole("button", { name: "Show all 2" }),
-    ).toBeTruthy();
+    expect(screen.getByTestId("move-sheet-not-now")).toBeTruthy();
+    expect(screen.getByTestId("move-sheet-accept")).toBeTruthy();
+    expect(detailsToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(movesRowTexts()).toEqual([]);
+  });
+
+  it("opens Details to every Moves row by name, and to what stays with its own reason", async () => {
+    mount({ plans: [FIRST_PLAN] });
+    await settle();
+    toggleDetails();
+
+    expect(movesRowTexts()).toEqual(["EDITOR · variable", "PAGER"]);
+    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
     const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
     expect(stays.textContent).toContain("Stays on this computer");
     // The key-shaped value is a stay, with its own reason and no choice.
@@ -395,15 +414,42 @@ describe("<MoveSheet />", () => {
     expect(stays.textContent).toContain(
       "a key's value does not move in or out of a computer",
     );
-    expect(
-      screen.getByTestId("move-sheet-alreadyInPersonal").textContent,
-    ).toContain("Nothing yet.");
     // Different from Personal is drawn only when the plan has any.
     expect(screen.queryByTestId("move-sheet-differsMasked")).toBeNull();
-    // Nothing here is stored as a secret, so no custody sentence.
-    expect(
-      screen.getByTestId("move-sheet-disclosure").textContent,
-    ).not.toContain("Stored encrypted in Traycer's cloud.");
+  });
+
+  it("draws Details in order: Moves, Stays, Already in Personal, Different, the guide line, the custody text, How Traycer handles this", async () => {
+    mount({
+      plans: [
+        {
+          ...plan("hash-order", {
+            moves: [rowOfKind("TOKEN", "secret", "TOKEN")],
+            staysOnThisComputer: [row("SSH", "SSH sign-in", null)],
+            alreadyInPersonal: [row("HOME", "HOME", null)],
+            differsMasked: [row("PAGER", "PAGER", "value differs")],
+          }),
+          guideDiffers: true,
+        },
+      ],
+    });
+    await settle();
+    toggleDetails();
+
+    const inOrder = [
+      screen.getAllByTestId("move-sheet-moves-row")[0],
+      screen.getByTestId("move-sheet-staysOnThisComputer"),
+      screen.getByTestId("move-sheet-alreadyInPersonal"),
+      screen.getByTestId("move-sheet-differsMasked"),
+      screen.getByTestId("move-sheet-guide-differs"),
+      screen.getByTestId("move-sheet-disclosure"),
+      screen.getByTestId("members-data-handling-trigger"),
+    ];
+    inOrder.slice(1).forEach((entry, index) => {
+      expect(
+        inOrder[index].compareDocumentPosition(entry) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
   });
 
   it("titles the differing section and reads its rows as label: detail", async () => {
@@ -416,57 +462,56 @@ describe("<MoveSheet />", () => {
       ],
     });
     await settle();
+    toggleDetails();
 
     const differs = screen.getByTestId("move-sheet-differsMasked");
     expect(differs.textContent).toContain("Different from Personal");
     expect(differs.textContent).not.toContain("Differs, masked");
-    fireEvent.click(within(differs).getByRole("button", { name: "1 item" }));
     expect(differs.textContent).toContain("PAGER: value differs");
     // The other sections keep the `label · detail` form.
-    const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(moves.textContent).toContain("EDITOR · variable");
+    expect(movesRowTexts()).toEqual(["EDITOR · variable"]);
   });
 
-  it("draws Already in Personal above Different from Personal", async () => {
+  it("draws Already in Personal only when it has rows", async () => {
+    mount({ plans: [FIRST_PLAN] });
+    await settle();
+    toggleDetails();
+
+    expect(screen.queryByTestId("move-sheet-alreadyInPersonal")).toBeNull();
+    expect(document.body.textContent).not.toContain("Nothing yet.");
+    cleanup();
+
     mount({
       plans: [
-        plan("hash-s", {
-          alreadyInPersonal: [row("HOME", "HOME", null)],
-          differsMasked: [row("PAGER", "PAGER", "value differs")],
-        }),
+        plan("hash-a", { alreadyInPersonal: [row("HOME", "HOME", null)] }),
       ],
     });
     await settle();
+    toggleDetails();
 
-    const already = screen.getByTestId("move-sheet-alreadyInPersonal");
-    const differs = screen.getByTestId("move-sheet-differsMasked");
-    expect(already.textContent).toContain("Already in Personal");
     expect(
-      already.compareDocumentPosition(differs) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+      screen.getByTestId("move-sheet-alreadyInPersonal").textContent,
+    ).toContain("HOME");
   });
 
-  it("says above Moves where an edited agent selection guide goes, naming the computer", async () => {
+  it("says in Details, in one line, where an edited agent selection guide goes", async () => {
     mount({
       plans: [{ ...FIRST_PLAN, guideDiffers: true }],
     });
     await settle();
 
-    const note = screen.getByTestId("move-sheet-guide-differs");
-    expect(note.textContent).toBe(
-      "Agent selection guide: this computer's guide has your edits. It moves to Personal only if Personal has never had a guide. Otherwise it is set aside on Old laptop, and Old laptop uses Personal's guide, or the built-in one if Personal's was removed. Nothing in Personal is replaced or restored.",
+    expect(screen.queryByTestId("move-sheet-guide-differs")).toBeNull();
+    toggleDetails();
+
+    expect(screen.getByTestId("move-sheet-guide-differs").textContent).toBe(
+      "Agent selection guide: yours moves only if Personal never had one; otherwise this computer uses Personal's and yours is set aside.",
     );
-    expect(
-      note.compareDocumentPosition(screen.getByTestId("move-sheet-moves")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
   });
 
   it("says nothing of the guide while it is not edited", async () => {
     mount({ plans: [FIRST_PLAN] });
     await settle();
+    toggleDetails();
 
     expect(screen.queryByTestId("move-sheet-guide-differs")).toBeNull();
   });
@@ -518,25 +563,17 @@ describe("<MoveSheet />", () => {
 
   it("stages an empty plan with no choices and closes after start", async () => {
     const harness = mount({
-      plans: [
-        plan("hash-n", {
-          alreadyInPersonal: [row("HOME", "HOME", null)],
-          staysOnThisComputer: [],
-        }),
-      ],
+      plans: [plan("hash-n", {})],
     });
     await settle();
 
     expect(screen.getByTestId("move-sheet-not-now")).toBeTruthy();
     expect(screen.getByTestId("move-sheet-accept")).toBeTruthy();
-    expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
     expect(screen.getByTestId("move-sheet-nothing-to-move").textContent).toBe(
       "Nothing on Old laptop needs moving.",
     );
-    expect(screen.queryByTestId("move-sheet-nothing-deleted")).toBeNull();
-    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
-    expect(screen.queryByTestId("move-sheet-staysOnThisComputer")).toBeNull();
-    expect(screen.getByTestId("move-sheet-alreadyInPersonal")).toBeTruthy();
+    expect(screen.queryByTestId("move-sheet-moves-summary")).toBeNull();
+
     const target = { kind: "personal", environmentId: ENVIRONMENT_ID } as const;
     expect(harness.plans).toEqual([{ target, personal: null }]);
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
@@ -563,23 +600,6 @@ describe("<MoveSheet />", () => {
     ]);
   });
 
-  it("shows no disclosure on an empty move even when Personal already has secrets", async () => {
-    mount({
-      plans: [
-        planWith(
-          "hash-empty-secrets",
-          {},
-          {
-            personalHoldsSecrets: true,
-          },
-        ),
-      ],
-    });
-    await settle();
-
-    expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
-  });
-
   it("names a one-of-a-kind row by its page, and leaves other rows their label", async () => {
     mount({
       plans: [
@@ -597,21 +617,17 @@ describe("<MoveSheet />", () => {
       ],
     });
     await settle();
+    toggleDetails();
 
-    const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "Show all 3" }));
-    expect(moves.textContent).toContain("Browser agent access");
-    expect(moves.textContent).toContain("ANTHROPIC_BASE_URL (Claude Code)");
-    expect(moves.textContent).not.toContain("Claude Code: ");
-    expect(moves.textContent).not.toContain("browser ");
-    expect(moves.textContent).toContain("EDITOR");
+    const moved = movesRowTexts().join("\n");
+    expect(moved).toContain("Browser agent access");
+    expect(moved).toContain("ANTHROPIC_BASE_URL (Claude Code)");
+    expect(moved).not.toContain("Claude Code: ");
+    expect(moved).not.toContain("browser ");
+    expect(moved).toContain("EDITOR");
   });
 
-  it("says where secrets are stored and who receives them only when something is stored as a secret", async () => {
-    const custody =
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
-    const accepts =
-      "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
+  it("says where a key is stored and who receives it, inside Details, only when a key moves", async () => {
     const disclosure = () =>
       screen.getByTestId("move-sheet-disclosure").textContent;
     const secretPlan = plan("hash-s", {
@@ -619,11 +635,20 @@ describe("<MoveSheet />", () => {
     });
     const options = { plans: [secretPlan] };
 
+    // Personal already holding secrets does not make a variable a custody case.
     mount({
-      plans: [plan("hash-v", { moves: [row("EDITOR", "EDITOR", null)] })],
+      plans: [
+        planWith(
+          "hash-v",
+          { moves: [row("EDITOR", "EDITOR", null)] },
+          { personalHoldsSecrets: true },
+        ),
+      ],
     });
     await settle();
-    expect(disclosure()).toBe(accepts);
+    toggleDetails();
+    expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
+    expect(document.body.textContent).not.toContain(CUSTODY);
     cleanup();
 
     mountReaching(options, [
@@ -632,49 +657,53 @@ describe("<MoveSheet />", () => {
       { hostId: HOST_ID, name: "Old laptop" },
     ]);
     await settle();
+    expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
+    toggleDetails();
     expect(disclosure()).toBe(
-      `${custody} Today that is MacBook Pro and dev-box, and any computer that starts running Personal later receives these keys as values its tools and agents can read. ${accepts}`,
+      `${CUSTODY} Today that is MacBook Pro and dev-box, and any computer that starts running Personal later receives these keys as values its tools and agents can read.`,
     );
     cleanup();
 
     mount(options);
     await settle();
+    toggleDetails();
     expect(disclosure()).toBe(
-      `${custody} No other computer runs Personal yet. Any computer that starts running Personal later receives these keys as values its tools and agents can read. ${accepts}`,
+      `${CUSTODY} No other computer runs Personal yet. Any computer that starts running Personal later receives these keys as values its tools and agents can read.`,
     );
   });
 
-  it("offers How Traycer handles this under the disclosure, and not on the nothing-to-move sheet", async () => {
+  it("offers How Traycer handles this at the end of Details", async () => {
     mount({ plans: [FIRST_PLAN] });
     await settle();
 
-    expect(screen.queryByTestId("members-data-handling-notice")).toBeNull();
+    expect(screen.queryByTestId("members-data-handling-trigger")).toBeNull();
+    toggleDetails();
     fireEvent.click(screen.getByTestId("members-data-handling-trigger"));
     expect(
       screen.getByTestId("members-data-handling-notice").textContent,
     ).toContain(
       "Traycer's cloud stores the value encrypted. Sandboxes running Personal or a team use the value without seeing it.",
     );
-    cleanup();
-
-    mount({
-      plans: [
-        plan("hash-n", { alreadyInPersonal: [row("HOME", "HOME", null)] }),
-      ],
-    });
-    await settle();
-    expect(screen.queryByTestId("members-data-handling-trigger")).toBeNull();
   });
 
-  it("has no Moves section when only stays rows are planned", async () => {
+  it("says nothing needs moving, and lists no Moves row, when only stays rows are planned", async () => {
     mount({
       plans: [
         plan("hash-n2", { staysOnThisComputer: [row("SSH", "SSH", null)] }),
       ],
     });
     await settle();
+    toggleDetails();
 
-    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
+    expect(screen.getByTestId("move-sheet-nothing-to-move").textContent).toBe(
+      "Nothing on Old laptop needs moving.",
+    );
+    expect(screen.queryByTestId("move-sheet-moves-summary")).toBeNull();
+    expect(movesRowTexts()).toEqual([]);
+    expect(
+      screen.getByTestId("move-sheet-staysOnThisComputer").textContent,
+    ).toContain("SSH");
+    expect(screen.queryByTestId("members-data-handling-trigger")).toBeNull();
   });
 
   it("shows a stays row's detail alone, so the item's name appears once", async () => {
@@ -691,6 +720,7 @@ describe("<MoveSheet />", () => {
       ],
     });
     await settle();
+    toggleDetails();
 
     const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
     const text = stays.textContent;
@@ -703,43 +733,39 @@ describe("<MoveSheet />", () => {
     expect(text).toContain("SSH sign-in");
   });
 
-  it("shows what stays on this computer without a click, while Moves stays folded", async () => {
+  it("lists MCP servers by name alone under MCP servers, and every other stay with its sentence", async () => {
+    const sshSentence =
+      "SSH sign-in is set up in this computer's terminal, so it stays here and keeps working.";
     mount({
       plans: [
-        plan("hash-stays", {
-          moves: [row("PATH", "PATH", null)],
-          staysOnThisComputer: [row("EDITOR", "EDITOR", null)],
+        plan("hash-m", {
+          staysOnThisComputer: [
+            describedRow(
+              "mcp_server_held",
+              "docs",
+              "docs",
+              "docs (MCP server) runs npx -y docs-server on this computer, so it stays here and keeps working.",
+            ),
+            describedRow(
+              "mcp_server",
+              "memory",
+              "memory",
+              "memory (MCP server) runs npx -y memory-server on this computer, so it stays here and keeps working.",
+            ),
+            describedRow("terminal", "SSH", "SSH sign-in", sshSentence),
+          ],
         }),
       ],
     });
     await settle();
+    toggleDetails();
 
-    expect(
-      screen.getByTestId("move-sheet-staysOnThisComputer").textContent,
-    ).toContain("EDITOR");
-    expect(screen.getByTestId("move-sheet-moves").textContent).not.toContain(
-      "PATH",
-    );
-  });
-
-  it("opens a section to its items", async () => {
-    mount({ plans: [FIRST_PLAN] });
-    await settle();
-
-    fireEvent.click(
-      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "Show all 2",
-      }),
-    );
-    expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
-      "EDITOR",
-    );
-    expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
-      "PAGER",
-    );
-    expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
-      "variable",
-    );
+    const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
+    expect(within(stays).getByText("MCP servers")).toBeTruthy();
+    expect(stays.textContent).toContain("docs");
+    expect(stays.textContent).toContain("memory");
+    expect(stays.textContent).not.toContain("runs npx");
+    expect(stays.textContent).toContain(sshSentence);
   });
 
   it("closes on accept and opens the move's progress for that computer", async () => {
@@ -870,7 +896,7 @@ describe("<MoveSheet />", () => {
     personalReadSucceeds = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(await screen.findByTestId("move-sheet-moves")).toBeTruthy();
+    expect(await screen.findByTestId("move-sheet-moves-summary")).toBeTruthy();
     expect(harness.plans).toEqual([
       {
         target: { kind: "personal", environmentId: ENVIRONMENT_ID },
@@ -965,11 +991,7 @@ describe("<MoveSheet />", () => {
       },
     });
     await settle();
-    fireEvent.click(
-      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "Show all 1",
-      }),
-    );
+    toggleDetails();
     fireEvent.click(
       screen.getByRole("button", { name: "Leave on this computer only" }),
     );
@@ -981,12 +1003,8 @@ describe("<MoveSheet />", () => {
       "This list changed. Read it again.",
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
-    fireEvent.click(
-      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "Show all 1",
-      }),
-    );
     expect(await screen.findByText("EDITOR updated")).toBeTruthy();
+    expect(detailsToggle().getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
     await waitFor(() => expect(useMoveSheetStore.getState().target).toBeNull());
@@ -1065,6 +1083,7 @@ describe("<MoveSheet />", () => {
     expect(useMoveSheetStore.getState().target).not.toBeNull();
     expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
   });
+
   it("lists a provider override as <NAME> (<Provider>)", async () => {
     mount({
       plans: [
@@ -1080,40 +1099,12 @@ describe("<MoveSheet />", () => {
       ],
     });
     await settle();
+    toggleDetails();
 
-    const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(
-      within(moves).getByText("ANTHROPIC_BASE_URL (Claude Code)"),
-    ).toBeTruthy();
+    expect(movesRowTexts()).toEqual(["ANTHROPIC_BASE_URL (Claude Code)"]);
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
       "1 Claude Code env setting",
     );
-  });
-
-  it("names the other computers in the recipient boundary when a secret moves", async () => {
-    const secretPlan = plan("hash-r", {
-      moves: [rowOfKind("TOKEN", "secret", "TOKEN")],
-    });
-    const later =
-      "any computer that starts running Personal later receives these keys as values its tools and agents can read.";
-    const disclosure = () =>
-      screen.getByTestId("move-sheet-disclosure").textContent;
-
-    mount({ plans: [secretPlan] });
-    await settle();
-    expect(disclosure()).toContain(
-      `No other computer runs Personal yet. Any computer that starts running Personal later receives these keys as values its tools and agents can read.`,
-    );
-    cleanup();
-
-    mountReaching({ plans: [secretPlan] }, [
-      { hostId: "a", name: "A" },
-      { hostId: "b", name: "B" },
-      { hostId: HOST_ID, name: "Old laptop" },
-    ]);
-    await settle();
-    expect(disclosure()).toContain(`Today that is A and B, and ${later}`);
   });
 
   describe("choices on a Moves row", () => {
@@ -1130,19 +1121,20 @@ describe("<MoveSheet />", () => {
         { personalHoldsSecrets: false },
       );
 
+    function movesRow(index: number): HTMLElement {
+      return screen.getAllByTestId("move-sheet-moves-row")[index];
+    }
+
     function rowButtons(index: number): string[] {
-      const rows = within(
-        screen.getByTestId("move-sheet-moves"),
-      ).getAllByTestId("move-sheet-moves-row");
-      return within(rows[index])
+      return within(movesRow(index))
         .queryAllByRole("button")
         .map((button) => button.textContent);
     }
 
-    function openMoves(): void {
+    function leaveEditorHere(): void {
       fireEvent.click(
-        within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-          name: "Show all 3",
+        within(movesRow(0)).getByRole("button", {
+          name: "Leave on this computer only",
         }),
       );
     }
@@ -1150,7 +1142,7 @@ describe("<MoveSheet />", () => {
     it("offers Leave on a variable and a secret, and nothing on a fallback policy", async () => {
       mount({ plans: [itemPlan()] });
       await settle();
-      openMoves();
+      toggleDetails();
 
       expect(rowButtons(0)).toEqual(["Leave on this computer only"]);
       expect(rowButtons(1)).toEqual(["Leave on this computer only"]);
@@ -1160,18 +1152,10 @@ describe("<MoveSheet />", () => {
     it("moves a row left on this computer only under Stays, where its pressed button takes it back", async () => {
       const harness = mount({ plans: [itemPlan()] });
       await settle();
-      openMoves();
+      toggleDetails();
 
-      fireEvent.click(
-        within(
-          within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
-            "move-sheet-moves-row",
-          )[0],
-        ).getByRole("button", { name: "Leave on this computer only" }),
-      );
-      expect(screen.getByTestId("move-sheet-moves").textContent).not.toContain(
-        "EDITOR",
-      );
+      leaveEditorHere();
+      expect(movesRowTexts().join("\n")).not.toContain("EDITOR");
       const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
       const left = within(stays).getByTestId("move-sheet-left-here-row");
       expect(left.textContent).toContain("EDITOR");
@@ -1193,18 +1177,67 @@ describe("<MoveSheet />", () => {
       ]);
     });
 
+    it("keeps a Leave choice when Details is closed and opened again, and the counts line follows it", async () => {
+      mount({ plans: [FIRST_PLAN] });
+      await settle();
+      toggleDetails();
+
+      leaveEditorHere();
+      toggleDetails();
+
+      expect(detailsToggle().getAttribute("aria-expanded")).toBe("false");
+      expect(movesRowTexts()).toEqual([]);
+      expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+        "1 variable",
+      );
+
+      toggleDetails();
+
+      expect(movesRowTexts()).toEqual(["PAGER"]);
+      const left = within(
+        screen.getByTestId("move-sheet-staysOnThisComputer"),
+      ).getByTestId("move-sheet-left-here-row");
+      expect(left.textContent).toContain("EDITOR");
+      expect(
+        within(left)
+          .getByRole("button", { name: "Leave on this computer only" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+    });
+
+    it("draws no Moves box while every row is left here, and draws it again when a choice is taken back", async () => {
+      mount({
+        plans: [plan("hash-one", { moves: [row("EDITOR", "EDITOR", null)] })],
+      });
+      await settle();
+      toggleDetails();
+
+      leaveEditorHere();
+
+      expect(screen.queryByTestId("move-sheet-moves-summary")).toBeNull();
+      expect(screen.queryByTestId("move-sheet-nothing-to-move")).toBeNull();
+      const left = within(
+        screen.getByTestId("move-sheet-staysOnThisComputer"),
+      ).getByTestId("move-sheet-left-here-row");
+      expect(left.textContent).toContain("EDITOR");
+
+      fireEvent.click(
+        within(left).getByRole("button", {
+          name: "Leave on this computer only",
+        }),
+      );
+
+      expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+        "1 variable",
+      );
+    });
+
     it("sends nothing for a row whose choice was taken back", async () => {
       const harness = mount({ plans: [itemPlan()] });
       await settle();
-      openMoves();
+      toggleDetails();
 
-      fireEvent.click(
-        within(
-          within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
-            "move-sheet-moves-row",
-          )[0],
-        ).getByRole("button", { name: "Leave on this computer only" }),
-      );
+      leaveEditorHere();
       const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
       fireEvent.click(
         within(stays).getByRole("button", {
@@ -1212,11 +1245,7 @@ describe("<MoveSheet />", () => {
         }),
       );
       expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
-      expect(
-        within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-          name: "Show all 3",
-        }),
-      ).toBeTruthy();
+      expect(screen.getAllByTestId("move-sheet-moves-row")).toHaveLength(3);
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
       await waitFor(() =>
         expect(useMoveSheetStore.getState().target).toBeNull(),

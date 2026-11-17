@@ -6,6 +6,7 @@ import {
 import {
   envOverrideProviderName,
   itemPageName,
+  moveRowLabel,
 } from "@/components/settings/personal/personal-page-status";
 
 export type MovePlan = EnvironmentMovePlanResponseV20;
@@ -20,9 +21,6 @@ export const MOVE_DISCLOSURE =
  * any other version shows the needs-an-update line and no accept.
  */
 export const MOVE_DISCLOSURE_VERSION = 2;
-
-export const MOVE_ACCEPTS_AS_SHOWN =
-  "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
 
 export const PLAN_CHANGED_TEXT = "This list changed. Read it again.";
 
@@ -82,26 +80,19 @@ export function moveRecipientSentence(hostNames: readonly string[]): string {
 
 /** What moving gives the computer, under the sheet's title. */
 export const MOVE_SHEET_DESCRIPTION =
-  "It then uses your Personal settings, the same ones every computer and sandbox running Personal uses. You can move it back any time.";
+  "It will use your Personal settings. Nothing is deleted from this computer, and you can move it back any time.";
 
 /** A plan with no Moves row: the computer still moves, with nothing in it. */
 export function nothingToMoveLine(hostName: string): string {
   return `Nothing on ${hostName} needs moving.`;
 }
 
-/** A plan with Moves rows: what moves is copied, never taken off. */
-export function nothingDeletedLine(hostName: string): string {
-  return `Everything also stays on ${hostName}; nothing is deleted.`;
-}
-
 /**
- * The note above Moves when this computer's agent selection guide has the
- * person's edits (`guideDiffers`): where it goes, and that Personal's guide,
- * or its removal, stands.
+ * The line in Details when this computer's agent selection guide has the
+ * person's edits (`guideDiffers`): the move never puts it over Personal's.
  */
-export function guideDiffersNote(hostName: string): string {
-  return `Agent selection guide: this computer's guide has your edits. It moves to Personal only if Personal has never had a guide. Otherwise it is set aside on ${hostName}, and ${hostName} uses Personal's guide, or the built-in one if Personal's was removed. Nothing in Personal is replaced or restored.`;
-}
+export const GUIDE_DIFFERS_NOTE =
+  "Agent selection guide: yours moves only if Personal never had one; otherwise this computer uses Personal's and yours is set aside.";
 
 /** Nothing would leave this computer: no row moves. */
 export function planMovesNothing(plan: MovePlan): boolean {
@@ -220,6 +211,30 @@ export function movesSummary(rows: readonly MovesSectionRow[]): string {
     .join(" · ");
 }
 
+/** What Stays names together by name alone, under {@link STAYS_MCP_SERVERS_TITLE}. */
+const STAYS_BY_NAME_KINDS: ReadonlySet<MoveRow["kind"]> = new Set([
+  "mcp_server",
+  "mcp_server_held",
+]);
+
+export const STAYS_MCP_SERVERS_TITLE = "MCP servers";
+
+/**
+ * Stays rows as Details draws them: every MCP server by its name, and every
+ * other row on its own, with its sentence.
+ */
+export function staysRowsByName(rows: readonly MoveRow[]): {
+  readonly mcpServerNames: readonly string[];
+  readonly others: readonly MoveRow[];
+} {
+  return {
+    mcpServerNames: rows
+      .filter((row) => STAYS_BY_NAME_KINDS.has(row.kind))
+      .map((row) => moveRowLabel(row)),
+    others: rows.filter((row) => !STAYS_BY_NAME_KINDS.has(row.kind)),
+  };
+}
+
 /**
  * Whether the move stores a secret: a provider's key among the rows that
  * still leave this computer. Only then does the sheet say where secrets are
@@ -254,7 +269,7 @@ export const MOVE_SECTIONS = [
   {
     rows: "alreadyInPersonal",
     title: "Already in Personal",
-    empty: "Nothing yet.",
+    empty: null,
     detailSeparator: " · ",
   },
   {
