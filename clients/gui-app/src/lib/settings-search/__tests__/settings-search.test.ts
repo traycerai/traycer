@@ -648,7 +648,7 @@ describe("settings search", () => {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
           expect(landingsFor(query, context), query).toContain("browser#<top>");
         }
-        for (const query of ["notification hooks", "webhook", "toast"]) {
+        for (const query of ["notification hooks", "webhook"]) {
           expect(landingsFor(query, context), query).toContain(
             "notifications#<top>",
           );

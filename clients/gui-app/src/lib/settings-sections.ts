@@ -307,8 +307,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Coins,
     group: "account",
   },
-  // Event policy and automation. Different controls than Application → Sounds
-  // and Alerts, so it keeps the generic word and the bell.
+  // The host's notification automation (hooks). Different controls than
+  // Application → Sounds and Alerts, so it keeps the generic word and the bell.
   {
     id: "notifications",
     label: "Notifications",
