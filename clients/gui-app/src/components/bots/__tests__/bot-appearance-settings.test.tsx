@@ -31,7 +31,6 @@ import {
   BOT_MASCOT_ACCESSORIES,
   BOT_MASCOT_EYEWEAR,
   BOT_UNRECOGNISED_MARK,
-  botAppearanceSchema,
   type BotAppearance,
   type BotDirectoryRecord,
   type BotListResponse,
@@ -107,11 +106,14 @@ import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const BARE: BotAppearance = { mark: null, color: null };
 
-/** A look an older host sent with a channel background; the schema drops it. */
-const STALE_BACKGROUND: BotAppearance = botAppearanceSchema.parse({
+/**
+ * A look as a host of the same method version still delivers it: raw, with the
+ * channel background it once carried. Nothing reads it, and nothing parses it away.
+ */
+const STALE_BACKGROUND: BotAppearance & { readonly background: number } = {
   ...BARE,
   background: 9,
-});
+};
 
 function botRow(appearance: BotAppearance): BotDirectoryRecord {
   return {
@@ -389,7 +391,7 @@ function chosenShape(): BotMascotShape {
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background though an older host sent one", () => {
+  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background though the host still delivers one", () => {
     mount(STALE_BACKGROUND);
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
@@ -441,7 +443,7 @@ describe("<BotAppearanceSettings />", () => {
     });
   });
 
-  it("writes the chosen colour alone, carrying no background, over a bot an older host sent one for", async () => {
+  it("writes the chosen colour alone, carrying no background, over a look the host still delivers a background with", async () => {
     const user = userEvent.setup();
     mount(STALE_BACKGROUND);
 

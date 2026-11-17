@@ -48,7 +48,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
-  botAppearanceSchema,
+  type BotAppearance,
   type BotReadCursorAdvanceRequest,
   type BotNotificationLevel,
   type BotReadCursorReadResponse,
@@ -565,9 +565,8 @@ let mountLanding: BotChannelLanding | null = null;
 let mountTiles: MobileTileCount | null = null;
 
 /**
- * The channel background an older host still sends with the bot's look on the
- * next mount, or `null` for none. It is read through the real schema, which
- * drops it, as it does for every caller.
+ * The channel background a host of the same method version still delivers on
+ * the bot's look on the next mount, raw as it arrives, or `null` for none.
  */
 let mountStaleBackground: number | null = null;
 
@@ -580,17 +579,11 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
+  const deliveredLook: BotAppearance & {
+    readonly background: number | null;
+  } = { mark: null, color: null, background: mountStaleBackground };
   const looks: BotLooks = {
-    appearances: new Map([
-      [
-        BOT_ID,
-        botAppearanceSchema.parse({
-          mark: null,
-          color: null,
-          background: mountStaleBackground,
-        }),
-      ],
-    ]),
+    appearances: new Map([[BOT_ID, deliveredLook]]),
     main: null,
   };
   const runnerHost = createFakeRunnerHost({});
@@ -711,7 +704,7 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
     '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   it.each([false, true])(
-    "keeps the page's own colour in the message area and everywhere else though an older host still sends the bot a background (dark: %s)",
+    "keeps the page's own colour in the message area and everywhere else though the host still delivers the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       mountStaleBackground = 11;
