@@ -535,7 +535,7 @@ interface UseProviderProfileLoginFlowInput {
   /** Fires once, the instant the flow lands on `failed` - lets a caller
    *  surface the failure outside the dialog (the Settings panel's inline
    *  retry banner). Reauth mode, which has no such banner, passes a no-op. */
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }
 
 export interface ProviderProfileLoginFlow {
@@ -965,6 +965,7 @@ export function useProviderDestinationLoginFlow(
       message: string,
       blocker: AnalyticsBlocker,
       refusal: ProviderLoginRefusal | null,
+      hostSentence: boolean,
     ): void => {
       releaseEndedAttempt();
       // Flow-level failures otherwise surface only as inline dialog copy -
@@ -984,7 +985,7 @@ export function useProviderDestinationLoginFlow(
         blocker,
       });
       setState({ kind: "failed", message, refusal });
-      onFailed(message);
+      onFailed(message, hostSentence);
     },
     [mode, onFailed, providerId, releaseEndedAttempt],
   );
@@ -1002,7 +1003,7 @@ export function useProviderDestinationLoginFlow(
         return;
       }
       if (restartCountRef.current >= CODE_PASTE_RESTART_CAP) {
-        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout", null);
+        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout", null, false);
         return;
       }
       restartCountRef.current += 1;
@@ -1079,7 +1080,7 @@ export function useProviderDestinationLoginFlow(
         setState({ kind: "start" });
         return;
       }
-      fail(failureMessages.notFinished, "authentication", null);
+      fail(failureMessages.notFinished, "authentication", null, false);
     },
     [
       existingProfileId,
@@ -1113,7 +1114,9 @@ export function useProviderDestinationLoginFlow(
         return;
       }
       if (outcome.kind === "failed") {
-        fail(failureMessages.notFinished, "authentication", null);
+        // Today's failed state, whole: its release retires only the answer
+        // the computer keeps for this sign-in, which undid nothing.
+        fail(failureMessages.notFinished, "authentication", null, false);
         return;
       }
       if (outcome.kind === "list-unread") {
@@ -1293,6 +1296,7 @@ export function useProviderDestinationLoginFlow(
               ),
               refusal.blocker,
               null,
+              false,
             );
             return;
           }
@@ -1422,6 +1426,7 @@ export function useProviderDestinationLoginFlow(
                 resolution.refusal.reason,
                 "authentication",
                 resolution.refusal,
+                false,
               );
               return;
             }
@@ -1442,14 +1447,13 @@ export function useProviderDestinationLoginFlow(
             }
             // The host refused the account as held by the environment: its
             // own sentence is the answer, not the generic did-not-finish
-            // line. The ambient banner reconnect stays quiet.
+            // line.
             if (
               error instanceof HostRpcError &&
-              error.code === "environment-managed" &&
-              !(mode === "reauth" && existingProfileId === null)
+              error.code === "environment-managed"
             ) {
               awaitOutcomeRef.current = "notAuthenticated";
-              fail(error.message, "authentication", null);
+              fail(error.message, "authentication", null, true);
               return;
             }
             // The await rejected without a host verdict, so the attempt ends
@@ -1508,6 +1512,7 @@ export function useProviderDestinationLoginFlow(
             failureMessages.notStarted,
             analyticsBlockerFromError(error),
             null,
+            false,
           );
         },
       );
@@ -1569,7 +1574,7 @@ export function useProviderDestinationLoginFlow(
           providerDisplayName(providerId),
         );
         setState({ kind: "failed", message, refusal: null });
-        onFailed(message);
+        onFailed(message, false);
         return;
       }
       // `starting`, not `startLogin.isPending`: see `busy` below.

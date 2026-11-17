@@ -224,8 +224,11 @@ function ProfileScopedSectionMessages(props: {
       {props.failedAttempt !== null ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
           <span className="min-w-0">
-            Sign-in did not finish for{" "}
-            {PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]}.
+            {props.failedAttempt.hostSentence
+              ? props.failedAttempt.message
+              : `Sign-in did not finish for ${
+                  PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]
+                }.`}
           </span>
           <div className="flex shrink-0 items-center gap-1">
             <Button

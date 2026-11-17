@@ -145,6 +145,8 @@ const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
   readonly message: string;
+  /** The message is the host's own sentence, not the flow's generic line. */
+  readonly hostSentence: boolean;
 }
 
 export interface ProviderTargetLoginControls {
@@ -295,8 +297,12 @@ function ProviderProfileSignInDialog({
           "Sign-in did not start. You can retry when the provider is available.",
         notFinished: "Sign-in did not finish. Retry when you are ready.",
       },
-      onFailed: (message) =>
-        onFailedAttempt({ providerId: state.providerId, message }),
+      onFailed: (message, hostSentence) =>
+        onFailedAttempt({
+          providerId: state.providerId,
+          message,
+          hostSentence,
+        }),
     },
     profileOutcomes,
     target,

@@ -237,6 +237,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         failedAttempt: {
           providerId: "opencode",
           message: "did not finish",
+          hostSentence: false,
         },
       },
       null,

@@ -170,6 +170,7 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
       failedAttempt: {
         providerId: "opencode",
         message: "secret-token-should-never-render",
+        hostSentence: false,
       },
     });
 
@@ -184,6 +185,7 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
       failedAttempt: {
         providerId: "opencode",
         message: "secret-token-should-never-render",
+        hostSentence: false,
       },
     });
 
