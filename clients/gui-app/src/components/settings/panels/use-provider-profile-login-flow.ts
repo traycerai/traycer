@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 import {
   HostMethodVersionUnsatisfiedError,
-  type HostRpcError,
+  HostRpcError,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -1477,6 +1477,16 @@ export function useProviderDestinationLoginFlow(
                 kind: "target-refused",
                 targetRefusal: "unsupported-computer",
               });
+              return;
+            }
+            // The host refused the account as held by the environment: its
+            // own sentence is the answer, not the generic did-not-finish line.
+            if (
+              error instanceof HostRpcError &&
+              error.code === "environment-managed"
+            ) {
+              awaitOutcomeRef.current = "notAuthenticated";
+              fail(error.message, "authentication", null);
               return;
             }
             // The await rejected without a host verdict, so the attempt ends
