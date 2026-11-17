@@ -476,6 +476,9 @@ export function CallController(): ReactNode {
     const sent = sendRef.current({
       hostId: known.hostId,
       account: callAccountRef.current,
+      // Unchecked, not safe: a live call's sends are not yet held to its
+      // sign-in session (T463), only to its account.
+      authority: null,
       request: callSendRequest(known, threadId, text),
     });
     inFlightRef.current = sent.then(
@@ -779,10 +782,14 @@ export function CallController(): ReactNode {
             const response = await sendRef.current({
               hostId: known.hostId,
               account,
+              authority,
               request: callSendRequest(known, threadId, text),
             });
             threadId = threadId ?? response.threadId;
           } catch (error) {
+            // Refused because the session went while the send was queued:
+            // the rest are dropped with it, and there is nothing to report.
+            if (!auth.isVoiceCallAuthorityLive(authority)) return;
             appLogger.warn("[voice] call's last words failed", {
               error: describeLogError(error),
             });

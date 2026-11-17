@@ -77,7 +77,12 @@ const BOT: BotRecord = {
 };
 
 interface Binding {
-  current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+  current: {
+    readonly hostClient: HostClient<HostRpcRegistry>;
+    // The binding's own service, which a final-words send checks the call's
+    // sign-in session against; every call here keeps its session.
+    readonly auth: { readonly isVoiceCallAuthorityLive: () => boolean };
+  } | null;
 }
 
 const fake = vi.hoisted(() => {
@@ -404,7 +409,10 @@ beforeEach(() => {
       entries.find((entry) => entry.hostId === hostId) ?? null,
     messenger,
   });
-  fake.binding.current = { hostClient: spine };
+  fake.binding.current = {
+    hostClient: spine,
+    auth: { isVoiceCallAuthorityLive: () => true },
+  };
   switchAccount("alice");
   render(
     <QueryClientProvider client={queryClient}>

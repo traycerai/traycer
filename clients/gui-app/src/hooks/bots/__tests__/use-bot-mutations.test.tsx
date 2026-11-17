@@ -321,6 +321,9 @@ function mountCallSend(): {
         await result.current.mutateAsync({
           hostId,
           account,
+          // These cases hold a send to its account and host; none names a
+          // call's sign-in session.
+          authority: null,
           request: { ...CALL, text },
         });
       });
