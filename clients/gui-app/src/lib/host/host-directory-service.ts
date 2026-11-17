@@ -295,6 +295,12 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private lastCommitCredentialGeneration: number | null = null;
   /**
+   * Counts commits on the success path (`hosts` or `signed-out`). A conclusion
+   * held for a fleet refresh stands only while this still names its own
+   * commit; see {@link concludeAfterFleetRefresh}.
+   */
+  private commitSequence = 0;
+  /**
    * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
    * of the retention rule. The `failed` branch keeps the last-known list on
    * the grounds that a network blip should not blank a directory, but that
@@ -1007,6 +1013,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
+    this.commitSequence += 1;
     // Captured BEFORE the overwrite: this is the only place that holds both
     // sides of a membership transition.
     const previousRemoteIds = new Set(
@@ -1059,7 +1066,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     // other moment.
     //
     if (fleetStep === "hold-conclusion") {
-      await this.concludeAfterFleetRefresh(era);
+      await this.concludeAfterFleetRefresh(era, this.commitSequence);
     } else if (fleetStep === "request") {
       requestFleetRefresh(this.runnerHost);
     }
@@ -1127,21 +1134,23 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   /**
    * Waits for the fleet refresh a concluding listing triggered, then concludes
-   * discovery for `era` - fenced like the commit itself, because a refresh for
-   * another era can commit while this one waits. The conclusion is dropped
-   * when the identity has changed, or when a commit for a different credential
-   * generation has landed since - including the `signed-out` that withdraws
-   * this listing; a same-era refresh joins this one instead of committing. It
-   * reads the last COMMITTED generation, not the live one: a rotation that has
-   * not committed anything yet leaves this conclusion standing. A rejected
-   * refresh still concludes: the fleet is then as stale as it was, and that is
-   * the verdict to narrate.
+   * discovery for `era`, unless something superseded that listing meanwhile:
+   * the identity changed, or any other commit landed. That covers a newer
+   * credential generation and a withdrawal in the SAME era alike - the
+   * session-verified path drops the in-flight slot and re-asks within the
+   * era, so a same-era read can commit while this one waits. A failed attempt
+   * landing meanwhile concludes on its own. A rejected fleet refresh still
+   * concludes: the fleet is then as stale as it was, and that is the verdict
+   * to narrate.
    */
-  private async concludeAfterFleetRefresh(era: AuthEra): Promise<void> {
+  private async concludeAfterFleetRefresh(
+    era: AuthEra,
+    commit: number,
+  ): Promise<void> {
     await this.runnerHost.refreshHostFleet().catch(() => undefined);
     if (
       this.authContextId() !== era.identity ||
-      this.lastCommitCredentialGeneration !== era.credentialGeneration
+      this.commitSequence !== commit
     ) {
       return;
     }

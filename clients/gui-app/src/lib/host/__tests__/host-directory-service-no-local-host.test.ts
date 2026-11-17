@@ -511,6 +511,26 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
     expect(directory.hasConcludedDiscovery()).toBe(false);
   });
 
+  it("a same-era withdrawal after the in-flight slot is invalidated is not overwritten by the held fleet refresh", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+    ]);
+
+    const held = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    directory.invalidateInFlightRefresh();
+    await directory.refresh();
+    fleet.release(0);
+    await held;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+  });
+
   it("a no-local-host shell still announces when the fleet refresh rejects", async () => {
     const host = makeHost(false, null);
     vi.spyOn(host, "refreshHostFleet").mockRejectedValue(new Error("boom"));
