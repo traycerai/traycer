@@ -101,6 +101,10 @@ export function useChatFeedbackDraftDecideMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: feedbackDraftMutationKeys.decide(blockId),
+      // The draft's notification row reads this decision after the card that
+      // made it has closed, until the row's own resolve arrives, which has no
+      // bound: the default five minutes would bring Send back on a slow one.
+      gcTime: Infinity,
       onSuccess: (response) => {
         const refusal = feedbackDraftRefusalMessage(response);
         if (refusal !== null) toast.error(refusal);
