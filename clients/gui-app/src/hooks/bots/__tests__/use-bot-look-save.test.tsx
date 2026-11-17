@@ -80,7 +80,6 @@ const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const LISTED: BotAppearance = {
   mark: null,
   color: 3,
-  background: null,
   eyewear: null,
   accessory: null,
 };

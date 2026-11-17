@@ -54,7 +54,6 @@ export function botLooksOf(
 const NO_LOOK: BotAppearance = {
   mark: null,
   color: null,
-  background: null,
   eyewear: null,
   accessory: null,
 };

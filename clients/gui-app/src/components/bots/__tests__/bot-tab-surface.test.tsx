@@ -70,7 +70,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotOpenPausedReason } from "@traycer/protocol/host/bot/schemas";
+import {
+  botAppearanceSchema,
+  type BotOpenPausedReason,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -1911,11 +1914,14 @@ describe("<BotTabSurface /> channel background", () => {
   });
 
   it.each([false, true])(
-    "keeps the page's own colour in the header and everywhere else though the bot saved a background (dark: %s)",
+    "keeps the page's own colour in the header and everywhere else though an older host still sends the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       mocks.state.listAppearance = new Map([
-        [BOT_ID, { mark: null, color: null, background: 7 }],
+        [
+          BOT_ID,
+          botAppearanceSchema.parse({ mark: null, color: null, background: 7 }),
+        ],
       ]);
       render(surface());
 

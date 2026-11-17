@@ -137,7 +137,6 @@ const STYLISH_BOT_ID = "bot_0KNEF4PC1F8D0H626S5VEKEQ8Y";
 const NO_CHOICE: BotAppearance = {
   mark: null,
   color: null,
-  background: null,
 };
 
 const EXPRESSIONS: readonly MascotExpression[] = ["idle", "working", "away"];
@@ -440,7 +439,6 @@ describe("a bot's mascot from its look", () => {
       {
         mark: { kind: "mascot", shape: "ghost" },
         color: 5,
-        background: null,
         eyewear: "none",
         accessory: "halo",
       },

@@ -48,7 +48,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
-  type BotAppearance,
+  botAppearanceSchema,
   type BotReadCursorAdvanceRequest,
   type BotNotificationLevel,
   type BotReadCursorReadResponse,
@@ -564,8 +564,12 @@ let mountLanding: BotChannelLanding | null = null;
 /** How many tiles the next mount is told the installed app shows; `null` off it. */
 let mountTiles: MobileTileCount | null = null;
 
-/** The background the surface's list names for the bot on the next mount. */
-let mountBackground: BotAppearance["background"] = null;
+/**
+ * The channel background an older host still sends with the bot's look on the
+ * next mount, or `null` for none. It is read through the real schema, which
+ * drops it, as it does for every caller.
+ */
+let mountStaleBackground: number | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -578,7 +582,14 @@ function mount(options: MountOptions): {
   const queryClient = new QueryClient();
   const looks: BotLooks = {
     appearances: new Map([
-      [BOT_ID, { mark: null, color: null, background: mountBackground }],
+      [
+        BOT_ID,
+        botAppearanceSchema.parse({
+          mark: null,
+          color: null,
+          background: mountStaleBackground,
+        }),
+      ],
     ]),
     main: null,
   };
@@ -690,7 +701,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  mountBackground = null;
+  mountStaleBackground = null;
   document.documentElement.classList.remove("dark");
 });
 
@@ -700,10 +711,10 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
     '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   it.each([false, true])(
-    "keeps the page's own colour in the message area and everywhere else though the bot saved a background (dark: %s)",
+    "keeps the page's own colour in the message area and everywhere else though an older host still sends the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
-      mountBackground = 11;
+      mountStaleBackground = 11;
       mount({ openThreadPostId: "post-1" });
 
       const area = screen.getByTestId("bot-channel-messages");

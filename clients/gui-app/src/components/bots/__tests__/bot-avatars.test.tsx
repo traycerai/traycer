@@ -336,7 +336,7 @@ describe("a bot's picture", () => {
 
 describe("a bot's chosen look", () => {
   const BOT_ID = TEAM_S_MAIN_BOT_ID;
-  const BARE: BotAppearance = { mark: null, color: null, background: null };
+  const BARE: BotAppearance = { mark: null, color: null };
 
   function looking(appearance: BotAppearance | undefined): ReactElement {
     return (
@@ -442,11 +442,10 @@ describe("a bot's chosen look", () => {
     ["a mascot", { ...BARE, mark: { kind: "mascot", shape: "flame" } }],
     ["a colour", { ...BARE, color: 17 }],
     [
-      "all three",
+      "both",
       {
         mark: { kind: "mascot", shape: "cat" },
         color: 3,
-        background: 20,
       },
     ],
   ] as const)(
