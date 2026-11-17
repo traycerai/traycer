@@ -10,21 +10,10 @@ export const environmentQueryKeys = {
     ] as const,
   personalForMove: (viewerId: string) =>
     ["environment", "move", "personal", viewerId] as const,
-  planUnlinkPreview: (
-    environmentId: string,
-    profileId: string,
-    viewerId: string,
-    previewId: string,
-  ) =>
-    [
-      "environment",
-      "plans",
-      "unlink-preview",
-      environmentId,
-      profileId,
-      viewerId,
-      previewId,
-    ] as const,
+  /**
+   * authn's listing of `hostId` in `environmentId`, as a save on that host
+   * reads it in one editor session.
+   */
   settingsSaveHost: (
     environmentId: string,
     hostId: string,

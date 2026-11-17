@@ -1,8 +1,6 @@
 // The configuration, MCP, policy, history and plans methods answered by authn
 // directly, in the shapes the host's forwarder answered.
 import { z } from "zod";
-import { providerIdOfHarness } from "@traycer/protocol/host/environment/item-identity";
-import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import {
   environmentConfigurationRevisionResponseSchema,
   environmentHistoryResponseSchema,
@@ -656,62 +654,6 @@ export async function listConfigurationPlans(
               },
       })),
   };
-}
-
-const managedProfileNameSchema = z.object({
-  name: z.string().min(1).max(64),
-});
-
-export interface ConfigurationPlanUnlinkPreview {
-  readonly keepsWorking: readonly string[];
-}
-
-/** The turns running on the plan are counted by a computer, never here. */
-export async function readConfigurationPlanUnlinkPreview(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  profileId: string,
-): Promise<ConfigurationPlanUnlinkPreview> {
-  const connections = await planConnections(cloud, environmentId);
-  const target = connections.find(
-    (connection) =>
-      connection.profileId === profileId && connection.kind !== "api_key",
-  );
-  if (target === undefined) {
-    throw new EnvironmentCloudError("invalid", "This plan is unavailable.");
-  }
-  const path = environmentPath(environmentId);
-  const [secrets, profiles] = await Promise.all([
-    sendSettings(cloud, "GET", `${path}/secrets`, null).then((answer) =>
-      parseSettings(answer, authnSecretsListSchema),
-    ),
-    sendSettings(cloud, "GET", `${path}/items?kind=managed_profile`, null).then(
-      (answer) => parseSettings(answer, authnItemsResponseSchema),
-    ),
-  ]);
-  const names = connections
-    .filter(
-      (connection) =>
-        connection.profileId !== target.profileId &&
-        planStatus(connection) === "linked",
-    )
-    .map((connection) => {
-      const item = profiles.items.find(
-        (row) => row.key === `${connection.harnessId}:${connection.profileId}`,
-      );
-      const profile = managedProfileNameSchema.safeParse(item?.value);
-      if (profile.success) return profile.data.name;
-      const provider = providerIdOfHarness(connection.harnessId);
-      return provider === null
-        ? connection.harnessId
-        : PROVIDER_DISPLAY_NAMES[provider];
-    });
-  names.push(
-    ...secrets.secrets
-      .filter((secret) => secret.kind === "provider")
-      .map((secret) => secret.name),
-  );
-  return { keepsWorking: [...new Set(names)] };
 }
 
 export async function unlinkConfigurationPlan(
