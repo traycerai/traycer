@@ -2689,7 +2689,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
 describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read (T186)", () => {
   const STORED = "Words stored with an image";
   const WAITING = {
-    [BOT_ID]: { "conversation-channel": { text: STORED } },
+    [BOT_ID]: { "conversation-channel": { text: STORED, replyTo: null } },
   };
 
   afterEach(() => {
@@ -2748,7 +2748,12 @@ describe("<BotChannelView tiles={null} /> a box whose stored draft names images 
         boxesReading: {},
         threadBoxes: {
           [BOT_ID]: {
-            "conversation-channel": { text: STORED, content: null, seedId: 1 },
+            "conversation-channel": {
+              text: STORED,
+              content: null,
+              seedId: 1,
+              replyTo: null,
+            },
           },
         },
       });
