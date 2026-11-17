@@ -60,7 +60,9 @@ type CanvasStoreSlice = Pick<
   | "renameTab"
   | "applyNestedRouteFocus"
   | "closeCanvasTab"
+  | "retireSeededOpenerPane"
   | "closedTilePayloadsByTabId"
+  | "seededOpenerPaneIdByTabId"
   | "pendingCreateArtifactIds"
 >;
 
@@ -130,7 +132,9 @@ const testState = vi.hoisted<TestState>(() => ({
     renameTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
     closeCanvasTab: vi.fn(),
+    retireSeededOpenerPane: vi.fn(),
     closedTilePayloadsByTabId: {},
+    seededOpenerPaneIdByTabId: {},
     pendingCreateArtifactIds: new Set<string>(),
   },
   openEpicState: {
@@ -552,6 +556,73 @@ function lastNavigateOptions(): Readonly<Record<string, unknown>> {
   const options: unknown = call[0];
   if (!isRecord(options)) throw new Error("expected navigate options");
   return options;
+}
+
+type RealCanvasStore =
+  typeof import("@/stores/epics/canvas/store").useEpicCanvasStore;
+
+interface RealCanvasHarness {
+  readonly store: RealCanvasStore;
+  readonly tabId: string;
+  readonly mount: (intent: EpicRouteFocusIntent) => {
+    readonly rerender: (intent: EpicRouteFocusIntent) => void;
+  };
+}
+
+function routeIntent(
+  tabId: string,
+  focusPaneId: string | undefined,
+  focusTileInstanceId: string | undefined,
+): EpicRouteFocusIntent {
+  return {
+    epicId: EPIC_ID,
+    tabId,
+    focusedAt: undefined,
+    focusArtifactId: undefined,
+    focusThreadId: undefined,
+    focusPaneId,
+    focusTileInstanceId,
+  };
+}
+
+function activePaneIdOf(store: RealCanvasStore, tabId: string): string {
+  const paneId = store.getState().canvasByTabId[tabId]?.activePaneId;
+  if (paneId === null || paneId === undefined) {
+    throw new Error("Expected an active pane");
+  }
+  return paneId;
+}
+
+async function withRealCanvas(
+  title: string,
+  run: (harness: RealCanvasHarness) => Promise<void>,
+): Promise<void> {
+  const { useEpicCanvasStore: store } = await vi.importActual<
+    typeof import("@/stores/epics/canvas/store")
+  >("@/stores/epics/canvas/store");
+  const unmounts: Array<() => void> = [];
+  try {
+    testState.nestedFocusEnabled = true;
+    testState.useRealCanvasStore = true;
+    store.setState(store.getInitialState(), true);
+    const tabId = store.getState().openEpicTab(EPIC_ID, title);
+    await run({
+      store,
+      tabId,
+      mount: (intent) => {
+        const hook = renderHook(
+          (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+          { initialProps: intent },
+        );
+        unmounts.push(hook.unmount);
+        return hook;
+      },
+    });
+  } finally {
+    for (const unmount of unmounts) unmount();
+    testState.useRealCanvasStore = false;
+    store.setState(store.getInitialState(), true);
+  }
 }
 
 function lastNavigateSearchPatch(): Readonly<Record<string, unknown>> {
@@ -1376,112 +1447,126 @@ describe("useEpicRouteSynchronization", () => {
   // The desktop shape of the case above: with nested route focus on, the
   // seeded opener pane is written into the route before the records arrive.
   it("auto-opens the target when the route already names the seeded opener pane", async () => {
-    testState.nestedFocusEnabled = true;
-    testState.records = [];
-    setSinglePaneCanvas("pane-opener", [], null);
-    const intent: EpicRouteFocusIntent = {
-      epicId: EPIC_ID,
-      tabId: TAB_ID,
-      focusedAt: undefined,
-      focusArtifactId: undefined,
-      focusThreadId: undefined,
-      focusPaneId: undefined,
-      focusTileInstanceId: undefined,
-    };
-    const hook = renderHook(
-      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
-      { initialProps: intent },
-    );
-    await waitFor(() => {
-      expect(testState.navigate).toHaveBeenCalled();
+    await withRealCanvas("Seeded canvas", async ({ store, tabId, mount }) => {
+      testState.records = [];
+      act(() => {
+        store.getState().ensureEmptyPaneInTab(tabId);
+      });
+      const seededPaneId = activePaneIdOf(store, tabId);
+      const hook = mount(routeIntent(tabId, undefined, undefined));
+
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+      testState.records = [{ id: "artifact-1" }];
+      hook.rerender(routeIntent(tabId, seededPaneId, undefined));
+
+      await waitFor(() => {
+        expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            target: { tabId },
+            source: "deep_link",
+            node: expect.objectContaining({
+              id: "artifact-1",
+            }) as EpicCanvasTileRef,
+          }),
+        );
+      });
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
     });
-    expect(lastNavigateSearchPatch()).toEqual({ focusPaneId: "pane-opener" });
-
-    const landed: EpicRouteFocusIntent = {
-      ...intent,
-      focusPaneId: "pane-opener",
-    };
-    hook.rerender(landed);
-    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
-
-    testState.records = [{ id: "artifact-1" }];
-    hook.rerender(landed);
-
-    await waitFor(() => {
-      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: { tabId: TAB_ID },
-          source: "deep_link",
-          node: expect.objectContaining({
-            id: "artifact-1",
-          }) as EpicCanvasTileRef,
-        }),
-      );
-    });
-    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
   });
 
   it("leaves a canvas the person emptied empty when the route names its pane", async () => {
-    const { useEpicCanvasStore: realCanvasStore } = await vi.importActual<
-      typeof import("@/stores/epics/canvas/store")
-    >("@/stores/epics/canvas/store");
-    let unmountHook: (() => void) | null = null;
-    try {
-      testState.nestedFocusEnabled = true;
-      testState.useRealCanvasStore = true;
+    await withRealCanvas("Emptied canvas", async ({ store, tabId, mount }) => {
       testState.records = [{ id: "artifact-1" }];
-      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
-      const realStore = realCanvasStore.getState();
-      const realTabId = realStore.openEpicTab(EPIC_ID, "Emptied canvas");
-      realStore.openTileInTab(
-        realTabId,
-        specTile("artifact-existing", "tile-existing", "Existing artifact"),
-      );
-      const populated = realCanvasStore.getState().canvasByTabId[realTabId];
-      if (populated === undefined) throw new Error("Expected seeded canvas");
-      const paneId = populated.activePaneId;
-      if (paneId === null) throw new Error("Expected seeded active pane");
-      const intent: EpicRouteFocusIntent = {
-        epicId: EPIC_ID,
-        tabId: realTabId,
-        focusedAt: undefined,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        focusPaneId: paneId,
-        focusTileInstanceId: "tile-existing",
-      };
-      const hook = renderHook(
-        (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
-        { initialProps: intent },
-      );
-      unmountHook = hook.unmount;
+      store
+        .getState()
+        .openTileInTab(
+          tabId,
+          specTile("artifact-existing", "tile-existing", "Existing artifact"),
+        );
+      const paneId = activePaneIdOf(store, tabId);
+      const hook = mount(routeIntent(tabId, paneId, "tile-existing"));
 
       act(() => {
-        realCanvasStore
-          .getState()
-          .closeCanvasTab(realTabId, paneId, "tile-existing");
+        store.getState().closeCanvasTab(tabId, paneId, "tile-existing");
       });
-      const emptied = realCanvasStore.getState().canvasByTabId[realTabId];
-      if (emptied === undefined) throw new Error("Expected emptied canvas");
-      const emptiedPaneId = emptied.activePaneId;
-      if (emptiedPaneId === null) throw new Error("Expected emptied pane");
-      expect(emptied.tilesByInstanceId).toEqual({});
+      expect(store.getState().canvasByTabId[tabId]?.tilesByInstanceId).toEqual(
+        {},
+      );
 
-      hook.rerender({
-        ...intent,
-        focusPaneId: emptiedPaneId,
-        focusTileInstanceId: undefined,
-      });
+      hook.rerender(
+        routeIntent(tabId, activePaneIdOf(store, tabId), undefined),
+      );
       await act(async () => {
         await Promise.resolve();
       });
 
       expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
-    } finally {
-      unmountHook?.();
-      testState.useRealCanvasStore = false;
-      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
-    }
+    });
+  });
+
+  // The record list has not answered yet when the last tile is closed, so the
+  // empty pane left behind is the person's even though records come later.
+  it("leaves a canvas emptied before the records arrived empty when they arrive", async () => {
+    await withRealCanvas("Emptied early", async ({ store, tabId, mount }) => {
+      testState.records = [];
+      store
+        .getState()
+        .openTileInTab(
+          tabId,
+          specTile("artifact-existing", "tile-existing", "Existing artifact"),
+        );
+      const paneId = activePaneIdOf(store, tabId);
+      const hook = mount(routeIntent(tabId, paneId, "tile-existing"));
+
+      act(() => {
+        store.getState().closeCanvasTab(tabId, paneId, "tile-existing");
+      });
+      hook.rerender(
+        routeIntent(tabId, activePaneIdOf(store, tabId), undefined),
+      );
+
+      testState.records = [{ id: "artifact-1" }];
+      hook.rerender(
+        routeIntent(tabId, activePaneIdOf(store, tabId), undefined),
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    });
+  });
+
+  // A layout restored with an empty root pane was never seeded by this
+  // session: the tile is closed before the hook mounts, which leaves the same
+  // unseeded empty pane a persisted layout would.
+  it("leaves a restored empty pane empty when the records arrive", async () => {
+    await withRealCanvas("Restored empty", async ({ store, tabId, mount }) => {
+      testState.records = [];
+      store
+        .getState()
+        .openTileInTab(
+          tabId,
+          specTile("artifact-existing", "tile-existing", "Existing artifact"),
+        );
+      act(() => {
+        store
+          .getState()
+          .closeCanvasTab(tabId, activePaneIdOf(store, tabId), "tile-existing");
+      });
+      const restoredPaneId = activePaneIdOf(store, tabId);
+      const hook = mount(routeIntent(tabId, restoredPaneId, undefined));
+
+      testState.records = [{ id: "artifact-1" }];
+      hook.rerender(routeIntent(tabId, restoredPaneId, undefined));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    });
   });
 
   it("leaves a canvas that already shows a tile alone when the records arrive", async () => {
