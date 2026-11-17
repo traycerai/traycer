@@ -203,7 +203,6 @@ export const authnManagedProfileBindingSchema = lazySchema(() =>
   z.object({
     bindingVersion: credentialVersionSchema.optional(),
     spendScopeKey: spendScopeKeySchema.optional(),
-    custodianSignOutCause: z.literal("signed-out-by-person").optional(),
     mergedInto: z.string().optional(),
   }),
 );
