@@ -313,10 +313,6 @@ function VariableFields(props: {
   return (
     <fieldset className="flex flex-col gap-1.5">
       <legend className="text-ui-sm font-medium">Variables</legend>
-      <p className="text-ui-xs text-muted-foreground">
-        The connection settings agents on a sandbox get, each in the format its
-        tool reads.
-      </p>
       <ul className="flex flex-col gap-2">
         {state.variables.map((variable, index) => (
           <VariableRow

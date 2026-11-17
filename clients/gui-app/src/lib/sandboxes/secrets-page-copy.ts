@@ -10,7 +10,7 @@ import {
 } from "@/lib/settings/settings-date";
 
 export const SECRETS_EMPTY_TEXT =
-  "Values and logins your agents use on sandboxes, without seeing them.";
+  "Values and logins your agents use on sandboxes.";
 
 /** A team's Secrets text, as its subtitle and as its empty state. */
 export function teamSecretsDescription(name: string): string {
@@ -61,7 +61,7 @@ export function secretRowDetail(input: {
 
 /** On a team's host, in place of the list's actions. */
 export const TEAM_SECRETS_LINE =
-  "Team secrets are used on the team's sandboxes, without being seen.";
+  "Team secrets are used on the team's sandboxes.";
 
 export const SECRET_REVOKED_LABEL = "Revoked";
 

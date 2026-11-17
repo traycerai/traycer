@@ -238,7 +238,7 @@ describe("TeamPlans", () => {
       const dialog = await screen.findByRole("dialog");
       expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
       expect(dialog.textContent).toContain(
-        "Acme's Claude Code plan was unlinked. A host that has not confirmed keeps the unlink pending.",
+        "Acme's Claude Code plan was unlinked.",
       );
       expect(dialog.textContent).not.toContain("An admin can link one.");
       expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
@@ -325,9 +325,7 @@ describe("TeamPlans", () => {
     ).toBeTruthy();
     expect(harness.paramsOf("environment.plans.unlinkPreview")).toEqual([]);
     expect(
-      within(dialog).getByText(
-        "Acme's Claude Code plan was unlinked. A host that has not confirmed keeps the unlink pending.",
-      ),
+      within(dialog).getByText("Acme's Claude Code plan was unlinked."),
     ).toBeTruthy();
     expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 

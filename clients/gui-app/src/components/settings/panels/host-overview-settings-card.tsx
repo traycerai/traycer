@@ -452,7 +452,7 @@ function TeamEnvironmentSourceControl(
           onClose={() => setSelected(null)}
           onGiven={(team) => {
             props.onTransferred(
-              `${props.hostName} now belongs to ${team.label}. Any member of the team can claim it as their own.`,
+              `${props.hostName} now belongs to ${team.label}. Any Admin or Editor of the team can claim it as their own.`,
             );
             setSelected(null);
           }}

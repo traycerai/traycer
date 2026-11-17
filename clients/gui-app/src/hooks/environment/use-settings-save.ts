@@ -100,7 +100,7 @@ async function readForViewer<T>(
   const cloud = source();
   const answer = await read(cloud);
   if (!cloud.onOriginSignIn()) {
-    throw new Error("The sign-in the read went out on has ended");
+    throw new Error("Please sign in again.");
   }
   return answer;
 }

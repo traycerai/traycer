@@ -121,11 +121,6 @@ describe("computer Notifications tab", () => {
         "What your automation receives when a host creates a notification. Choose which kinds interrupt you under Application → Alerts.",
       ),
     ).toBeNull();
-    expect(
-      screen.queryByText(
-        "A hook that runs a script, or reads a value from a computer, is set on that computer.",
-      ),
-    ).toBeNull();
     expect(screen.getByTestId("notification-hooks-manager")).toBeTruthy();
   });
 });

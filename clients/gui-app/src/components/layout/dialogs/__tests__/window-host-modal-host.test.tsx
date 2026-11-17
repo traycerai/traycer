@@ -2472,9 +2472,7 @@ describe("<WindowHostModalHost />", () => {
       "You no longer have access to this team's computer",
     );
     expect(
-      within(surface).getByText(
-        "Ask a team administrator if this is unexpected. Work you started continues for the team.",
-      ),
+      within(surface).getByText("Work you started continues for the team."),
     ).toBeTruthy();
     expect(buttonsOf(surface)).toEqual(["Open settings"]);
   });
@@ -2641,8 +2639,7 @@ describe("<WindowHostModalHost />", () => {
         { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
         {
           title: "You no longer have access to this team's computer",
-          description:
-            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          description: "Work you started continues for the team.",
           actions: ["Open settings"],
         },
       );
@@ -2731,8 +2728,7 @@ describe("<WindowHostModalHost />", () => {
         { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
         {
           title: "You no longer have access to this team's computer",
-          description:
-            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          description: "Work you started continues for the team.",
           actions: ["Open settings"],
         },
       );

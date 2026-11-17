@@ -2,22 +2,18 @@
 export const TEAM_NOTIFICATION_HOOKS_COPY = {
   title: "Notification hooks",
   description: (team: string) =>
-    `Each hook is sent from every computer of ${team}. A member's own hooks aren't sent from there.`,
+    `Each hook is sent from every computer of ${team}.`,
   visibility: (team: string) =>
     `Everyone in ${team} can see each hook's address and headers.`,
   localOnly: (variable: string) =>
     `A team's hook can't read ${variable} from a computer. Type the value itself.`,
   headersExample: "authorization: Bearer your-token",
   emptyTitle: "No notification hooks",
-  emptyDescription:
-    "Hooks send an HTTP request for enabled notification severities.",
 } as const;
 
 export const ACCOUNT_NOTIFICATIONS_COPY = {
   description:
     "What your automation receives when a host creates a notification. Choose which kinds interrupt you under Application → Alerts.",
-  computerHooks:
-    "A hook that runs a script, or reads a value from a computer, is set on that computer.",
   localOnly: (variable: string) =>
     `This hook reads ${variable} from a computer. Set it on that computer.`,
   computerTab: "Notifications",

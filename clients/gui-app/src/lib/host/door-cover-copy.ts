@@ -41,8 +41,7 @@ const DOOR_COVER_COPY: Readonly<
   },
   "membership-removed": {
     title: "You no longer have access to this team's computer",
-    description:
-      "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+    description: "Work you started continues for the team.",
   },
   "team-membership-required": {
     title: "This computer belongs to a team",

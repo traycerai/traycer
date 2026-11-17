@@ -288,7 +288,7 @@ function SwitchAccountMoveBody({
       {view.kind === "loading" ? <MutedAgentSpinner /> : null}
       {view.kind === "question" ? (
         <>
-          <p>{`${view.preview.targets.length} agents and bots use ${session.source.label}. Move them to ${session.destination.label}, or leave them where they are.`}</p>
+          <p>{`${view.preview.targets.length} agents and bots use ${session.source.label}. Move them to ${session.destination.label}.`}</p>
           <SwitchAccountTargets
             preview={view.preview}
             computerName={computerName}

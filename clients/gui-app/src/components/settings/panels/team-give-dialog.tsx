@@ -175,8 +175,8 @@ export function TeamGiveDialog(props: {
             Use {props.hostName} for {team.label}?
           </DialogTitle>
           <DialogDescription>
-            The team will own this computer. Any member of the team can claim it
-            as their own. Traycer restarts once on this computer.
+            The team will own this computer. Any Admin or Editor of the team can
+            claim it as their own. Traycer restarts once on this computer.
           </DialogDescription>
         </DialogHeader>
         <ul className="list-disc space-y-2 pl-5 text-ui-sm">

@@ -56,9 +56,6 @@ function CloudNotificationHooksEmptyState(props: {
       <p className="text-ui-sm font-medium">
         {TEAM_NOTIFICATION_HOOKS_COPY.emptyTitle}
       </p>
-      <p className="text-ui-sm text-muted-foreground">
-        {TEAM_NOTIFICATION_HOOKS_COPY.emptyDescription}
-      </p>
     </div>
   );
 }

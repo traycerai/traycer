@@ -746,13 +746,13 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(progress).toBeTruthy();
     expect(
       screen.queryByText(
-        "Old laptop now belongs to Admin team. Any member of the team can claim it as their own.",
+        "Old laptop now belongs to Admin team. Any Admin or Editor of the team can claim it as their own.",
       ),
     ).toBeNull();
     doneStatus.resolve(giveMoveStatus("done", GIVE_ATTEMPT_ID));
     expect(
       await screen.findByText(
-        "Old laptop now belongs to Admin team. Any member of the team can claim it as their own.",
+        "Old laptop now belongs to Admin team. Any Admin or Editor of the team can claim it as their own.",
       ),
     ).toBeTruthy();
     const target = {

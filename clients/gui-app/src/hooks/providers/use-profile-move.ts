@@ -17,6 +17,7 @@ import {
   type ProvidersPreviewProfileMoveRequest,
   type ProvidersPreviewProfileMoveResponse,
 } from "@traycer/protocol/host/profile-move-schemas";
+import { MOVE_ERROR_FALLBACKS } from "@/components/providers/profile-move-copy";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
@@ -88,7 +89,7 @@ function assertGroupResponse(
     response.results.length !== expected.size ||
     response.results.some((row) => !expected.has(targetKey(row.target)))
   )
-    throw new Error("The other computer answered a different move.");
+    throw new Error(MOVE_ERROR_FALLBACKS.commit);
 }
 
 function failureOutcome(

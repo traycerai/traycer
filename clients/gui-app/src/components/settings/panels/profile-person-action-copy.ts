@@ -28,7 +28,7 @@ export function profilePersonActionCopy(
       title: `Remove ${profileName}?`,
       description:
         scope === "record"
-          ? `Remove ${profileName} from every list in ${environment}. Running work finishes first. You can add this account again later by signing in.`
+          ? `Remove ${profileName} from every list in ${environment}. Running work finishes first.`
           : `Agents that ran on ${profileName} will show it as removed. Running sessions on this profile must be stopped first.`,
       actionLabel,
     };
@@ -44,7 +44,7 @@ export function profilePersonActionCopy(
   return {
     title: `Sign out of ${profileName} in ${environment}?`,
     description:
-      "Running work finishes first. The account stays in the list and needs a sign-in. This does not reach a computer that already left or has not updated, or a separate Terminal login.",
+      "Running work finishes first. The account stays in the list and needs a sign-in.",
     actionLabel,
   };
 }

@@ -782,7 +782,7 @@ export async function unlinkConfigurationPlan(
   if (answer.status === 409)
     throw new EnvironmentCloudError(
       "invalid",
-      "The provider connection changed. Refresh and try again.",
+      "This connection changed. Refresh and try again.",
     );
   if (answer.status === 403) return { outcome: "forbidden" };
   if (answer.status === 404) return { outcome: "not_linked" };

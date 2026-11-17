@@ -40,9 +40,6 @@ export function NotificationsSettingsPanel() {
       {account === undefined || query.error !== null ? null : (
         <AccountNotificationHooksSection key={viewerId} account={account} />
       )}
-      <p className="text-ui-sm text-muted-foreground">
-        {ACCOUNT_NOTIFICATIONS_COPY.computerHooks}
-      </p>
     </SettingsPanelShell>
   );
 }

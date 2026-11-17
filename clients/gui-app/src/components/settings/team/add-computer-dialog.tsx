@@ -13,8 +13,7 @@ import {
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 
 /** Board C12's Proposal, character for character; the owner has not ruled it. */
-const RUN_ON_THE_COMPUTER =
-  "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.";
+const RUN_ON_THE_COMPUTER = "Run this on the computer.";
 
 export function AddComputerDialog(props: {
   readonly teamName: string;

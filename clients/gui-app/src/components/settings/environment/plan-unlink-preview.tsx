@@ -52,8 +52,7 @@ export function PlanUnlinkPreview(props: {
         <div>
           <dt className="font-medium">Afterwards</dt>
           <dd className="text-muted-foreground">
-            {props.teamName}'s {props.plan.providerLabel} plan was unlinked. A
-            host that has not confirmed keeps the unlink pending.
+            {props.teamName}'s {props.plan.providerLabel} plan was unlinked.
           </dd>
         </div>
         <div>

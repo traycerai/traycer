@@ -149,9 +149,7 @@ describe("team Notification hooks page", () => {
       within(manager).getByText("https://hooks.example/builds"),
     ).toBeTruthy();
     expect(
-      screen.getByText(
-        "Each hook is sent from every computer of Acme. A member's own hooks aren't sent from there.",
-      ),
+      screen.getByText("Each hook is sent from every computer of Acme."),
     ).toBeTruthy();
     expect(
       screen.getByText(
@@ -168,11 +166,6 @@ describe("team Notification hooks page", () => {
       screen.getAllByRole("button", { name: "Add hook" }).length,
     ).toBeGreaterThan(0);
     expect(screen.getByText("No notification hooks")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Hooks send an HTTP request for enabled notification severities.",
-      ),
-    ).toBeTruthy();
   });
 
   it("adds an HTTP hook through the page and writes the current item revision", async () => {

@@ -857,9 +857,7 @@ describe("Switch account moves only previewed work", () => {
 
     expect(await screen.findByText("Move work from Work?")).toBeTruthy();
     expect(
-      screen.getByText(
-        "3 agents and bots use Work. Move them to New account, or leave them where they are.",
-      ),
+      screen.getByText("3 agents and bots use Work. Move them to New account."),
     ).toBeTruthy();
     expect(screen.getByText("Idle agent")).toBeTruthy();
     expect(screen.getByText("Running agent")).toBeTruthy();
@@ -1139,7 +1137,7 @@ describe("Switch account moves only previewed work", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        `1 agents and bots use ${SOURCE_LABEL}. Move them to ${SAVED_DESTINATION_LABEL}, or leave them where they are.`,
+        `1 agents and bots use ${SOURCE_LABEL}. Move them to ${SAVED_DESTINATION_LABEL}.`,
       ),
     ).toBeTruthy();
     expect(screen.queryByText(new RegExp(DESTINATION_LABEL))).toBeNull();

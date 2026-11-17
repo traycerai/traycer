@@ -271,10 +271,7 @@ function MovePreview({
       {data.terminals.length > 0 ? (
         <section className="flex flex-col gap-2">
           <h3 className="font-medium">Terminal agents</h3>
-          <p className="text-muted-foreground">
-            These run in a terminal and are not moved. Restart each one on
-            another profile.
-          </p>
+          <p className="text-muted-foreground">These are not moved.</p>
           {data.terminals.map((terminal) => (
             <div
               key={`${terminal.epicId}:${terminal.agentId}`}

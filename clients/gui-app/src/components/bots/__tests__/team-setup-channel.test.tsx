@@ -291,11 +291,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(
         screen.getByRole("heading", { name: "Add a computer to Newco" }),
       ).toBeTruthy();
-      expect(
-        screen.getByText(
-          "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.",
-        ),
-      ).toBeTruthy();
+      expect(screen.getByText("Run this on the computer.")).toBeTruthy();
       expect(
         screen.getByTestId("team-host-option-machine-command").textContent,
       ).toBe("traycer host install --team newco");

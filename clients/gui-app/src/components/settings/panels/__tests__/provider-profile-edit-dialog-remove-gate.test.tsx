@@ -378,7 +378,7 @@ describe("<ProfileEditDialog /> remove gate by profile kind", () => {
 
     expect(
       screen.getByText(
-        "Remove Work account from every list in this environment. Running work finishes first. You can add this account again later by signing in.",
+        "Remove Work account from every list in this environment. Running work finishes first.",
       ),
     ).toBeTruthy();
   });
