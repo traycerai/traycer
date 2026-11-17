@@ -270,8 +270,8 @@ function createHostTokenRemoteSessionAuth(
 }
 
 /**
- * The pool's `open` presents the user bearer, as a personal host's does, with
- * nowhere to put anything else: no `authz`, no session grant.
+ * The pool's `open` presents the user bearer, with nowhere to put anything
+ * else: no `authz`, no session grant.
  */
 function createClientPoolSessionAuth(
   bearer: BearerSourceProvider,
