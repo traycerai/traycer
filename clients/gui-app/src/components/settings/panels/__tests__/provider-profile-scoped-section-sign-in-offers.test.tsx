@@ -107,7 +107,6 @@ function renderSection(input: {
   readonly row: ProviderProfile;
   readonly signedOut: boolean;
   readonly onHostOnly: boolean;
-  readonly advertiseLink: boolean;
 }) {
   const calls: RecordedCall[] = [];
   let listCalls = 0;
@@ -138,9 +137,6 @@ function renderSection(input: {
   const oldComputer = input.offers === "10.11";
   const manifest = {
     "providers.list": { major: 10, minor: oldComputer ? 11 : 12 },
-    ...(input.advertiseLink
-      ? { "providers.link": { major: 1, minor: 1 } }
-      : {}),
     "providers.startLogin": { major: 1, minor: oldComputer ? 4 : 5 },
     "providers.awaitLogin": { major: 2, minor: oldComputer ? 2 : 4 },
   } as const;
@@ -190,7 +186,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
       signedOut: true,
       onHostOnly: true,
-      advertiseLink: true,
     });
     const button = await screen.findByRole("button", { name: "Add a profile" });
     fireEvent.click(button);
@@ -205,7 +200,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
       signedOut: true,
       onHostOnly: true,
-      advertiseLink: true,
     });
     const button = await screen.findByRole("button", {
       name: SIGN_IN_EVERYWHERE,
@@ -225,7 +219,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
         row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
         signedOut: true,
         onHostOnly: false,
-        advertiseLink: false,
       });
       expect(await screen.findByRole("button", { name: SIGN_IN })).toBeTruthy();
       expect(
@@ -241,7 +234,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
       onHostOnly: true,
-      advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toContain(AVAILABLE_HERE);
@@ -257,7 +249,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
       onHostOnly: true,
-      advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toContain(AVAILABLE_HERE);
@@ -274,7 +265,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
       onHostOnly: true,
-      advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toContain(AVAILABLE_HERE);
@@ -300,7 +290,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
         ),
         signedOut: false,
         onHostOnly: false,
-        advertiseLink: false,
       });
       if (offers === true) {
         expect(await screen.findByText(NOT_ON_COMPUTER)).toBeTruthy();
