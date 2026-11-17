@@ -26,8 +26,10 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -64,13 +66,22 @@ import "@/index.css";
  * reports for those cards, standing in for a card beyond the fold, so its
  * summary can be seen; `?filler=<n>` adds older threads after them, read,
  * so the last card starts far below the view; `?phone=true` draws the
- * installed app's phone form; `?theme=dark` draws it dark.
+ * installed app's phone form; `?theme=dark` draws it dark;
+ * `?gate=<chatId,…>` withholds those chats' snapshots, as a host that is slow
+ * to hydrate a thread does, until the page calls `window.__releaseChat(id)`.
  */
 const params = new URLSearchParams(window.location.search);
 useSettingsStore
   .getState()
   .setTheme(params.get("theme") === "dark" ? "dark" : "light");
 if (params.get("phone") === "true") setPhoneLayoutOnly(true);
+
+declare global {
+  interface Window {
+    /** Delivers the snapshot of a chat named in `?gate=`, which the page withheld until now. */
+    __releaseChat?: (chatId: string) => void;
+  }
+}
 
 const held = new Set(
   (params.get("hold") ?? "").split(",").filter((id) => id.length > 0),
@@ -112,6 +123,7 @@ recordNegotiatedHostManifest(HOST_ID, {
   "bot.notificationLevel.read": { major: 1, minor: 0 },
   "bot.conversation.send": { major: 1, minor: 4 },
   "bot.turn.locate": { major: 1, minor: 0 },
+  "bot.conversation.list": { major: 1, minor: 0 },
   "environment.list": { major: 1, minor: 1 },
   "environment.members": { major: 1, minor: 2 },
 });
@@ -338,12 +350,37 @@ const FILLER = Array.from(
   },
 );
 
+/**
+ * `?surface=channel`: two posts by another member after the viewer's last
+ * post, which the read cursor (below) stands behind, so the channel opens
+ * with two unread posts and the unread banner.
+ */
+const CHANNEL_ID = `channel-${TRACY_ID}`;
+const UNREAD_POSTS: ReadonlyArray<Message> =
+  params.get("surface") === "channel"
+    ? [
+        memberPost(
+          "post-unread-1",
+          SIMAR_ID,
+          "Can the iPad fix also cover the landscape switcher?",
+          NOW - 6 * MINUTE,
+        ),
+        memberPost(
+          "post-unread-2",
+          SIMAR_ID,
+          "Checking the same on the phone layout.",
+          NOW - 4 * MINUTE,
+        ),
+      ]
+    : [];
+
 /** The chats the streams serve, by chat id. */
 const CHATS: Readonly<Record<string, ReadonlyArray<Message>>> = {
   [`channel-${TRACY_ID}`]: [
     ...FILLER.map((filler) => filler.post),
     POLICY_POST,
     IPAD_POST,
+    ...UNREAD_POSTS,
   ],
   [`channel-${RELEASE_ID}`]: [RELEASE_POST, LONELY_POST],
   "thread-ipad": IPAD_REPLIES,
@@ -430,9 +467,18 @@ const THREADS: Readonly<Record<string, ReadonlyArray<BotThreadSummary>>> = {
 const fillerRead = Object.fromEntries(
   FILLER.map((filler) => [filler.threadId, filler.read]),
 );
+const UNREAD_LAST = UNREAD_POSTS.at(-1);
 const cursors: Record<string, BotReadCursorReadResponse> = {
   [TRACY_ID]: {
     cursors: {
+      ...(UNREAD_LAST === undefined
+        ? {}
+        : {
+            [CHANNEL_ID]: {
+              messageId: IPAD_POST.messageId,
+              seq: IPAD_POST.timestamp,
+            },
+          }),
       "thread-ipad": { messageId: "ipad-r1", seq: NOW - 29 * MINUTE },
       "thread-policy": {
         messageId: "policy-r1",
@@ -441,6 +487,14 @@ const cursors: Record<string, BotReadCursorReadResponse> = {
       ...fillerRead,
     },
     latest: {
+      ...(UNREAD_LAST === undefined
+        ? {}
+        : {
+            [CHANNEL_ID]: {
+              messageId: UNREAD_LAST.messageId,
+              seq: UNREAD_LAST.timestamp,
+            },
+          }),
       "thread-ipad": { messageId: "ipad-r2", seq: NOW - 14 * MINUTE },
       "thread-policy": {
         messageId: "policy-r3",
@@ -571,12 +625,32 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
       },
       "bot.notificationLevel.read": () => ({ levels: {} }),
       "bot.turn.locate": () => ({ turns: [] }),
+      "bot.conversation.list": (request) => ({
+        conversations: [
+          {
+            conversationId: CHANNEL_ID,
+            botId: request.botId,
+            title: null,
+            createdAt: NOW - 30 * 24 * 60 * MINUTE,
+            updatedAt: NOW - 4 * MINUTE,
+          },
+        ],
+      }),
     },
   });
 
+const gated = new Set(
+  (params.get("gate") ?? "").split(",").filter((id) => id.length > 0),
+);
+const gatedDeliveries = new Map<string, () => void>();
+window.__releaseChat = (chatId) => {
+  gatedDeliveries.get(chatId)?.();
+  gatedDeliveries.delete(chatId);
+};
+
 __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
   const messages = CHATS[chatId] ?? [];
-  queueMicrotask(() => {
+  const deliver = (): void => {
     callbacks.onConnectionStatus("open", null, null, null);
     callbacks.onSnapshot({
       kind: "snapshot",
@@ -619,7 +693,9 @@ __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
         portForwards: [],
       },
     });
-  });
+  };
+  if (gated.has(chatId)) gatedDeliveries.set(chatId, deliver);
+  else queueMicrotask(deliver);
   return {
     sendAction: () => undefined,
     sameTurnSteeringProtocolSupported: () => true,
@@ -670,6 +746,9 @@ const width = params.get("width");
 
 function noop(): void {}
 
+const resolveMember: BotMemberResolver = (userId) =>
+  userId === SIMAR_ID ? { displayName: "Simar Kaur", avatarUrl: null } : null;
+
 export function Page(): ReactElement {
   return (
     <div
@@ -682,13 +761,42 @@ export function Page(): ReactElement {
           <ActivityGroupOpenStoreProvider store={null}>
             <A2AOpenStoreProvider store={null}>
               <ChatFindForceStoreProvider tileInstanceId="bot-threads-cards">
-                <BotThreadsView
-                  level2={null}
-                  hostId={HOST_ID}
-                  channelId={TRACY_ID}
-                  channelTitle="Tracy"
-                  onBack={noop}
-                />
+                {params.get("surface") === "channel" ? (
+                  <BotChannelView
+                    tiles={null}
+                    botId={TRACY_ID}
+                    hostId={HOST_ID}
+                    boundHostId={HOST_ID}
+                    boundHostEpoch={1}
+                    botTitle="Tracy"
+                    directive={null}
+                    appConversationChatId={CHANNEL_ID}
+                    trunkChatId={`trunk-${TRACY_ID}`}
+                    resolveMember={resolveMember}
+                    tasks={[]}
+                    surfaceActions={null}
+                    openThread={null}
+                    onOpenThread={noop}
+                    onOpenTurn={noop}
+                    landOn={null}
+                    openMemory={null}
+                    onOpenMemory={noop}
+                    environmentId="env-personal"
+                    botNameOf={() => null}
+                    environmentBots={null}
+                    openExchange={null}
+                    exchangeRail={{ open: noop, close: noop }}
+                    setupHistory={null}
+                  />
+                ) : (
+                  <BotThreadsView
+                    level2={null}
+                    hostId={HOST_ID}
+                    channelId={TRACY_ID}
+                    channelTitle="Tracy"
+                    onBack={noop}
+                  />
+                )}
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>
           </ActivityGroupOpenStoreProvider>

@@ -31,6 +31,8 @@ export type BotFollowedThread = {
   /** A reply has landed past the person's read cursor (decision 139). */
   readonly newReplies: boolean;
   readonly readTarget: BotReadPosition | null;
+  /** The bot's read cursors these come from; `undefined` until they answer. */
+  readonly read: BotReadCursorReadResponse | undefined;
 };
 
 export type BotFollowedThreads =
@@ -192,6 +194,7 @@ function followedThreadsOf(
           thread.threadId,
           !channelMuted(levels?.levels, thread.conversationId),
         ),
+        read: cursors,
       });
     }
   }
