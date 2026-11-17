@@ -30,7 +30,6 @@ import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
-import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
@@ -58,8 +57,8 @@ import "@/index.css";
 
 /**
  * A BOT'S ACTIVITY TAB (Tracy Bots T135): the real `BotActivityPage` over the
- * real `useBotActiveTasks`, under the channel header's two views with the
- * Activity count in `UnreadCountBadge`'s inline seat. The host answers the
+ * real `useBotActiveTasks`, under the channel header's two views, the
+ * Activity tab named by its words alone. The host answers the
  * notification indicators and the tasks' titles; the activity plane and one
  * task's open session (the only thing that names a task's agents) are put in
  * place before the first render. Nothing of the page is reimplemented.
@@ -620,13 +619,6 @@ export function ActivityTab(): ReactElement {
           <TabsTrigger value="messages">Messages</TabsTrigger>
           <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
             Activity
-            <UnreadCountBadge
-              count={active.rows.length}
-              size="xs"
-              testId="bot-tab-activity-count"
-              corner={null}
-              noun="active"
-            />
           </TabsTrigger>
         </TabsList>
       </header>

@@ -944,7 +944,7 @@ describe("<BotTabSurface /> views", () => {
     return copy.textContent;
   }
 
-  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+  it("rule 6: lists every row whatever puts a task there, and the tab carries no count", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       status: "signed-in",
@@ -1010,16 +1010,38 @@ describe("<BotTabSurface /> views", () => {
       .dataset.rowIds?.split(",");
     expect(shown).toHaveLength(4);
     expect(shown).not.toContain("task-quiet");
-    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
-    expect(badge.textContent).toContain(String(shown?.length));
-    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
-    // jsdom joins the name's parts without the spaces a browser puts in.
-    expect(
-      screen.getByRole("tab", {
-        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
-      }),
-    ).toBe(activityTab());
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
+  });
+
+  it("names the desktop Activity tab by its words alone while one task is active, and still lists that task", async () => {
+    const user = userEvent.setup();
+    signInAda();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests(
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
+      "cloud",
+      "connected",
+    );
+    renderOverCloudFeed();
+
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
+    expect(activityTab().textContent).not.toMatch(/\d|active/);
+
+    await user.click(activityTab());
+    expect(screen.getByTestId("stub-activity").dataset.rowIds).toBe(
+      "task-working",
+    );
+    expect(visibleTabText()).toBe("Activity");
   });
 
   it("rule 6: shows no count when no task is active", () => {

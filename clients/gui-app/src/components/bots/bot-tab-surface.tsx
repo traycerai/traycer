@@ -2235,13 +2235,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-tab-activity-count"
-            corner={null}
-            noun="active"
-          />
         </TabsTrigger>
       </TabsList>
     </header>
