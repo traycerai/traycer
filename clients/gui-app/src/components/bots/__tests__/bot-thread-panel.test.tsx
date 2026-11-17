@@ -2873,6 +2873,32 @@ describe("<BotThreadPanel /> the split panel's unread boundary", () => {
     ).toBe("");
   });
 
+  it("opens on the New divider above a merged row that holds the cursor's record and a newer unread one", async () => {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "turn-a1", seq: 3_000 } },
+      latest: { [THREAD_ID]: { messageId: "turn-a2", seq: 4_000 } },
+    };
+    mountPanel(listed(null), [
+      threadReply("reply-read", "Already read reply", 2_000),
+      { ...threadReply("turn-a1", "Merged part one", 3_000), turnId: "turn-1" },
+      { ...threadReply("turn-a2", "Merged part two", 4_000), turnId: "turn-1" },
+    ]);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "Merged part two",
+    );
+    expect(boundaryTarget()).not.toBe("");
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
   it("lands on the message a permalink names and requests no boundary, though the replies are unread", async () => {
     readBehindTwoReplies();
     panelLanding = { messageId: "reply-new-2", sendPostId: null, visit: 1 };

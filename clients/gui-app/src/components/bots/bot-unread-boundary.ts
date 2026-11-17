@@ -79,6 +79,15 @@ function carries(row: TranscriptListRow, messageId: string): boolean {
   );
 }
 
+/** Merged assistant records retain their persisted order within the row. */
+function hasRecordsAfter(row: TranscriptListRow, messageId: string): boolean {
+  if (row.kind !== "hydrated") return false;
+  const ids = row.model.turnMessageIds;
+  if (ids === undefined) return false;
+  const index = ids.lastIndexOf(messageId);
+  return index >= 0 && index < ids.length - 1;
+}
+
 /** A placeholder prevents guessing who wrote the first unread row. */
 function boundaryTarget(
   rows: readonly TranscriptListRow[],
@@ -91,6 +100,9 @@ function boundaryTarget(
   if (afterMessageId !== null) {
     after = rows.findLastIndex((row) => carries(row, afterMessageId));
     if (after < 0) return { kind: "locate", messageId: afterMessageId };
+    // The cursor can divide records inside one painted row. Include that row
+    // rather than skipping its unread continuation along with the read part.
+    if (hasRecordsAfter(rows[after], afterMessageId)) after -= 1;
   }
   for (const row of rows.slice(after + 1)) {
     if (row.kind === "placeholder")

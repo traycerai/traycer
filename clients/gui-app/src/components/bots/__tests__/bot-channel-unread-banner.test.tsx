@@ -455,6 +455,20 @@ function boundaryRequest(): string | null {
     .getAttribute("data-boundary-to");
 }
 
+/**
+ * The requests a mutation record shows, whichever attribute it changed, message
+ * or boundary: the value it replaced, which a later change would otherwise
+ * hide from a reader of the current value, and the value it left.
+ */
+function requestsOfRecord(record: MutationRecord): string[] {
+  if (!(record.target instanceof Element) || record.attributeName === null)
+    return [];
+  return [
+    record.oldValue ?? "",
+    record.target.getAttribute(record.attributeName) ?? "",
+  ];
+}
+
 /** The message the transcript was asked to scroll to and highlight. */
 function messageRequest(): string | null {
   return screen
@@ -786,18 +800,12 @@ describe("the channel's unread banner and automatic reading", () => {
     };
     const scrolledTo: string[] = [];
     const watcher = new MutationObserver((records) => {
-      for (const record of records) {
-        if (record.target instanceof Element)
-          scrolledTo.push(
-            record.target.getAttribute("data-scroll-to") ??
-              record.target.getAttribute("data-boundary-to") ??
-              "",
-          );
-      }
+      scrolledTo.push(...records.flatMap(requestsOfRecord));
     });
     onTestFinished(() => watcher.disconnect());
     watcher.observe(document.body, {
       attributes: true,
+      attributeOldValue: true,
       attributeFilter: ["data-scroll-to", "data-boundary-to"],
       subtree: true,
     });
@@ -825,17 +833,7 @@ describe("the channel's unread banner and automatic reading", () => {
       { ordinal: 4, at: 4_000 },
     ]);
     await pass(0);
-    scrolledTo.push(
-      ...watcher
-        .takeRecords()
-        .map((record) =>
-          record.target instanceof Element
-            ? (record.target.getAttribute("data-scroll-to") ??
-              record.target.getAttribute("data-boundary-to") ??
-              "")
-            : "",
-        ),
-    );
+    scrolledTo.push(...watcher.takeRecords().flatMap(requestsOfRecord));
 
     // The captured ordinal is dropped, not carried over to the new window: it
     // never lands on what stands at ordinal 1 now (the row already read), and
@@ -1235,5 +1233,117 @@ describe("the unread boundary in the channel's transcript", () => {
       screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
     ).toBe("assistant:ts:3000");
     expect(boundaryRequest()).toBe("");
+  });
+
+  /**
+   * One bot turn written as two records, which the transcript draws as a
+   * single row carrying both ids (`turnMessageIds`), between an older row
+   * and a newer one.
+   */
+  function loadMergedTurn(newer: "bot" | "own"): void {
+    const first = {
+      ...botReply({
+        messageId: "turn-a1",
+        text: "Merged part one",
+        timestamp: 2_000,
+      }),
+      turnId: "turn-1",
+    };
+    const second = {
+      ...botReply({
+        messageId: "turn-a2",
+        text: "Merged part two",
+        timestamp: 3_000,
+      }),
+      turnId: "turn-1",
+    };
+    const after =
+      newer === "own"
+        ? memberPost({
+            messageId: "row-after",
+            requestId: "request-after",
+            lines: ["my note after"],
+            timestamp: 4_000,
+            resolvedBy: null,
+          })
+        : botReply({
+            messageId: "row-after",
+            text: "update after",
+            timestamp: 4_000,
+          });
+    mocks.sessions = {
+      [CHANNEL_ID]: scriptedSession(CHANNEL_ID, [
+        botReply({
+          messageId: "row-0",
+          text: "update before",
+          timestamp: 1_000,
+        }),
+        first,
+        second,
+        after,
+      ]).handle,
+    };
+  }
+
+  function readTo(cursor: BotReadPosition, latest: BotReadPosition): void {
+    setRead({
+      cursors: { [CHANNEL_ID]: cursor },
+      latest: { [CHANNEL_ID]: latest },
+    });
+  }
+
+  it("draws the divider above a merged row that holds the cursor's record and newer unread ones, and takes the banner's press there with no highlight", async () => {
+    loadMergedTurn("bot");
+    readTo(
+      { messageId: "turn-a1", seq: 2_000 },
+      { messageId: "row-after", seq: 4_000 },
+    );
+    render(<MountedChannel />);
+
+    expect(rowBelow(onlyDivider())).toContain("Merged part two");
+    fireEvent.click(
+      within(banner()).getByRole("button", { name: /Unread messages/ }),
+    );
+    await pass(0);
+
+    expect(boundaryRequest()).toBe(
+      rowElementBelow(onlyDivider())?.getAttribute("data-bot-read-row"),
+    );
+    expect(boundaryRequest()).not.toBe("");
+    expect(messageRequest()).toBe("");
+    expect(document.querySelector(".ring-primary\\/80")).toBeNull();
+  });
+
+  it("draws the divider below a merged row whose last record the cursor is on, above the newer row", () => {
+    loadMergedTurn("bot");
+    readTo(
+      { messageId: "turn-a2", seq: 3_000 },
+      { messageId: "row-after", seq: 4_000 },
+    );
+    render(<MountedChannel />);
+
+    expect(rowBelow(onlyDivider())).toContain("update after");
+  });
+
+  it("draws no divider when the cursor is on the last record of the merged row and nothing is newer", () => {
+    loadMergedTurn("bot");
+    readTo(
+      { messageId: "turn-a2", seq: 3_000 },
+      { messageId: "turn-a2", seq: 3_000 },
+    );
+    render(<MountedChannel />);
+
+    expect(dividers()).toEqual([]);
+  });
+
+  it("skips the viewer's own row after a merged row read through its last record, and draws no divider when nothing else is newer", () => {
+    loadMergedTurn("own");
+    readTo(
+      { messageId: "turn-a2", seq: 3_000 },
+      { messageId: "row-after", seq: 4_000 },
+    );
+    render(<MountedChannel />);
+
+    expect(dividers()).toEqual([]);
   });
 });
