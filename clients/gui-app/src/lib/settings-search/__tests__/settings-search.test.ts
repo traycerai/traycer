@@ -161,10 +161,21 @@ describe("settings search", () => {
     );
   });
 
-  it("reaches the Notifications page by its former name, Inbox", () => {
-    // The strip's drawer was renamed from "Inbox" to "Notifications"; the old
-    // name stays in the page's keywords so it is still findable.
-    expect(landingFor("inbox", DESKTOP)).toBe("notifications#<top>");
+  it("finds no Notifications page: the host's notification hooks are gone with it", () => {
+    for (const query of [
+      "inbox",
+      "notification hooks",
+      "webhook",
+      "script",
+      "automation",
+    ]) {
+      for (const context of [DESKTOP, MOBILE]) {
+        expect(
+          searchSettings(query, context).map((result) => result.entry.section),
+          query,
+        ).not.toContain("notifications");
+      }
+    }
   });
 
   it("reaches a bespoke page through the vocabulary it is really about", () => {
@@ -278,12 +289,7 @@ describe("settings search", () => {
     ] as const) {
       expect(pageScopeFor(query, section, label), query).toBe("Environment");
     }
-    for (const [query, section, label] of [
-      ["Credits", "credits", "Credits"],
-      ["Notifications", "notifications", "Notifications"],
-    ] as const) {
-      expect(pageScopeFor(query, section, label), query).toBe("Account");
-    }
+    expect(pageScopeFor("Credits", "credits", "Credits")).toBe("Account");
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
@@ -640,18 +646,12 @@ describe("settings search", () => {
 
     it("sends runtime-gated groups' vocabulary to their pages", () => {
       // Website sessions also waits on a bound host runtime and a first read
-      // of the browser bridge; host Notifications' and Fallback's groups sit
-      // behind their pages' scope gates, and Fallback's render only once the
-      // host answers the policy read. None is a target — their words reach
-      // the page.
+      // of the browser bridge; Fallback's groups sit behind its page's scope
+      // gate and render only once the host answers the policy read. None is a
+      // target — their words reach the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
           expect(landingsFor(query, context), query).toContain("browser#<top>");
-        }
-        for (const query of ["notification hooks", "webhook"]) {
-          expect(landingsFor(query, context), query).toContain(
-            "notifications#<top>",
-          );
         }
         for (const query of ["rate limit", "failover", "equivalent models"]) {
           expect(landingsFor(query, context), query).toContain(

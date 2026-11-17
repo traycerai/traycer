@@ -142,16 +142,16 @@ describe("navigationSource", () => {
     expect(ids).toContain("nav:settings/general");
   });
 
-  it("distinguishes application Sounds from account Notifications", () => {
+  it("lists application Sounds and Alerts, and no retired Notifications row", () => {
     soundtrackOfferedMock.value = true;
     const items = captureSettingsSubpage("/");
     const app = items.find((i) => i.id === "nav:settings/app-notifications");
-    const account = items.find((i) => i.id === "nav:settings/notifications");
+    const alerts = items.find((i) => i.id === "nav:settings/alerts");
     expect(app?.label).toBe("Sounds");
     expect(app?.statusBadge).toBe("Application");
-    expect(app?.keywords).toContain("notifications");
-    expect(account?.label).toBe("Notifications");
-    expect(account?.statusBadge).toBe("Account");
+    expect(alerts?.label).toBe("Alerts");
+    expect(alerts?.statusBadge).toBe("Application");
+    expect(items.map((i) => i.id)).not.toContain("nav:settings/notifications");
   });
 
   it("lists Sounds only where a soundtrack is offered, and Alerts either way", () => {
