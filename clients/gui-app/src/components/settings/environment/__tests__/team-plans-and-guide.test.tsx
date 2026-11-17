@@ -19,7 +19,6 @@ import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
   mountTeamPage,
-  mountTeamPageNegotiating,
   personalPoolSource,
   poolSource,
   requireTeamHostClient,
