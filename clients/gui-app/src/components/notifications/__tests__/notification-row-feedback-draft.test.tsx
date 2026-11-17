@@ -252,6 +252,38 @@ describe("<NotificationRow /> feedback draft rows", () => {
     expect(screen.queryByText("Sent to the Traycer team.")).toBeNull();
   });
 
+  it("shows a draft as sent when a later failed answer lands before the earlier sent one", async () => {
+    renderRow(buildRow({}), vi.fn());
+    let resolveEarlier: (
+      response: ChatFeedbackDraftDecideResponse,
+    ) => void = () => {};
+    decideElsewhere(
+      new Promise((resolve) => {
+        resolveEarlier = resolve;
+      }),
+    );
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: {
+          ...STAMP,
+          state: "failed",
+          failureReason: "Network unreachable",
+        },
+      }),
+    );
+    expect(await screen.findByText(/Network unreachable/)).toBeTruthy();
+
+    resolveEarlier({
+      kind: "settled",
+      feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+    });
+
+    expect(await screen.findByText("Sent to the Traycer team.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByText(/Network unreachable/)).toBeNull();
+  });
+
   it("holds Send while the card's decision is out", async () => {
     renderRow(buildRow({}), vi.fn());
     decideElsewhere(new Promise(() => {}));

@@ -1,5 +1,12 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { create } from "zustand";
 import type { ChatFeedbackDraftDecideResponse } from "@traycer/protocol/host/chat/feedback-draft";
@@ -8,6 +15,7 @@ import {
   ChatAttachmentScopeContext,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
+import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 import { FeedbackDraftCard } from "@/components/chat/segments/feedback-draft-card";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
@@ -19,24 +27,31 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The host boundary: the RPC hooks and the chat's live session. The card's
-// own logic runs for real.
-vi.mock("@/hooks/chats/use-chat-feedback-draft", () => ({
-  useChatFeedbackDraftSupported: () => mocks.supported,
-  useChatFeedbackDraftDecideMutation: () => ({
-    mutate: mocks.mutate,
-    isPending: false,
-    data: mocks.decideData,
-  }),
-  useChatFeedbackDraftPreviewQuery: () => ({
-    isPending: false,
-    data: {
-      kind: "preview",
-      details: [{ label: "Host version", value: "1.6.0" }],
-      logTail: "[2026-11-03 10:00:00.000] [INFO] started",
-      logTailTruncated: false,
-    },
-  }),
-}));
+// own logic, and the decision state it reads from the mutation cache, run
+// for real.
+vi.mock("@/hooks/chats/use-chat-feedback-draft", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/chats/use-chat-feedback-draft")
+    >();
+  return {
+    ...actual,
+    useChatFeedbackDraftSupported: () => mocks.supported,
+    useChatFeedbackDraftDecideMutation: () => ({
+      mutate: mocks.mutate,
+      data: mocks.decideData,
+    }),
+    useChatFeedbackDraftPreviewQuery: () => ({
+      isPending: false,
+      data: {
+        kind: "preview",
+        details: [{ label: "Host version", value: "1.6.0" }],
+        logTail: "[2026-11-03 10:00:00.000] [INFO] started",
+        logTailTruncated: false,
+      },
+    }),
+  };
+});
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -70,14 +85,18 @@ const PENDING: ToolCallFeedbackDraftStamp = {
   failureReason: null,
 };
 
+let queryClient = new QueryClient();
+
 function renderCard(
   draft: ToolCallFeedbackDraftStamp,
   scope: ChatAttachmentScopeValue | null,
 ): void {
   const wrap = (children: ReactNode): ReactNode => (
-    <ChatAttachmentScopeContext.Provider value={scope}>
-      {children}
-    </ChatAttachmentScopeContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <ChatAttachmentScopeContext.Provider value={scope}>
+        {children}
+      </ChatAttachmentScopeContext.Provider>
+    </QueryClientProvider>
   );
   render(
     wrap(
@@ -87,6 +106,7 @@ function renderCard(
 }
 
 beforeEach(() => {
+  queryClient = new QueryClient();
   mocks.mutate.mockReset();
   mocks.decideData = undefined;
   mocks.supported = true;
@@ -214,5 +234,28 @@ describe("FeedbackDraftCard", () => {
       screen.getByText("Not sent: offline. You can try again."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  it("holds Send and Skip while a decision on the draft is out from elsewhere", async () => {
+    renderCard(PENDING, SCOPE);
+    void queryClient
+      .getMutationCache()
+      .build(queryClient, {
+        mutationKey: feedbackDraftMutationKeys.decide("block-1"),
+        mutationFn: () =>
+          new Promise<ChatFeedbackDraftDecideResponse>(() => {}),
+      })
+      .execute(undefined);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+    expect(screen.getByRole("button", { name: "Skip" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 });

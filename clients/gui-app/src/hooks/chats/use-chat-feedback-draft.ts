@@ -119,7 +119,10 @@ export function useChatFeedbackDraftDecideMutation(
 /** Where the decisions on one draft stand, across every surface offering them. */
 export interface ChatFeedbackDraftDecisionState {
   readonly isPending: boolean;
-  /** The newest answer a decision got, `null` while none has one. */
+  /**
+   * The answer that decided the draft when one has, else the newest answer a
+   * decision got, `null` while none has one.
+   */
   readonly response: ChatFeedbackDraftDecideResponse | null;
 }
 
@@ -133,6 +136,15 @@ function selectDecideAttempt(
     isPending: mutation.state.status === "pending",
     response: parsed.success ? parsed.data : null,
   };
+}
+
+function decidesDraft(
+  response: ChatFeedbackDraftDecideResponse | null,
+): boolean {
+  const stamp = response === null ? null : response.feedbackDraft;
+  return (
+    stamp !== null && (stamp.state === "sent" || stamp.state === "skipped")
+  );
 }
 
 /**
@@ -155,7 +167,10 @@ export function useChatFeedbackDraftDecisionState(
   return useMemo(
     () => ({
       isPending: attempts.some((attempt) => attempt.isPending),
+      // Answers can land out of submission order, and only one attempt can
+      // decide the draft: a sent or skipped answer outranks any failure.
       response:
+        attempts.find((attempt) => decidesDraft(attempt.response))?.response ??
         attempts.findLast((attempt) => attempt.response !== null)?.response ??
         null,
     }),

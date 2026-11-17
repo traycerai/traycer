@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import {
   type FeedbackDraftBlockRef,
   useChatFeedbackDraftDecideMutation,
+  useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftPreviewQuery,
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
@@ -126,6 +127,7 @@ function LiveFeedbackDraftCard(
   const supported = useChatFeedbackDraftSupported(hostId);
   const client = useHostClientForHostId(hostId);
   const decide = useChatFeedbackDraftDecideMutation(client, blockRef.blockId);
+  const decision = useChatFeedbackDraftDecisionState(blockRef.blockId);
   const readOnly = liveReadOnlyReason(canAct, supported);
   // The settled stamp also arrives as a row update; until it does, the
   // response is what the card shows.
@@ -142,8 +144,9 @@ function LiveFeedbackDraftCard(
         client,
         readOnly,
         // Unknown standing (the chat is still connecting) holds the buttons
-        // without claiming the reader may not act.
-        isPending: decide.isPending || canAct === null,
+        // without claiming the reader may not act. So does a decision the
+        // draft's notification row has out.
+        isPending: decision.isPending || canAct === null,
         decide: (decision, includeDiagnostics) => {
           decide.mutate({
             ...blockRef,
