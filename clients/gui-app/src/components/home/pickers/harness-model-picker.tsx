@@ -79,6 +79,7 @@ import { useHarnessModelPickerState } from "@/components/home/pickers/harness-mo
 import {
   EMPTY_PREPARING_BY_HARNESS_ID,
   EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
+  railEntryDegraded,
   railHarnessDegraded,
   removedProfilesForHarness,
   resolveActiveProfileForHarness,
@@ -911,6 +912,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         selectedProviderId: selection.harnessId,
         degradedHarnessIds,
         preparingByHarnessId,
+        profilesByHarnessId,
       }),
     [
       activeProviderId,
@@ -918,6 +920,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       degradedHarnessIds,
       lockedHarnessId,
       preparingByHarnessId,
+      profilesByHarnessId,
       selection.harnessId,
     ],
   );
@@ -2255,6 +2258,10 @@ function resolveActiveProviderId(input: {
     GuiHarnessId,
     ProviderPackPreparing
   >;
+  readonly profilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ReadonlyArray<ProviderProfile>
+  >;
 }): ProviderId {
   const {
     harnesses,
@@ -2262,6 +2269,7 @@ function resolveActiveProviderId(input: {
     selectedProviderId,
     degradedHarnessIds,
     preparingByHarnessId,
+    profilesByHarnessId,
   } = input;
   // A provider the user CANNOT RUN is visible but not selectable, so the picker
   // never auto-lands on it - otherwise a first boot would open onto a provider
@@ -2313,7 +2321,12 @@ function resolveActiveProviderId(input: {
   // a provider that is not even selectable.
   const runnable = harnesses.find(
     (harness) =>
-      selectable(harness) && !railHarnessDegraded(harness, degradedHarnessIds),
+      selectable(harness) &&
+      !railEntryDegraded(
+        harness,
+        degradedHarnessIds,
+        profilesByHarnessId.get(harness.id) ?? [],
+      ),
   );
   return (runnable ?? harnesses.find(selectable))?.id ?? activeProviderId;
 }
