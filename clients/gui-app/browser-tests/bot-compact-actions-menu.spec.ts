@@ -347,6 +347,13 @@ interface Recorded {
   readonly frames: number;
 }
 
+interface ReferenceFrame {
+  /** The title's animation timeline on the frame; `null` with no animation. */
+  readonly title: number | null;
+  /** The timeline of an animation of the same title that was never moved. */
+  readonly reference: number;
+}
+
 interface TitleFrame {
   /** The title's animation timeline on the frame; `null` with no animation. */
   readonly time: number | null;
@@ -358,6 +365,7 @@ declare global {
     __recorded?: Recorded;
     __titleFrames?: TitleFrame[];
     __moveBeforeCalls?: number;
+    __referenceFrames?: ReferenceFrame[];
   }
 }
 
@@ -539,6 +547,101 @@ async function expectContinuous(
   }
 }
 
+/** One painted frame: what a move may leave a running title behind by. */
+const ONE_FRAME_MS = 17;
+/** What the move is made to take, in the task that commits it. */
+const MOVE_COST_MS = 40;
+
+/**
+ * Starts an animation of the title's own keyframes and timing on an element
+ * outside the tab, at the title's own start time, so the two read the same
+ * timeline until the title is moved; it is then where the title would be had
+ * it never moved. Every frame from here records both.
+ */
+async function startReference(page: Page): Promise<void> {
+  const before = await page.evaluate((titleSelector) => {
+    const title = document
+      .querySelector(titleSelector)
+      ?.getAnimations({ subtree: true })
+      .at(0);
+    if (title === undefined || !(title.effect instanceof KeyframeEffect))
+      throw new Error("a running title is needed to start a reference");
+    const element = document.createElement("div");
+    document.body.append(element);
+    const reference = new Animation(
+      new KeyframeEffect(
+        element,
+        title.effect.getKeyframes(),
+        title.effect.getTiming(),
+      ),
+      document.timeline,
+    );
+    reference.startTime = title.startTime;
+    const frames: ReferenceFrame[] = [];
+    window.__referenceFrames = frames;
+    const sample = (): void => {
+      const current = document
+        .querySelector(titleSelector)
+        ?.getAnimations({ subtree: true })
+        .at(0);
+      frames.push({
+        title: current === undefined ? null : Number(current.currentTime),
+        reference: Number(reference.currentTime),
+      });
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    return {
+      title: Number(title.currentTime),
+      reference: Number(reference.currentTime),
+    };
+  }, TITLE);
+  expect(
+    Math.abs(before.title - before.reference),
+    "the reference reads the title's own time",
+  ).toBeLessThanOrEqual(1);
+}
+
+/**
+ * Makes the next move of the controls' carrier take `ms` of the task that
+ * commits it: the busy wait comes right after the carrier is inserted, and so
+ * between what the scope read before the move and what it puts back.
+ */
+async function slowNextCarrierMove(page: Page, ms: number): Promise<void> {
+  await page.evaluate((cost) => {
+    const append: unknown = Reflect.get(Node.prototype, "appendChild");
+    if (typeof append !== "function") throw new Error("no appendChild");
+    let slow = true;
+    Node.prototype.appendChild = function <T extends Node>(
+      this: Node,
+      node: T,
+    ): T {
+      Reflect.apply(append, this, [node]);
+      if (
+        slow &&
+        node instanceof HTMLElement &&
+        node.querySelector('[role="group"][aria-label="Music playback"]') !==
+          null
+      ) {
+        slow = false;
+        const end = performance.now() + cost;
+        while (performance.now() < end) continue;
+      }
+      return node;
+    };
+  }, ms);
+}
+
+async function referenceFramesFrom(
+  page: Page,
+  mark: number,
+): Promise<ReferenceFrame[]> {
+  return page.evaluate(
+    (from) => (window.__referenceFrames ?? []).slice(from),
+    mark,
+  );
+}
+
 async function focusToggle(page: Page, name: "Pause" | "Play"): Promise<void> {
   await page
     .getByRole("group", { name: "Music playback" })
@@ -702,6 +805,56 @@ test.describe("the playback controls across the Tracy tab's moves", () => {
 
     expect(failures).toEqual([]);
   });
+
+  for (const move of [SESSION, THREADS]) {
+    test(`a running title is where it would have been after ${move.name}, though the move takes ${MOVE_COST_MS} ms`, async ({
+      context,
+    }) => {
+      const { page, failures } = await openAtHeader(context, move);
+      await expect(page.locator(TITLE).first()).toHaveAttribute(
+        "data-scrolling",
+        "true",
+      );
+      await startReference(page);
+      await slowNextCarrierMove(page, MOVE_COST_MS);
+      const mark =
+        (await page.evaluate(() => window.__referenceFrames?.length)) ?? 0;
+
+      await move.out(page);
+      await nextFrames(page, 5);
+
+      const frames = await referenceFramesFrom(page, mark);
+      const lags = frames.map((frame) =>
+        frame.title === null ? null : frame.title - frame.reference,
+      );
+      expect(frames.length, "frames since the move").toBeGreaterThan(5);
+      expect(
+        lags.filter((lag) => lag === null || Math.abs(lag) > ONE_FRAME_MS),
+        `frames off the reference by more than one frame, in ms: ${JSON.stringify(lags)}`,
+      ).toEqual([]);
+      expect(failures).toEqual([]);
+    });
+
+    test(`a paused title stands where it stood after ${move.name}, though the move takes ${MOVE_COST_MS} ms`, async ({
+      context,
+    }) => {
+      const { page, failures } = await openAtHeader(context, move);
+      await page.getByRole("button", { name: "Pause" }).click();
+      await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+      await recordContinuity(page);
+      await slowNextCarrierMove(page, MOVE_COST_MS);
+
+      await move.out(page);
+      await nextFrames(page, 3);
+
+      const after = await readContinuity(page);
+      expect(after.playState).toBe("paused");
+      expect(
+        Math.abs((after.time ?? Infinity) - after.before),
+      ).toBeLessThanOrEqual(1);
+      expect(failures).toEqual([]);
+    });
+  }
 
   test("do not take focus from a control outside the group, or give it to one when none had it", async ({
     context,

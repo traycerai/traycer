@@ -129,7 +129,9 @@ function createCarrier(): HTMLElement {
  * What taking the carrier out of the document loses, read before it and put
  * back by the answer once the carrier is where it stays: focus, where one of
  * its controls had it and nothing has taken it since; and how far the title
- * had scrolled, on the animation that replaces it on the same element. A
+ * had scrolled, on the animation that replaces it on the same element: a
+ * running one from the moment it started, so it is where it would have been
+ * had it never stopped, a held one at the place it held. A
  * title for another track is another element, and gets nothing put back;
  * whether the title runs or holds still stays its own style's to say.
  *
@@ -158,6 +160,12 @@ function keepAcrossReinsert(carrier: HTMLElement): () => void {
                   target,
                   name: animation.animationName,
                   time: animation.currentTime,
+                  // A running animation's place is a moment on the
+                  // document's clock, which goes on through the move.
+                  start:
+                    animation.playState === "running"
+                      ? animation.startTime
+                      : null,
                 },
               ];
         })
@@ -172,7 +180,9 @@ function keepAcrossReinsert(carrier: HTMLElement): () => void {
             animation instanceof CSSAnimation &&
             animation.animationName === run.name,
         );
-      if (next !== undefined) next.currentTime = run.time;
+      if (next === undefined) continue;
+      if (run.start === null) next.currentTime = run.time;
+      else next.startTime = run.start;
     }
     if (
       focused !== null &&

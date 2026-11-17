@@ -2,7 +2,14 @@
  * The Tracy tab's playback scope with small real trees: the scope, its title
  * rows and the real controls. Nothing of the scope is replaced.
  */
-import { StrictMode, type ReactNode } from "react";
+import {
+  StrictMode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import {
@@ -155,9 +162,13 @@ describe("<TracyPlaybackScope /> unmounting", () => {
     act(() => screen.getByTestId("epic-playback-toggle").focus());
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
 
-    unmount();
+    try {
+      unmount();
 
-    expect(focus).not.toHaveBeenCalled();
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      focus.mockRestore();
+    }
   });
 });
 
@@ -259,5 +270,64 @@ describe("<TracyPlaybackScope /> moving the focused control", () => {
     rerender(<Tree place="b" />);
 
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("<TracyPlaybackScope /> when a title row is replaced by state below the scope", () => {
+  // The scope's parent does not render: only the child holding the rows does.
+  function SwappingRows(): ReactNode {
+    const [place, setPlace] = useState<"a" | "b">("a");
+    useEffect(() => {
+      const swap = (): void => setPlace("b");
+      window.addEventListener("swap-rows", swap);
+      return () => window.removeEventListener("swap-rows", swap);
+    }, []);
+    return <Row key={place} id={`row-${place}`} />;
+  }
+
+  it("keeps focus on the same button", () => {
+    render(
+      <TracyPlaybackScope>
+        <SwappingRows />
+      </TracyPlaybackScope>,
+    );
+    const button = screen.getByTestId("epic-playback-toggle");
+    act(() => button.focus());
+
+    act(() => {
+      window.dispatchEvent(new Event("swap-rows"));
+    });
+
+    expect(slotOf("row-b").contains(button)).toBe(true);
+    expect(document.activeElement).toBe(button);
+  });
+});
+
+describe("<TracyPlaybackScope /> when another control takes focus in the commit of the move", () => {
+  function TakesFocus(): ReactNode {
+    const ref = useRef<HTMLButtonElement>(null);
+    useLayoutEffect(() => ref.current?.focus(), []);
+    return <button ref={ref}>Taker</button>;
+  }
+
+  it("leaves focus on that control", () => {
+    const { rerender } = render(
+      <TracyPlaybackScope>
+        <Row key="a" id="row-a" />
+      </TracyPlaybackScope>,
+    );
+    act(() => screen.getByTestId("epic-playback-toggle").focus());
+
+    rerender(
+      <TracyPlaybackScope>
+        <Row key="b" id="row-b" />
+        <TakesFocus />
+      </TracyPlaybackScope>,
+    );
+
+    expect(slotOf("row-b").contains(onlyGroup())).toBe(true);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Taker" }),
+    );
   });
 });
