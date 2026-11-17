@@ -33,6 +33,7 @@ import { useStripSectionFolded } from "./strip-section-fold";
 import {
   holdInPlace,
   useOpenedSectionHold,
+  type StripOpening,
   useStripSectionHolds,
 } from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
@@ -84,7 +85,16 @@ export function SideStripSections(props: {
     props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
-  const opened = useOpenedSectionHold(assigned, controller.activeItemId, holds);
+  const { activeItemId, layoutItems } = controller;
+  const opening = useMemo((): StripOpening | null => {
+    if (activeItemId === null) return null;
+    const item = layoutItems.find((entry) => entry.id === activeItemId);
+    return {
+      itemId: activeItemId,
+      focusedSide: item?.kind === "split" ? item.focusedSide : null,
+    };
+  }, [activeItemId, layoutItems]);
+  const opened = useOpenedSectionHold(assigned, opening, holds);
   // A row the person is on is held where it is drawn, over where it was opened.
   const sections = useMemo(
     () => holdInPlace(assigned, opened === null ? holds : [opened, ...holds]),

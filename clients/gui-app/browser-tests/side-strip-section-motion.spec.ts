@@ -184,8 +184,8 @@ test("keeps a task opened from To review there once it is read, until another ta
 
   await moveTask(page, "release", "idle");
 
-  // Read, and still where it was clicked.
-  await nextFrames(page, 4);
+  // Read, so its row no longer says "Done", and still where it was clicked.
+  await expect(release.getByTestId("side-tab-section-detail")).toHaveCount(0);
   expect(await laneOf(release)).toBe("to-review");
 
   await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');

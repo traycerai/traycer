@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { SplitSideName } from "@/stores/tabs/layout";
 import {
   groupEntriesBySection,
   type StripSection,
@@ -117,31 +118,42 @@ function sectionOfItem(
   );
 }
 
+/** The current item, and which half of it when it is a split pair. */
+export interface StripOpening {
+  readonly itemId: string;
+  readonly focusedSide: SplitSideName | null;
+}
+
 interface OpenedHoldState {
   readonly sections: ReadonlyArray<StripSectionGroup>;
-  readonly activeItemId: string | null;
+  readonly opening: StripOpening | null;
   readonly hold: StripSectionHold | null;
+}
+
+function sameOpening(a: StripOpening | null, b: StripOpening | null): boolean {
+  return a?.itemId === b?.itemId && a?.focusedSide === b?.focusedSide;
 }
 
 function openedHoldOf(
   prev: OpenedHoldState | null,
   sections: ReadonlyArray<StripSectionGroup>,
-  activeItemId: string | null,
+  opening: StripOpening | null,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSectionHold | null {
-  if (activeItemId === null) return null;
-  const now = sectionOfItem(sections, activeItemId);
+  if (opening === null) return null;
+  const { itemId } = opening;
+  const now = sectionOfItem(sections, itemId);
   if (now !== "to-review" && now !== "idle") return null;
-  if (prev?.activeItemId === activeItemId) return prev.hold;
+  if (prev !== null && sameOpening(prev.opening, opening)) return prev.hold;
   // Opened in this render: where the row was drawn when the person opened it,
-  // which a read landing in the same render has not changed yet.
+  // which a read landing in the same render has not changed yet. Opening a
+  // pair's other half is an opening too, and the pair's row is one row.
   const opened =
-    holds.find((held) => held.itemId === activeItemId)?.section ??
-    (prev === null ? null : sectionOfItem(prev.sections, activeItemId)) ??
+    holds.find((held) => held.itemId === itemId)?.section ??
+    (prev?.hold?.itemId === itemId ? prev.hold.section : null) ??
+    (prev === null ? null : sectionOfItem(prev.sections, itemId)) ??
     now;
-  return opened === "to-review"
-    ? { itemId: activeItemId, section: "to-review" }
-    : null;
+  return opened === "to-review" ? { itemId, section: "to-review" } : null;
 }
 
 /**
@@ -153,19 +165,19 @@ function openedHoldOf(
  */
 export function useOpenedSectionHold(
   sections: ReadonlyArray<StripSectionGroup>,
-  activeItemId: string | null,
+  opening: StripOpening | null,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSectionHold | null {
   const [state, setState] = useState<OpenedHoldState>(() => ({
     sections,
-    activeItemId,
-    hold: openedHoldOf(null, sections, activeItemId, holds),
+    opening,
+    hold: openedHoldOf(null, sections, opening, holds),
   }));
-  if (state.sections !== sections || state.activeItemId !== activeItemId) {
+  if (state.sections !== sections || !sameOpening(state.opening, opening)) {
     setState({
       sections,
-      activeItemId,
-      hold: openedHoldOf(state, sections, activeItemId, holds),
+      opening,
+      hold: openedHoldOf(state, sections, opening, holds),
     });
   }
   return state.hold;
