@@ -478,4 +478,34 @@ describe("Add a profile around one sign-in", () => {
       screen.queryByRole("heading", { name: "Add new Claude Code profile" }),
     ).toBeNull();
   });
+
+  it("reads whether the computer offers sign-ins again when the Add dialog reopens", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Add a profile" }),
+    ).toBeTruthy();
+    stopOfferingSignIns(harness.queryClient);
+
+    act(() => {
+      useProviderProfileAddFlowStore.getState().close();
+    });
+    act(() => {
+      useProviderProfileAddFlowStore
+        .getState()
+        .openForHarness("claude", null, harness.created);
+    });
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Add new Claude Code profile",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
+  });
 });

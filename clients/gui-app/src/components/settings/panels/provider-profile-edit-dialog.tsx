@@ -6,6 +6,7 @@ import {
   useDisconnectBrokeredProfile,
 } from "@/hooks/providers/use-disconnect-brokered-profile-mutation";
 import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
+import { useProfileRecordEnvironmentId } from "@/hooks/providers/use-profile-record-environment-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -554,7 +555,16 @@ function ProfileSignOutAction(props: {
     props.recordAccount,
   );
   const signOut = props.recordAccount ? recordSignOut : localSignOut;
-  const disconnect = useDisconnectBrokeredProfile();
+  // An unmapped brokered row is disconnected at authn on the person's sign-in
+  // first; the host signs it out only once that disconnect has landed.
+  const connection = props.recordAccount
+    ? null
+    : brokeredProfileConnection(props.providerId, props.profile);
+  const boundEnvironmentId = useProfileRecordEnvironmentId(
+    useHostClient(),
+    connection !== null,
+  );
+  const disconnect = useDisconnectBrokeredProfile(boundEnvironmentId);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(
@@ -580,11 +590,6 @@ function ProfileSignOutAction(props: {
         },
       },
     );
-  // An unmapped brokered row is disconnected at authn on the person's sign-in
-  // first; the host signs it out only once that disconnect has landed.
-  const connection = recordAccount
-    ? null
-    : brokeredProfileConnection(props.providerId, props.profile);
   const submit = (): void => {
     if (connection === null) {
       signOutOnHost();

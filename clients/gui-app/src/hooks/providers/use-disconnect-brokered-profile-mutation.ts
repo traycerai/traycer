@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import {
   readHarnessConnectionKind,
@@ -96,7 +97,10 @@ function refusedDisconnect(): HostRpcError {
   });
 }
 
-/** The sign-out refusal a host gave when the row's account moved. */
+/**
+ * Refuses a sign-out whose row no longer answers to the environment's entry
+ * or to this computer's binding, with the code the existing copy reads.
+ */
 function bindingChanged(): HostRpcError {
   return new HostRpcError({
     code: "binding-changed",
@@ -124,20 +128,27 @@ function readOnSignIn<T>(
 }
 
 /**
- * Disconnects the row's connection at authn on the person's own sign-in, at
- * the entry's own binding version (the row's presence counter is this
- * computer's). An entry with no live connection is already disconnected; an
- * entry bound to another account, a setup-token row whose entry's connection
- * is not a setup token, or any failure, changes nothing.
+ * Disconnects the row's family at authn on the person's own sign-in, at its
+ * entry's binding version (the row's presence counter is this computer's).
+ * Nothing changes unless this computer is bound to the row's environment
+ * before and after each read, the entry holds the row's account (a setup
+ * token only on a setup-token connection), and the disconnect answers. An
+ * environment with no entry for the row is already disconnected.
  */
-export function useDisconnectBrokeredProfile(): UseMutationResult<
-  void,
-  HostRpcError,
-  BrokeredProfileConnection
-> {
+export function useDisconnectBrokeredProfile(
+  boundEnvironmentId: string | null,
+): UseMutationResult<void, HostRpcError, BrokeredProfileConnection> {
   const source = useEnvironmentCloud();
+  const bound = useRef(boundEnvironmentId);
+  useEffect(() => {
+    bound.current = boundEnvironmentId;
+  }, [boundEnvironmentId]);
   return useMutation<void, HostRpcError, BrokeredProfileConnection>({
     mutationFn: async (connection) => {
+      const assertBound = (): void => {
+        if (bound.current !== connection.environmentId) throw bindingChanged();
+      };
+      assertBound();
       const cloud = source === null ? null : source();
       const harness = providerIdToGuiHarnessId(connection.providerId);
       const binding = await readOnSignIn(cloud, (signedIn) =>
@@ -148,6 +159,7 @@ export function useDisconnectBrokeredProfile(): UseMutationResult<
           connection.environmentProfileId,
         ),
       );
+      assertBound();
       if (binding === null) return;
       const match = rowAccountMatch(connection, binding);
       if (match === "other") throw bindingChanged();
@@ -157,9 +169,10 @@ export function useDisconnectBrokeredProfile(): UseMutationResult<
             signedIn,
             connection.environmentId,
             harness,
-            connection.environmentProfileId,
+            binding.entryProfileId,
           ),
         );
+        assertBound();
         if (kind !== "setup_token") throw bindingChanged();
       }
       if (typeof binding.bindingVersion !== "number") throw refusedDisconnect();
@@ -168,7 +181,7 @@ export function useDisconnectBrokeredProfile(): UseMutationResult<
       );
       const answer = await send(UNLINK_METHOD, {
         environmentId: connection.environmentId,
-        profileId: connection.environmentProfileId,
+        profileId: binding.entryProfileId,
         expectedBindingVersion: binding.bindingVersion,
       });
       if (answer.outcome === "forbidden") throw refusedDisconnect();

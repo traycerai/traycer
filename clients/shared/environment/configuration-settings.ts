@@ -40,6 +40,7 @@ import {
   authnMcpServersResponseSchema,
   authnSecretsListSchema,
   type AuthnHarnessConnection,
+  type AuthnItemRow,
   type AuthnMcpServer,
 } from "./authn-environment-schemas";
 import {
@@ -680,16 +681,33 @@ export async function readHarnessConnectionKind(
   return connection?.kind ?? null;
 }
 
-/** A managed profile's live connection binding at authn. */
+/** The binding of a managed profile's family entry at authn. */
 export interface ManagedProfileBinding {
+  readonly entryProfileId: string;
   readonly bindingVersion: CredentialVersion | null;
   readonly spendScopeKey: SpendScopeKey | null;
 }
 
+function managedProfileValue(
+  items: readonly AuthnItemRow[],
+  harnessId: string,
+  profileId: string,
+): z.infer<typeof authnManagedProfileBindingSchema> | null {
+  const key = `${harnessId}:${profileId}`;
+  const item = items.find(
+    (row) => row.kind === "managed_profile" && row.key === key,
+  );
+  if (item === undefined) return null;
+  const value = authnManagedProfileBindingSchema.safeParse(item.value);
+  if (!value.success)
+    throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
+  return value.data;
+}
+
 /**
- * The binding of the managed profile `harnessId:profileId`, read with its
- * identity fields; null when the environment holds no live connection for
- * it: no item, an item folded into another, or one a person signed out.
+ * The binding of the family entry the managed profile `harnessId:profileId`
+ * belongs to: its own item, or the entry its folded item names. Read with the
+ * identity fields; null when the environment holds no item for either.
  */
 export async function readManagedProfileBinding(
   cloud: EnvironmentCloud,
@@ -705,22 +723,18 @@ export async function readManagedProfileBinding(
     ),
     authnItemsResponseSchema,
   );
-  const key = `${harnessId}:${profileId}`;
-  const item = items.find(
-    (row) => row.kind === "managed_profile" && row.key === key,
-  );
-  if (item === undefined) return null;
-  const value = authnManagedProfileBindingSchema.safeParse(item.value);
-  if (!value.success)
-    throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
-  if (
-    value.data.mergedInto !== undefined ||
-    value.data.custodianSignOutCause !== undefined
-  )
-    return null;
+  const own = managedProfileValue(items, harnessId, profileId);
+  if (own === null) return null;
+  const entryProfileId = own.mergedInto ?? profileId;
+  const entry =
+    own.mergedInto === undefined
+      ? own
+      : managedProfileValue(items, harnessId, own.mergedInto);
+  if (entry === null) return null;
   return {
-    bindingVersion: value.data.bindingVersion ?? null,
-    spendScopeKey: value.data.spendScopeKey ?? null,
+    entryProfileId,
+    bindingVersion: entry.bindingVersion ?? null,
+    spendScopeKey: entry.spendScopeKey ?? null,
   };
 }
 
