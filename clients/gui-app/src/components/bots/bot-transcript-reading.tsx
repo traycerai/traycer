@@ -1,3 +1,10 @@
+import { BotUnreadDivider } from "@/components/bots/bot-unread-divider";
+import {
+  BotUnreadBoundaryContext,
+  useBotTranscriptBoundary,
+  type BotTranscriptUnread,
+  type BotUnreadLanding,
+} from "@/components/bots/bot-unread-boundary";
 import type { BotReadPosition } from "@traycer/protocol/host/bot/schemas";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
@@ -29,9 +36,7 @@ const READ_AFTER_MS = 1_000;
 type ObserveRow = (node: HTMLElement, message: ChatMessage) => () => void;
 const ObservedRowsContext = createContext<ObserveRow | null>(null);
 import { BotReadPresenceContext } from "@/components/bots/bot-read-presence-context";
-export type BotUnreadLanding =
-  | { readonly kind: "message"; readonly messageId: string }
-  | { readonly kind: "ordinal"; readonly ordinal: number };
+export type { BotUnreadLanding } from "@/components/bots/bot-unread-boundary";
 
 /** Only the transcript's actual message renderer registers, never a placeholder or post stand-in. */
 export function BotReadObservedRow(props: {
@@ -39,6 +44,7 @@ export function BotReadObservedRow(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const observe = useContext(ObservedRowsContext);
+  const boundary = useContext(BotUnreadBoundaryContext);
   const ref = useCallback(
     (node: HTMLDivElement | null) => {
       if (node !== null && observe !== null)
@@ -48,9 +54,12 @@ export function BotReadObservedRow(props: {
   );
   if (observe === null) return props.children;
   return (
-    <div ref={ref} data-bot-read-row={props.message.id}>
-      {props.children}
-    </div>
+    <>
+      {boundary?.rowId === props.message.id ? <BotUnreadDivider /> : null}
+      <div ref={ref} data-bot-read-row={props.message.id}>
+        {props.children}
+      </div>
+    </>
   );
 }
 
@@ -405,23 +414,6 @@ function observedTurnExtension(
   return { position, rowKey: row.key, ordinal: row.ordinal, epoch };
 }
 
-function unreadLanding(
-  range: readonly TranscriptListRow[] | null,
-  seen: ReadonlyMap<string, ChatMessage>,
-  cursor: BotReadPosition | null,
-): BotUnreadLanding {
-  const first = range?.find(
-    (row) => row.kind === "placeholder" || seen.get(row.model.id) !== row.model,
-  );
-  if (first?.kind === "placeholder")
-    return { kind: "ordinal", ordinal: first.ordinal };
-  if (first?.kind === "hydrated" && first.model.persistentMessageId !== null)
-    return { kind: "message", messageId: first.model.persistentMessageId };
-  return cursor === null
-    ? { kind: "ordinal", ordinal: 0 }
-    : { kind: "message", messageId: cursor.messageId };
-}
-
 function useQualifiedRange(args: {
   readonly rows: readonly TranscriptListRow[];
   readonly epoch: string;
@@ -431,7 +423,6 @@ function useQualifiedRange(args: {
   readonly seen: ReadonlyMap<string, ChatMessage>;
   readonly positions: ReadonlyMap<string, BotReadPosition>;
 }): {
-  readonly range: readonly TranscriptListRow[] | null;
   readonly qualified: ReadAnchor | null;
 } {
   const { rows, epoch, cursor, target, presented, seen, positions } = args;
@@ -466,7 +457,7 @@ function useQualifiedRange(args: {
     qualified ?? (anchors.next?.epoch === epoch ? anchors.next : null);
   if (!sameAnchor(anchors.current, current) || !sameAnchor(anchors.next, next))
     setAnchors({ current, next });
-  return { range, qualified };
+  return { qualified };
 }
 
 export function BotTranscriptReading(props: {
@@ -476,6 +467,9 @@ export function BotTranscriptReading(props: {
   readonly enabled: boolean;
   readonly epoch: string;
   readonly channelBanner: boolean;
+  readonly windowEpoch: number;
+  readonly unread: BotTranscriptUnread | null | undefined;
+  readonly automaticBoundary: boolean;
   readonly rows: readonly TranscriptListRow[];
   readonly records: readonly OpenMessage[];
   readonly onNavigate: (landing: BotUnreadLanding) => void;
@@ -484,6 +478,14 @@ export function BotTranscriptReading(props: {
   const client = useTabHostClient();
   const read = useBotReadCursors(props.botId, props.hostId)?.data;
   const outerPresented = useContext(BotReadPresenceContext);
+  const navigation = useBotTranscriptBoundary(props, read, client);
+  const boundaryContext = useMemo(
+    () => ({
+      rowId: navigation.rowId,
+      cancelNavigation: navigation.cancelNavigation,
+    }),
+    [navigation.rowId, navigation.cancelNavigation],
+  );
   const presented = usePresented(props.enabled && outerPresented);
   const target =
     read === undefined ? null : advanceTarget(read, props.conversationId);
@@ -507,7 +509,7 @@ export function BotTranscriptReading(props: {
       ),
     [props.records],
   );
-  const { range, qualified } = useQualifiedRange({
+  const { qualified } = useQualifiedRange({
     rows: props.rows,
     epoch: props.epoch,
     cursor,
@@ -533,21 +535,21 @@ export function BotTranscriptReading(props: {
           },
         ],
   );
-  const navigate = (): void =>
-    props.onNavigate(unreadLanding(range, seen, cursor));
   return (
-    <ObservedRowsContext value={props.enabled ? observe : null}>
-      {props.channelBanner && (target !== null || mark.failed) ? (
-        <BotUnreadBanner
-          label="Unread messages"
-          navigateTestId={undefined}
-          onNavigate={navigate}
-          onMarkRead={mark.markRead}
-          pending={mark.pending}
-          failed={mark.failed}
-        />
-      ) : null}
-      {props.children}
-    </ObservedRowsContext>
+    <BotUnreadBoundaryContext value={boundaryContext}>
+      <ObservedRowsContext value={props.enabled ? observe : null}>
+        {props.channelBanner && (target !== null || mark.failed) ? (
+          <BotUnreadBanner
+            label="Unread messages"
+            navigateTestId={undefined}
+            onNavigate={navigation.navigate}
+            onMarkRead={mark.markRead}
+            pending={mark.pending}
+            failed={mark.failed}
+          />
+        ) : null}
+        {props.children}
+      </ObservedRowsContext>
+    </BotUnreadBoundaryContext>
   );
 }

@@ -126,6 +126,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 type ThreadTranscriptState = Pick<
   ChatSessionState,
   | "snapshotLoaded"
+  | "fatalClose"
   | "messages"
   | "events"
   | "transcriptRowContext"
@@ -169,6 +170,8 @@ const mocks = vi.hoisted(() => ({
     held: false,
     listeners: new Set<() => void>(),
   },
+  /** The person's read cursors as the host answers them: none behind anything unless a case says so. */
+  read: { cursors: {}, latest: {} },
 }));
 
 vi.mock(
@@ -213,6 +216,12 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => activityStore((state) => state.activity),
 }));
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () => ({ data: mocks.read }),
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -255,11 +264,24 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
+      scrollRequest?: {
+        kind?: string;
+        messageId?: string;
+        rowId?: string;
+      } | null;
     }) => {
       const header = use(ChatTimelineHeaderContext);
       return (
         <Providers tileInstanceId={props.instanceId}>
-          <div data-testid="chat-messages-stub">
+          <div
+            data-testid="chat-messages-stub"
+            data-scroll-to={props.scrollRequest?.messageId ?? ""}
+            data-boundary-to={
+              props.scrollRequest?.kind === "boundary"
+                ? (props.scrollRequest.rowId ?? "")
+                : ""
+            }
+          >
             {header}
             {props.messages.length === 0 && header === null ? (
               <ChatEmptyState />
@@ -391,6 +413,7 @@ function createThreadStore(
 ): UseBoundStore<StoreApi<ThreadTranscriptState>> {
   return create<ThreadTranscriptState>()(() => ({
     snapshotLoaded: true,
+    fatalClose: null,
     messages,
     events: [],
     transcriptRowContext: {},
@@ -596,6 +619,7 @@ beforeEach(() => {
   sent = [];
   panelSent = null;
   panelLanding = null;
+  mocks.read = { cursors: {}, latest: {} };
   panelTasks = [];
   panelReplyReach = "none";
   panelOrigin = null;
@@ -2796,5 +2820,69 @@ describe("<BotThreadPanel /> a reply box whose stored draft names images still b
       expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
       expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
     });
+  });
+});
+
+describe("<BotThreadPanel /> the split panel's unread boundary", () => {
+  /** A reply of the bot's in the thread, at `at`. */
+  function threadReply(
+    messageId: string,
+    text: string,
+    at: number,
+  ): Extract<Message, { role: "assistant" }> {
+    return { ...announcement(messageId, text), timestamp: at, startedAt: at };
+  }
+
+  const REPLIES: ReadonlyArray<Message> = [
+    threadReply("reply-read", "Already read reply", 2_000),
+    threadReply("reply-new-1", "First new reply", 3_000),
+    threadReply("reply-new-2", "Second new reply", 4_000),
+  ];
+
+  function readBehindTwoReplies(): void {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "reply-read", seq: 2_000 } },
+      latest: { [THREAD_ID]: { messageId: "reply-new-2", seq: 4_000 } },
+    };
+  }
+
+  function boundaryTarget(): string {
+    return (
+      screen
+        .getByTestId("chat-messages-stub")
+        .getAttribute("data-boundary-to") ?? ""
+    );
+  }
+
+  it("opens on the New divider above the first unread reply, by a boundary request and not a message request", async () => {
+    readBehindTwoReplies();
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "First new reply",
+    );
+    expect(boundaryTarget()).not.toBe("");
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
+  it("lands on the message a permalink names and requests no boundary, though the replies are unread", async () => {
+    readBehindTwoReplies();
+    panelLanding = { messageId: "reply-new-2", sendPostId: null, visit: 1 };
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+      ).toBe("assistant:ts:4000");
+    });
+    expect(boundaryTarget()).toBe("");
   });
 });

@@ -34,6 +34,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type MockInstance,
 } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -2483,5 +2484,358 @@ describe("<BotThreadsView /> with nothing to list", () => {
       screen.getAllByText("This host can't list your threads."),
     ).toHaveLength(1);
     expect(screen.queryByTestId("bot-thread-card")).toBeNull();
+  });
+});
+
+describe("<BotThreadsView /> unread divider (T467)", () => {
+  const VIEWER = "user-1";
+  const COLLEAGUE = "user-2";
+
+  beforeEach(() => {
+    mocks.hosted[TRACY] = script([], {});
+  });
+
+  /** The Team bot's followed threads, none with a reply yet. */
+  function followedThreads(...threadIds: string[]): void {
+    mocks.hosted[TEAM] = script(
+      threadIds.map((threadId) => thread(TEAM, threadId, null)),
+      Object.fromEntries(threadIds.map((threadId) => [threadId, FOLLOWING])),
+    );
+  }
+
+  function replyId(threadId: string, n: number): string {
+    return `${threadId}-reply-${String(n)}`;
+  }
+
+  /**
+   * The thread holds `count` replies, reply `n` written at `n` seconds: by the
+   * viewer where `ownAt` lists `n`, by another member otherwise. The host's
+   * newest row is the last reply, and the person's cursor sits on `readTo`.
+   */
+  function unreadFrom(input: {
+    readonly threadId: string;
+    readonly count: number;
+    readonly ownAt: ReadonlyArray<number>;
+    readonly readTo: number;
+  }): void {
+    const { threadId, count, ownAt, readTo } = input;
+    withReplies(TEAM, threadId, replyTexts(count), count * 1_000);
+    mocks.replyRows[threadId] = replyTexts(count).map(
+      (text, index): Message => {
+        const n = index + 1;
+        return {
+          ...memberPost({
+            messageId: replyId(threadId, n),
+            requestId: replyId(threadId, n),
+            lines: [text],
+            timestamp: n * 1_000,
+            resolvedBy: null,
+          }),
+          sender: {
+            type: "user",
+            userId: ownAt.includes(n) ? VIEWER : COLLEAGUE,
+          },
+        };
+      },
+    );
+    const read = mocks.hosted[TEAM].cursors;
+    mocks.hosted[TEAM].cursors = {
+      cursors: {
+        ...read.cursors,
+        [threadId]: {
+          messageId: replyId(threadId, readTo),
+          seq: readTo * 1_000,
+        },
+      },
+      latest: {
+        ...read.latest,
+        [threadId]: { messageId: replyId(threadId, count), seq: count * 1_000 },
+      },
+    };
+  }
+
+  /** The unread dividers a card draws. */
+  function dividersIn(threadId: string): HTMLElement[] {
+    return Array.from(
+      card(threadId).querySelectorAll<HTMLElement>("[data-unread-divider]"),
+    );
+  }
+
+  /**
+   * The id of the message row directly under the card's one divider: the row
+   * that holds it, or else the first row after it.
+   */
+  function rowUnderDivider(threadId: string): string | undefined {
+    const dividers = dividersIn(threadId);
+    expect(dividers).toHaveLength(1);
+    const [divider] = dividers;
+    const inOrder = Array.from(
+      card(threadId).querySelectorAll<HTMLElement>(
+        "[data-unread-divider], [data-message-id]",
+      ),
+    );
+    const under =
+      divider.closest("[data-message-id]") ??
+      inOrder
+        .slice(inOrder.indexOf(divider) + 1)
+        .find((node) => node.dataset.messageId !== undefined);
+    return under instanceof HTMLElement ? under.dataset.messageId : undefined;
+  }
+
+  /** The message rows of a card painted with the navigation highlight. */
+  function highlightedRows(threadId: string): Element[] {
+    const marks = CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ");
+    return Array.from(
+      card(threadId).querySelectorAll("[data-message-id]"),
+    ).filter((row) => marks.some((mark) => row.classList.contains(mark)));
+  }
+
+  /** Replaces scrollIntoView with a recorder, restored after the case. */
+  function recordScrolls(): MockInstance<Element["scrollIntoView"]> {
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    scrolled.mockImplementation(() => undefined);
+    onTestFinished(() => scrolled.mockRestore());
+    return scrolled;
+  }
+
+  it("draws one divider directly above the first reply after the person's cursor, and none in a card whose cursor is on its newest reply", async () => {
+    followedThreads("team-new", "team-read");
+    unreadFrom({ threadId: "team-new", count: 4, ownAt: [], readTo: 2 });
+    unreadFrom({ threadId: "team-read", count: 3, ownAt: [], readTo: 3 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new", "team-read"]));
+    await within(await revealFull("team-new")).findByText("reply 4");
+    await within(await revealFull("team-read")).findByText("reply 3");
+
+    expect(dividersIn("team-new")).toHaveLength(1);
+    expect(rowUnderDivider("team-new")).toBe(replyId("team-new", 3));
+    expect(dividersIn("team-read")).toHaveLength(0);
+  });
+
+  it("skips the viewer's own replies: the divider goes above the first reply another member wrote, and none where every reply past the cursor is the viewer's", async () => {
+    followedThreads("team-mixed", "team-own");
+    unreadFrom({ threadId: "team-mixed", count: 5, ownAt: [3, 4], readTo: 2 });
+    unreadFrom({ threadId: "team-own", count: 4, ownAt: [3, 4], readTo: 2 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-mixed", "team-own"]));
+    await within(await revealFull("team-mixed")).findByText("reply 5");
+    await within(await revealFull("team-own")).findByText("reply 4");
+
+    expect(dividersIn("team-mixed")).toHaveLength(1);
+    expect(rowUnderDivider("team-mixed")).toBe(replyId("team-mixed", 5));
+    expect(dividersIn("team-own")).toHaveLength(0);
+  });
+
+  it("keeps the divider where it was once the replies have been read, and draws none when the page is mounted again at the newest reply", async () => {
+    foregroundWindow();
+    followedThreads("team-read", "team-unread");
+    unreadFrom({ threadId: "team-read", count: 4, ownAt: [], readTo: 2 });
+    unreadFrom({ threadId: "team-unread", count: 3, ownAt: [], readTo: 1 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-read", "team-unread"]));
+    await within(await revealFull("team-read")).findByText("reply 4");
+    await within(await revealFull("team-unread")).findByText("reply 3");
+    expect(dividersIn("team-read")).toHaveLength(1);
+    expect(rowUnderDivider("team-read")).toBe(replyId("team-read", 3));
+
+    // Both unread replies stay whole in view for the read's second; the whole
+    // read runs on the fake clock, as the cache write's notification is a
+    // zero-delay timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readRow("team-read", "reply 3"), "view", true);
+    intersectTarget(readRow("team-read", "reply 4"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(() =>
+      expect(mocks.advances.at(-1)).toEqual({
+        botId: TEAM,
+        conversationId: "team-read",
+        messageId: replyId("team-read", 4),
+        seq: 4_000,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        within(card("team-read")).queryByTestId("bot-thread-row-new-replies"),
+      ).toBeNull(),
+    );
+    vi.useRealTimers();
+
+    expect(rowUnderDivider("team-read")).toBe(replyId("team-read", 3));
+
+    cleanup();
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-read", "team-unread"]));
+    await within(await revealFull("team-read")).findByText("reply 4");
+    await within(await revealFull("team-unread")).findByText("reply 3");
+    // The other card draws its divider once the cursors are read.
+    await waitFor(() => expect(dividersIn("team-unread")).toHaveLength(1));
+    expect(dividersIn("team-read")).toHaveLength(0);
+  });
+
+  it("keeps the divider where it was once Mark all read moves the cursor", async () => {
+    followedThreads("team-new");
+    unreadFrom({ threadId: "team-new", count: 4, ownAt: [], readTo: 2 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    await within(await revealFull("team-new")).findByText("reply 4");
+    expect(dividersIn("team-new")).toHaveLength(1);
+    expect(rowUnderDivider("team-new")).toBe(replyId("team-new", 3));
+
+    fireEvent.click(
+      within(screen.getByTestId("bot-unread-banner")).getByRole("button", {
+        name: "Mark all read",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("bot-unread-banner")).toBeNull(),
+    );
+    expect(mocks.advances).toEqual([
+      {
+        botId: TEAM,
+        conversationId: "team-new",
+        messageId: replyId("team-new", 4),
+        seq: 4_000,
+      },
+    ]);
+    expect(rowUnderDivider("team-new")).toBe(replyId("team-new", 3));
+  });
+
+  it("unfolds a folded card from the unread pill and scrolls the card's divider to the top, highlighting no row", async () => {
+    const user = userEvent.setup();
+    const scrolled = recordScrolls();
+    followedThreads("team-new");
+    unreadFrom({ threadId: "team-new", count: 8, ownAt: [], readTo: 2 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    const full = within(await revealFull("team-new"));
+    expect(
+      (await full.findByTestId("bot-chat-transcript-unfold")).textContent,
+    ).toBe("Show 6 more replies");
+
+    await user.click(await screen.findByTestId("bot-threads-unread-pill"));
+
+    await waitFor(() =>
+      expect(drawnReplies("team-new")).toEqual(replyTexts(8)),
+    );
+    expect(dividersIn("team-new")).toHaveLength(1);
+    expect(rowUnderDivider("team-new")).toBe(replyId("team-new", 3));
+    const [divider] = dividersIn("team-new");
+    await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+    expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    expect(highlightedRows("team-new")).toEqual([]);
+  });
+
+  it("lands the pill on a card's divider where it draws one, and on the card itself where its new replies are all the viewer's own, highlighting no row", async () => {
+    const user = userEvent.setup();
+    const scrolled = recordScrolls();
+    followedThreads("team-new", "team-own");
+    unreadFrom({ threadId: "team-new", count: 4, ownAt: [], readTo: 2 });
+    unreadFrom({ threadId: "team-own", count: 3, ownAt: [3], readTo: 2 });
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new", "team-own"]));
+    await within(await revealFull("team-new")).findByText("reply 4");
+    await within(await revealFull("team-own")).findByText("reply 3");
+    const pill = await screen.findByTestId("bot-threads-unread-pill");
+    expect(pill.textContent).toBe("2 unread threads");
+    expect(dividersIn("team-new")).toHaveLength(1);
+    expect(dividersIn("team-own")).toHaveLength(0);
+    // jsdom lays nothing out: place the cards against the page's top by hand.
+    const place = (element: HTMLElement, top: number): void => {
+      vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, top, 100, 100),
+      );
+    };
+    place(screen.getByTestId("bot-threads-scroll"), 0);
+    place(card("team-new"), 200);
+    place(card("team-own"), 600);
+
+    scrolled.mockClear();
+    await user.click(pill);
+
+    const [divider] = dividersIn("team-new");
+    await waitFor(() => expect(scrolled.mock.contexts).toHaveLength(1));
+    expect(scrolled.mock.contexts[0]).toBe(divider);
+    expect(scrolled.mock.calls[0][0]).toMatchObject({ block: "start" });
+    expect(highlightedRows("team-new")).toEqual([]);
+
+    // The first card now starts above the page's top: on to the next.
+    place(card("team-new"), -100);
+    await user.click(pill);
+
+    await waitFor(() =>
+      expect(scrolled.mock.contexts.at(-1)).toBe(card("team-own")),
+    );
+    expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    expect(dividersIn("team-own")).toHaveLength(0);
+    expect(highlightedRows("team-own")).toEqual([]);
+  });
+
+  it("draws no divider where the cursor's message is not among the card's loaded rows", async () => {
+    followedThreads("team-gone", "team-loaded");
+    unreadFrom({ threadId: "team-gone", count: 4, ownAt: [], readTo: 2 });
+    unreadFrom({ threadId: "team-loaded", count: 3, ownAt: [], readTo: 1 });
+    // The session holds only the newest two replies, not the one the cursor is on.
+    mocks.replyRows["team-gone"] = mocks.replyRows["team-gone"].slice(2);
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-gone", "team-loaded"]));
+    await within(await revealFull("team-gone")).findByText("reply 4");
+    await within(await revealFull("team-loaded")).findByText("reply 3");
+
+    expect(drawnReplies("team-gone")).toEqual(["reply 3", "reply 4"]);
+    expect(dividersIn("team-loaded")).toHaveLength(1);
+    expect(dividersIn("team-gone")).toHaveLength(0);
+  });
+
+  it("clears the highlight a reply's badge landed when the unread pill lands, and highlights again when the badge is used after it", async () => {
+    const scrolled = recordScrolls();
+    followedThreads("team-new");
+    unreadFrom({ threadId: "team-new", count: 5, ownAt: [], readTo: 2 });
+    // The bot wrote reply 5 in answer to reply 1, which is not the row above
+    // it: it draws a badge.
+    mocks.replyRows["team-new"] = mocks.replyRows["team-new"].map(
+      (row, index) =>
+        index === 4
+          ? {
+              ...botReply({
+                messageId: replyId("team-new", 5),
+                text: "reply 5",
+                timestamp: 5_000,
+              }),
+              repliesTo: replyId("team-new", 1),
+            }
+          : row,
+    );
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    const full = within(await revealFull("team-new"));
+    await full.findByText("reply 5");
+    const badge = (): HTMLElement =>
+      full.getByRole("button", { name: /^Replying to .*: reply 1$/ });
+    const highlightedIds = (): Array<string | null> =>
+      highlightedRows("team-new").map((row) =>
+        row.getAttribute("data-message-id"),
+      );
+    expect(dividersIn("team-new")).toHaveLength(1);
+    const [divider] = dividersIn("team-new");
+    const pill = await screen.findByTestId("bot-threads-unread-pill");
+
+    // The clock stands still from the badge's landing to the pill's, so the
+    // highlight's three seconds cannot be up before the pill clears it.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.click(badge());
+    expect(highlightedIds()).toEqual([replyId("team-new", 1)]);
+
+    fireEvent.click(pill);
+
+    expect(scrolled.mock.contexts.at(-1)).toBe(divider);
+    expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    expect(highlightedIds()).toEqual([]);
+
+    fireEvent.click(badge());
+
+    expect(highlightedIds()).toEqual([replyId("team-new", 1)]);
   });
 });

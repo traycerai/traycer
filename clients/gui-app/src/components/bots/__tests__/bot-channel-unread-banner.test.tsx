@@ -41,15 +41,20 @@ import {
   CHANNEL_ID,
   botReply,
   hostClientLocating,
+  memberPost,
   scriptedSession,
   sessionPrompt,
   textDoc,
 } from "@/components/bots/__tests__/bot-turn-test-support";
-import { MountedChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
+import {
+  MountedChannel,
+  MountedLandingChannel,
+} from "@/components/bots/__tests__/bot-turn-channel-harness";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -59,6 +64,8 @@ const mocks = vi.hoisted(() => ({
     value: { cursors: {}, latest: {} },
     listeners: new Set<() => void>(),
   },
+  /** Whether the pane the channel is in is on screen, and who is told when it changes. */
+  pane: { visible: true, listeners: new Set<() => void>() },
   /** Every advance the view sent, in order. */
   advances: [] as BotReadCursorAdvanceRequest[],
   /** The next advance is refused, as one to an offline host is. */
@@ -100,11 +107,21 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: () => true,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => true,
-  usePaneFocused: () => true,
-  usePaneFocusProbe: () => () => true,
-}));
+vi.mock("@/components/epic-tabs/pane-visibility-context", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    usePaneVisible: () =>
+      useSyncExternalStore(
+        (listener) => {
+          mocks.pane.listeners.add(listener);
+          return () => mocks.pane.listeners.delete(listener);
+        },
+        () => mocks.pane.visible,
+      ),
+    usePaneFocused: () => true,
+    usePaneFocusProbe: () => () => true,
+  };
+});
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: [{ conversationId: CHANNEL_ID }] },
@@ -204,13 +221,22 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
-      scrollRequest?: { messageId: string } | null;
+      scrollRequest?: {
+        kind?: string;
+        messageId?: string;
+        rowId?: string;
+      } | null;
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
           data-scroll-to={props.scrollRequest?.messageId ?? ""}
+          data-boundary-to={
+            props.scrollRequest?.kind === "boundary"
+              ? (props.scrollRequest.rowId ?? "")
+              : ""
+          }
         >
           {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
@@ -228,6 +254,14 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ),
   };
 });
+
+/** The pane goes off screen or comes back, with the channel mounted throughout. */
+function setPaneVisible(visible: boolean): void {
+  act(() => {
+    mocks.pane.visible = visible;
+    for (const listener of mocks.pane.listeners) listener();
+  });
+}
 
 function setRead(next: BotReadCursorReadResponse): void {
   mocks.read.value = next;
@@ -414,6 +448,20 @@ function banner(): HTMLElement {
   return screen.getByTestId("bot-unread-banner");
 }
 
+/** The row the transcript was asked to scroll to as the divider's row, with no highlight. */
+function boundaryRequest(): string | null {
+  return screen
+    .getByTestId("chat-messages-stub")
+    .getAttribute("data-boundary-to");
+}
+
+/** The message the transcript was asked to scroll to and highlight. */
+function messageRequest(): string | null {
+  return screen
+    .getByTestId("chat-messages-stub")
+    .getAttribute("data-scroll-to");
+}
+
 function markAllRead(): HTMLElement {
   return within(banner()).getByRole("button", { name: "Mark all read" });
 }
@@ -422,6 +470,7 @@ beforeEach(() => {
   useBotOpenThreadStore.setState({ byBotId: {} });
   mocks.advances = [];
   mocks.failNextAdvance = false;
+  mocks.pane.visible = true;
   mocks.client = hostClientLocating(() => ({ turns: [] }), []);
   setRead({ cursors: {}, latest: {} });
   FakeIntersectionObserver.all = [];
@@ -679,9 +728,8 @@ describe("the channel's unread banner and automatic reading", () => {
     hydrate([0, 1, 2, 3]);
     await pass(0);
 
-    expect(
-      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
-    ).toBe("assistant:ts:2000");
+    expect(boundaryRequest()).toBe("assistant:ts:2000");
+    expect(messageRequest()).toBe("");
     expect(mocks.advances).toEqual([]);
   });
 
@@ -740,13 +788,17 @@ describe("the channel's unread banner and automatic reading", () => {
     const watcher = new MutationObserver((records) => {
       for (const record of records) {
         if (record.target instanceof Element)
-          scrolledTo.push(record.target.getAttribute("data-scroll-to") ?? "");
+          scrolledTo.push(
+            record.target.getAttribute("data-scroll-to") ??
+              record.target.getAttribute("data-boundary-to") ??
+              "",
+          );
       }
     });
     onTestFinished(() => watcher.disconnect());
     watcher.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-scroll-to"],
+      attributeFilter: ["data-scroll-to", "data-boundary-to"],
       subtree: true,
     });
     behind(NEWEST);
@@ -778,7 +830,9 @@ describe("the channel's unread banner and automatic reading", () => {
         .takeRecords()
         .map((record) =>
           record.target instanceof Element
-            ? (record.target.getAttribute("data-scroll-to") ?? "")
+            ? (record.target.getAttribute("data-scroll-to") ??
+              record.target.getAttribute("data-boundary-to") ??
+              "")
             : "",
         ),
     );
@@ -788,9 +842,8 @@ describe("the channel's unread banner and automatic reading", () => {
     // nothing is scrolled to on the person's behalf.
     expect(scrolledTo).not.toContain("assistant:ts:1000");
     expect(request).toHaveBeenLastCalledWith(null);
-    expect(
-      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
-    ).toBe("");
+    expect(boundaryRequest()).toBe("");
+    expect(messageRequest()).toBe("");
 
     // A fresh press of the banner goes to the first unread row of the window as it is.
     fireEvent.click(
@@ -798,9 +851,8 @@ describe("the channel's unread banner and automatic reading", () => {
     );
     await pass(0);
 
-    expect(
-      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
-    ).toBe("assistant:ts:2000");
+    expect(boundaryRequest()).toBe("assistant:ts:2000");
+    expect(messageRequest()).toBe("");
     expect(scrolledTo).not.toContain("assistant:ts:1000");
     expect(mocks.advances).toEqual([]);
   });
@@ -964,5 +1016,224 @@ describe("the channel's unread banner and automatic reading", () => {
       { botId: BOT_ID, conversationId: CHANNEL_ID, ...NEWEST },
       { botId: BOT_ID, conversationId: CHANNEL_ID, ...NEWEST },
     ]);
+  });
+});
+
+describe("the unread boundary in the channel's transcript", () => {
+  const VIEWER = "user-viewer";
+
+  beforeEach(() => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: VIEWER,
+        userName: "Olive Owner",
+        email: "owner@example.com",
+        avatarUrl: null,
+      },
+      { userId: VIEWER, username: "Olive Owner" },
+      [],
+    );
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  /** The channel's rows `1..n`, each the bot's reply or, when `own` names it, the viewer's own post. */
+  function loadTimeline(count: number, own: ReadonlySet<number>): void {
+    mocks.sessions = {
+      [CHANNEL_ID]: scriptedSession(
+        CHANNEL_ID,
+        Array.from({ length: count }, (_, index) => {
+          const n = index + 1;
+          return own.has(n)
+            ? memberPost({
+                messageId: `row-${String(n)}`,
+                requestId: `request-${String(n)}`,
+                lines: [`my note ${String(n)}`],
+                timestamp: n * 1_000,
+                resolvedBy: null,
+              })
+            : botReply({
+                messageId: `row-${String(n)}`,
+                text: `update ${String(n)}`,
+                timestamp: n * 1_000,
+              });
+        }),
+      ).handle,
+    };
+  }
+
+  /** Every unread divider drawn in the transcript. */
+  function dividers(): HTMLElement[] {
+    return [...document.querySelectorAll<HTMLElement>("[data-unread-divider]")];
+  }
+
+  /** The row directly below `divider`: the one that contains it, or the next one after it. */
+  function rowElementBelow(divider: HTMLElement): Element | undefined {
+    return [...document.querySelectorAll("[data-bot-read-row]")].find(
+      (candidate) =>
+        candidate.contains(divider) ||
+        (divider.compareDocumentPosition(candidate) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0,
+    );
+  }
+
+  function rowBelow(divider: HTMLElement): string {
+    return rowElementBelow(divider)?.textContent ?? "";
+  }
+
+  function onlyDivider(): HTMLElement {
+    const found = dividers();
+    const divider = found.at(0);
+    if (divider === undefined || found.length > 1) {
+      throw new Error(
+        `expected one divider, found ${String(dividers().length)}`,
+      );
+    }
+    return divider;
+  }
+
+  it("draws one New divider directly above the first unread row, and writes nothing for drawing it", () => {
+    loadTimeline(4, new Set());
+    behind(NEWEST);
+
+    render(<MountedChannel />);
+
+    expect(onlyDivider().textContent).toBe("New");
+    expect(rowBelow(onlyDivider())).toContain("update 2");
+    expect(mocks.advances).toEqual([]);
+  });
+
+  it("draws no divider once the channel is read through its newest row", () => {
+    loadTimeline(4, new Set());
+    setRead({
+      cursors: { [CHANNEL_ID]: NEWEST },
+      latest: { [CHANNEL_ID]: NEWEST },
+    });
+
+    render(<MountedChannel />);
+
+    expect(dividers()).toEqual([]);
+  });
+
+  it("draws the divider above the first unread row the viewer did not write, skipping their own", () => {
+    loadTimeline(4, new Set([2]));
+    behind(NEWEST);
+
+    render(<MountedChannel />);
+
+    expect(rowBelow(onlyDivider())).toContain("update 3");
+  });
+
+  it("keeps the divider where it was, through the dwell that reads the channel and clears the banner, for as long as the visit lasts", async () => {
+    loadTimeline(4, new Set());
+    behind(NEWEST);
+    render(<MountedChannel />);
+
+    showEverything();
+    await pass(1_000);
+
+    expect(mocks.advances).toEqual([
+      { botId: BOT_ID, conversationId: CHANNEL_ID, ...NEWEST },
+    ]);
+    expect(screen.queryByTestId("bot-unread-banner")).toBeNull();
+    expect(rowBelow(onlyDivider())).toContain("update 2");
+  });
+
+  it("draws no divider when the person leaves the channel and comes back after reading it", async () => {
+    loadTimeline(4, new Set());
+    behind(NEWEST);
+    const visit = render(<MountedChannel />);
+    showEverything();
+    await pass(1_000);
+    expect(mocks.advances).toHaveLength(1);
+    expect(rowBelow(onlyDivider())).toContain("update 2");
+
+    visit.unmount();
+    render(<MountedChannel />);
+
+    expect(dividers()).toEqual([]);
+  });
+
+  it("keeps the divider through the window losing and regaining focus, the pane staying on screen", async () => {
+    loadTimeline(4, new Set());
+    behind(NEWEST);
+    render(<MountedChannel />);
+    showEverything();
+    await pass(1_000);
+    expect(mocks.advances).toHaveLength(1);
+
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    hasFocus.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await pass(0);
+
+    expect(rowBelow(onlyDivider())).toContain("update 2");
+  });
+
+  it("draws no divider once the pane has been hidden and shown again without the channel unmounting, after the channel was read", async () => {
+    loadTimeline(4, new Set());
+    behind(NEWEST);
+    render(<MountedChannel />);
+    showEverything();
+    await pass(1_000);
+    expect(mocks.advances).toHaveLength(1);
+    expect(rowBelow(onlyDivider())).toContain("update 2");
+
+    setPaneVisible(false);
+    setPaneVisible(true);
+    await pass(0);
+
+    expect(dividers()).toEqual([]);
+  });
+
+  it("takes the banner's press to the row carrying the divider, with no message request and no highlight, even when the newest unread row is the viewer's own", async () => {
+    loadTimeline(3, new Set([3]));
+    setRead({
+      cursors: { [CHANNEL_ID]: OLD },
+      latest: { [CHANNEL_ID]: { messageId: "row-3", seq: 3_000 } },
+    });
+    render(<MountedChannel />);
+
+    fireEvent.click(
+      within(banner()).getByRole("button", { name: /Unread messages/ }),
+    );
+    await pass(0);
+
+    expect(boundaryRequest()).toBe("assistant:ts:2000");
+    expect(
+      rowElementBelow(onlyDivider())?.getAttribute("data-bot-read-row"),
+    ).toBe("assistant:ts:2000");
+    expect(messageRequest()).toBe("");
+    expect(document.querySelector(".ring-primary\\/80")).toBeNull();
+  });
+
+  it("still scrolls to and highlights the message a permalink names, with the channel unread, and requests no boundary", async () => {
+    loadRows(4);
+    behind(NEWEST);
+
+    render(
+      <MountedLandingChannel
+        landOn={{
+          messageId: "row-3",
+          sendPostId: null,
+          visit: 1,
+          threadId: null,
+        }}
+      />,
+    );
+    await pass(0);
+
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("assistant:ts:3000");
+    expect(boundaryRequest()).toBe("");
   });
 });

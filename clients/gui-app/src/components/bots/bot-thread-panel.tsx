@@ -63,6 +63,7 @@ import type {
   QuestionAnswerSend,
   QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
+import type { BotTranscriptUnread } from "@/components/bots/bot-unread-boundary";
 import {
   answerEntries,
   type ChatBotPresentation,
@@ -132,7 +133,8 @@ export type BotThreadPanelThread =
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
  * card's post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
- * in full).
+ * in full), and a divider sits where the replies new to the person began
+ * (`unread`, `null` for none).
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -140,6 +142,7 @@ export type BotThreadLayout =
       readonly kind: "card";
       readonly fold: BotTranscriptFold | null;
       readonly onShowPost: () => void;
+      readonly unread: BotTranscriptUnread | null;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -1119,7 +1122,10 @@ function KnownThread(
     [hasReplies, onCard, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
-    () => (layout.kind === "card" ? { fold: layout.fold } : null),
+    () =>
+      layout.kind === "card"
+        ? { fold: layout.fold, unread: layout.unread }
+        : null,
     [layout],
   );
   return (
