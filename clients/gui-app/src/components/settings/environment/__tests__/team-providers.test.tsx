@@ -161,7 +161,7 @@ describe("TeamProviders items", () => {
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
-    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Linked plan" })).toBeNull();
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
     expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: "key" });
     expect(
@@ -339,7 +339,7 @@ describe("TeamProviders items", () => {
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
   });
 
-  it("orders Plans & limits as Plans, Profiles, then rate limits", async () => {
+  it("orders Plans & limits as Profiles, then rate limits", async () => {
     const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [cursorProfile("Cursor Work", 1)]),
       "environment.secrets.list": () => ({
@@ -359,19 +359,15 @@ describe("TeamProviders items", () => {
     expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
     expect(screen.queryByText("CURSOR_API_KEY")).toBeNull();
     const panel = screen.getByRole("tabpanel");
-    const labels = ["Plans", "Profiles", "Rate limits"].map((name) =>
+    const labels = ["Profiles", "Rate limits"].map((name) =>
       within(panel).getByRole("heading", { name }),
     );
     expect(
       labels[0]?.compareDocumentPosition(labels[1] ?? labels[0]) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      labels[1]?.compareDocumentPosition(labels[2] ?? labels[1]) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
     expect(within(panel).queryByRole("region", { name: "Key" })).toBeNull();
-    expect(within(panel).getByRole("region", { name: "Plans" })).toBeTruthy();
+    expect(within(panel).queryByRole("region", { name: "Plans" })).toBeNull();
     expect(harness.paramsOf("environment.secrets.list").length).toBeGreaterThan(
       0,
     );

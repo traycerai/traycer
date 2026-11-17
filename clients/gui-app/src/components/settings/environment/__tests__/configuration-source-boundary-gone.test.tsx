@@ -37,7 +37,6 @@ import {
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
-import { TeamPlans } from "@/components/settings/environment/team-plans";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
@@ -361,7 +360,6 @@ function mountOwnershipConsumers(
     <>
       <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <ConfigurationPermissionProbe testId="personal-ownership-probe" />
-        <TeamPlans providerId="claude-code" />
       </ConfigurationSourceBoundary>
       <ConfigurationSourceBoundary
         target={{ kind: "team", environmentId: "env-a" }}
@@ -384,7 +382,6 @@ async function expectOwnershipConsumers(options: {
     String(options.personalEditable),
   );
   expect(teamPage.getAttribute("data-can-edit")).toBe("true");
-  expect(screen.queryByRole("button", { name: "Link a plan" })).toBeNull();
   const readOnlyLine = screen.queryByText(
     "You can see Personal's settings but not change them.",
   );
