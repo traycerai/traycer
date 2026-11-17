@@ -23,27 +23,12 @@ import { ITEM_OS_VALUES } from "./authn-environment-schemas";
  */
 
 /** Per severity: whether that severity notifies on the renderer channel. */
-export const accountNotificationMatrixSchema = lazySchema(() =>
+const accountNotificationMatrixSchema = lazySchema(() =>
   z.record(
     hostNotificationSeveritySchema,
     z.strictObject({ renderer: z.boolean() }),
   ),
 );
-export type AccountNotificationMatrix = z.infer<
-  typeof accountNotificationMatrixSchema
->;
-
-/**
- * The matrix of a person who never chose: every severity notifies but
- * `info`. The one copy the host and the server both read.
- */
-export const DEFAULT_ACCOUNT_NOTIFICATION_MATRIX: Readonly<AccountNotificationMatrix> =
-  {
-    info: { renderer: false },
-    needs_action: { renderer: true },
-    failure: { renderer: true },
-    done: { renderer: true },
-  };
 
 const hookHttpActionSchema = lazySchema(() =>
   z.strictObject({
@@ -142,44 +127,21 @@ export type AccountNotificationSettingsResponse = z.infer<
 >;
 
 /**
- * `PUT /api/v3/user/notification-settings` on a person's sign-in. One of the
- * two strict bodies: this one names the matrix and no hooks key. The write
- * does not read, check or write the stored hooks. No row: created with this
- * matrix and no hooks. `revision` is the row's, null to create.
+ * `PUT /api/v3/user/notification-settings` on a person's sign-in. The list
+ * replaces the stored hooks whole (at most 64): a stored hook the list leaves
+ * out is gone. `assertHooksWellFormed` judges the list sent and never the
+ * stored row. The matrix is not read, checked or written. No row: created
+ * with the default matrix and this list. `revision` is the row's, null to
+ * create.
  *
  * 200: `accountNotificationSettingsResponseSchema` (the row after the write).
  * 409: `accountNotificationSettingsConflictSchema`, code `revision_conflict`,
  * when `revision` is not the row's.
- * 400, no `code`: the body is neither this shape nor
- * `accountNotificationHooksPutRequestSchema`. The message is
- * `notification settings body is invalid: malformed`.
- * This shape never answers `hook_id_duplicate`, `hook_local_only` or
- * `hook_held_invalid`.
- */
-export const accountNotificationMatrixPutRequestSchema = lazySchema(() =>
-  z.strictObject({
-    matrix: accountNotificationMatrixSchema,
-    revision: z.number().int().nonnegative().nullable(),
-  }),
-);
-export type AccountNotificationMatrixPutRequest = z.infer<
-  typeof accountNotificationMatrixPutRequestSchema
->;
-
-/**
- * The other sign-in body on the same route. The list replaces the stored
- * hooks whole (at most 64): a stored hook the list leaves out is gone.
- * `assertHooksWellFormed` judges the list sent and never the stored row.
- * The matrix is not read, checked or written. No row: created with
- * `DEFAULT_ACCOUNT_NOTIFICATION_MATRIX` and this list.
- *
- * 200: `accountNotificationSettingsResponseSchema`.
- * 409: `accountNotificationSettingsConflictSchema`, code `revision_conflict`.
  * 400 `hook_id_duplicate`: two hooks share one id.
  * 400 `hook_local_only`: a command, or an HTTP header value that interpolates
  * a host's environment.
  * 400 `hook_held_invalid`: `held` is true.
- * 400, no `code`: the body is neither strict sign-in shape. The message is
+ * 400, no `code`: the body is malformed. The message is
  * `notification settings body is invalid: malformed`.
  */
 export const accountNotificationHooksPutRequestSchema = lazySchema(() =>
