@@ -256,12 +256,23 @@ async function sendEnvironmentRequest(
  * carried, for a caller that must keep it out of anything it shows. The
  * bearer is used for that comparison and never kept.
  */
-export async function sendEnvironmentRequestWithBearer(
+export function sendEnvironmentRequestWithBearer(
   cloud: EnvironmentCloud,
   purpose: EnvironmentPurpose,
   method: EnvironmentHttpMethod,
   path: string,
   body: unknown,
+): Promise<{ readonly answer: EnvironmentAnswer; readonly bearer: string }> {
+  return sendWithHeaders(cloud, purpose, method, path, body, {});
+}
+
+async function sendWithHeaders(
+  cloud: EnvironmentCloud,
+  purpose: EnvironmentPurpose,
+  method: EnvironmentHttpMethod,
+  path: string,
+  body: unknown,
+  extraHeaders: Readonly<Record<string, string>>,
 ): Promise<{ readonly answer: EnvironmentAnswer; readonly bearer: string }> {
   const bearer = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
   if (bearer === null || bearer.length === 0) {
@@ -283,6 +294,7 @@ export async function sendEnvironmentRequestWithBearer(
           Authorization: `Bearer ${bearer}`,
           Accept: "application/json",
           ...(body === null ? {} : { "Content-Type": "application/json" }),
+          ...extraHeaders,
         },
         body,
         signal: abort.signal,
@@ -311,6 +323,28 @@ export function sendSettings(
   body: unknown,
 ): Promise<EnvironmentAnswer> {
   return sendEnvironmentRequest(cloud, "settings", method, path, body);
+}
+
+/**
+ * The header a reader names the authn value shapes it parses in, comma
+ * separated: `HOST_CAPABILITIES_HEADER` in the internal repository's
+ * `packages/common/src/environments/internal-wire.ts`.
+ */
+const CAPABILITIES_HEADER = "x-traycer-host-capabilities";
+
+/**
+ * A settings read on the person's bearer that opts into the wider value
+ * shapes `capabilities` name; without them authn answers the released ones.
+ */
+export async function readSettingsWithCapabilities(
+  cloud: EnvironmentCloud,
+  path: string,
+  capabilities: readonly string[],
+): Promise<EnvironmentAnswer> {
+  const sent = await sendWithHeaders(cloud, "settings", "GET", path, null, {
+    [CAPABILITIES_HEADER]: capabilities.join(","),
+  });
+  return sent.answer;
 }
 
 /** A settings answer authn refused, as the caller's error. */

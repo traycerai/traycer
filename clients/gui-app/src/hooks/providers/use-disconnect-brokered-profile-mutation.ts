@@ -1,20 +1,32 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import {
+  readManagedProfileBinding,
+  type ManagedProfileBinding,
+} from "@traycer-clients/shared/environment/configuration-settings";
 import { SETTINGS_REFUSED_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { spendScopeKeysEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import type {
   ProviderId,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { useEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
+import {
+  beginEnvironmentCloudOperation,
+  useEnvironmentCloud,
+} from "@/hooks/environment/use-environment-cloud";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 
 /** The authn connection an unmapped brokered row's sign-out disconnects. */
 export interface BrokeredProfileConnection {
   readonly environmentId: string;
   readonly environmentProfileId: string;
-  readonly admittedBindingVersion: number;
-  /** A Claude setup token carries no account: its live connection names the version. */
-  readonly setupToken: boolean;
+  readonly providerId: ProviderId;
+  readonly credentialIdentity: ProviderProfile["credentialIdentity"];
 }
 
 /**
@@ -39,11 +51,30 @@ export function brokeredProfileConnection(
   return {
     environmentId: environmentPresence.environmentId,
     environmentProfileId,
-    admittedBindingVersion: profile.presence.bindingVersion,
-    setupToken:
-      providerId === "claude-code" &&
-      profile.credentialIdentity?.kind === "unidentified",
+    providerId,
+    credentialIdentity: profile.credentialIdentity,
   };
+}
+
+/**
+ * Whether the row's account is the one the environment's entry is bound to.
+ * A Claude setup token carries no account, so it disconnects the entry it
+ * names when that entry holds no account either.
+ */
+function bindsRowAccount(
+  connection: BrokeredProfileConnection,
+  binding: ManagedProfileBinding,
+): boolean {
+  const identity = connection.credentialIdentity;
+  const key = binding.spendScopeKey;
+  if (identity?.kind === "spend-scoped")
+    return key !== null && spendScopeKeysEqual(identity.spendScopeKey, key);
+  if (identity?.kind === "accountless") return key === null;
+  return (
+    connection.providerId === "claude-code" &&
+    identity?.kind === "unidentified" &&
+    key === null
+  );
 }
 
 const UNLINK_METHOD = "environment.plans.unlink";
@@ -59,38 +90,59 @@ function refusedDisconnect(): HostRpcError {
   });
 }
 
+/** The sign-out refusal a host gave when the row's account moved. */
+function bindingChanged(): HostRpcError {
+  return new HostRpcError({
+    code: "binding-changed",
+    message: SETTINGS_REFUSED_MESSAGE,
+    requestId: "",
+    method: "providers.signOutProfile",
+    fatalDetails: null,
+  });
+}
+
 /**
- * Disconnects the row's connection at authn on the person's own sign-in. An
- * absent connection is already disconnected; a failure changes nothing.
+ * Disconnects the row's connection at authn on the person's own sign-in, at
+ * the entry's own binding version (the row's presence counter is this
+ * computer's). An entry with no live connection is already disconnected; an
+ * entry bound to another account, or any failure, changes nothing.
  */
 export function useDisconnectBrokeredProfile(): UseMutationResult<
   void,
   HostRpcError,
   BrokeredProfileConnection
 > {
-  const begin = useEnvironmentCloudOperation();
+  const source = useEnvironmentCloud();
   return useMutation<void, HostRpcError, BrokeredProfileConnection>({
     mutationFn: async (connection) => {
-      const send = begin();
-      let expectedBindingVersion: number | null =
-        connection.admittedBindingVersion;
-      if (connection.setupToken) {
-        const { plans } = await send("environment.plans.list", {
-          environmentId: connection.environmentId,
-        });
-        const plan = plans.find(
-          (candidate) =>
-            candidate.profileId === connection.environmentProfileId &&
-            candidate.harness === "claude",
-        );
-        if (plan === undefined) return;
-        expectedBindingVersion = plan.bindingVersion ?? null;
-        if (expectedBindingVersion === null) throw refusedDisconnect();
-      }
+      const cloud = source === null ? null : source();
+      const binding = await withHostQueryErrorBoundary(
+        UNLINK_METHOD,
+        async () => {
+          cloudVerdictPreflight(UNLINK_METHOD)();
+          if (cloud === null) throw hostClientUnavailableError(UNLINK_METHOD);
+          try {
+            return await readManagedProfileBinding(
+              cloud,
+              connection.environmentId,
+              providerIdToGuiHarnessId(connection.providerId),
+              connection.environmentProfileId,
+            );
+          } catch (error) {
+            throw environmentCloudHostError(UNLINK_METHOD, error);
+          }
+        },
+      );
+      if (binding === null) return;
+      if (!bindsRowAccount(connection, binding)) throw bindingChanged();
+      if (typeof binding.bindingVersion !== "number") throw refusedDisconnect();
+      const send = beginEnvironmentCloudOperation(
+        cloud === null ? null : () => cloud,
+      );
       const answer = await send(UNLINK_METHOD, {
         environmentId: connection.environmentId,
         profileId: connection.environmentProfileId,
-        expectedBindingVersion,
+        expectedBindingVersion: binding.bindingVersion,
       });
       if (answer.outcome === "forbidden") throw refusedDisconnect();
     },

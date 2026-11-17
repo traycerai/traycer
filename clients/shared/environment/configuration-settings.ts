@@ -30,13 +30,19 @@ import {
   type EnvironmentPlansListResponse,
   type EnvironmentPlansUnlinkResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  CredentialVersion,
+  SpendScopeKey,
+} from "@traycer/protocol/host/provider-credential-home-schemas";
 import {
   ITEM_ROUTE_KINDS,
+  MANAGED_PROFILE_IDENTITY_CAPABILITY,
   authnHarnessConnectionsResponseSchema,
   authnHarnessDisconnectResponseSchema,
   authnItemConflictSchema,
   authnItemWriteResponseSchema,
   authnItemsResponseSchema,
+  authnManagedProfileBindingSchema,
   authnMcpServerDeleteResponseSchema,
   authnMcpServerItemValueSchema,
   authnMcpServerResponseSchema,
@@ -46,12 +52,14 @@ import {
   type AuthnMcpServer,
 } from "./authn-environment-schemas";
 import {
+  CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
   environmentPath,
   errorBodyCode,
   isRedirect,
   isSuccess,
   parseSettings,
+  readSettingsWithCapabilities,
   sendSettings,
   settingsRefusal,
   type EnvironmentAnswer,
@@ -694,6 +702,50 @@ export async function listConfigurationPlans(
                 you: connection.linkedBy.you,
               },
       })),
+  };
+}
+
+/** A managed profile's live connection binding at authn. */
+export interface ManagedProfileBinding {
+  readonly bindingVersion: CredentialVersion | null;
+  readonly spendScopeKey: SpendScopeKey | null;
+}
+
+/**
+ * The binding of the managed profile `harnessId:profileId`, read with its
+ * identity fields; null when the environment holds no live connection for
+ * it: no item, an item folded into another, or one a person signed out.
+ */
+export async function readManagedProfileBinding(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  harnessId: string,
+  profileId: string,
+): Promise<ManagedProfileBinding | null> {
+  const { items } = parseSettings(
+    await readSettingsWithCapabilities(
+      cloud,
+      `${environmentPath(environmentId)}/items?kind=managed_profile`,
+      [MANAGED_PROFILE_IDENTITY_CAPABILITY],
+    ),
+    authnItemsResponseSchema,
+  );
+  const key = `${harnessId}:${profileId}`;
+  const item = items.find(
+    (row) => row.kind === "managed_profile" && row.key === key,
+  );
+  if (item === undefined) return null;
+  const value = authnManagedProfileBindingSchema.safeParse(item.value);
+  if (!value.success)
+    throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
+  if (
+    value.data.mergedInto !== undefined ||
+    value.data.custodianSignOutCause !== undefined
+  )
+    return null;
+  return {
+    bindingVersion: value.data.bindingVersion ?? null,
+    spendScopeKey: value.data.spendScopeKey ?? null,
   };
 }
 
