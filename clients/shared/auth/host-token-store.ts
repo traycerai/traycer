@@ -46,8 +46,8 @@ interface HostTokenFileV1 {
 
 /**
  * The on-disk form, shared by every writer of one machine's file (the desktop
- * today, the CLI with T14). An entry that does not have the shape is dropped,
- * never repaired: the next open mints a fresh token for it.
+ * and the CLI). An entry that does not have the shape is dropped, never
+ * repaired: the next open mints a fresh token for it.
  */
 export function parseHostTokenFile(
   raw: unknown,

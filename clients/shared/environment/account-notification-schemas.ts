@@ -5,21 +5,19 @@ import { hostNotificationSeveritySchema } from "@traycer/protocol/host/notificat
 import { ITEM_OS_VALUES } from "./authn-environment-schemas";
 
 /**
- * The account's notification settings (environments plan, migration page): one
- * row per account in authn, behind `GET` / `PUT
- * /api/v3/user/notification-settings`. A person's sign-in reads and writes
- * this row with no computer online. Every host of the account reads it (on
- * its device credential, as it reads the environment) for the renderer
- * column of its matrix and its hooks, in place of that part of its own
- * `config/notification-configs.json` and `notification-hooks.json`.
+ * The account's notification settings: one row per account in authn, behind
+ * `GET` / `PUT /api/v3/user/notification-settings`. A person's sign-in reads and
+ * writes this row with no computer online. Every host of the account reads it
+ * (on its device credential) for the renderer column of its matrix and its
+ * hooks, in place of that part of its own `config/notification-configs.json`
+ * and `notification-hooks.json`.
  *
- * The email channel is not here: its SMTP settings, its password and its
- * matrix column stay on each host, never uploaded and never overwritten by
- * this row.
+ * The email channel is not here: its SMTP settings, its password and its matrix
+ * column stay on each host, never uploaded and never overwritten by this row.
  *
  * New writes contain only literal HTTP hooks. Command actions and the held
- * field remain readable for legacy rows; writers remove those entries
- * rather than uploading them again.
+ * field remain readable for legacy rows; writers remove those entries rather
+ * than uploading them again.
  */
 
 /** Per severity: whether that severity notifies on the renderer channel. */

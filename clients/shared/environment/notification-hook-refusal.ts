@@ -2,9 +2,7 @@ import type { NotificationHookRefusalCode } from "./account-notification-schemas
 import { EnvironmentCloudError } from "./environment-cloud";
 
 const PROVISIONAL_REFUSAL_COPY = {
-  // provisional: no board sentence; asked of the head
   hook_id_duplicate: "The settings request was refused.",
-  // provisional: no board sentence; asked of the head
   hook_held_invalid: "The settings request was refused.",
 } as const;
 

@@ -97,11 +97,8 @@ export type RevalidateOutcome =
 export interface StreamAuthRevalidator {
   revalidateForReconnect(): Promise<RevalidateOutcome>;
   /**
-   * Recovery from the host's own refusal. Every app revalidator implements
-   * it. Optional only because the CLI's revalidator
-   * (`traycer-cli/src/host/credential-provisioning.ts`) and its test's five
-   * bare calls predate it; it becomes required when the CLI moves to the
-   * host-only token.
+   * Recovery from the host's own refusal. Every app revalidator implements it;
+   * a revalidator for the sign-in token alone has no use for it.
    */
   readonly revalidateRefused?: (
     refusal: FatalErrorDetails,

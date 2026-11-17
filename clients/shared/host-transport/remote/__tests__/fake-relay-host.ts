@@ -83,24 +83,20 @@ interface FakeConnection {
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
   /**
-   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
-   * `seq` due next on each client stream. The production host closes the
-   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
-   * frame skips or repeats one, so the fake fails the same way - into
-   * `errors`, which the suites assert empty. Without it a client that
-   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
-   * due) passed every test here and killed every real session on the first
-   * unsubscribe.
+   * Mirror of the host's `RemoteClientSession.inboundSeqByStream`: the `seq` due
+   * next on each client stream. The host closes the whole session with
+   * `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked frame skips or repeats
+   * one, so the fake fails the same way, into `errors`, which the suites assert
+   * empty; without it a CLOSE sent after its stream's counter was retired would
+   * pass here and kill every real session.
    */
   readonly inboundSeqByStream: Map<number, number>;
   /**
-   * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
-   * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
-   * fake sends a FATAL for a stream, every later CLIENT frame for that id -
-   * a SUBSCRIBE included - is dropped at ingest, and the harness refuses to
-   * send server frames for it. Without this the fake accepted a re-subscribe
-   * of a tombstoned id that the production host silently ignores, and a
-   * recovery test passed against a client that was in fact permanently dead.
+   * Mirror of the host's `RemoteClientSession.terminalStreamIds`, per
+   * connection: once the fake sends a FATAL for a stream, every later CLIENT
+   * frame for that id, a SUBSCRIBE included, is dropped at ingest, and the
+   * harness refuses to send server frames for it, so a re-subscribe of a
+   * tombstoned id fails here as it does on the host.
    */
   readonly terminalStreamIds: Set<number>;
   /** Serializes async frame handling so mux ordering matches the wire. */
@@ -185,9 +181,12 @@ export class FakeRelayHost {
    * than a silently half-understood manifest.
    */
   sendOptionalRpc = true;
-  /** The `capabilities` array this fake host advertises in `openAck` (T5). */
+  /** The `capabilities` array this fake host advertises in `openAck`. */
   openAckCapabilities: string[] = [];
-  /** Every mux frame decoded off the wire from the CLIENT, pre-reassembly - lets a test read `compressed` per frame exactly as the host would (T5). */
+  /**
+   * Every mux frame decoded off the wire from the CLIENT, pre-reassembly, so a
+   * test reads `compressed` per frame as the host would.
+   */
   readonly clientFrames: MuxFrame[] = [];
   /** Every REQUEST frame the client sent: method + on-wire version + params. */
   readonly unaryRequests: {
@@ -383,10 +382,9 @@ export class FakeRelayHost {
 
   /**
    * Pushes a single logical STREAM_FRAME to the client through the REAL
-   * chunker (`OutboundChunkSource`, same as production `sendMux`) - a body
-   * over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically. Used
-   * by the C1 per-frame credit-accounting regression to drive a transfer
-   * long enough to cross `FINE_INBOUND_CREDIT_GRANT_BATCH` mid-flight.
+   * chunker (`OutboundChunkSource`, same as production `sendMux`): a body over
+   * `BULK_CHUNK_SIZE_BYTES` spans many wire frames, long enough to cross
+   * `FINE_INBOUND_CREDIT_GRANT_BATCH` mid-flight.
    */
   async sendStreamFrame(
     streamId: number,
@@ -488,23 +486,16 @@ export class FakeRelayHost {
 
   private enqueue(connection: FakeConnection, data: string | Uint8Array): void {
     // THE KEEPALIVE LANE DOES NOT QUEUE BEHIND THE MUX LANE. `handleClientSend`
-    // awaits a real WebCrypto decrypt for every data frame, and the queue is
-    // serial - so a ping sent while two frames are in flight is answered only
-    // after both decrypts resolve. Under `shouldAdvanceTime` that real latency
-    // becomes fake milliseconds, and on a loaded runner it can exceed the
-    // client's 12s awaiting-pong deadline: the socket fails 4004
-    // `relay-missed-pongs`, the session rebuilds mid-test, and whatever the
-    // test was actually pinning is lost to a teardown it never asked for.
-    // (Observed in CI on the D4 error-envelope control, never locally.) A real
-    // relay answers pings at its own edge, never behind the host's mux
-    // decryption, so this lane is the FAITHFUL order, not a convenience.
+    // awaits a real WebCrypto decrypt per data frame on a serial queue, so a
+    // ping queued behind frames can miss the client's 12s awaiting-pong
+    // deadline under `shouldAdvanceTime` on a loaded runner, failing the socket
+    // 4004 `relay-missed-pongs` mid-test. A real relay answers pings at its own
+    // edge, so this order is the faithful one.
     //
-    // A MICROTASK, never inline: `send` returning before its answer arrives is
-    // the one thing a real socket does guarantee, and the wake probe arms
-    // AFTER the forced ping is sent. Answering reentrantly inside `send`
-    // clears a probe that does not exist yet, leaves the armed one unanswered,
-    // and makes an answered arm look failed - which silently retires nothing
-    // and leaks the previous arm's policy into the next redial.
+    // A MICROTASK, never inline: a real socket's `send` returns before its
+    // answer, and the wake probe arms AFTER the forced ping is sent. Answering
+    // inside `send` would clear a probe that does not exist yet and leave the
+    // armed one unanswered.
     if (typeof data === "string" && data === "relay-ping") {
       queueMicrotask(() => {
         this.answerKeepalivePing(connection);
@@ -577,9 +568,9 @@ export class FakeRelayHost {
       });
       return;
     }
-    // H11 mirror, same placement and predicate as the production host's
-    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
-    // frames only (chunk sequences are ordered by the reassembler itself).
+    // Same placement and predicate as the host's `feedInbound`: after the
+    // tombstone drop, before `accept()`, unchunked frames only (chunk sequences
+    // are ordered by the reassembler itself).
     const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
     if (
       !frame.chunked &&

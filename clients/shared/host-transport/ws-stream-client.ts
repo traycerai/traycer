@@ -3216,7 +3216,7 @@ class StreamSession<
     // dial carries. `isCredentialRefusal` decides by the `doorReason`, or by
     // `UNAUTHORIZED` from a host that sends none. Every other fatalError (e.g.
     // `INCOMPATIBLE` or a stream domain code such as `CHAT_INVALID`), and the
-    // no-revalidator case, stays terminal exactly as before.
+    // no-revalidator case, stays terminal.
     if (
       isCredentialRefusal(details) &&
       !this.usesSessionGrant &&

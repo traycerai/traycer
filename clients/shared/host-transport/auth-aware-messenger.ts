@@ -114,7 +114,8 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * A revalidation that rotated the bearer is followed by one more `request`
  * attempt, whose failure propagates. If that attempt is refused again for a
  * recognised credential reason, the refusal is first handed to the
- * revalidator once more (see `reportRefusedAgain`). One that did not rotate rethrows the
+ * revalidator once more (see `reportRefusedAgain`). One that did not rotate
+ * rethrows the
  * original error; an abort during recovery rejects with
  * `HostRequestAbortedError`, and a superseded recovery with
  * `HostAuthoritySupersededError`.

@@ -801,7 +801,7 @@ export type RelayPassMintOutcome =
   | { readonly kind: "unreachable"; readonly provision: AttachGrantProvision }
   /**
    * authn refused the sign-in (401). The caller refreshes it once and mints
-   * again, as the local door does; `provision` is today's answer otherwise.
+   * again, as the local door does; otherwise `provision` is the answer.
    */
   | {
       readonly kind: "sign-in-rejected";
@@ -819,10 +819,10 @@ const MEMBERSHIP_REFUSED: AttachGrantProvision = {
 };
 
 /**
- * A remote open's one call: the relay pass and, beside it, the host-only
- * token (`session_grant_version: 2`). Never sends `purpose`. A revoked
- * computer (403) and an owner's computer with remote access off (403
- * `remote_access_off`) are answered as they are today.
+ * A remote open's one call: the relay pass and, beside it, the host-only token
+ * (`session_grant_version: 2`). Never sends `purpose`. A revoked computer (403)
+ * and an owner's computer with remote access off (403 `remote_access_off`) keep
+ * their own answers.
  */
 export async function mintRelayPassWithHostTokenViaHttp(
   authnBaseUrl: string,

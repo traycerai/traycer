@@ -204,9 +204,9 @@ type DefaultAccountSources = {
  * default would be the Terminal login: the provider's one enabled, signed-in
  * profile when the Terminal login shows as signed out
  * (`isProviderAmbientSignedOut`: its store is empty, its login expired or a
- * provider refused it), else `null` (the Terminal login, as before). Two
- * signed-in profiles, none, a signed-in Terminal login and an `unknown` or
- * `unavailable` Terminal verdict all stay `null`.
+ * provider refused it), else `null` (the Terminal login). Two signed-in
+ * profiles, none, a signed-in Terminal login and an `unknown` or `unavailable`
+ * Terminal verdict all stay `null`.
  */
 export function soleSignedInProfileForSignedOutTerminal(
   provider: DefaultAccountSources,

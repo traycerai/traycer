@@ -1,11 +1,9 @@
 /**
  * The environment list as the app reads it itself: traycer-server's directory
- * (the rows the shell's `listEnvironments` answers) joined with authn's reads
- * on the person's sign-in, by the protocol's one combining function
- * (`enrichConfigurationList`), as the host's `environment.list` joined them.
- *
- * Each authn read is parsed for the one field the join reads, and nothing
- * else: a host's `purgePending`, and the viewer's effective role.
+ * (the rows the shell's `listEnvironments` answers) joined with authn's reads on
+ * the person's sign-in by the protocol's `enrichConfigurationList`. Each authn
+ * read is parsed for the one field the join reads: a host's `purgePending`, and
+ * the viewer's effective role.
  */
 import { z } from "zod";
 import {

@@ -299,7 +299,7 @@ export function createRemoteHostTransport<
       };
       // authn refused the sign-in: refresh it once and mint again, the local
       // door's rule (`hostTokenRevalidator`). Refused again, or any recovery
-      // answer but `rotated`, keeps today's provision: the relay's backoff,
+      // answer but `rotated`, keeps the first provision: the relay's backoff,
       // with no state. An invalid sign-in is ended by the auth service's own
       // refresh, not here.
       const mintAfterSignInRefresh = async (

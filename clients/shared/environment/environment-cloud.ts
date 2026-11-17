@@ -89,8 +89,8 @@ const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * No failure's body is read past this many bytes: one over it counts by its
- * status alone. A success is read whole, as the host reads it today: an
- * environment's items list has no size of its own to cap.
+ * status alone. A success is read whole: an environment's items list has no
+ * size of its own to cap.
  */
 export const MAX_FAILURE_BODY_BYTES = 256 * 1024;
 

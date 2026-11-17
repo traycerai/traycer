@@ -1,8 +1,8 @@
 /**
  * `GET /api/environments` on traycer-server: every environment the signed-in
- * person belongs to, in the protocol's own list shape. The app joins it with
+ * person belongs to, in the protocol's own list shape, which the app joins with
  * authn's reads (the hosts' reports, the viewer's role) through
- * `enrichConfigurationList`, as the host's `environment.list` did.
+ * `enrichConfigurationList`.
  *
  * Reached only from desktop main or the phone's shell, which traycer-server
  * answers; the renderer asks through `IRunnerHost.listEnvironments`. The

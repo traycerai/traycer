@@ -48,10 +48,9 @@ export interface SignInRequestClient {
 
 /**
  * How the recording step ended. `recorded`: await again on the same handle
- * with `recordedOperationId`. Otherwise the sign-in ends; the reason carries
- * no sentence, and each screen shows its own: on a team's dialog `forbidden`
- * is 3a, `unavailable` 3b and the others its "did not finish", and every
- * other screen shows its own "did not finish" for every reason.
+ * with `recordedOperationId`. Otherwise the sign-in ends; the reason carries no
+ * sentence. A team's dialog has its own for `forbidden` and `unavailable` and
+ * its "did not finish" for the rest; every other screen says "did not finish".
  */
 export type SignInRecording =
   | { readonly kind: "recorded"; readonly recordedOperationId: string }

@@ -6,13 +6,11 @@ import {
 } from "@traycer/protocol/framework/door-reason";
 
 /**
- * Why the app cannot use a host right now, as the app's own state: the eight
- * messages of the team host identity plan ("The eight messages, end to end"),
- * plus the three refusals that sit beside them.
+ * Why the app cannot use a host right now, as the app's own state.
  *
  * Every recovery is keyed on the host's `doorReason`, never on its `code`, and
- * nothing a host says starts sign-in recovery. `session_revoked` is not a
- * state here: it takes the ordinary sign-out path.
+ * nothing a host says starts sign-in recovery. `session_revoked` is not a state
+ * here: it takes the ordinary sign-out path.
  */
 export type HostDoorStateKind =
   /** authn unreachable when opening, and no usable token on disk. */
