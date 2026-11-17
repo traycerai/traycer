@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -86,7 +92,11 @@ import "@/index.css";
  * `?music=1` turns the playback controls on with a sounding track, as the
  * Music settings do, and `window.__botChannelProbe` changes them live:
  * `setControls` turns the setting on or off, `setPaneWidth` sets the width of
- * the pane the channel is drawn in, in CSS pixels.
+ * the pane the channel is drawn in, in CSS pixels, `holdSnapshots` holds back
+ * the snapshots of one bot (`null`: of none, which delivers every one held;
+ * `?snapshot=held` holds every bot's), and `selectBot` changes the channel
+ * the surface is asked for.
+ * `?bots=2` lists a second bot, `SECOND_BOT_ID`, for `selectBot` to switch to.
  *
  * The drafts bridge the app mounts above every tab
  * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
@@ -97,18 +107,22 @@ const QUERY = new URLSearchParams(window.location.search);
 const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
 const DESKTOP_FORM = QUERY.get("form") === "desktop";
 const MUSIC = QUERY.get("music") === "1";
+const TWO_BOTS = QUERY.get("bots") === "2";
 
 declare global {
   interface Window {
     __botChannelProbe?: {
       readonly setControls: (on: boolean) => void;
       readonly setPaneWidth: (px: number) => void;
+      readonly holdSnapshots: (botId: string | null) => void;
+      readonly selectBot: (botId: string) => void;
     };
   }
 }
 
 const HOST_ID = "bot-compact-actions-menu-host";
 const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+const SECOND_BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W9Z";
 const ENVIRONMENT_ID = "env-personal";
 const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
 const AUTHN_BASE_URL = "http://127.0.0.1:9";
@@ -136,12 +150,40 @@ if (MUSIC) {
     soundingTrack: { ...playbackTrack("slow-tide", 60), title: "Slow Tide" },
   });
 }
+
+/** The channel the surface is asked for, which `selectBot` changes. */
+let selectedBotId = BOT_ID;
+const selectionListeners = new Set<() => void>();
+
+/**
+ * The bot whose snapshots are held back, `"all"` for every bot's, `null` for
+ * none; a held delivery waits in `heldDeliveries` until its bot is released.
+ */
+let heldBot: string | null = SNAPSHOT_HELD ? "all" : null;
+const heldDeliveries: Array<{ botId: string; deliver: () => void }> = [];
+
+function isHeld(botId: string): boolean {
+  return heldBot === "all" || heldBot === botId;
+}
+
 window.__botChannelProbe = {
   setControls: (on) => {
     useSettingsStore.setState({ soundtrackPlaybackControls: on });
   },
   setPaneWidth: (px) => {
     document.documentElement.style.setProperty("--pane-width", `${px}px`);
+  },
+  holdSnapshots: (botId) => {
+    heldBot = botId;
+    const waiting = heldDeliveries.splice(0);
+    for (const entry of waiting) {
+      if (isHeld(entry.botId)) heldDeliveries.push(entry);
+      else entry.deliver();
+    }
+  },
+  selectBot: (botId) => {
+    selectedBotId = botId;
+    for (const listener of selectionListeners) listener();
   },
 };
 
@@ -185,6 +227,20 @@ const BOT: BotRecord = {
   archivedAt: null,
 };
 
+const SECOND_BOT: BotRecord = {
+  ...BOT,
+  botId: SECOND_BOT_ID,
+  title: "Scribe",
+  appConversationChatId: `channel-${SECOND_BOT_ID}`,
+  trunkChatId: `trunk-${SECOND_BOT_ID}`,
+};
+
+const BOTS: readonly BotRecord[] = TWO_BOTS ? [BOT, SECOND_BOT] : [BOT];
+
+function botOf(botId: string): BotRecord {
+  return BOTS.find((bot) => bot.botId === botId) ?? BOT;
+}
+
 const SNAPSHOT: BotSubscribeServerFrame = {
   kind: "snapshot",
   bot: BOT,
@@ -218,15 +274,22 @@ const SNAPSHOT: BotSubscribeServerFrame = {
   hasBinaryPayload: false,
 };
 
-/** One `bot.subscribe` session that opens and delivers the snapshot. */
+/** One `bot.subscribe` session that opens and delivers its bot's snapshot. */
 class SnapshotSession implements IStreamSession {
   readonly close = (): void => undefined;
+
+  constructor(private readonly botId: string) {}
 
   sendClientFrame(): void {}
 
   onServerFrame(handler: ServerFrameHandler): void {
-    if (SNAPSHOT_HELD) return;
-    queueMicrotask(() => handler(SNAPSHOT, null));
+    const deliver = (): void =>
+      handler({ ...SNAPSHOT, bot: botOf(this.botId) }, null);
+    if (isHeld(this.botId)) {
+      heldDeliveries.push({ botId: this.botId, deliver });
+      return;
+    }
+    queueMicrotask(deliver);
   }
 
   onStatusChange(handler: StatusChangeHandler): void {
@@ -254,9 +317,16 @@ class SnapshotStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
 
   subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
-    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    return new SnapshotSession();
+    return new SnapshotSession(
+      typeof params === "object" &&
+        params !== null &&
+        "botId" in params &&
+        typeof params.botId === "string"
+        ? params.botId
+        : BOT_ID,
+    );
   }
 
   subscribeWithParamsProvider<
@@ -265,7 +335,7 @@ class SnapshotStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
     _method: Method,
     _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    return new SnapshotSession();
+    return new SnapshotSession(BOT_ID);
   }
 
   getMethodSchemaVersion(): SchemaVersion | null {
@@ -378,9 +448,9 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
-      "bot.list": () => ({ bots: [BOT], mainBotIds: null }),
-      "bot.open": () => ({
-        bot: BOT,
+      "bot.list": () => ({ bots: [...BOTS], mainBotIds: null }),
+      "bot.open": (request) => ({
+        bot: botOf(request.botId),
         outcome: { kind: "serve-here", claimed: null },
       }),
       "bot.conversation.list": (request) => ({
@@ -469,6 +539,13 @@ function SignedIn(props: { readonly children: ReactNode }): ReactElement {
 }
 
 function Page(): ReactElement {
+  const botId = useSyncExternalStore(
+    (listener) => {
+      selectionListeners.add(listener);
+      return () => selectionListeners.delete(listener);
+    },
+    () => selectedBotId,
+  );
   return (
     <ResolvedThemeContext.Provider
       value={{ resolvedTheme: "light", themePreset: "neutral" }}
@@ -482,7 +559,7 @@ function Page(): ReactElement {
                 <A2AOpenStoreProvider store={null}>
                   <ChatFindForceStoreProvider tileInstanceId="compact-actions-menu">
                     <div className="h-full w-[var(--pane-width,100%)]">
-                      <BotTabSurface botId={BOT_ID} hostId={HOST_ID} />
+                      <BotTabSurface botId={botId} hostId={HOST_ID} />
                     </div>
                   </ChatFindForceStoreProvider>
                 </A2AOpenStoreProvider>

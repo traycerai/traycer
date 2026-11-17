@@ -1,5 +1,5 @@
 import { useCallback, useMemo, type ReactNode } from "react";
-import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { ChevronLeft } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { Badge } from "@/components/ui/badge";
@@ -239,9 +239,7 @@ export function BotSessionView(props: {
           <Badge variant="muted" size="xs">
             Read-only
           </Badge>
-          <span className="ml-auto flex min-w-0 items-center">
-            <SoundtrackPlaybackControls placement="title-strip" />
-          </span>
+          <TracyPlaybackSlot />
         </header>
         <BotSessionContext value={access}>
           <TileFindScope

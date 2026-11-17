@@ -79,6 +79,7 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
 }));
 
 import { BotSessionView } from "@/components/bots/bot-session-view";
+import { TracyPlaybackScope } from "@/components/bots/tracy-playback-slot";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -346,21 +347,23 @@ function mountSession(input: {
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
           <BotIdentityContext value={IDENTITY}>
-            <BotSessionView
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              botTitle={botTitle}
-              session={{
-                chatId: input.chatId,
-                threadId: input.threadId,
-                landOn: input.landOn,
-              }}
-              threads={input.threads}
-              resolveMember={input.resolveMember}
-              onClose={opened.close}
-              onOpenChannel={opened.channel}
-              onOpenThread={opened.thread}
-            />
+            <TracyPlaybackScope>
+              <BotSessionView
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                botTitle={botTitle}
+                session={{
+                  chatId: input.chatId,
+                  threadId: input.threadId,
+                  landOn: input.landOn,
+                }}
+                threads={input.threads}
+                resolveMember={input.resolveMember}
+                onClose={opened.close}
+                onOpenChannel={opened.channel}
+                onOpenThread={opened.thread}
+              />
+            </TracyPlaybackScope>
           </BotIdentityContext>
         </TooltipProvider>
       </QueryClientProvider>
@@ -605,17 +608,16 @@ describe("a bot's trunk session, read whole", () => {
     expect(opened.close).toHaveBeenCalledOnce();
   });
 
-  it("draws the music controls inside the session's header", () => {
+  it("draws the tab's one music group inside the session's header, and no row of its own", () => {
     useSettingsStore.setState({
       soundtrackEnabled: true,
       soundtrackPlaybackControls: true,
     });
     mountTrunk(null);
 
-    const group = within(view()).getByRole("group", {
-      name: "Music playback",
-    });
-    expect(group.closest("header")?.parentElement).toBe(view());
+    const groups = screen.getAllByRole("group", { name: "Music playback" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.closest("header")?.parentElement).toBe(view());
   });
 
   it("finds text in the check-in turn's activity and in what the bot posted, as the agent chat's find does", async () => {

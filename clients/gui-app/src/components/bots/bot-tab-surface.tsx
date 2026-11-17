@@ -7,7 +7,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
+import {
+  TracyPlaybackScope,
+  TracyPlaybackSlot,
+} from "@/components/bots/tracy-playback-slot";
 import { createPortal } from "react-dom";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
@@ -151,7 +154,10 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
-import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
+import {
+  ExpressiveBotAvatar,
+  NamedBotAvatar,
+} from "@/components/bots/bot-avatars";
 import { botExpressionOn, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
@@ -191,6 +197,17 @@ type BotTabView = TracyChannelView;
  * connecting state, never nothing.
  */
 export function BotTabSurface(props: {
+  readonly botId: string | null;
+  readonly hostId: string;
+}): ReactNode {
+  return (
+    <TracyPlaybackScope>
+      <BotTabSurfaceBody botId={props.botId} hostId={props.hostId} />
+    </TracyPlaybackScope>
+  );
+}
+
+function BotTabSurfaceBody(props: {
   readonly botId: string | null;
   readonly hostId: string;
 }): ReactNode {
@@ -352,6 +369,7 @@ function TracySurfaceShell(props: {
                   botList.status === "error" || environments.status === "error"
                 }
                 onRetry={retryLists}
+                level2={level2}
               />
             </BotUnselectedLevel2Pane>
           ) : null}
@@ -563,41 +581,28 @@ function TracyUnselected(props: {
   readonly unavailable: ReadonlySet<string>;
   readonly listsFailed: boolean;
   readonly onRetry: () => void;
+  readonly level2: MobileLevel2Form | null;
 }): ReactNode {
   const { groups } = props;
   if (groups === null) {
     return props.listsFailed ? (
-      <TracyWithoutHeader>
-        <ErrorNotice
-          text="Couldn't load this channel."
-          onRetry={props.onRetry}
-          className="m-4"
-        />
-      </TracyWithoutHeader>
+      <ErrorNotice
+        text="Couldn't load this channel."
+        onRetry={props.onRetry}
+        className="m-4"
+      />
     ) : (
-      <BotTabConnecting />
+      <ChannelOpening botId={null} title={undefined} level2={props.level2}>
+        <BotTabConnecting />
+      </ChannelOpening>
     );
   }
   return defaultTracyChannelOf(groups, props.unavailable) === null ? (
-    <TracyWithoutHeader>
-      <TracyNoChannel />
-    </TracyWithoutHeader>
-  ) : null;
-}
-
-/**
- * A state the surface rests in with no channel, so no title row to hold the
- * playback controls: they keep a row of their own over it. A channel on its
- * way draws none, so the row never shows and leaves as the channel arrives.
- */
-function TracyWithoutHeader(props: {
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SoundtrackPlaybackControls placement="surface" />
-      {props.children}
-    </div>
+    <TracyNoChannel />
+  ) : (
+    <ChannelOpening botId={null} title={undefined} level2={props.level2}>
+      {null}
+    </ChannelOpening>
   );
 }
 
@@ -724,7 +729,16 @@ function TracyChannelPane(props: {
   }, [botId, landing]);
   const { route, botList, retry } = useChannelRoute(botId, hostId);
   if (threadsShown && route.kind !== "bot") return null;
-  if (route.kind === "connecting") return <BotTabConnecting />;
+  const opening = (content: ReactNode): ReactNode => (
+    <ChannelOpening
+      botId={botId}
+      title={botList.data?.bots.find((bot) => bot.botId === botId)?.title}
+      level2={level2}
+    >
+      {content}
+    </ChannelOpening>
+  );
+  if (route.kind === "connecting") return opening(<BotTabConnecting />);
   if (route.kind === "setup") {
     return (
       <TeamSetupChannel
@@ -737,12 +751,12 @@ function TracyChannelPane(props: {
     );
   }
   if (route.kind === "unresolved") {
-    return (
+    return opening(
       <ErrorNotice
         text="Couldn't load this channel."
         onRetry={retry}
         className="m-4"
-      />
+      />,
     );
   }
   return (
@@ -927,36 +941,46 @@ function BotTabBody(props: {
     return () => clearTimeout(timer);
   }, [openError, openPending, paneVisible, reopen]);
 
+  const opening = (content: ReactNode): ReactNode =>
+    threadsShown ? null : (
+      <ChannelOpening
+        botId={botId}
+        title={props.listedBots?.find((bot) => bot.botId === botId)?.title}
+        level2={props.level2}
+      >
+        {content}
+      </ChannelOpening>
+    );
   if (openState.kind === "failed") {
-    return threadsShown ? null : (
+    return opening(
       <ErrorNotice
         text={`Couldn't open this bot: ${openState.message}`}
         onRetry={reopen}
         className="m-4"
-      />
+      />,
     );
   }
   if (openState.kind === "reconnecting") {
-    return threadsShown ? null : (
+    return opening(
       <OpenReconnecting
         onRetry={reopen}
         pending={openPending}
         className="m-4"
-      />
+      />,
     );
   }
   const snapshot = subscription.snapshot;
   if (snapshot === null && subscription.error !== null) {
-    return threadsShown ? null : (
+    return opening(
       <ErrorNotice
         text={`Couldn't reach this bot: ${subscription.error}`}
         onRetry={resubscribe}
         className="m-4"
-      />
+      />,
     );
   }
   if (snapshot === null || openState.kind === "opening") {
-    return threadsShown ? null : <BotTabConnecting />;
+    return opening(<BotTabConnecting />);
   }
 
   return (
@@ -1889,6 +1913,51 @@ function environmentBotsOf(
 }
 
 /** The tab while anything about its host is unknown. */
+/**
+ * A channel before its own header exists, selected or still being chosen:
+ * the header's title row, with the bot's picture and listed name once both
+ * are known and the place its playback controls take, over what the surface
+ * shows meanwhile. The row is the one the open channel draws, so the
+ * controls sit where they will stay and nothing under them moves when the
+ * channel opens. Where the app's header carries the channel's title there is
+ * no row here to hold.
+ */
+function ChannelOpening(props: {
+  /** The channel being opened; `null` while the default one is being chosen. */
+  readonly botId: string | null;
+  /** The bot's listed name; `undefined` until the list names it. */
+  readonly title: string | undefined;
+  readonly level2: MobileLevel2Form | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { botId, title } = props;
+  if (props.level2 === "menu" || props.level2 === "bar") return props.children;
+  return (
+    <div className="flex size-full min-h-0 min-w-0 flex-col">
+      <header
+        data-testid="bot-channel-opening-header"
+        className="@container/title-strip flex min-h-19 shrink-0 items-center gap-2 px-4 pt-3 pb-9"
+      >
+        {botId === null || title === undefined ? (
+          <span
+            aria-hidden="true"
+            className="h-4 w-32 max-w-1/3 rounded-sm bg-foreground/10"
+          />
+        ) : (
+          <>
+            <NamedBotAvatar botId={botId} size="sm" />
+            <h1 className="min-w-0 truncate text-ui-md font-bold text-foreground">
+              {title}
+            </h1>
+          </>
+        )}
+        <TracyPlaybackSlot />
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col">{props.children}</div>
+    </div>
+  );
+}
+
 function BotTabConnecting(): ReactNode {
   return (
     <div
@@ -2058,9 +2127,7 @@ function BotChannelActions({
   );
   return titleTarget === null ? (
     <>
-      <span className="ml-auto flex min-w-0 items-center">
-        <SoundtrackPlaybackControls placement="title-strip" />
-      </span>
+      <TracyPlaybackSlot />
       {props.onOpenSearch === null ? null : (
         <TooltipWrapper
           label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}

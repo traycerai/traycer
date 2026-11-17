@@ -346,6 +346,10 @@ vi.mock("@/components/bots/bot-session-view", () => ({
       data-land-on={props.session.landOn?.messageId ?? "none"}
       data-visit={String(props.session.landOn?.visit ?? "none")}
     >
+      {/* The real session view holds the tab's playback slot in its header. */}
+      <header>
+        <TracyPlaybackSlot />
+      </header>
       <button
         type="button"
         data-testid="stub-session-back"
@@ -438,6 +442,8 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
@@ -2560,5 +2566,381 @@ describe("<BotTabSurface /> under the app header on a short viewport with the ke
 
     lowerNativeKeyboard();
     expect(screen.getByTestId("app-header").hidden).toBe(false);
+  });
+});
+
+describe("<BotTabSurface /> the one music group", () => {
+  const GROUP = { name: "Music playback" } as const;
+
+  /**
+   * Where the group is drawn. The channel's own header holds it, or a setup
+   * channel's, or the reserved title row a channel draws before its header
+   * exists, or a row of its own over the tab outside any `<header>`.
+   */
+  type Placement =
+    | "title row"
+    | "setup title row"
+    | "reserved title row"
+    | "row";
+  const HEADER_OF: Readonly<Record<Placement, string | null>> = {
+    "title row": "bot-channel-header",
+    "setup title row": "team-setup-header",
+    "reserved title row": "bot-channel-opening-header",
+    row: null,
+  };
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+  });
+  afterEach(() => {
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  });
+
+  /** The tab's only group, and the `<header>` it sits in, or `null` in a row of its own. */
+  function onlyGroup(): { group: HTMLElement; header: Element | null } {
+    // `getByRole` throws on a second group, as it does on none.
+    const group = screen.getByRole("group", GROUP);
+    return { group, header: group.closest("header") };
+  }
+
+  function placementOf(): Placement {
+    const testId = onlyGroup().header?.getAttribute("data-testid") ?? null;
+    const placement = (Object.keys(HEADER_OF) as Placement[]).find(
+      (key) => HEADER_OF[key] === testId,
+    );
+    if (placement === undefined) throw new Error(`group in ${testId}`);
+    return placement;
+  }
+
+  function expectPlacement(placement: Placement): void {
+    expect(placementOf()).toBe(placement);
+  }
+
+  interface PlacedState {
+    readonly state: string;
+    readonly script: () => void;
+    /** The channel the surface is asked for: none, the listed bot, or the team's unlisted main bot. */
+    readonly channel: string | null;
+    /** A test id that shows what the surface draws meanwhile. */
+    readonly shown: string;
+    readonly placement: Placement;
+  }
+
+  it.each<PlacedState>([
+    {
+      state: "the host's support is unknown",
+      script: () => {
+        mocks.state.support = null;
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "row",
+    },
+    {
+      state: "the host lacks bot.open",
+      script: () => {
+        mocks.state.support = false;
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-unavailable",
+      placement: "row",
+    },
+    {
+      state: "the account's drafts are not yet admitted",
+      script: () => {
+        useBotDraftsStore.setState({
+          owner: { userId: "user-outgoing" },
+          ownDraftsRead: false,
+        });
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "row",
+    },
+    {
+      state: "Threads shows in place of the channel",
+      script: () => {
+        useTracyPlaceStore.getState().setThreadsShown(true);
+      },
+      channel: BOT_ID,
+      shown: "stub-threads",
+      placement: "row",
+    },
+    {
+      state: "a team's main bot is being set up",
+      script: () => {
+        setUpNewTeam();
+        mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
+      },
+      channel: SETUP_BOT_ID,
+      shown: "team-setup-channel",
+      placement: "setup title row",
+    },
+    {
+      state: "the lists have not answered and no channel is selected",
+      script: () => {
+        mocks.state.listedBotIds = undefined;
+        useTracySurfaceStore.setState({ botId: null });
+      },
+      channel: null,
+      shown: "bot-tab-connecting",
+      placement: "reserved title row",
+    },
+    {
+      state: "the lists answered and the default channel is being chosen",
+      script: () => {
+        mocks.state.listedBotIds = [BOT_ID];
+        useTracySurfaceStore.setState({ botId: null });
+      },
+      channel: null,
+      shown: "bot-tab-content-pane",
+      placement: "reserved title row",
+    },
+    {
+      state: "the channel's lists have not answered",
+      script: () => {
+        mocks.state.listedBotIds = undefined;
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "reserved title row",
+    },
+    {
+      state: "the channel's bot.open has not answered",
+      script: () => {
+        mocks.state.openResult = null;
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "reserved title row",
+    },
+    {
+      state: "the channel's bot.open failed with no earlier answer",
+      script: () => {
+        mocks.state.openResult = { kind: "error", message: "the host is busy" };
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-error",
+      placement: "reserved title row",
+    },
+    {
+      state: "the channel's stream failed before a snapshot",
+      script: () => {
+        mocks.state.snapshot = null;
+        mocks.state.error = "stream closed";
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-error",
+      placement: "reserved title row",
+    },
+    {
+      state: "the channel's stream has no snapshot yet",
+      script: () => {
+        mocks.state.snapshot = null;
+      },
+      channel: BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "reserved title row",
+    },
+    {
+      state: "a team's setup read is pending",
+      script: setUpNewTeam,
+      channel: SETUP_BOT_ID,
+      shown: "bot-tab-connecting",
+      placement: "reserved title row",
+    },
+    {
+      state: "a team's setup read failed",
+      script: () => {
+        setUpNewTeam();
+        mocks.reads["env-new"] = "fails";
+      },
+      channel: SETUP_BOT_ID,
+      shown: "bot-tab-error",
+      placement: "reserved title row",
+    },
+    {
+      state: "Messages shows",
+      script: () => undefined,
+      channel: BOT_ID,
+      shown: "stub-channel",
+      placement: "title row",
+    },
+    {
+      state: "Activity shows",
+      script: () => useTracyPlaceStore.getState().setView(BOT_ID, "activity"),
+      channel: BOT_ID,
+      shown: "stub-activity",
+      placement: "title row",
+    },
+    {
+      state: "the channel is paused",
+      script: () => {
+        mocks.state.openResult = answer({
+          kind: "paused",
+          reason: "reachability-unknown",
+        });
+      },
+      channel: BOT_ID,
+      shown: "stub-channel",
+      placement: "title row",
+    },
+    {
+      state: "the stream failed after a snapshot",
+      script: () => {
+        mocks.state.error = "stream closed";
+      },
+      channel: BOT_ID,
+      shown: "stub-channel",
+      placement: "title row",
+    },
+  ])("draws it in the $placement while $state", (row) => {
+    row.script();
+    render(surfaceFor(row.channel));
+
+    expect(screen.getByTestId(row.shown)).toBeTruthy();
+    expectPlacement(row.placement);
+  });
+
+  it.each<readonly [string, () => void, string | null]>([
+    [
+      "no channel is selected",
+      () => {
+        mocks.state.listedBotIds = undefined;
+      },
+      null,
+    ],
+    ["a team's main bot is not listed", setUpNewTeam, SETUP_BOT_ID],
+  ])(
+    "draws a bar in the reserved title row, not a name, while %s",
+    (_state, script, channel) => {
+      script();
+      render(surfaceFor(channel));
+
+      expectPlacement("reserved title row");
+      const header = screen.getByTestId("bot-channel-opening-header");
+      expect(within(header).queryByRole("heading", { level: 1 })).toBeNull();
+    },
+  );
+
+  it("names the bot in the reserved title row once the list does", () => {
+    mocks.state.listTitles.set(BOT_ID, "Release Bot");
+    mocks.state.openResult = null;
+    render(surface());
+
+    expectPlacement("reserved title row");
+    const header = screen.getByTestId("bot-channel-opening-header");
+    expect(within(header).getByRole("heading", { level: 1 }).textContent).toBe(
+      "Release Bot",
+    );
+  });
+
+  it("draws it in the channel header with the settings open, and with a re-open failed over the held answer", async () => {
+    const user = userEvent.setup();
+    const view = render(surface());
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    expectPlacement("title row");
+
+    mocks.state.openResult = { kind: "error", message: "network down" };
+    mocks.state.paneVisible = false;
+    view.rerender(surface());
+    mocks.state.paneVisible = true;
+    view.rerender(surface());
+    expect(screen.getByTestId("bot-tab-error")).toBeTruthy();
+    expectPlacement("title row");
+  });
+
+  it("draws it in the session's header while a session shows, and in the channel's again on Back", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    expectPlacement("title row");
+
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(onlyGroup().header?.parentElement).toBe(
+      screen.getByTestId("stub-session"),
+    );
+
+    await user.click(screen.getByTestId("stub-session-back"));
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    expectPlacement("title row");
+  });
+
+  it("keeps one group, in the same node, as a channel goes from no channel through its opening to open, never in a row", () => {
+    mocks.state.listedBotIds = undefined;
+    useTracySurfaceStore.setState({ botId: null });
+    const view = render(surfaceFor(null));
+    const seen = [{ placement: placementOf(), group: onlyGroup().group }];
+
+    view.rerender(surfaceFor(BOT_ID));
+    seen.push({ placement: placementOf(), group: onlyGroup().group });
+
+    mocks.state.listedBotIds = [BOT_ID];
+    view.rerender(surfaceFor(BOT_ID));
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    seen.push({ placement: placementOf(), group: onlyGroup().group });
+
+    expect(seen.map((step) => step.placement)).toEqual([
+      "reserved title row",
+      "reserved title row",
+      "title row",
+    ]);
+    expect(new Set(seen.map((step) => step.group)).size).toBe(1);
+  });
+
+  it("is never zero or two while the open channel goes to Threads, a session and back", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    expectPlacement("title row");
+
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(screen.getByTestId("stub-threads")).toBeTruthy();
+    expectPlacement("row");
+    await user.click(screen.getByTestId("stub-threads-back"));
+    expect(screen.queryByTestId("stub-threads")).toBeNull();
+    expectPlacement("title row");
+
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(screen.getByTestId("stub-session")).toBeTruthy();
+    expect(onlyGroup().header?.parentElement).toBe(
+      screen.getByTestId("stub-session"),
+    );
+    await user.click(screen.getByTestId("stub-session-back"));
+    expectPlacement("title row");
+  });
+
+  it("keeps the same mounted group, with its play state, as it moves between the row and the header", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    const before = onlyGroup().group;
+    const pause = within(before).getByRole("button", { name: "Pause" });
+    await user.click(pause);
+    expect(within(before).getByRole("button", { name: "Play" })).toBeTruthy();
+
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expectPlacement("row");
+    expect(onlyGroup().group).toBe(before);
+
+    await user.click(screen.getByTestId("stub-threads-back"));
+    expectPlacement("title row");
+    expect(onlyGroup().group).toBe(before);
+    expect(within(before).getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+
+  it("puts the header's buttons before Search, and the row's before the tab's content", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    const search = screen.getByTestId("bot-channel-search-open");
+    const group = onlyGroup().group;
+    const follows = (a: Node, b: Node): boolean =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(group, search)).toBe(true);
+
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(follows(group, screen.getByTestId("stub-threads"))).toBe(true);
   });
 });
