@@ -52,8 +52,7 @@ function partName(part: string): string {
 }
 
 /**
- * A bot's icon, its colour, what it wears and its channel's background, in
- * its channel settings. Each part starts as the one the bot's id gives it.
+ * A bot's icon, its colour and what it wears, in its channel settings. Each part starts as the one the bot's id gives it.
  * Drawn where the tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
@@ -122,14 +121,6 @@ export function BotAppearanceSettings(props: {
         pending={saver.saving("accessory")}
         refusal={saver.refusal("accessory")}
         onChange={(accessory) => change({ accessory })}
-      />
-      <ColorSection
-        label="Background"
-        testId="bot-settings-background"
-        chosen={appearance.background}
-        pending={saver.saving("background")}
-        refusal={saver.refusal("background")}
-        onChange={(background) => change({ background })}
       />
     </>
   );
