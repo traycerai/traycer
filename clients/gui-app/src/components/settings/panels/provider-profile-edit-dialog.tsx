@@ -741,14 +741,24 @@ export function ProfileEditDialog(props: {
     props.onSelectedProfileIdChange,
     setSignInSettled,
   );
-  const offersSignIns = listOffersSignIns(
-    useProvidersList({ enabled: false, subscribed: false }).data,
-  );
-  const recordAccount = offersSignIns && props.profile.aliases !== undefined;
+  const providersList = useProvidersList({
+    enabled: false,
+    subscribed: false,
+  }).data;
+  const recordAccount =
+    listOffersSignIns(providersList) && props.profile.aliases !== undefined;
   const presence = props.profile.credentialHome?.environmentPresence;
-  const environmentName = usePickedTeamLabel(
+  const listedEnvironmentName = usePickedTeamLabel(
     presence?.scope === "environment" ? presence.environmentId : "",
   );
+  // A home that names no environment belongs to the one this computer serves,
+  // which the list names only when that is Personal.
+  const servedEnvironmentName =
+    providersList?.scope === "personal" ? "Personal" : null;
+  const environmentName =
+    presence?.scope === "environment"
+      ? listedEnvironmentName
+      : servedEnvironmentName;
   const localRemoveProfile = useRemoveProviderProfile();
   const recordRemoveProfile = useProfileRecordPersonAction(
     "remove",
