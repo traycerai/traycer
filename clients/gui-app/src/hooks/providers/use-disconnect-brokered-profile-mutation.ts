@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import {
   readHarnessConnectionKind,
@@ -9,6 +8,7 @@ import {
   SETTINGS_REFUSED_MESSAGE,
   type EnvironmentCloud,
 } from "@traycer-clients/shared/environment/environment-cloud";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { spendScopeKeysEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import type {
@@ -21,6 +21,7 @@ import {
 } from "@/hooks/environment/use-environment-cloud";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -111,6 +112,25 @@ function bindingChanged(): HostRpcError {
   });
 }
 
+/**
+ * This computer's binding, read live: it must be bound, at a sharing
+ * generation, to the row's environment, or nothing is sent.
+ */
+async function assertBoundTo(
+  client: HostClient<HostRpcRegistry>,
+  environmentId: string,
+): Promise<void> {
+  const binding = await client
+    .request("environment.host.read", {})
+    .catch(() => null);
+  if (
+    binding === null ||
+    binding.sharingGeneration === null ||
+    binding.environment.environmentId !== environmentId
+  )
+    throw bindingChanged();
+}
+
 /** One authn read of the sign-out, on the sign-in the operation began on. */
 function readOnSignIn<T>(
   cloud: EnvironmentCloud | null,
@@ -131,24 +151,22 @@ function readOnSignIn<T>(
  * Disconnects the row's family at authn on the person's own sign-in, at its
  * entry's binding version (the row's presence counter is this computer's).
  * Nothing changes unless this computer is bound to the row's environment
- * before and after each read, the entry holds the row's account (a setup
+ * before the first read and after each one, the entry holds the row's account (a setup
  * token only on a setup-token connection), and the disconnect answers. An
  * environment with no entry for the row is already disconnected.
  */
-export function useDisconnectBrokeredProfile(
-  boundEnvironmentId: string | null,
-): UseMutationResult<void, HostRpcError, BrokeredProfileConnection> {
+export function useDisconnectBrokeredProfile(): UseMutationResult<
+  void,
+  HostRpcError,
+  BrokeredProfileConnection
+> {
   const source = useEnvironmentCloud();
-  const bound = useRef(boundEnvironmentId);
-  useEffect(() => {
-    bound.current = boundEnvironmentId;
-  }, [boundEnvironmentId]);
+  const client = useHostClient();
   return useMutation<void, HostRpcError, BrokeredProfileConnection>({
     mutationFn: async (connection) => {
-      const assertBound = (): void => {
-        if (bound.current !== connection.environmentId) throw bindingChanged();
-      };
-      assertBound();
+      const assertBound = (): Promise<void> =>
+        assertBoundTo(client, connection.environmentId);
+      await assertBound();
       const cloud = source === null ? null : source();
       const harness = providerIdToGuiHarnessId(connection.providerId);
       const binding = await readOnSignIn(cloud, (signedIn) =>
@@ -159,7 +177,7 @@ export function useDisconnectBrokeredProfile(
           connection.environmentProfileId,
         ),
       );
-      assertBound();
+      await assertBound();
       if (binding === null) return;
       const match = rowAccountMatch(connection, binding);
       if (match === "other") throw bindingChanged();
@@ -172,7 +190,7 @@ export function useDisconnectBrokeredProfile(
             binding.entryProfileId,
           ),
         );
-        assertBound();
+        await assertBound();
         if (kind !== "setup_token") throw bindingChanged();
       }
       if (typeof binding.bindingVersion !== "number") throw refusedDisconnect();

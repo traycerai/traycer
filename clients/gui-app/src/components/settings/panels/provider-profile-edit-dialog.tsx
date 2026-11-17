@@ -6,7 +6,6 @@ import {
   useDisconnectBrokeredProfile,
 } from "@/hooks/providers/use-disconnect-brokered-profile-mutation";
 import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
-import { useProfileRecordEnvironmentId } from "@/hooks/providers/use-profile-record-environment-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -560,11 +559,7 @@ function ProfileSignOutAction(props: {
   const connection = props.recordAccount
     ? null
     : brokeredProfileConnection(props.providerId, props.profile);
-  const boundEnvironmentId = useProfileRecordEnvironmentId(
-    useHostClient(),
-    connection !== null,
-  );
-  const disconnect = useDisconnectBrokeredProfile(boundEnvironmentId);
+  const disconnect = useDisconnectBrokeredProfile();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(

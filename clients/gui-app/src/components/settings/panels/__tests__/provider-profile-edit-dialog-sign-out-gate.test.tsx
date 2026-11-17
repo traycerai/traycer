@@ -3,6 +3,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { SpendScopeKey } from "@traycer/protocol/host/provider-credential-home-schemas";
+import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ProfileRecordClient } from "@traycer-clients/shared/host-client/profile-record-actions";
 import type {
   EnvironmentCloud,
@@ -42,7 +43,9 @@ const fixture = vi.hoisted(() => ({
     | "cached-bound-error"
     | "empty",
   bindingRefetch: vi.fn(),
-  boundEnvironmentId: "bound-environment",
+  hostBinding: (): EnvironmentHostReadResponseV11 => {
+    throw new Error("no host binding answer");
+  },
   auth: {
     signOutProfileRecord: vi.fn<ProfileRecordClient["signOutProfileRecord"]>(),
     removeProfileRecord: vi.fn<ProfileRecordClient["removeProfileRecord"]>(),
@@ -120,7 +123,7 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
       return {
         kind: "binding",
         query: {
-          data: { environment: { environmentId: fixture.boundEnvironmentId } },
+          data: { environment: { environmentId: "bound-environment" } },
           isError: true,
           refetch: fixture.bindingRefetch,
         },
@@ -131,7 +134,7 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
       query: {
         data:
           fixture.bindingAnswer === "bound"
-            ? { environment: { environmentId: fixture.boundEnvironmentId } }
+            ? { environment: { environmentId: "bound-environment" } }
             : undefined,
         refetch: fixture.bindingRefetch,
       },
@@ -254,7 +257,27 @@ const CONNECTIONS_URL =
   "https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections";
 const CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${ENTRY_PROFILE_ID}`;
 const MEMBER_PROFILE_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
-const MEMBER_CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${MEMBER_PROFILE_ID}`;
+
+/** This computer's live binding as `environment.host.read` answers it. */
+function hostBinding(
+  environmentId: string,
+  sharingGeneration: number | null,
+): EnvironmentHostReadResponseV11 {
+  return {
+    hostId: "mock-local",
+    environment: {
+      environmentId,
+      ownerKind: "organization",
+      ownerId: "synthetic-team",
+      roomId: `room-${environmentId}`,
+      label: "Synthetic team",
+    },
+    explicit: true,
+    enrolledByUserId: null,
+    canUnbind: true,
+    sharingGeneration,
+  };
+}
 
 function json(status: number, body: unknown): EnvironmentTransportAnswer {
   return { status, text: JSON.stringify(body) };
@@ -379,24 +402,16 @@ function disconnectAnswer(
   return json(200, { disconnected: deleted });
 }
 
-function namesFamily(family: ModelledFamily, url: string): boolean {
-  return (
-    url === CONNECTION_URL || (family.member && url === MEMBER_CONNECTION_URL)
-  );
-}
-
 /**
  * authn's routes for one family, as the final tree serves them. The items GET
  * strips the binding fields and leaves a folded member out unless the reader
  * names `managed_profile_identity` (managed-profile-projection.ts:11-26). A
- * DELETE at any id of the family checks the entry's version: anything else is
- * 409 `binding-changed` (harness-binding-cas.ts:53-93). A match deletes every
+ * DELETE at the entry checks the entry's version: anything else is 409
+ * `binding-changed` (harness-binding-cas.ts:53-93). A match deletes every
  * connection row of the family, a pending reconnect included, re-puts each
  * item at a new version with `custodianSignOutCause`, kept while nothing
  * serves (harness-connections.ts:2700-2850, families.ts:559-638), and answers
- * whether a row was deleted. An id no family owns is 404
- * `harness_profile_unknown` (harness-connections.ts:2627-2648). The
- * connections list names the family by its entry id while it has a row, and a
+ * whether a row was deleted. The connections list names the family by its entry id while it has a row, and a
  * fresh entry otherwise (:826-880).
  */
 function modelAuthn(
@@ -407,13 +422,8 @@ function modelAuthn(
       return itemsAnswer(family, request);
     if (request.method === "GET" && request.url === CONNECTIONS_URL)
       return connectionsAnswer(family);
-    if (request.method === "DELETE" && namesFamily(family, request.url))
+    if (request.method === "DELETE" && request.url === CONNECTION_URL)
       return disconnectAnswer(family, request);
-    if (request.method === "DELETE")
-      return json(404, {
-        code: "harness_profile_unknown",
-        message: "the environment has no owning managed profile",
-      });
     return json(404, { code: "not_found" });
   };
 }
@@ -586,7 +596,6 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.authnAnswer = () => ({ status: 500, text: null });
     fixture.offersSignIns = false;
     fixture.bindingAnswer = "bound";
-    fixture.boundEnvironmentId = "bound-environment";
     fixture.bindingRefetch.mockReset();
     fixture.auth.signOutProfileRecord.mockReset().mockResolvedValue({
       kind: "ok",
@@ -854,7 +863,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
   describe("an unmapped brokered row", () => {
     beforeEach(() => {
       fixture.supportsSignOut = true;
-      fixture.boundEnvironmentId = "env-a";
+      fixture.hostBinding = () => hostBinding("env-a", 3);
       useAuthStore.setState({ status: "signed-in" });
     });
 
@@ -865,12 +874,19 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     function installOrderedSignOutClient() {
       const messenger = installSignOutClient();
       messenger.setHandlers({
+        "environment.host.read": () => fixture.hostBinding(),
         "providers.signOutProfile": () => {
           fixture.order.push("host signOutProfile");
           return { signedOut: true };
         },
       });
       return messenger;
+    }
+
+    function signOuts(messenger: MockHostMessenger<HostRpcRegistry>) {
+      return messenger.calls.filter(
+        (call) => call.method === "providers.signOutProfile",
+      );
     }
 
     function confirmSignOut(): void {
@@ -883,6 +899,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     function failingHostThenSucceeding() {
       const messenger = installOrderedSignOutClient();
       messenger.setHandlers({
+        "environment.host.read": () => fixture.hostBinding(),
         "providers.signOutProfile": () => {
           fixture.order.push("host signOutProfile");
           throw new HostRpcError({
@@ -950,7 +967,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         ),
       );
       expect(fixture.authnRequests).toEqual([ITEMS_READ, CONNECTIONS_READ]);
-      expect(messenger.calls).toEqual([]);
+      expect(signOuts(messenger)).toEqual([]);
       expect(fixture.openChanges).toEqual([]);
     });
 
@@ -969,7 +986,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         ),
       );
       expect(fixture.authnRequests).toEqual([ITEMS_READ]);
-      expect(messenger.calls).toEqual([]);
+      expect(signOuts(messenger)).toEqual([]);
       expect(fixture.openChanges).toEqual([]);
     });
 
@@ -988,7 +1005,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         expect(storedToastTitles()).toContain("Couldn't sign out."),
       );
       expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
-      expect(messenger.calls).toEqual([]);
+      expect(signOuts(messenger)).toEqual([]);
       expect(fixture.openChanges).toEqual([]);
     });
 
@@ -1055,8 +1072,51 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       ]);
     });
 
-    it("changes nothing when this computer is bound to another environment", async () => {
-      fixture.boundEnvironmentId = "bound-environment";
+    it.each([
+      [
+        "is not bound at a sharing generation",
+        () => hostBinding("env-a", null),
+      ],
+      [
+        "is bound to another environment",
+        () => hostBinding("bound-environment", 3),
+      ],
+      [
+        "does not answer its binding",
+        (): EnvironmentHostReadResponseV11 => {
+          throw new HostRpcError({
+            code: "RPC_ERROR",
+            message: "synthetic binding failure",
+            requestId: "req-binding-failure",
+            method: "environment.host.read",
+            fatalDetails: null,
+          });
+        },
+      ],
+    ])(
+      "changes nothing when this computer %s",
+      async (_state, binding) => {
+        fixture.hostBinding = binding;
+        fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
+        const messenger = installOrderedSignOutClient();
+        renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+        confirmSignOut();
+
+        await waitFor(() =>
+          expect(storedToastTitles()).toContain(
+            "This connection changed. Refresh and try again.",
+          ),
+        );
+        expect(fixture.authnRequests).toEqual([]);
+        expect(signOuts(messenger)).toEqual([]);
+        expect(fixture.openChanges).toEqual([]);
+      },
+    );
+
+    it("changes nothing when this computer's binding moves during the sign-out", async () => {
+      const answers = [hostBinding("env-a", 3), hostBinding("env-b", 4)];
+      fixture.hostBinding = () => answers.shift() ?? hostBinding("env-b", 4);
       fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
       const messenger = installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
@@ -1068,8 +1128,8 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
           "This connection changed. Refresh and try again.",
         ),
       );
-      expect(fixture.authnRequests).toEqual([]);
-      expect(messenger.calls).toEqual([]);
+      expect(fixture.authnRequests).toEqual([ITEMS_READ]);
+      expect(signOuts(messenger)).toEqual([]);
       expect(fixture.openChanges).toEqual([]);
     });
 
@@ -1113,7 +1173,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       );
       expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
       expect(family.connection).toBe("connected");
-      expect(messenger.calls).toEqual([]);
+      expect(signOuts(messenger)).toEqual([]);
       expect(fixture.openChanges).toEqual([]);
     });
 
@@ -1135,6 +1195,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       );
 
       messenger.setHandlers({
+        "environment.host.read": () => fixture.hostBinding(),
         "providers.signOutProfile": () => {
           fixture.order.push("host signOutProfile");
           return { signedOut: true };
