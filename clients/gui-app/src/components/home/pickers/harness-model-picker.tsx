@@ -79,6 +79,7 @@ import { useHarnessModelPickerState } from "@/components/home/pickers/harness-mo
 import {
   EMPTY_PREPARING_BY_HARNESS_ID,
   EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
+  railEntryBrowseOnly,
   railEntryDegraded,
   railHarnessDegraded,
   removedProfilesForHarness,
@@ -1221,8 +1222,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
       // remembered model/effort/tier, or landing on an embedding's own
       // model). A degraded / unavailable entry just browses the rail - the
-      // panel shows its reauth / setup CTA, no commit. Nor does a provider a
-      // team sandbox does not offer: the panel says so.
+      // panel shows its reauth / setup CTA, no commit. Nor does a provider
+      // whose Terminal login is signed out beside two or more signed-in
+      // profiles: the person picks one. Nor does a provider a team sandbox
+      // does not offer: the panel says so.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );
@@ -1230,6 +1233,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         entry !== undefined &&
         entry.harness.available &&
         !entry.degraded &&
+        !railEntryBrowseOnly(profilesByHarnessId.get(providerId) ?? []) &&
         !teamSandboxHarnessBlocked(
           entry.harness.sandboxCredentialMode,
           onTeamSandbox,

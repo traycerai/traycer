@@ -7,6 +7,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   isHarnessRowSignedOut,
+  signedOutTerminalBesideSignedInProfile,
   soleSignedInProfileFromRows,
 } from "@/lib/providers/provider-ambient-auth";
 import {
@@ -111,14 +112,18 @@ export function resolveActiveProfileForHarness(input: {
     (profile) => profileCommitId(profile) === browsedProfileId,
   );
   if (matchBrowsed !== undefined) return profileCommitId(matchBrowsed);
+  // Nothing committed for this provider and its Terminal login signed out:
+  // the one signed-in managed profile, as a new chat's default account.
+  if (selectedProfileId === null) {
+    const sole = soleSignedInProfileFromRows(profiles);
+    if (sole !== null) return sole;
+  }
   if (
     resolveProfilePin(profiles, removedProfiles, selectedProfileId).kind !==
     "unknown"
   ) {
     return selectedProfileId;
   }
-  const sole = soleSignedInProfileFromRows(profiles);
-  if (sole !== null) return sole;
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
@@ -380,9 +385,9 @@ export function railHarnessDegraded(
 
 /**
  * Whether a rail entry is dimmed: the Terminal login's signed-out verdict
- * (`railHarnessDegraded`), except for a provider whose tab lands on its one
- * signed-in managed profile (`soleSignedInProfileFromRows`), which can run
- * a turn and so is not dimmed for the Terminal login's sake.
+ * (`railHarnessDegraded`), except for a provider with any enabled, signed-in
+ * managed profile (`signedOutTerminalBesideSignedInProfile`), which can run a
+ * turn and so is not dimmed for the Terminal login's sake.
  */
 export function railEntryDegraded(
   harness: HarnessOption,
@@ -390,10 +395,25 @@ export function railEntryDegraded(
   profiles: ReadonlyArray<ProviderProfile>,
 ): boolean {
   if (!harness.enabled) return false;
-  if (soleSignedInProfileFromRows(profiles) !== null) {
+  if (signedOutTerminalBesideSignedInProfile(profiles)) {
     return !harness.available && harness.requiresApiKey;
   }
   return railHarnessDegraded(harness, degradedHarnessIds);
+}
+
+/**
+ * Whether a click on a lit tab only browses it: the Terminal login is signed
+ * out and two or more managed profiles are signed in, so nothing says which
+ * one to commit and the person picks. With exactly one, the click lands on it
+ * (`resolveActiveProfileForHarness`).
+ */
+export function railEntryBrowseOnly(
+  profiles: ReadonlyArray<ProviderProfile>,
+): boolean {
+  return (
+    signedOutTerminalBesideSignedInProfile(profiles) &&
+    soleSignedInProfileFromRows(profiles) === null
+  );
 }
 
 /**

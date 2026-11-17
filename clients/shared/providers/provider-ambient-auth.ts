@@ -217,6 +217,26 @@ export function soleSignedInProfileForSignedOutTerminal(
 }
 
 /**
+ * Whether the Terminal login shows as signed out (by its own row alone, as a
+ * harness catalog row carries no `providers.list` state) while at least one
+ * enabled managed profile is signed in: the provider can run a turn on that
+ * profile, so the Terminal login's verdict is not the provider's.
+ */
+export function signedOutTerminalBesideSignedInProfile(
+  profiles: DefaultAccountSources["profiles"],
+): boolean {
+  return (
+    isProviderAmbientSignedOut({ auth: { status: "unknown" }, profiles }) &&
+    profiles.some(
+      (profile) =>
+        profile.kind === "managed" &&
+        isProfileEnabled(profile) &&
+        profile.auth.status === "authenticated",
+    )
+  );
+}
+
+/**
  * {@link soleSignedInProfileForSignedOutTerminal} read from a provider's
  * profile rows alone, where only the Terminal row's own verdict is at hand
  * (a harness catalog row carries no `providers.list` state).

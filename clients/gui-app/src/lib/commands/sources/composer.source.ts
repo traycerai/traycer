@@ -32,7 +32,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   isHarnessRowSignedOut,
-  soleSignedInProfileFromRows,
+  signedOutTerminalBesideSignedInProfile,
 } from "@/lib/providers/provider-ambient-auth";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
@@ -362,7 +362,7 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
  * definitive-only verdict the rail reads, taken straight off the row being
  * listed. On a host below `agent.gui.listHarnesses@7.1` the field is absent,
  * the predicate is false for every row, and both subpages look exactly as
- * they do today. Only the exception to it, one signed-in managed profile
+ * they do today. Only the exception to it, any signed-in managed profile
  * (see {@link providerSignedOutInPalette}), reads `providers.list`.
  */
 function providerOfferableInPalette(provider: HarnessOption): boolean {
@@ -382,9 +382,10 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * beside a signed-in managed profile. The ambient verdict says nothing about
  * that managed profile, so leave the execution verdict to its send gate.
  *
- * The rail reads the identical signal (`railHarnessDegraded`) and reaches the
- * same conclusion by a different route: there it dims the row and leaves it
- * exactly where it is, because the rail is a fixed strip of ⌘-digit positions
+ * The rail reads the same signal (`railHarnessDegraded`) and the same
+ * exception: a provider with any enabled, signed-in managed profile beside the
+ * signed-out Terminal login is neither badged nor demoted here, nor dimmed
+ * there. Otherwise the rail dims the row and leaves it exactly where it is, because the rail is a fixed strip of ⌘-digit positions
  * a user learns. This is a searched list with no positional memory to break,
  * so it may additionally group the unusable rows last.
  */
@@ -392,11 +393,9 @@ function providerSignedOutInPalette(
   provider: HarnessOption,
   profiles: ReadonlyArray<ProviderProfile>,
 ): boolean {
-  // The one signed-in managed profile a new chat runs on while the Terminal
-  // login is signed out makes the provider runnable, as the rail reads it.
   return (
     isHarnessRowSignedOut(provider) &&
-    soleSignedInProfileFromRows(profiles) === null
+    !signedOutTerminalBesideSignedInProfile(profiles)
   );
 }
 
