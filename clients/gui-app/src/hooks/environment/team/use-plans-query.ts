@@ -38,37 +38,3 @@ export function useConfigurationPlansQuery(): UseQueryResult<
     },
   });
 }
-
-/** Opening Unlink fetches current consequences before confirmation can mount. */
-export function useConfigurationPlanUnlinkPreview(
-  profileId: string | null,
-  previewId: string | null,
-): UseQueryResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.plans.unlinkPreview">,
-  HostRpcError
-> {
-  const source = useConfigurationSource();
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const client = usePoolTierHostClient(useHostClient());
-  return useHostQuery({
-    cacheKeyIdentity: [viewerId, previewId],
-    client,
-    method: "environment.plans.unlinkPreview",
-    params: {
-      environmentId: source.kind === "pool" ? source.environmentId : "",
-      profileId: profileId ?? "",
-    },
-    preflight: cloudVerdictPreflight("environment.plans.unlinkPreview"),
-    options: {
-      enabled:
-        source.kind === "pool" &&
-        authorized &&
-        viewerId.length > 0 &&
-        profileId !== null,
-      staleTime: 0,
-    },
-  });
-}

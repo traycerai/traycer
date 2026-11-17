@@ -916,9 +916,7 @@ Providers, on cloud-backed Personal or a team, lists every provider in the
 rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
 labelled **Provider**. The header does not link to Secrets, and the pane has
 no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
-**Pack version** when the provider has pack ids. Plans is one **Linked plan**
-picker, plus **Link a plan** and **Unlink** when the viewer can administer, and
-**No plans linked.** when none are. Profiles is one **Profile** picker under
+**Pack version** when the provider has pack ids. Profiles is one **Profile** picker under
 **Profiles**; the selected profile's account name stays under it, and Use is a
 switch when the person can edit, otherwise On or Off as text. The executable
 path and version stay inside the rate-limit card. A rail subtitle reads **key**

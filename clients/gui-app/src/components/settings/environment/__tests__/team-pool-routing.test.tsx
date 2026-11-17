@@ -5,7 +5,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,7 +14,6 @@ import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import { PageChip } from "@/components/settings/personal/page-chip";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
-import { TeamPlans } from "@/components/settings/environment/team-plans";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -164,58 +162,6 @@ describe("team pages on a build with a server pool", () => {
       expect(hostIdsOf(harness, "environment.host.list")).not.toHaveLength(0);
     });
     expect(new Set(hostIdsOf(harness, "environment.host.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-  });
-
-  it("invalidates the pool's environment list after an unlink the pool carries", async () => {
-    const harness = mountTeamPageOnPoolBuild(poolSource("admin"), {
-      "environment.plans.list": () => ({
-        plans: [
-          {
-            profileId: "prof-1",
-            harness: "claude",
-            status: "linked" as const,
-            linkedBy: { name: "Ada", you: false },
-          },
-        ],
-      }),
-      "environment.list": () => environmentList,
-      "environment.plans.unlinkPreview": () => ({
-        activeTurns: 0,
-        localHostId: null,
-        keepsWorking: [],
-      }),
-      "environment.plans.unlink": () => ({ outcome: "unlinked" }),
-    });
-    removeSurfaceHost();
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
-      wrapper: harness.Wrapper,
-    });
-
-    const card = await screen.findByRole("region", { name: "Plans" });
-    await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
-    });
-    const listReadsBefore = hostIdsOf(harness, "environment.list").length;
-    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Unlink" }),
-    );
-
-    await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list").length).toBeGreaterThan(
-        listReadsBefore,
-      );
-    });
-    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([
-      POOL_HOST_ID,
-    ]);
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-    expect(new Set(hostIdsOf(harness, "environment.plans.list"))).toEqual(
       new Set([POOL_HOST_ID]),
     );
   });

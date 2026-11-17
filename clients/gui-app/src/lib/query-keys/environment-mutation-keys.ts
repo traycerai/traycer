@@ -61,9 +61,7 @@ export const environmentMutationKeys = {
   invitationsAccept: () => ["environment.invitations.accept"] as const,
   reviewHeldApply: () => ["environment.review.heldApply"] as const,
   reviewRecord: () => ["environment.review.record"] as const,
-  plansUnlink: () => ["environment.plans.unlink"] as const,
-  // `providers.link@1.1` carries a team's `environmentId`: a team's Plans
-  // card links a plan into that configuration.
+  // `providers.link@1.1` carries a team's `environmentId`.
   providersLink: () => ["providers.link"] as const,
   providersLinkComplete: () => ["providers.linkComplete"] as const,
   configurationGuideSet: () => ["environment.configuration.guide.set"] as const,
