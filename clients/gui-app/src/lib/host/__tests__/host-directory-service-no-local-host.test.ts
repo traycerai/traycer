@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  RemoteHostFetcher,
+  RemoteHostFetchOutcome,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostDirectoryService,
   type HostDirectoryServiceOptions,
@@ -333,8 +336,9 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
 
 /**
  * The window narrator reads `hasConcludedDiscovery()` against the selection
- * authority's fleet, so a shell with no local host must not announce a
- * listing that names hosts until the fleet refresh has settled.
+ * authority's fleet, through `useSyncExternalStore`, so on any render and not
+ * only on an emit. A shell with no local host must not conclude on a listing
+ * that names hosts until the fleet refresh it triggers has settled.
  */
 describe("HostDirectoryService - announcing a concluded listing against the fleet refresh", () => {
   const listedHost: HostDirectoryEntry = {
@@ -366,29 +370,77 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
     return observed;
   }
 
-  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
-    const host = makeHost(false, null);
-    let resolveFleet: () => void = () => undefined;
-    const fleetRefresh = vi.spyOn(host, "refreshHostFleet").mockImplementation(
+  function heldFleetRefresh(host: MockRunnerHost): {
+    readonly called: () => boolean;
+    readonly release: () => void;
+  } {
+    let release: () => void = () => undefined;
+    const spy = vi.spyOn(host, "refreshHostFleet").mockImplementation(
       () =>
         new Promise<void>((resolve) => {
-          resolveFleet = resolve;
+          release = resolve;
         }),
     );
+    return {
+      called: () => spy.mock.calls.length > 0,
+      release: () => {
+        release();
+      },
+    };
+  }
+
+  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
     const directory = await startedDirectory(host);
     const observed = recordConcluded(directory);
 
     const refreshed = directory.refresh();
     await vi.waitFor(() => {
-      expect(fleetRefresh).toHaveBeenCalled();
+      expect(fleet.called()).toBe(true);
     });
 
     expect(observed).not.toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(false);
 
-    resolveFleet();
+    fleet.release();
     await refreshed;
 
     expect(observed).toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("a newer credential's sign-out during the held fleet refresh keeps discovery unconcluded", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    let generation = 0;
+    const outcomes: RemoteHostFetchOutcome[] = [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+    ];
+    const directory = makeDirectory({
+      authContextId: () => "user-1",
+      credentialGeneration: () => generation,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: () => {
+        const next = outcomes.shift();
+        if (next === undefined) throw new Error("unexpected registry fetch");
+        return Promise.resolve(next);
+      },
+    });
+    await directory.startSeeded();
+
+    const held = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.called()).toBe(true);
+    });
+    generation = 1;
+    await directory.refresh();
+    fleet.release();
+    await held;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
   });
 
   it("a no-local-host shell still announces when the fleet refresh rejects", async () => {
