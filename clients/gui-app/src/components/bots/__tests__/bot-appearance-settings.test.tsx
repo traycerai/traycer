@@ -354,6 +354,15 @@ const EYEWEAR_NAMES: readonly string[] = [
   "Visor",
 ];
 
+/** A section's "Use the default" button, found through the section's own name. */
+function defaultIn(
+  section: "Icon" | "Colour" | "Eyewear" | "Accessory",
+): HTMLButtonElement {
+  return within(
+    screen.getByRole("region", { name: section }),
+  ).getByRole<HTMLButtonElement>("button", { name: "Use the default" });
+}
+
 /** The choice a section shows pressed. */
 function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
   const [pressed, ...rest] = within(
@@ -396,7 +405,9 @@ describe("<BotAppearanceSettings />", () => {
     expect(
       document.querySelector('[data-testid^="bot-settings-background"]'),
     ).toBeNull();
-    expect(screen.getAllByText("Use the default")).toHaveLength(4);
+    for (const section of ["Icon", "Colour", "Eyewear", "Accessory"] as const) {
+      expect(defaultIn(section)).toBeTruthy();
+    }
   });
 
   it("is absent when the host does not support bot.updateAppearance", () => {
@@ -520,22 +531,10 @@ describe("<BotAppearanceSettings />", () => {
   it("offers Use the default only where a choice stands", () => {
     mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
 
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
-        .disabled,
-    ).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-colour-default")
-        .disabled,
-    ).toBe(false);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-eyewear-default")
-        .disabled,
-    ).toBe(false);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-accessory-default")
-        .disabled,
-    ).toBe(true);
+    expect(defaultIn("Icon").disabled).toBe(true);
+    expect(defaultIn("Colour").disabled).toBe(false);
+    expect(defaultIn("Eyewear").disabled).toBe(false);
+    expect(defaultIn("Accessory").disabled).toBe(true);
   });
 
   it("offers no upload: neither a button nor a file input", () => {

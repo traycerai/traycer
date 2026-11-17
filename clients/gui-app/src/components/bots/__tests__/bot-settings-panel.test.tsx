@@ -678,7 +678,9 @@ describe("<BotChannelSettingsPanel /> appearance", () => {
       ["bot-settings-eyewear", "Eyewear"],
       ["bot-settings-accessory", "Accessory"],
     ] as const) {
-      expect(within(screen.getByTestId(testId)).getByText(label)).toBeTruthy();
+      expect(screen.getByRole("region", { name: label })).toBe(
+        screen.getByTestId(testId),
+      );
     }
     expect(screen.queryByText("Background")).toBeNull();
     expect(mocks.supportQueries).toContainEqual({
