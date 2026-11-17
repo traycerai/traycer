@@ -567,18 +567,38 @@ function TracyUnselected(props: {
   const { groups } = props;
   if (groups === null) {
     return props.listsFailed ? (
-      <ErrorNotice
-        text="Couldn't load this channel."
-        onRetry={props.onRetry}
-        className="m-4"
-      />
+      <TracyWithoutHeader>
+        <ErrorNotice
+          text="Couldn't load this channel."
+          onRetry={props.onRetry}
+          className="m-4"
+        />
+      </TracyWithoutHeader>
     ) : (
       <BotTabConnecting />
     );
   }
   return defaultTracyChannelOf(groups, props.unavailable) === null ? (
-    <TracyNoChannel />
+    <TracyWithoutHeader>
+      <TracyNoChannel />
+    </TracyWithoutHeader>
   ) : null;
+}
+
+/**
+ * A state the surface rests in with no channel, so no title row to hold the
+ * playback controls: they keep a row of their own over it. A channel on its
+ * way draws none, so the row never shows and leaves as the channel arrives.
+ */
+function TracyWithoutHeader(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <SoundtrackPlaybackControls placement="surface" />
+      {props.children}
+    </div>
+  );
 }
 
 /** The surface with no channel: there is no bot to show yet. */

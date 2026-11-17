@@ -2482,12 +2482,51 @@ describe("<BotTabSurface /> beside the bots column under the app header", () => 
     render(surfaceUnderHeader(BOT_ID));
 
     const group = screen.getByRole("group", { name: "Music playback" });
+    expect(
+      screen.getAllByRole("group", { name: "Music playback" }),
+    ).toHaveLength(1);
     const search = screen.getByTestId("bot-channel-search-open");
     const row = group.closest(".\\@container\\/title-strip");
     expect(row).not.toBeNull();
     expect(row?.contains(search)).toBe(true);
     expect(
       group.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps one row for the music controls over the empty state when there are no bots, outside any channel header", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+    mocks.state.listedBotIds = [];
+    render(surfaceUnderHeader(null));
+
+    const groups = screen.getAllByRole("group", { name: "Music playback" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.closest('[data-testid="bot-channel-header"]')).toBeNull();
+    expect(
+      groups[0]?.compareDocumentPosition(
+        screen.getByTestId("bot-tab-no-channel"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps one row for the music controls over the failure notice when the lists could not be read, outside any channel header", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+    mocks.state.listedBotIds = undefined;
+    mocks.state.listFailed = true;
+    render(surfaceUnderHeader(null));
+
+    const groups = screen.getAllByRole("group", { name: "Music playback" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.closest('[data-testid="bot-channel-header"]')).toBeNull();
+    expect(
+      groups[0]?.compareDocumentPosition(screen.getByTestId("bot-tab-error")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 });
