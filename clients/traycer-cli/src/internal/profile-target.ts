@@ -1,8 +1,8 @@
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import {
   PROVIDER_DISPLAY_NAMES,
-  type ProviderCliState,
   type ProviderId,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   GUI_HARNESS_BY_PROVIDER_ID,
@@ -27,13 +27,11 @@ import {
  * next major opens, where the negotiated downgrade serves this read fine.
  * The commands that change anything name their own floors.
  */
-export async function readProviderStates(): Promise<
-  readonly ProviderCliState[]
-> {
+export async function readProviderInventory(): Promise<ProvidersListResponse> {
   const response = await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
   );
-  return response.providers;
+  return response;
 }
 
 /**

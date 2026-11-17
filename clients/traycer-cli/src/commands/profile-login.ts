@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  SIGNED_IN_RECEIVING_LINE,
+  usesEnvironmentSignIn,
+} from "../../../shared/providers/environment-profile-sign-in";
+import { runEnvironmentProfileLogin } from "./profile-environment-login";
 import { createInterface } from "node:readline";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
@@ -15,6 +20,7 @@ import { openInBrowser } from "../auth/login-flow";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
+  readLocalHostMethodVersion,
   toAgentCliError,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -24,8 +30,10 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
-  readProviderStates,
+  readProviderInventory,
 } from "../internal/profile-target";
+import { httpUrlOf } from "../internal/profile-login-url";
+import { nameNewProfile } from "../internal/profile-login-name";
 import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -170,7 +178,7 @@ const START_LOGIN_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
-  reauthenticate: "always",
+  reauthenticate: "before-request",
   idempotencyKey: null,
 };
 const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
@@ -197,7 +205,8 @@ const KEEPALIVE_INTERVAL_MS = 60_000;
 
 const INTERRUPTED_EXIT_CODE = 130;
 
-type LoginOutcome =
+export type LoginOutcome =
+  | { readonly status: "signed-in-pending" }
   | {
       readonly status: "signed-in";
       readonly profile: ProfileListRow | null;
@@ -243,12 +252,41 @@ export function buildProfileLoginCommand(
         exitCode: 1,
       });
     }
-    const outcome = await runLogin(ctx, io, providerId, target, state);
+    const supportsEnvironmentSignIn =
+      (target.create !== null || target.profileId !== null) &&
+      usesEnvironmentSignIn(
+        providerId,
+        await readLocalHostMethodVersion("providers.link"),
+      ) &&
+      usesEnvironmentSignIn(
+        providerId,
+        await readLocalHostMethodVersion("providers.linkComplete"),
+      ) &&
+      (await readLocalHostMethodVersion("environment.status")) !== null &&
+      (await readLocalHostMethodVersion("environment.host.read")) !== null;
+    const environmentSignIn =
+      supportsEnvironmentSignIn &&
+      (
+        await toAgentCliError(
+          callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH),
+        )
+      ).principal !== null;
+    if (
+      environmentSignIn &&
+      providerId === "claude-code" &&
+      !io.stdinIsTerminal()
+    )
+      throw notInteractive();
+    const outcome = environmentSignIn
+      ? await toAgentCliError(
+          runEnvironmentProfileLogin(ctx, io, providerId, target, state),
+        )
+      : await runLogin(ctx, io, providerId, target, state);
     return resultOf(providerId, outcome);
   };
 }
 
-interface ResolvedTarget {
+export interface ResolvedTarget {
   readonly create: { readonly label: string | null } | null;
   /** The existing row to sign in; null for a create and for ambient. */
   readonly profileId: string | null;
@@ -311,9 +349,16 @@ function notInteractive(): CliError {
 async function readProviderState(
   providerId: ProviderId,
 ): Promise<ProviderCliState> {
-  const state = (await readProviderStates()).find(
-    (p) => p.providerId === providerId,
-  );
+  const inventory = await readProviderInventory();
+  if (inventory.credentialsManagedInAccount === true)
+    throw cliError({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: sandboxes don't take sign-ins. Sign in on a computer first.",
+      details: null,
+      exitCode: 1,
+    });
+  const state = inventory.providers.find((p) => p.providerId === providerId);
   if (state === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.NOT_FOUND,
@@ -570,22 +615,6 @@ function declares(marker: object | null | undefined): boolean {
   return marker !== null && marker !== undefined;
 }
 
-/**
- * The http(s) URL `value` parses to, or null. The parsed form is what gets
- * both printed and opened: the parser drops tabs and line breaks, so the raw
- * string could print as one link and open as another.
- */
-function httpUrlOf(value: string): string | null {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:"
-      ? url.href
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function announce(
   ctx: CommandContext,
   io: ProfileLoginIo,
@@ -780,41 +809,6 @@ function failedOutcome(result: AwaitLoginResult): LoginOutcome {
     : { status: "not-completed" };
 }
 
-/**
- * A profile created without `--label` takes the account's email prefix, the
- * GUI's default. Best effort: the profile is signed in either way, and
- * `traycer profile rename` is there if this did not land.
- */
-async function nameNewProfile(
-  providerId: ProviderId,
-  profile: ProfileListRow,
-  requestedLabel: string | null,
-): Promise<ProfileListRow> {
-  if (requestedLabel !== null) return profile;
-  const label = (profile.email?.split("@")[0] ?? "").trim().slice(0, 64);
-  if (label.length === 0 || label === profile.label) return profile;
-  try {
-    await callHostRpcWithDispatch(
-      "providers.setEnabled",
-      {
-        providerId,
-        enabled: true,
-        profileAction: { type: "rename", profileId: profile.profileId, label },
-      },
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "providers.setEnabled",
-          version: { major: 2, minor: 1 },
-        },
-      },
-    );
-    return { ...profile, label };
-  } catch {
-    return profile;
-  }
-}
-
 function describeRow(row: ProfileListRow): string {
   return `${printable(row.profileId)} "${printable(row.label)}"`;
 }
@@ -826,6 +820,8 @@ function resultOf(
   const provider = describeProvider(providerId);
   const data = { providerId, ...outcome };
   switch (outcome.status) {
+    case "signed-in-pending":
+      return { data, human: SIGNED_IN_RECEIVING_LINE, exitCode: 0 };
     case "signed-in":
       return {
         data,

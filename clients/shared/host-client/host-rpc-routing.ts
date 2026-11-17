@@ -725,6 +725,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.installPackVersion": "target-host",
   "providers.link": "target-host",
   "providers.linkComplete": "target-host",
+  "providers.linkCancel": "target-host",
   "providers.list": "target-host",
   "providers.listModelProviders": "target-host",
   "providers.mcpAuth": "target-host",

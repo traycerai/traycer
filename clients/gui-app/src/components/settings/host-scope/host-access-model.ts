@@ -194,10 +194,8 @@ export function terminalAccountSentence(hostName: string | null): string {
     : `${hostName}'s own sign-in, which stays on ${hostName}. Sign in on Providers to use one everywhere.`;
 }
 
-/** A team host's Terminal account line: only an admin links a team's plan. */
-export function teamTerminalAccountSentence(teamName: string): string {
-  return `This host's own sign-in, which stays on this host. An admin can link a plan on ${teamName}'s Providers to use one everywhere.`;
-}
+export const TEAM_TERMINAL_ACCOUNT_SENTENCE =
+  "This host's own sign-in, which stays on this host. Sign in on Providers to use one everywhere.";
 
 /** A kept value's name: the variable, or `<NAME> (<Provider>)` for an override. */
 export function localOverrideLabel(override: LocalOverride): string {

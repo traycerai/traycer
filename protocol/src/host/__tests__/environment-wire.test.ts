@@ -32,6 +32,10 @@ import {
   environmentReviewUpgradeV11ToV12,
   environmentReviewV11,
   environmentReviewV12,
+  providersLinkCompleteUpgradeV11ToV12,
+  providersLinkCompleteV12,
+  providersLinkUpgradeV11ToV12,
+  providersLinkV12,
 } from "@traycer/protocol/host/environment-contracts";
 import * as env from "@traycer/protocol/host/environment-schemas";
 import { EXECUTABLE_WRITE_GRANT_MAX_LENGTH } from "@traycer/protocol/host/executable-write-grant";
@@ -64,7 +68,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * The wire of the environment family: the 26 environment methods, the
+ * The wire of the environment family: the 28 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
@@ -89,12 +93,12 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.review",
   "environment.status",
   "environment.secrets.list",
+  "providers.link",
+  "providers.linkComplete",
 ]);
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
-  "providers.link",
-  "providers.linkComplete",
   "environment.secrets.create",
   "environment.secrets.verify",
   "environment.secrets.replaceValue",
@@ -208,8 +212,8 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 
 describe("new methods are off every released floor", () => {
   it("registers exactly 27 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(27);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(27);
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
@@ -252,6 +256,30 @@ describe("new methods are off every released floor", () => {
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
       kind: "unsupported",
     });
+  });
+});
+
+describe("providers.linkCancel@1.0 wire contract", () => {
+  it("registers the idempotent cancel request at @1.0 with no upgrade path", () => {
+    const registry = hostRpcRegistry["providers.linkCancel"];
+    expect(registry.degrade).toEqual({ kind: "unsupported" });
+    expect(registry[1].latestMinor).toBe(0);
+    expect(Object.keys(registry[1].versions)).toEqual(["0"]);
+    const contract = registry[1].versions[0].contract;
+    const request = {
+      linkId: "link-1",
+      environmentId: "env_team_1",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      contract.requestSchema.parse({
+        linkId: "link-2",
+        environmentId: null,
+      }),
+    ).toEqual({ linkId: "link-2", environmentId: null });
+    expect(contract.responseSchema.parse({})).toEqual({});
+    expect(registry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
+    expect(registry[1].downgradePathsFromLatest).toEqual({});
   });
 });
 
@@ -1723,6 +1751,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
 
 const ONE_ZERO = { major: 1, minor: 0 } as const;
 const ONE_ONE = { major: 1, minor: 1 } as const;
+const ONE_TWO = { major: 1, minor: 2 } as const;
 
 const STATUS_V10: env.EnvironmentStatusResponse = {
   principal: { kind: "team", teamName: "acme" },
@@ -2290,6 +2319,160 @@ describe("environment.secrets.* @1.1 requests gain environmentId: null through t
         removed: [{ ...removed, name: "" }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("providers.link and linkComplete@1.2 profile wire compatibility", () => {
+  const linkRegistry = hostRpcRegistry["providers.link"];
+  const completeRegistry = hostRpcRegistry["providers.linkComplete"];
+
+  it("registers both @1.2 contracts and their @1.1 upgrade paths", () => {
+    expect(linkRegistry[1].latestMinor).toBe(2);
+    expect(linkRegistry[1].versions[2].contract).toBe(providersLinkV12);
+    expect(linkRegistry[1].versions[2].upgradeFromPreviousVersion).toBe(
+      providersLinkUpgradeV11ToV12,
+    );
+    expect(completeRegistry[1].latestMinor).toBe(2);
+    expect(completeRegistry[1].versions[2].contract).toBe(
+      providersLinkCompleteV12,
+    );
+    expect(completeRegistry[1].versions[2].upgradeFromPreviousVersion).toBe(
+      providersLinkCompleteUpgradeV11ToV12,
+    );
+  });
+
+  it("upgrades a @1.1 providers.link request with explicit defaults and preserves chosen fields on @1.2", () => {
+    const requestV11 = env.providersLinkRequestSchemaV11.parse({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: "env_team_1",
+    });
+    const upgraded = upgradeRequestToVersion(
+      linkRegistry,
+      ONE_ONE,
+      ONE_TWO,
+      requestV11,
+    );
+    expect(upgraded).toEqual({
+      ...requestV11,
+      createProfile: null,
+      replaceAccount: false,
+    });
+    expect(env.providersLinkRequestSchemaV12.parse(upgraded)).toEqual(upgraded);
+    expect(
+      env.providersLinkRequestSchemaV12.safeParse(requestV11).success,
+    ).toBe(false);
+
+    const selectedProfileRequest = {
+      ...requestV11,
+      createProfile: { label: "Team", shareSkillsAndPlugins: true },
+      replaceAccount: true,
+    };
+    expect(
+      prepareRequestPayload(
+        linkRegistry,
+        ONE_TWO,
+        ONE_TWO,
+        selectedProfileRequest,
+        "link-same-minor",
+        "providers.link",
+      ).onWirePayload,
+    ).toEqual(selectedProfileRequest);
+    expect(
+      prepareRequestPayload(
+        linkRegistry,
+        ONE_TWO,
+        ONE_ONE,
+        selectedProfileRequest,
+        "link-older-host",
+        "providers.link",
+      ).onWirePayload,
+    ).toEqual(requestV11);
+  });
+
+  it("keeps linkComplete requests unchanged across @1.1 and @1.2", () => {
+    const requestV11 = env.providersLinkCompleteRequestSchemaV11.parse({
+      linkId: "link-1",
+      code: null,
+      environmentId: "env_team_1",
+    });
+    expect(
+      upgradeRequestToVersion(completeRegistry, ONE_ONE, ONE_TWO, requestV11),
+    ).toEqual(requestV11);
+    expect(env.providersLinkCompleteRequestSchemaV11.parse(requestV11)).toEqual(
+      requestV11,
+    );
+  });
+
+  it("upgrades @1.1 host responses to explicit null profile ids for a @1.2 client", () => {
+    const startV11 = env.providersLinkResponseSchema.parse({
+      linkId: "link-1",
+      prompt: { kind: "local_handoff" },
+    });
+    expect(
+      decodeResponsePayload(
+        linkRegistry,
+        ONE_TWO,
+        ONE_ONE,
+        startV11,
+        "link-old-host",
+        "providers.link",
+      ),
+    ).toEqual({ ...startV11, environmentProfileId: null });
+
+    const completeV11 = env.providersLinkCompleteResponseSchema.parse({
+      state: "linked",
+      code: null,
+      account: "account@example.test",
+      expectedAccount: null,
+    });
+    expect(
+      decodeResponsePayload(
+        completeRegistry,
+        ONE_TWO,
+        ONE_ONE,
+        completeV11,
+        "complete-old-host",
+        "providers.linkComplete",
+      ),
+    ).toEqual({
+      ...completeV11,
+      environmentProfileId: null,
+      profileId: null,
+    });
+  });
+
+  it("projects @1.2 response fields through the @1.1 schemas and preserves them at @1.2", () => {
+    const startV12 = {
+      linkId: "link-1",
+      prompt: { kind: "local_handoff" },
+      environmentProfileId: "env-profile-1",
+    };
+    expect(env.providersLinkResponseSchemaV12.parse(startV12)).toEqual(
+      startV12,
+    );
+    expect(env.providersLinkResponseSchema.parse(startV12)).toEqual({
+      linkId: "link-1",
+      prompt: { kind: "local_handoff" },
+    });
+
+    const completeV12 = {
+      state: "installing",
+      code: null,
+      account: null,
+      expectedAccount: null,
+      environmentProfileId: "env-profile-1",
+      profileId: "profile-1",
+    };
+    expect(
+      env.providersLinkCompleteResponseSchemaV12.parse(completeV12),
+    ).toEqual(completeV12);
+    expect(env.providersLinkCompleteResponseSchema.parse(completeV12)).toEqual({
+      state: "installing",
+      code: null,
+      account: null,
+      expectedAccount: null,
+    });
   });
 });
 

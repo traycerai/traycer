@@ -2,7 +2,11 @@ import type {
   ProvidersLinkCompleteResponse,
   ProvidersLinkResponse,
 } from "@traycer/protocol/host/environment-schemas";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
  * The Link dialog's states and lines: one place for the copy, so each state's
@@ -20,20 +24,18 @@ export const LINK_SIGN_IN_LINE =
   "Sign in on claude.ai, then paste the code it shows.";
 export const LINK_DEVICE_LINE =
   "Open the page below and enter this code to sign in.";
-export const LINK_LINKING = "Linking…";
-export const LINK_UNAVAILABLE = "Connect to Traycer to link this profile.";
+export const LINK_LINKING = "Signing in…";
+export const LINK_UNAVAILABLE = "Connect to Traycer to sign in.";
 export const LINK_EXPIRED = "This sign-in expired.";
-export const LINK_FAILED = "Couldn't link this profile.";
+export const LINK_FAILED = "Sign-in did not finish.";
+export const LINK_OUTCOME_UNKNOWN =
+  "Couldn't confirm whether sign-in finished. Check Providers before trying again.";
 export const LINK_PASTE_WHOLE_CODE = "Paste the whole code claude.ai shows.";
 export const LINK_NO_SIGN_IN =
-  "Sign in to this profile on this computer first, then link it.";
+  "Sign in on the selected computer first, then try again.";
 
 export function onHostOnlyLine(hostName: string): string {
   return `On ${hostName} only.`;
-}
-
-export function linkedLine(account: string | null): string {
-  return account === null ? "Linked." : `Linked as ${account}.`;
 }
 
 export function mismatchLine(
@@ -121,6 +123,26 @@ export function stateOfLinkError(error: unknown): LinkDialogState {
   };
 }
 
+/** A sent completion can commit before its transport or resolver rejects. */
+export function isLinkCompletionOutcomeUnknown(error: unknown): boolean {
+  if (mayHaveReachedHost(error)) return true;
+  return (
+    error instanceof HostRpcError &&
+    !(error instanceof HostTransportFailureError) &&
+    error.requestId !== "client-normalized" &&
+    (error.code === "RPC_ERROR" ||
+      error.code === "PROVIDER_LINK_UNAVAILABLE" ||
+      error.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN" ||
+      error.code === "E_IDEMPOTENCY_REPLAY_TOO_LARGE")
+  );
+}
+
+export function stateOfLinkCompleteError(error: unknown): LinkDialogState {
+  return isLinkCompletionOutcomeUnknown(error)
+    ? { kind: "failed", line: LINK_OUTCOME_UNKNOWN }
+    : stateOfLinkError(error);
+}
+
 /**
  * `providers.linkComplete`'s answer as the dialog's next state; `current`
  * is kept while the link is still pending.
@@ -129,8 +151,10 @@ export function stateOfLinkComplete(
   current: LinkDialogState,
   response: ProvidersLinkCompleteResponse,
 ): LinkDialogState {
+  if (current.kind === "linked") return current;
   switch (response.state) {
     case "linked":
+    case "installing":
       return { kind: "linked", account: response.account };
     case "mismatch":
       return {
@@ -141,7 +165,7 @@ export function stateOfLinkComplete(
     case "expired":
       return { kind: "expired" };
     case "unavailable":
-      return { kind: "unavailable" };
+      return { kind: "failed", line: LINK_OUTCOME_UNKNOWN };
     case "pending":
       if (current.kind === "sign_in") {
         return {

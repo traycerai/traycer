@@ -2625,6 +2625,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "providers.linkCancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.env.localOverride.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
