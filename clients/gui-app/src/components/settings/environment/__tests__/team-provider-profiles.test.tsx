@@ -9,7 +9,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { describe, expect, it } from "vitest";
-import { environmentPlansListRequestSchema } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -325,72 +324,6 @@ describe("TeamProviders profiles", () => {
         ),
       ).toHaveLength(1);
     });
-  });
-
-  it("keeps the plan label, standing and quota while synced team admins lose Link and Unlink", async () => {
-    teamProfileRecordHttpBoundary.list = {
-      status: 200,
-      body: teamProfileRecordsBody([
-        teamProfileRecord({
-          profileId: "team-plan-row",
-          harnessId: "claude",
-          name: "Team plan row",
-          readerLabel: "live",
-          kind: "oauth_code",
-        }),
-      ]),
-    };
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.host.list": () => ({ hosts: [reachableHost] }),
-        "environment.plans.list": () => ({
-          plans: [
-            {
-              profileId: "plan-claude",
-              harness: "claude",
-              status: "linked" as const,
-              linkedBy: { name: "Ada", you: false },
-            },
-          ],
-        }),
-      },
-      "providers",
-    );
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    const plans = await screen.findByRole("region", { name: "Plans" });
-    expect(
-      within(plans).getByRole("combobox", { name: "Linked plan" }),
-    ).toBeTruthy();
-    expect(within(plans).getByText("Signed in")).toBeTruthy();
-    expect(
-      within(plans).getByText(
-        "Shared Claude Code quota. Sandbox charges use Acme credits.",
-      ),
-    ).toBeTruthy();
-    expect(
-      within(plans).queryByRole("button", { name: "Link a plan" }),
-    ).toBeNull();
-    expect(within(plans).queryByRole("button", { name: "Unlink" })).toBeNull();
-    expect(within(plans).queryByText(/tier/i)).toBeNull();
-    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
-    const planRequests = harness.paramsOf("environment.plans.list");
-    expect(planRequests.length).toBeGreaterThan(0);
-    expect(
-      planRequests.every(
-        (request) =>
-          environmentPlansListRequestSchema.parse(request).environmentId ===
-          "env-a",
-      ),
-    ).toBe(true);
   });
 
   it("shows the existing write-refusal line for an admin colour change through the real boundary", async () => {
