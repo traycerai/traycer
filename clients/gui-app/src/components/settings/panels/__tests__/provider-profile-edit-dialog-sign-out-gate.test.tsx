@@ -261,6 +261,8 @@ const SPEND_SCOPED_IDENTITY: ProviderProfile["credentialIdentity"] = {
 const ENTRY_PROFILE_ID = "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 const ITEMS_URL =
   "https://authn.example.test/api/v3/environments/env-a/items?kind=managed_profile";
+const CONNECTIONS_URL =
+  "https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections";
 const CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${ENTRY_PROFILE_ID}`;
 
 function json(status: number, body: unknown): EnvironmentTransportAnswer {
@@ -272,6 +274,7 @@ interface ModelledEntry {
   bindingVersion: number;
   spendScopeKey: SpendScopeKey | null;
   connected: boolean;
+  connectionKind: string;
   signedOutByPerson: boolean;
   mergedInto: string | null;
 }
@@ -283,7 +286,8 @@ interface ModelledEntry {
  * item's is 409 `binding-changed` (harness-binding-cas.ts:71-93); one that
  * matches deletes the connection rows, re-puts the item at a new version with
  * `custodianSignOutCause` (harness-connections.ts:2700-2745, families.ts:563)
- * and answers whether a row was deleted (:2842-2910).
+ * and answers whether a row was deleted (:2842-2910). The connections list
+ * names the entry while it has a row, and a fresh entry otherwise (:826-880).
  */
 function modelAuthn(
   entry: ModelledEntry,
@@ -336,6 +340,21 @@ function modelAuthn(
         ],
       });
     }
+    if (request.method === "GET" && request.url === CONNECTIONS_URL)
+      return json(200, {
+        connections: [
+          {
+            profileId: entry.connected
+              ? ENTRY_PROFILE_ID
+              : "1e2d3c4b-5a69-4788-9a0b-c1d2e3f4a5b6",
+            harnessId: "claude",
+            bindingVersion: entry.connected ? entry.bindingVersion : null,
+            kind: entry.connectionKind,
+            status: entry.connected ? "connected" : "absent",
+            linkedBy: null,
+          },
+        ],
+      });
     if (request.method === "DELETE" && request.url === CONNECTION_URL) {
       const expected =
         typeof request.body === "object" &&
@@ -364,6 +383,7 @@ function liveEntry(spendScopeKey: SpendScopeKey | null): ModelledEntry {
     bindingVersion: 4812,
     spendScopeKey,
     connected: true,
+    connectionKind: spendScopeKey === null ? "setup_token" : "oauth",
     signedOutByPerson: false,
     mergedInto: null,
   };
@@ -374,6 +394,19 @@ const ITEMS_READ = {
   url: ITEMS_URL,
   capabilities: "managed_profile_identity",
   body: null,
+};
+
+const CONNECTIONS_READ = {
+  method: "GET",
+  url: CONNECTIONS_URL,
+  capabilities: null,
+  body: null,
+};
+
+const SETUP_TOKEN_IDENTITY: ProviderProfile["credentialIdentity"] = {
+  kind: "unidentified",
+  provenance: "synthetic",
+  reason: "setup-token",
 };
 
 function disconnectAt(version: number) {
@@ -843,23 +876,42 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     it("disconnects a Claude setup token on an entry that holds no account", async () => {
       fixture.authnAnswer = modelAuthn(liveEntry(null));
       installOrderedSignOutClient();
-      renderDialog(
-        unmappedBrokeredProfile({
-          kind: "unidentified",
-          provenance: "synthetic",
-          reason: "setup-token",
-        }),
-      );
+      renderDialog(unmappedBrokeredProfile(SETUP_TOKEN_IDENTITY));
 
       confirmSignOut();
 
       await waitFor(() => expect(fixture.openChanges).toEqual([false]));
-      expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
+      expect(fixture.authnRequests).toEqual([
+        ITEMS_READ,
+        CONNECTIONS_READ,
+        disconnectAt(4812),
+      ]);
       expect(fixture.order).toEqual([
+        "authn GET",
         "authn GET",
         "authn DELETE",
         "host signOutProfile",
       ]);
+    });
+
+    it("changes nothing for a setup-token row whose entry's connection is not a setup token", async () => {
+      fixture.authnAnswer = modelAuthn({
+        ...liveEntry(null),
+        connectionKind: "oauth",
+      });
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SETUP_TOKEN_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain(
+          "This connection changed. Refresh and try again.",
+        ),
+      );
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, CONNECTIONS_READ]);
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
     });
 
     it("changes nothing when the entry is bound to another account", async () => {

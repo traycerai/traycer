@@ -664,6 +664,22 @@ export async function listConfigurationPlans(
   };
 }
 
+/**
+ * The kind of `harnessId`'s connection for `profileId` as the plans list
+ * reads it from authn (`setup_token`, ...); null when none is listed.
+ */
+export async function readHarnessConnectionKind(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  harnessId: string,
+  profileId: string,
+): Promise<string | null> {
+  const connection = (await planConnections(cloud, environmentId)).find(
+    (row) => row.profileId === profileId && row.harnessId === harnessId,
+  );
+  return connection?.kind ?? null;
+}
+
 /** A managed profile's live connection binding at authn. */
 export interface ManagedProfileBinding {
   readonly bindingVersion: CredentialVersion | null;
