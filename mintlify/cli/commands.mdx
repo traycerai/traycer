@@ -191,6 +191,15 @@ The token works once and expires after one hour. The team can run agents and
 read or change files on the computer. Team installs register and start the
 host's service; they cannot use `--no-service-register`.
 
+To make a team computer your own again, run this on the computer:
+
+```sh
+traycer host claim
+```
+
+This computer will become yours. The team will lose access to it. Running
+chats will stop. Pass `--yes` to skip the question in a script.
+
 
 ## CLI Commands
 
