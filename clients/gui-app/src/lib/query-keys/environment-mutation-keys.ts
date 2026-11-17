@@ -11,6 +11,7 @@ export const environmentMutationKeys = {
     ["environment.agentDefinitions.delete"] as const,
   setupPut: () => ["environment.setup.put"] as const,
   setupRetry: () => ["environment.setup.retry"] as const,
+  moveDiagnosticsExport: () => ["environment.move.diagnosticsExport"] as const,
   undo: () => ["environment.undo"] as const,
   localOverrideSet: () => ["config.env.localOverride.set"] as const,
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,

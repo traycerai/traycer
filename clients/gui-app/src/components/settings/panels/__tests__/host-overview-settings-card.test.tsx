@@ -14,7 +14,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV13,
+  SetupAttempt,
+} from "@traycer/protocol/host/environment-schemas";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type {
   EnvironmentHostBinding,
@@ -132,16 +135,48 @@ vi.mock("@/components/settings/details/settings-details-button", () => ({
       </div>
     ) : null,
 }));
+interface DetailsSubjectFixture {
+  readonly environmentId: string;
+  readonly kind: "host_settings";
+  readonly key: string;
+}
+const BOUND_SUBJECT: DetailsSubjectFixture = {
+  environmentId: "env-a",
+  kind: "host_settings",
+  key: "old",
+};
+const detailsMock = vi.hoisted(
+  (): { subject: DetailsSubjectFixture | null } => ({ subject: null }),
+);
 vi.mock(
   "@/components/settings/details/use-host-settings-details-subject",
-  () => ({
-    useHostSettingsDetailsSubject: () => ({
-      environmentId: "env-a",
-      kind: "host_settings",
-      key: "old",
-    }),
+  () => ({ useHostSettingsDetailsSubject: () => detailsMock.subject }),
+);
+// Whether this build reads host bindings from the pool: the no-binding export
+// stands in only where it does not.
+const poolMock = vi.hoisted((): { readsPool: boolean } => ({
+  readsPool: false,
+}));
+vi.mock(
+  "@/hooks/bots/use-host-environment-bindings-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/bots/use-host-environment-bindings-query")
+    >()),
+    readsHostBindingsFromPool: () => poolMock.readsPool,
   }),
 );
+// The file a no-binding export saves, observed where it leaves the app.
+const saveMock = vi.hoisted(() => ({
+  saveBlobToDisk:
+    vi.fn<
+      (blob: Blob, suggestedName: string, fileSave: unknown) => Promise<null>
+    >(),
+}));
+vi.mock("@/lib/files/save-blob-to-disk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/files/save-blob-to-disk")>()),
+  saveBlobToDisk: saveMock.saveBlobToDisk,
+}));
 let authnFixture: FakeEnvironmentCloud;
 let directoryAnswer: EnvironmentDirectoryResult;
 let directoryQueue: EnvironmentDirectoryResult[];
@@ -384,6 +419,7 @@ function renderCardWithBinding(
     "environment.move.stage": { major: 1, minor: 0 },
     "environment.move.start": { major: 1, minor: 0 },
     "environment.move.outcome": { major: 1, minor: 0 },
+    "environment.setup.attempts": { major: 1, minor: 0 },
     ...(options.previewLocalFactsSupported === true
       ? { "environment.previewLocalFacts": { major: 1, minor: 0 } }
       : {}),
@@ -428,6 +464,10 @@ function renderCardOnThisComputer(
 }
 
 beforeEach(() => {
+  detailsMock.subject = BOUND_SUBJECT;
+  poolMock.readsPool = false;
+  saveMock.saveBlobToDisk.mockReset();
+  saveMock.saveBlobToDisk.mockResolvedValue(null);
   directoryAnswer = { kind: "ok", list: { environments: [] } };
   directoryQueue = [];
   directoryReadCount = 0;
@@ -1047,6 +1087,58 @@ describe("<HostOverviewSettingsCard />", () => {
       );
 
       expect(screen.getByTestId("details-dialog").dataset.tab).toBe("export");
+      expect(saveMock.saveBlobToDisk).not.toHaveBeenCalled();
+    });
+
+    it("saves the move's own diagnostics file from Export diagnostics when the computer has no binding", async () => {
+      detailsMock.subject = null;
+      const attempt: SetupAttempt = {
+        attemptId: "retry-1",
+        scriptHash: "hash-of-the-script",
+        itemRevision: 1,
+        trigger: "retry",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        exitStatus: 1,
+        stageReached: "applying",
+        result: "failed",
+      };
+      renderCard(stoppedStatus("stalled"), {
+        "environment.setup.attempts": () => ({ attempts: [attempt] }),
+      });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      await waitFor(() =>
+        expect(saveMock.saveBlobToDisk).toHaveBeenCalledOnce(),
+      );
+      const call = saveMock.saveBlobToDisk.mock.calls.at(0);
+      if (call === undefined) throw new Error("nothing was saved");
+
+      expect(call[1]).toBe("traycer-move-diagnostics.json");
+      const anyExportTime: unknown = expect.any(Number);
+      expect(JSON.parse(await call[0].text())).toEqual({
+        version: 1,
+        exportedAt: anyExportTime,
+        setup: { stage: "moving_settings", state: "stalled" },
+        stopReason: "it timed out",
+        items: { applied: 1, total: 4 },
+        pendingUploads: 1,
+        attempts: [
+          {
+            attemptId: "retry-1",
+            trigger: "retry",
+            itemRevision: 1,
+            startedAt: 1_000,
+            endedAt: 2_000,
+            exitStatus: 1,
+            stageReached: "applying",
+            result: "failed",
+          },
+        ],
+      });
+      expect(screen.queryByTestId("details-dialog")).toBeNull();
     });
   });
 

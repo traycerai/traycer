@@ -21,7 +21,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV13,
+  SetupAttempt,
+} from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import { fakeEnvironmentCloud } from "@/components/settings/host-scope/__tests__/host-access-test-support";
@@ -74,20 +77,59 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => fixtureMock.binding };
 });
 // The Details drawer has its own suite; the dialog only needs its button and
-// a subject for Export diagnostics.
+// the subject Export diagnostics opens it for, or none: a build with no pool
+// has no binding answer.
+interface DetailsSubjectFixture {
+  readonly environmentId: string;
+  readonly kind: "host_settings";
+  readonly key: string;
+}
+const BOUND_SUBJECT: DetailsSubjectFixture = {
+  environmentId: "env-personal",
+  kind: "host_settings",
+  key: "details-subject",
+};
+const detailsMock = vi.hoisted(
+  (): { subject: DetailsSubjectFixture | null } => ({ subject: null }),
+);
 vi.mock(
   "@/components/settings/details/use-host-settings-details-subject",
-  () => ({
-    useHostSettingsDetailsSubject: () => ({
-      environmentId: "env-personal",
-      kind: "host_settings",
-      key: "details-subject",
-    }),
-  }),
+  () => ({ useHostSettingsDetailsSubject: () => detailsMock.subject }),
 );
 vi.mock("@/components/settings/details/settings-details-button", () => ({
   SettingsDetailsButton: () => <button type="button">Details</button>,
-  SettingsDetailsDialog: () => null,
+  SettingsDetailsDialog: (props: {
+    readonly open: boolean;
+    readonly initialTab: string;
+  }) =>
+    props.open ? (
+      <div data-testid="details-dialog" data-tab={props.initialTab} />
+    ) : null,
+}));
+// Whether this build reads host bindings from the pool: the no-binding export
+// stands in only where it does not.
+const poolMock = vi.hoisted((): { readsPool: boolean } => ({
+  readsPool: false,
+}));
+vi.mock(
+  "@/hooks/bots/use-host-environment-bindings-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/bots/use-host-environment-bindings-query")
+    >()),
+    readsHostBindingsFromPool: () => poolMock.readsPool,
+  }),
+);
+// The file a no-binding export saves, observed where it leaves the app.
+const saveMock = vi.hoisted(() => ({
+  saveBlobToDisk:
+    vi.fn<
+      (blob: Blob, suggestedName: string, fileSave: unknown) => Promise<null>
+    >(),
+}));
+vi.mock("@/lib/files/save-blob-to-disk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/files/save-blob-to-disk")>()),
+  saveBlobToDisk: saveMock.saveBlobToDisk,
 }));
 
 const LOCAL_PLANES = {
@@ -167,6 +209,7 @@ function localStatus(): EnvironmentStatusResponseV13 {
 /** What the computer answers `environment.status` with; a test changes it to move the computer along. */
 interface StatusFeed {
   answer: EnvironmentStatusResponseV13;
+  attempts: readonly SetupAttempt[];
 }
 
 interface Harness {
@@ -179,12 +222,13 @@ interface Harness {
 
 /** The dialog over a computer that answers `answer`, closed until {@link openDialog}. */
 function mount(answer: EnvironmentStatusResponseV13): Harness {
-  const feed: StatusFeed = { answer };
+  const feed: StatusFeed = { answer, attempts: [] };
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "environment.status": () => feed.answer,
       "environment.setup.retry": () => ({ attemptId: "retry-1" }),
+      "environment.setup.attempts": () => ({ attempts: [...feed.attempts] }),
     },
   });
   const authn = fakeEnvironmentCloud((request) => {
@@ -211,6 +255,7 @@ function mount(answer: EnvironmentStatusResponseV13): Harness {
   recordNegotiatedHostManifest(HOST_ID, {
     "environment.status": { major: 1, minor: 3 },
     "environment.setup.retry": { major: 1, minor: 0 },
+    "environment.setup.attempts": { major: 1, minor: 0 },
   });
   render(
     <QueryClientProvider
@@ -263,6 +308,54 @@ async function settle(): Promise<void> {
   await advance(50);
 }
 
+/** One retry attempt that stopped, as the computer serves it. */
+const STOPPED_ATTEMPT: SetupAttempt = {
+  attemptId: "retry-1",
+  scriptHash: "hash-of-the-script",
+  itemRevision: 1,
+  trigger: "retry",
+  startedAt: 1_000,
+  endedAt: 2_000,
+  exitStatus: 1,
+  stageReached: "applying",
+  result: "failed",
+};
+
+const ANY_EXPORT_TIME: unknown = expect.any(Number);
+
+/** What the export holds for {@link stoppedStatus}("failed") and {@link STOPPED_ATTEMPT}. */
+const EXPECTED_DIAGNOSTICS = {
+  version: 1,
+  exportedAt: ANY_EXPORT_TIME,
+  setup: { stage: "moving_settings", state: "failed" },
+  stopReason: "it couldn't finish",
+  items: { applied: 1, total: 3 },
+  pendingUploads: 0,
+  attempts: [
+    {
+      attemptId: "retry-1",
+      trigger: "retry",
+      itemRevision: 1,
+      startedAt: 1_000,
+      endedAt: 2_000,
+      exitStatus: 1,
+      stageReached: "applying",
+      result: "failed",
+    },
+  ],
+};
+
+/** The one file the export saved: its name and its text. */
+async function savedDiagnostics(): Promise<{
+  readonly name: string;
+  readonly text: string;
+}> {
+  await waitFor(() => expect(saveMock.saveBlobToDisk).toHaveBeenCalledOnce());
+  const call = saveMock.saveBlobToDisk.mock.calls.at(0);
+  if (call === undefined) throw new Error("nothing was saved");
+  return { name: call[1], text: await call[0].text() };
+}
+
 function dialogIsGone(): boolean {
   return (
     screen.queryByTestId("move-progress-dialog") === null &&
@@ -274,6 +367,10 @@ beforeEach(() => {
   installLegendListTestClock();
   focusManager.setFocused(true);
   useMoveProgressDialogStore.setState({ target: null });
+  detailsMock.subject = BOUND_SUBJECT;
+  poolMock.readsPool = false;
+  saveMock.saveBlobToDisk.mockReset();
+  saveMock.saveBlobToDisk.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -566,5 +663,137 @@ describe("<MoveProgressDialog />", () => {
       expect(dialogIsGone()).toBe(true);
       expect(harness.requests("environment.setup.retry")).toEqual([]);
     });
+  });
+
+  describe("Export diagnostics on a computer with no binding", () => {
+    beforeEach(() => {
+      detailsMock.subject = null;
+    });
+
+    it("saves the move's own diagnostics file with exactly the allowed keys", async () => {
+      const harness = mount(stoppedStatus("failed"));
+      harness.feed.attempts = [STOPPED_ATTEMPT];
+      openDialog();
+      await settle();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      const saved = await savedDiagnostics();
+
+      expect(saved.name).toBe("traycer-move-diagnostics.json");
+      expect(JSON.parse(saved.text)).toEqual(EXPECTED_DIAGNOSTICS);
+      expect(screen.queryByTestId("details-dialog")).toBeNull();
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+    });
+
+    it("leaves the attempts out as null on a computer that does not serve them", async () => {
+      mount(stoppedStatus("failed"));
+      recordNegotiatedHostManifest(HOST_ID, {
+        "environment.status": { major: 1, minor: 3 },
+        "environment.setup.retry": { major: 1, minor: 0 },
+      });
+      openDialog();
+      await settle();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      const saved = await savedDiagnostics();
+
+      expect(JSON.parse(saved.text)).toEqual({
+        ...EXPECTED_DIAGNOSTICS,
+        attempts: null,
+      });
+    });
+
+    it("says why when the file could not be saved, stays open, and clears the line on a save that works", async () => {
+      saveMock.saveBlobToDisk.mockRejectedValueOnce(new Error("disk full"));
+      mount(stoppedStatus("failed"));
+      openDialog();
+      await settle();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+
+      expect((await screen.findByRole("alert")).textContent).toBe("disk full");
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      await waitFor(() =>
+        expect(saveMock.saveBlobToDisk).toHaveBeenCalledTimes(2),
+      );
+
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+    });
+
+    it("carries nothing a served status or attempt holds beyond the allowed keys", async () => {
+      const served = {
+        ...stoppedStatus("failed"),
+        token: "SECRET-STATUS-TOKEN",
+        items: [
+          {
+            ...itemStatusFixture({
+              kind: "variable",
+              key: "OPENAI_API_KEY",
+              status: "applied",
+            }),
+            apiKey: "SECRET-ITEM-KEY",
+          },
+          itemStatusFixture({ kind: "variable", key: "B", status: "pending" }),
+          itemStatusFixture({ kind: "variable", key: "C", status: "pending" }),
+        ],
+      };
+      const attempt = {
+        ...STOPPED_ATTEMPT,
+        apiKey: "SECRET-ATTEMPT-KEY",
+        token: "SECRET-ATTEMPT-TOKEN",
+      };
+      const harness = mount(served);
+      harness.feed.attempts = [attempt];
+      openDialog();
+      await settle();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      const saved = await savedDiagnostics();
+
+      expect(saved.text).not.toContain("SECRET");
+      expect(saved.text).not.toContain("OPENAI_API_KEY");
+      expect(saved.text).not.toContain("hash-of-the-script");
+      expect(JSON.parse(saved.text)).toEqual(EXPECTED_DIAGNOSTICS);
+    });
+  });
+
+  it("shows no Export diagnostics on a pool build with no binding answer", async () => {
+    detailsMock.subject = null;
+    poolMock.readsPool = true;
+    mount(stoppedStatus("failed"));
+    openDialog();
+    await settle();
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Export diagnostics" }),
+    ).toBeNull();
+    expect(saveMock.saveBlobToDisk).not.toHaveBeenCalled();
+  });
+
+  it("opens the Details drawer at Export, and saves no file, on a bound computer", async () => {
+    mount(stoppedStatus("failed"));
+    openDialog();
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+    await settle();
+
+    expect(screen.getByTestId("details-dialog").dataset.tab).toBe("export");
+    expect(saveMock.saveBlobToDisk).not.toHaveBeenCalled();
   });
 });
