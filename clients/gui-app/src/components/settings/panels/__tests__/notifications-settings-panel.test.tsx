@@ -80,10 +80,6 @@ type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
   "host.notifications.getConfig"
 >;
-type SetConfigRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "host.notifications.setConfig"
->;
 type HooksStatus = ResponseOfMethod<
   HostRpcRegistry,
   "host.notificationHooks.status"
@@ -692,16 +688,14 @@ function renderNotificationsSettings(
   options: RenderNotificationsOptions | undefined,
 ): {
   readonly client: HostClient<HostRpcRegistry>;
-  readonly setRequests: SetConfigRequest[];
   readonly saveRequests: SaveHooksRequest[];
   readonly testRequests: TestHookRequest[];
   readonly testPromise: Promise<TestHookResponse>;
   readonly resolveTest: (value: TestHookResponse) => void;
 } {
-  const setRequests: SetConfigRequest[] = [];
   const saveRequests: SaveHooksRequest[] = [];
   const testRequests: TestHookRequest[] = [];
-  let config = makeNotificationConfig();
+  const config = makeNotificationConfig();
   let hooksStatus =
     options === undefined || options.hooksStatus === undefined
       ? makeHooksStatus(undefined)
@@ -721,11 +715,6 @@ function renderNotificationsSettings(
       requestId: () => "req-1",
       handlers: {
         "host.notifications.getConfig": () => config,
-        "host.notifications.setConfig": (params) => {
-          setRequests.push(params);
-          config = responseFromSetRequest(config, params);
-          return config;
-        },
         "host.notificationHooks.status": () => {
           if (options !== undefined && options.hooksStatusError !== undefined) {
             throw new Error(options.hooksStatusError);
@@ -778,7 +767,6 @@ function renderNotificationsSettings(
 
   return {
     client,
-    setRequests,
     saveRequests,
     testRequests,
     testPromise,
@@ -811,7 +799,6 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
         requestId: () => "req-scope",
         handlers: {
           "host.notifications.getConfig": () => makeNotificationConfig(),
-          "host.notifications.setConfig": () => makeNotificationConfig(),
           "host.notificationHooks.status": () =>
             makeHooksStatus({ hooks: [makeHook({ id: "hook-1" })] }),
         },
@@ -937,39 +924,6 @@ function makeHook(
       overrides.lastResult === undefined ? null : overrides.lastResult,
     localOnly: overrides.localOnly === undefined ? true : overrides.localOnly,
   };
-}
-
-function responseFromSetRequest(
-  previous: NotificationConfig,
-  request: SetConfigRequest,
-): NotificationConfig {
-  return {
-    matrix: request.matrix,
-    channels: {
-      renderer: {
-        lastError: null,
-      },
-      email: {
-        host: request.channels.email.host,
-        port: request.channels.email.port,
-        user: request.channels.email.user,
-        from: request.channels.email.from,
-        credentialConfigured: credentialConfiguredAfterWrite(
-          previous.channels.email.credentialConfigured,
-          request.channels.email.password,
-        ),
-        lastError: null,
-      },
-    },
-  };
-}
-
-function credentialConfiguredAfterWrite(
-  previous: boolean,
-  write: SetConfigRequest["channels"]["email"]["password"],
-): boolean {
-  if (write.kind === "leaveUnchanged") return previous;
-  return write.kind === "set";
 }
 
 const LONG_TURN_ALERT_LABEL = "Alert when a turn runs longer than";
