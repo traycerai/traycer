@@ -12,17 +12,9 @@ type Fetch = (
 ) => Promise<Response>;
 
 /**
- * The window's `fetch` on the phone, made to honour `redirect: "manual"`.
- *
- * Capacitor's patched `fetch` drops `redirect` from a request's init: a POST
- * goes to the native request with redirects followed (on iOS
- * `URLSession.shared`, which re-sends the method and body on a 307 or 308),
- * and a GET goes through the native proxy, which follows them too. A request
- * that carries a credential says `redirect: "manual"` so its credential never
- * reaches wherever a redirect points; here that request goes to `request`
- * instead, which follows none, so a 3xx comes back as the answer and every
- * caller reads it as the non-success it reads on desktop. Every other request
- * goes to `platform` untouched.
+ * Capacitor's patched `fetch` drops `redirect` and follows redirects natively (iOS
+ * re-sends method and body on a 307 or 308). A `redirect: "manual"` request carries a
+ * credential, so it goes to `request`, which follows none: a 3xx is the answer.
  */
 export function manualRedirectFetch(
   platform: Fetch,
@@ -97,11 +89,7 @@ function bodyData(body: BodyInit): string {
   throw new TypeError("This request body is not sent from the phone.");
 }
 
-/**
- * The native answer as a `Response`. A redirect's body is not kept. A status
- * no `Response` can carry, which the native layer does not report, is the
- * network error a `fetch` answers with, whose status is 0.
- */
+/** A redirect's body is not kept; a status no `Response` can carry is the network error, status 0. */
 function responseOf(answer: NativeAnswer): Response {
   const { status } = answer;
   if (status < 200 || status > 599) return Response.error();
