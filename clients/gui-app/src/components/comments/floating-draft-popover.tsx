@@ -127,7 +127,9 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     const reposition = () => {
       void computePosition(virtualReference, floating, {
         placement: "bottom-start",
-        middleware: [offset(8), flip(), shift({ padding: 8 })],
+        // A selection taller than the pane has room neither below nor above
+        // it, so the box moves over the selection rather than out of view.
+        middleware: [offset(8), flip(), shift({ crossAxis: true, padding: 8 })],
       }).then(({ x, y }) => {
         floating.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
       });

@@ -213,7 +213,9 @@ export function AnchoredDraftPopover(props: {
       void computePosition(reference, floating, {
         strategy: "fixed",
         placement: "bottom-start",
-        middleware: [offset(8), flip(), shift({ padding: 8 })],
+        // An element taller than the window has room neither below nor above
+        // it, so the box moves over the element rather than off screen.
+        middleware: [offset(8), flip(), shift({ crossAxis: true, padding: 8 })],
       }).then(({ x, y }) => {
         if (active) {
           floating.style.left = `${x}px`;
