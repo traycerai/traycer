@@ -5,7 +5,10 @@ import {
   guiHarnessIdToProviderId,
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
-import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
+import {
+  isHarnessRowSignedOut,
+  soleSignedInProfileForSignedOutTerminal,
+} from "@/lib/providers/provider-ambient-auth";
 import {
   profileAccentDotInput,
   profileCommitId,
@@ -19,6 +22,23 @@ import {
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 
+/**
+ * The profile a provider's tab lands on while its Terminal login is signed
+ * out and exactly one enabled managed profile is signed in, else `null`: the
+ * same rule a new chat's default account follows
+ * (`soleSignedInProfileForSignedOutTerminal`), read from the profile rows'
+ * own verdicts.
+ */
+function soleProfileForSignedOutTerminal(
+  profiles: ReadonlyArray<ProviderProfile>,
+): string | null {
+  return soleSignedInProfileForSignedOutTerminal({
+    auth: { status: "unknown" },
+    profiles,
+  });
+}
+
+/** Shared empty map for a computer that reports no removed accounts. */
 export const EMPTY_REMOVED_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
   readonly RemovedProviderProfile[]
@@ -113,6 +133,8 @@ export function resolveActiveProfileForHarness(input: {
   ) {
     return selectedProfileId;
   }
+  const sole = soleProfileForSignedOutTerminal(profiles);
+  if (sole !== null) return sole;
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
@@ -150,7 +172,11 @@ function buildRailEntry(input: {
 }): RailEntry {
   return {
     harness: input.harness,
-    degraded: railHarnessDegraded(input.harness, input.degradedHarnessIds),
+    degraded: railEntryDegraded(
+      input.harness,
+      input.degradedHarnessIds,
+      input.profiles,
+    ),
     accentDot: resolveAccentDot(
       input.harness.id,
       input.profiles,
@@ -366,6 +392,24 @@ export function railHarnessDegraded(
     degradedHarnessIds.has(harness.id) ||
     (!harness.available && harness.requiresApiKey)
   );
+}
+
+/**
+ * Whether a rail entry is dimmed: the Terminal login's signed-out verdict
+ * (`railHarnessDegraded`), except for a provider whose tab lands on its one
+ * signed-in managed profile (`soleProfileForSignedOutTerminal`), which can run
+ * a turn and so is not dimmed for the Terminal login's sake.
+ */
+export function railEntryDegraded(
+  harness: HarnessOption,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
+  profiles: ReadonlyArray<ProviderProfile>,
+): boolean {
+  if (!harness.enabled) return false;
+  if (soleProfileForSignedOutTerminal(profiles) !== null) {
+    return !harness.available && harness.requiresApiKey;
+  }
+  return railHarnessDegraded(harness, degradedHarnessIds);
 }
 
 /**
