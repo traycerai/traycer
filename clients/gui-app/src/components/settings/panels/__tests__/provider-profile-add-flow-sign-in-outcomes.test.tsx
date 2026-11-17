@@ -9,6 +9,8 @@ import {
   sameEmailRenameProfiles,
   createAddProfileNameAuthFixture,
   renderAddFlow,
+  LIST_KEY,
+  listBody,
   methodCount,
   pressAccount,
   expectSignedInDecision,
@@ -26,6 +28,7 @@ import { SIGN_IN_TEXT } from "@/components/providers/profile-sync-copy";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 
 describe("Add a profile around one sign-in", () => {
   it("titles the dialog Add a profile and offers Sign in when the list offers sign-ins", async () => {
@@ -409,5 +412,54 @@ describe("Add a profile around one sign-in", () => {
       },
     ]);
     expect(harness.created).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog it opened when a refetch stops offering sign-ins", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Add a profile" }),
+    ).toBeTruthy();
+
+    act(() => {
+      harness.queryClient.setQueryData(LIST_KEY, listBody(false, [], false));
+    });
+
+    expect(screen.getByRole("heading", { name: "Add a profile" })).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Add new Claude Code profile" }),
+    ).toBeNull();
+  });
+
+  it("keeps the switching dialog it opened when a refetch stops offering sign-ins", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+    });
+    act(() => {
+      useProviderProfileAddFlowStore.setState({
+        switchSource: { profileId: PROFILE_ID, label: "Work" },
+      });
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Add a profile" }),
+    ).toBeTruthy();
+
+    act(() => {
+      harness.queryClient.setQueryData(LIST_KEY, listBody(false, [], false));
+    });
+
+    expect(screen.getByRole("heading", { name: "Add a profile" })).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Add new Claude Code profile" }),
+    ).toBeNull();
   });
 });
