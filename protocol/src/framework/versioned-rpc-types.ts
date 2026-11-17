@@ -336,6 +336,12 @@ export const RPC_ERROR_CODES = [
   // say the send failed: sending again would be refused again. Additive, as
   // above: a host that predates it refuses with RPC_ERROR.
   "E_BOT_QUESTION_ALREADY_SETTLED",
+  // `bot.conversation.send` named the message it replies to (`replyTo`) for a
+  // bot whose bound host has not said it takes it (`BOT_HOST_TAKES_REPLIES`):
+  // a host that predates it would take the message as an ordinary post and
+  // drop what it replies to. Nothing was written or queued. Additive, as
+  // above.
+  "E_BOT_REPLIES_UNSUPPORTED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not

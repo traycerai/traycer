@@ -16,6 +16,9 @@ import {
   BOT_ID,
   BOX_DRAFTS_KEY,
   boxDoc,
+  readDraftsStoreAs,
+  retireDraftsStoreAs,
+  signInDraftsStoreAs,
   hashedImage,
   startFresh,
   startSignedOutApp,
@@ -184,16 +187,19 @@ const STORED_A: StoredBoxDraft = {
   text: "A text",
   content: boxDoc("A text", [hashedImage(HASH_A)]),
   seedId: 1,
+  replyTo: null,
 };
 const STORED_B: StoredBoxDraft = {
   text: "B text",
   content: boxDoc("B text", [hashedImage(HASH_B)]),
   seedId: 1,
+  replyTo: null,
 };
 const STORED_C: StoredBoxDraft = {
   text: "C text",
   content: boxDoc("C text", []),
   seedId: 1,
+  replyTo: null,
 };
 
 let app: App;
@@ -221,13 +227,7 @@ afterEach(() => {
 
 /** What signing in does (`BotDraftsPersistLifecycleBridge`): the account takes the store, which holds none of its drafts until they are read. */
 function signIn(started: App, userId: string): void {
-  started.drafts
-    .getState()
-    .retire((kept) => kept ?? { text: "", content: null, seedId: 0 }, {
-      userId,
-    });
-  started.drafts.persist.setOptions({ name: botBoxDraftsKey(userId) });
-  void started.drafts.persist.rehydrate();
+  signInDraftsStoreAs(started, userId);
 }
 
 /** The account's boxes stored, and the app started over them: admitted once the stored text is read. */
@@ -237,14 +237,9 @@ async function startOver(
   storeDraftsAsLeft({ [BOT_ID]: boxes });
   const started = await startSignedOutApp();
   app = started;
-  started.drafts
-    .getState()
-    .retire((kept) => kept ?? { text: "", content: null, seedId: 0 }, {
-      userId: TEST_USER_ID,
-    });
+  retireDraftsStoreAs(started, TEST_USER_ID);
   expect(started.drafts.getState().ownDraftsRead).toBe(false);
-  started.drafts.persist.setOptions({ name: botBoxDraftsKey(TEST_USER_ID) });
-  void started.drafts.persist.rehydrate();
+  readDraftsStoreAs(started, TEST_USER_ID);
   await vi.waitFor(() =>
     expect(started.drafts.getState().ownDraftsRead).toBe(true),
   );
@@ -383,6 +378,7 @@ describe("the boxes' drafts while images they name are being read", () => {
         text: "B names A's image",
         content: boxDoc("B names A's image", [hashedImage(HASH_A)]),
         seedId: 1,
+        replyTo: null,
       },
     });
 
@@ -429,11 +425,7 @@ describe("the boxes' drafts while images they name are being read", () => {
       type(started, "c", "C edited", []);
       pageHides();
 
-      started.drafts
-        .getState()
-        .retire((kept) => kept ?? { text: "", content: null, seedId: 0 }, {
-          userId: "user-next",
-        });
+      retireDraftsStoreAs(started, "user-next");
       signIn(started, TEST_USER_ID);
       await vi.waitFor(() =>
         expect(started.drafts.getState().ownDraftsRead).toBe(true),
@@ -529,11 +521,7 @@ describe("the boxes' drafts while images they name are being read", () => {
   it("leaves a retiring account's waiting box stored under its own key, and brings nothing of it to the next account, when its image settles later", async () => {
     const started = await startOver({ a: STORED_A, c: STORED_C });
 
-    started.drafts
-      .getState()
-      .retire((kept) => kept ?? { text: "", content: null, seedId: 0 }, {
-        userId: "user-next",
-      });
+    retireDraftsStoreAs(started, "user-next");
     settleRead(HASH_A, BYTES_A);
     await untilEncoded(1);
 
@@ -749,6 +737,7 @@ describe("the boxes' drafts while images they name are being read", () => {
         content: [{ type: "paragraph", content: [hashedImage(HASH_X)] }],
       },
       seedId: 1,
+      replyTo: null,
     };
     const started = await startOver({ x: goneOnly, c: STORED_C });
     type(started, "c", "C edited", []);
@@ -831,11 +820,7 @@ describe("the boxes' drafts while images they name are being read", () => {
     const started = await startOver({ a: STORED_A, c: STORED_C });
     expect(readCalls()).toEqual([HASH_A]);
 
-    started.drafts
-      .getState()
-      .retire((kept) => kept ?? { text: "", content: null, seedId: 0 }, {
-        userId: "user-next",
-      });
+    retireDraftsStoreAs(started, "user-next");
     signIn(started, TEST_USER_ID);
     await untilClockless(() => readCalls().length === 2);
     expect(waitingBoxes(started)).toEqual(["a"]);
@@ -934,7 +919,7 @@ describe("the boxes' drafts while images they name are being read", () => {
     expect(boxesOf(started).c?.text).toBe("C text");
     expect(boxesOf(started).a).toBeUndefined();
     expect(started.drafts.getState().boxesReading).toEqual({
-      [BOT_ID]: { a: { text: "A text" } },
+      [BOT_ID]: { a: { text: "A text", replyTo: null } },
     });
   });
 
