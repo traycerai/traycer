@@ -10,6 +10,7 @@ import {
   useBotDraftActions,
   useBotDraftsStore,
   withoutAnswerFailure,
+  type BotCarriedBlock,
   type BotThreadBoxDraft,
 } from "@/stores/bots/bot-drafts-store";
 
@@ -17,7 +18,7 @@ import {
  * A message box's unsent draft, kept under the bot (`useBotDraftsStore`) by
  * `key` so it outlives the box: what it held loads back into it as a seed,
  * and the box keeps it through `keptDraft`, with a failed send it offers
- * back beside it. Answers moved off question cards wait there for the box
+ * back beside it and the message it replies to. Answers moved off question cards wait there for the box
  * to add them (`moved`), beside what the box says about card answers
  * (`notice`): all but those a send still out carries, or the failed send
  * offered back holds, which the box adds only once that send failed or that
@@ -43,6 +44,7 @@ export function useKeptBoxDraft(
   const unsent = useBotDraftsStore((state) =>
     key === null ? null : (state.unsentBoxes[botId]?.[key] ?? null),
   );
+  const replyTo = kept?.replyTo ?? null;
   const carry = useBotDraftsStore((state) =>
     key === null ? null : (state.boxCarries[botId]?.[key] ?? null),
   );
@@ -61,13 +63,19 @@ export function useKeptBoxDraft(
     sendCarry,
     noticeBox,
     discardReadingBox,
+    setReplyTarget,
   } = useBotDraftActions();
   const reading = useMemo<BotComposerReading | null>(
     () =>
       key === null || waiting === null
         ? null
-        : { text: waiting.text, discard: () => discardReadingBox(botId, key) },
-    [botId, discardReadingBox, key, waiting],
+        : {
+            text: waiting.text,
+            replyTo: waiting.replyTo,
+            discard: () => discardReadingBox(botId, key),
+            cancelReply: () => setReplyTarget(botId, key, null),
+          },
+    [botId, discardReadingBox, key, setReplyTarget, waiting],
   );
   const moved = useMemo<BotComposerCarry | null>(
     () =>
@@ -106,23 +114,51 @@ export function useKeptBoxDraft(
               undefined,
             unsent,
             offer: (message) => offerUnsent(botId, key, message),
+            replyTo,
+            setReplyTo: (target) => setReplyTarget(botId, key, target),
           },
-    [botId, key, offerUnsent, sendCarry, typeThreadBox, unsent],
+    [
+      botId,
+      key,
+      offerUnsent,
+      replyTo,
+      sendCarry,
+      setReplyTarget,
+      typeThreadBox,
+      unsent,
+    ],
   );
   return {
     kept,
-    seed:
-      kept === null
-        ? null
-        : {
-            id: kept.seedId,
-            text: kept.text,
-            content: kept.content,
-            held: draftMoves?.map((item) => item.id) ?? [],
-          },
+    seed: keptSeed(kept, draftMoves),
     keptDraft,
     moved,
     notice,
     reading,
+  };
+}
+
+/**
+ * What a kept draft puts in the box; `null` for none, and for a draft that
+ * holds only the message it replies to, which has nothing to put there and
+ * would otherwise empty an edit the box holds.
+ */
+function keptSeed(
+  kept: BotThreadBoxDraft | null,
+  draftMoves: ReadonlyArray<BotCarriedBlock> | null,
+): BotComposerSeed | null {
+  if (kept === null) return null;
+  if (
+    kept.replyTo !== null &&
+    kept.text.length === 0 &&
+    kept.content === null
+  ) {
+    return null;
+  }
+  return {
+    id: kept.seedId,
+    text: kept.text,
+    content: kept.content,
+    held: draftMoves?.map((item) => item.id) ?? [],
   };
 }

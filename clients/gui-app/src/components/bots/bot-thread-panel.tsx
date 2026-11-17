@@ -54,7 +54,9 @@ import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type {
   BotAnswerReach,
   BotImageReach,
+  BotReplyReach,
 } from "@/hooks/bots/use-bot-send-version";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
@@ -74,6 +76,7 @@ import {
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
+import { useBotDraftActions } from "@/stores/bots/bot-drafts-store";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
@@ -167,6 +170,9 @@ const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
  * channel moves its answers to the channel's box. What the box holds is kept
  * under the bot (`useBotDraftsStore`), so it outlives the panel, until it is
  * sent.
+ *
+ * Reply on a row of the thread names it in the thread's box (T166), which
+ * takes the focus; the thread's rows offer no thread of their own.
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
@@ -178,6 +184,8 @@ export function BotThreadPanel(props: {
   readonly imageReach: BotImageReach;
   /** How a question card's answers reach the bot. */
   readonly answerReach: BotAnswerReach;
+  /** Where a Reply on a row of the thread reaches the bot (T166). */
+  readonly replyReach: BotReplyReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -306,6 +314,7 @@ type ThreadPanelBodyProps = {
   readonly boundHostId: string | null;
   readonly imageReach: BotImageReach;
   readonly answerReach: BotAnswerReach;
+  readonly replyReach: BotReplyReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -687,6 +696,7 @@ function originPresentation(
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions,
     failedRequest,
     failedRecovery: turns.failedRecovery,
@@ -736,6 +746,21 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     botId,
     originMessageId,
   );
+  // Reply on a row of the thread names it in this box; none while the box
+  // edits a failed message, whose send replaces it and replies to nothing.
+  const { setReplyTarget } = useBotDraftActions();
+  const [replyChosen, setReplyChosen] = useState(0);
+  const { replyReach } = props;
+  const chooseReply = useMemo(
+    () =>
+      replyReach !== "delivered" || edit !== null
+        ? null
+        : (target: BotReplyTarget) => {
+            setReplyTarget(botId, originMessageId, target);
+            setReplyChosen((chosen) => chosen + 1);
+          },
+    [botId, edit, originMessageId, replyReach, setReplyTarget],
+  );
   if (thread.kind === "pending" || thread.kind === "failed") {
     return (
       <UnlistedThread
@@ -770,6 +795,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           retry={thread.retry}
           sendable={thread.sendable}
           onEdit={setEdit}
+          onReply={chooseReply}
         />
       )}
       <BotRoutingCard
@@ -798,6 +824,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           seed={seed}
           keptDraft={keptDraft}
           quote={props.quote}
+          reply={{ reach: replyReach, chosen: replyChosen }}
           moved={moved}
           notice={notice}
           onSent={keepOpenThread}
@@ -807,6 +834,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           placeholder="Reply…"
           label={edit === null ? box.label : IN_THREAD_LABEL}
           reading={reading}
+          replyReach={replyReach}
           testId="bot-thread-composer"
         />
       )}
@@ -891,6 +919,8 @@ function KnownThread(
     readonly sendable: boolean;
     /** Edit on a failed message: its text goes in the panel's box. */
     readonly onEdit: (edit: BotComposerEdit) => void;
+    /** Reply on a row of the thread: it is named in the panel's box; `null` where none can. */
+    readonly onReply: ((target: BotReplyTarget) => void) | null;
   },
 ): ReactNode {
   const {
@@ -909,6 +939,7 @@ function KnownThread(
     resolveMember,
     sendFailure,
     onEdit,
+    onReply,
     onOpenTurn,
     landOn,
     layout,
@@ -1033,6 +1064,7 @@ function KnownThread(
                 { onError: () => failSend(null) },
               );
             },
+      reply: sendable ? onReply : null,
       answerQuestion:
         sendable && answerReach !== "none" ? answerQuestion : null,
       answerQuestions:
@@ -1054,6 +1086,7 @@ function KnownThread(
       failedRequestShown,
       listed?.sessionChatId,
       onOpenTurn,
+      onReply,
       originMessageId,
       opening,
       send,

@@ -10,6 +10,7 @@ import {
   BotMessageComposer,
   type BotComposerEdit,
 } from "@/components/bots/bot-message-composer";
+import { NO_BOT_REPLY } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
   BOT_ID,
@@ -55,6 +56,7 @@ function Box(props: {
         seed={kept.seed}
         keptDraft={kept.keptDraft}
         quote={null}
+        reply={NO_BOT_REPLY}
         moved={kept.moved}
         notice={kept.notice}
         onSent={() => false}

@@ -554,6 +554,41 @@ function intersectTarget(
   });
 }
 
+const BOUND_ELSEWHERE = "host-elsewhere";
+const BOUND_EPOCH = 3;
+
+/**
+ * The Team bot runs on a host other than the tab's, which lists `kinds` in
+ * its thread list, and its thread holds `rows`; the tab's host negotiated
+ * `bot.conversation.send` at 1.`minor`. Mounts the view.
+ */
+function mountBotBoundElsewhere(input: {
+  readonly minor: number;
+  readonly kinds: readonly string[];
+  readonly rows: Message[];
+}): void {
+  negotiateBotSend("host-1", { major: 1, minor: input.minor });
+  mocks.bots = [
+    bot(TRACY, "Tracy"),
+    {
+      ...bot(TEAM, "Team Tracy"),
+      boundHostId: BOUND_ELSEWHERE,
+      hostEpoch: BOUND_EPOCH,
+    },
+  ];
+  mocks.hosted[TEAM] = {
+    ...script([thread(TEAM, "team-new", 3_000)], { "team-new": FOLLOWING }),
+    threadAnchors: {
+      hostId: BOUND_ELSEWHERE,
+      epoch: BOUND_EPOCH,
+      kinds: [...input.kinds],
+    },
+  };
+  mocks.hosted[TRACY] = script([], {});
+  mocks.replyRows["team-new"] = input.rows;
+  mount();
+}
+
 /**
  * Reading needs a window the person is in; jsdom's own answer depends on which
  * cases ran before, so a case that reads says so itself.
@@ -2036,8 +2071,6 @@ describe("<BotThreadsView />", () => {
 });
 
 describe("<BotThreadsView /> a card whose bot asks several questions at once", () => {
-  const BOUND_ELSEWHERE = "host-elsewhere";
-  const BOUND_EPOCH = 3;
   const DEPLOY: BotQuestionItem = {
     text: "Deploy to staging now or after the train?",
     options: ["Now", "After the train"],
@@ -2064,34 +2097,9 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
     };
   }
 
-  /**
-   * The Team bot runs on a host other than the tab's, which lists `kinds` in
-   * its thread list, and its thread holds the card; the tab's host
-   * negotiated `bot.conversation.send` at 1.5. Mounts the view.
-   */
+  /** The Team bot's thread holds the card; the tab's host negotiated 1.5. */
   function mountCardOfBotBoundElsewhere(kinds: readonly string[]): void {
-    negotiateBotSend("host-1", { major: 1, minor: 5 });
-    mocks.bots = [
-      bot(TRACY, "Tracy"),
-      {
-        ...bot(TEAM, "Team Tracy"),
-        boundHostId: BOUND_ELSEWHERE,
-        hostEpoch: BOUND_EPOCH,
-      },
-    ];
-    mocks.hosted[TEAM] = {
-      ...script([thread(TEAM, "team-new", 3_000)], {
-        "team-new": FOLLOWING,
-      }),
-      threadAnchors: {
-        hostId: BOUND_ELSEWHERE,
-        epoch: BOUND_EPOCH,
-        kinds: [...kinds],
-      },
-    };
-    mocks.hosted[TRACY] = script([], {});
-    mocks.replyRows["team-new"] = [askedBoth()];
-    mount();
+    mountBotBoundElsewhere({ minor: 5, kinds, rows: [askedBoth()] });
   }
 
   it("draws one Submit and the tally under the card, none under a question, when the bot's host lists answers and this host takes them", async () => {
@@ -2129,6 +2137,53 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
   });
 });
 
+describe("<BotThreadsView /> Reply on a row of a full thread", () => {
+  /** The first `bot.conversation.send` line that carries a reply. */
+  const REPLIES_MINOR = 6;
+  const REPLY_ROW = botReply({
+    messageId: "team-new-reply",
+    text: "Staging looks fine.",
+    timestamp: 3_000,
+  });
+
+  async function fullThread(): Promise<HTMLElement> {
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    return revealFull("team-new");
+  }
+
+  it("offers Reply on a reply of the thread where the bot's host lists replies and this host takes them", async () => {
+    mountBotBoundElsewhere({
+      minor: REPLIES_MINOR,
+      kinds: ["answer", "message", "replies"],
+      rows: [REPLY_ROW],
+    });
+
+    const full = within(await fullThread());
+
+    expect(await full.findByRole("button", { name: "Reply" })).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "the bot's host does not list replies",
+      REPLIES_MINOR,
+      ["answer", "message"],
+    ],
+    [
+      "this host negotiated bot.conversation.send below the line that carries a reply",
+      REPLIES_MINOR - 1,
+      ["answer", "message", "replies"],
+    ],
+  ])("offers no Reply on the thread where %s", async (_label, minor, kinds) => {
+    mountBotBoundElsewhere({ minor, kinds, rows: [REPLY_ROW] });
+
+    const full = within(await fullThread());
+
+    expect(await full.findByText("Staging looks fine.")).toBeTruthy();
+    expect(full.queryByRole("button", { name: "Reply" })).toBeNull();
+  });
+});
+
 describe("<BotThreadsView /> a thread opened on a channel question, drawn without the channel's transcript", () => {
   const QUESTION_ID = "bot-question:req-q";
   const HOLD_TEXT = "Anything to hold back from the train?";
@@ -2159,16 +2214,39 @@ describe("<BotThreadsView /> a thread opened on a channel question, drawn withou
     };
   }
 
-  /** The fake clock moves until `check` holds: what the view starts on a timer, and what the host's replies feed, finishes in it. */
+  /** When the running case started, on the real clock, which the fake one leaves alone. */
+  let caseStartedAt = 0;
+  /** The running case's own timeout, as the runner holds it. */
+  let caseTimeout = 0;
+  beforeEach(({ task }) => {
+    caseStartedAt = performance.now();
+    caseTimeout = task.timeout;
+  });
+
+  /**
+   * The fake clock moves until `check` holds: what the view starts on a timer,
+   * and what the host's replies feed, finishes in it. Some of what it waits
+   * on runs on the real event loop, so the steps it takes are not countable:
+   * it gives up on the real clock instead, once another step would end past
+   * the case's own timeout, and throws the check's last error rather than
+   * leave the runner to time out.
+   */
   async function untilOnFakeClock(check: () => void): Promise<void> {
+    const deadline = caseStartedAt + caseTimeout;
+    let last: unknown = null;
     for (;;) {
+      const stepStartedAt = performance.now();
       try {
         check();
         return;
-      } catch {
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(50);
-        });
+      } catch (error) {
+        last = error;
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      if (performance.now() + (performance.now() - stepStartedAt) >= deadline) {
+        throw last;
       }
     }
   }

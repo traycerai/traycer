@@ -22,6 +22,10 @@ import {
   sha256Hex,
 } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
+import {
+  storedBotReplyTargetOf,
+  type BotReplyTarget,
+} from "@/lib/bots/bot-reply-target";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
 import { appLogger } from "@/lib/logger";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
@@ -31,6 +35,11 @@ export interface StoredBoxDraft {
   readonly text: string;
   readonly content: JsonContent | null;
   readonly seedId: number;
+  /**
+   * The message the box replies to (T166); `null` for none. A draft stored
+   * before replies reads back with none.
+   */
+  readonly replyTo: BotReplyTarget | null;
 }
 
 /** By bot, then by the box's conversation key. */
@@ -118,7 +127,9 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * once, without the images not yet stored. Each image is admitted against
  * the composer image store's budget before it is stored; one the budget
  * refuses is written without, the person told once, and tried again on the
- * next write. Only a change to the boxes' drafts is written. Nothing is
+ * next write. Only a change to the boxes' drafts is written, and a reply
+ * chosen for a box still waiting for its images, which goes straight onto
+ * its stored draft ({@link replyOnStoredBotBoxDraft}). Nothing is
  * written until the drafts store says it holds the stored drafts' text
  * ({@link botBoxDraftsRead}), so a change made while they are still being
  * read cannot replace them. A read that storage refuses fails, never reads as
@@ -250,6 +261,46 @@ export function storedBotBoxDrafts(name: string): StoredBoxDrafts | null {
     return readStoredValue(name)?.state.threadBoxes ?? {};
   } catch {
     return null;
+  }
+}
+
+/**
+ * Puts the reply chosen for a box still waiting for its draft's images onto
+ * that box's stored draft, its text and images left as stored, so a reload
+ * reads the draft back under it (T166). No write of the store's drafts can:
+ * a waiting box is in neither them nor this window's baseline, which is also
+ * why every later write leaves this entry as stored. Nothing is written for a
+ * box with nothing stored, so a reply never makes a box out of nothing, nor
+ * where storage cannot be read, which is unknown, never nothing. Written
+ * under `name` and the store's `version`, as every write is, since the
+ * drafts read back are already in its format.
+ */
+export function replyOnStoredBotBoxDraft(
+  { name, version }: { readonly name: string; readonly version: number },
+  botId: string,
+  key: string,
+  replyTo: BotReplyTarget | null,
+): void {
+  if (writer.stopped || !writer.read) return;
+  try {
+    const stored = readStoredValue(name);
+    if (stored === null) return;
+    const draft = stored.state.threadBoxes[botId]?.[key];
+    if (draft === undefined) return;
+    const threadBoxes = editableDrafts(stored.state.threadBoxes);
+    threadBoxes[botId] = {
+      ...threadBoxes[botId],
+      [key]: { ...draft, replyTo },
+    };
+    localStorage.setItem(
+      name,
+      JSON.stringify({ version, state: { threadBoxes } }),
+    );
+  } catch (error) {
+    // The key names the account: only the error's name is logged.
+    appLogger.warn("[bot-box-drafts] waiting draft's reply write failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
   }
 }
 
@@ -751,10 +802,12 @@ function takeOutGoneImages(
     // A box stored without those images stays as it is: an empty one is
     // another window's draft written ahead of its images, which its retry needs.
     if (content === draft.content) continue;
-    const empty =
-      draft.text.length === 0 &&
-      (content === null || !containsImageAtoms(content));
-    putBox(threadBoxes, botId, key, empty ? null : { ...draft, content });
+    putBox(
+      threadBoxes,
+      botId,
+      key,
+      emptyDraft(draft, content) ? null : { ...draft, content },
+    );
   }
 }
 
@@ -906,8 +959,36 @@ function sameDraft(
   return (
     a.text === b.text &&
     a.seedId === b.seedId &&
+    sameReplyTarget(a.replyTo, b.replyTo) &&
     (a.content === b.content ||
       JSON.stringify(a.content) === JSON.stringify(b.content))
+  );
+}
+
+function sameReplyTarget(
+  a: BotReplyTarget | null,
+  b: BotReplyTarget | null,
+): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.messageId === b.messageId && a.author === b.author && a.line === b.line
+  );
+}
+
+/**
+ * Whether a box's draft holds nothing to keep: no text, no image, and no
+ * message it replies to. `content` is the draft's document as it is about to
+ * be written or was read back.
+ */
+function emptyDraft(
+  draft: StoredBoxDraft,
+  content: JsonContent | null,
+): boolean {
+  return (
+    draft.text.length === 0 &&
+    draft.replyTo === null &&
+    (content === null || !containsImageAtoms(content))
   );
 }
 
@@ -1011,12 +1092,7 @@ function storedDraft(
       ],
     };
   }
-  if (
-    draft.text.length === 0 &&
-    (content === null || !containsImageAtoms(content))
-  ) {
-    return null;
-  }
+  if (emptyDraft(draft, content)) return null;
   return { ...draft, content };
 }
 
@@ -1161,7 +1237,7 @@ function restoredDraft(
   content: JsonContent | null,
 ): StoredBoxDraft | null {
   if (content === null) return draft;
-  if (draft.text.length === 0 && !containsImageAtoms(content)) return null;
+  if (emptyDraft(draft, content)) return null;
   return {
     ...draft,
     content: (content.content?.length ?? 0) === 0 ? null : content,
@@ -1283,10 +1359,10 @@ export function storedBoxDraftsOf(value: unknown): StoredBoxDrafts {
 
 function storedDraftOf(value: unknown): StoredBoxDraft | null {
   if (!isRecord(value)) return null;
-  const { text, content, seedId } = value;
+  const { text, content, seedId, replyTo } = value;
   if (typeof text !== "string" || typeof seedId !== "number") return null;
   if (content !== null && !isJsonContent(content, 0)) return null;
-  return { text, content, seedId };
+  return { text, content, seedId, replyTo: storedBotReplyTargetOf(replyTo) };
 }
 
 /**

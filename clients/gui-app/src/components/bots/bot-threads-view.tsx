@@ -49,6 +49,7 @@ import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import {
   useBotAnswerReach,
   useBotImageReach,
+  useBotReplyReach,
 } from "@/hooks/bots/use-bot-send-version";
 import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
@@ -745,6 +746,11 @@ function FullThread(props: {
     boundHostId,
     boundHostTakes: threadAnchorKinds,
   });
+  const replyReach = useBotReplyReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const unfolded = useBotThreadFoldStore((state) =>
     Object.hasOwn(state.unfolded, threadId),
   );
@@ -807,6 +813,7 @@ function FullThread(props: {
             boundHostId={boundHostId}
             imageReach={imageReach}
             answerReach={answerReach}
+            replyReach={replyReach}
             botTitle={bot.title}
             conversationId={thread.conversationId}
             originMessageId={originMessageId}
