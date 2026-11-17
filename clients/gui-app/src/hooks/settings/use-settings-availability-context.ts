@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import { isMobileApp } from "@/lib/mobile-app";
-import { desktopSoundtrackBridge } from "@/lib/soundtrack/desktop-set";
+import { desktopSoundtrackBridge } from "@/lib/soundtrack/desktop-soundtrack-bridge";
 import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 import { desktopRecordingChannel } from "@/lib/soundtrack/recording-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
