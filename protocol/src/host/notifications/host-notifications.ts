@@ -4018,20 +4018,11 @@ export type NotificationHooksSaveRequestV40 = z.infer<
 >;
 
 /**
- * `host.notificationHooks.save@4.0`'s answer: the status `@3.0` answers, and
- * the account's part of the saved list.
- *
- * `accountHooks` holds the saved hooks this host classifies as not staying on
- * this computer, at most 64. `[]` means the account's hooks column becomes
- * empty; `null` means the app writes nothing to it.
- *
- * The host writes the saved hooks to this computer's file and answers; it
- * makes no write of the account's hooks. The app writes the account's hooks
- * column from this field, as a whole replace, against the row's revision it
- * read itself, and adds `held: false` to each entry. A hook in `accountHooks`
- * that the account's row does not hold is removed from this computer's file
- * when the host next reads that row, so a save is complete only when the
- * app's write of `accountHooks` to the account succeeds.
+ * `@3.0`'s status plus `accountHooks`: the saved hooks not staying on this computer, at
+ * most 64; `[]` empties the account's column, `null` writes nothing. The host writes only
+ * this computer's file; the app replaces the column from this field against the revision
+ * it read, adding `held: false`. A save is complete only when that write succeeds: the
+ * host drops from its file any such hook the account's row does not hold.
  */
 export const notificationHooksSaveResponseSchemaV40 = lazySchema(() =>
   notificationHooksStatusResponseSchema
@@ -4045,10 +4036,8 @@ export type NotificationHooksSaveResponseV40 = z.infer<
 >;
 
 /**
- * A major, not a minor: `@3.0`'s answer is `.strict()`, so a `@3.0` caller
- * refuses an answer carrying `accountHooks`; the downgrades below drop it.
- * Its request drops the grant field. Older request shapes receive a null
- * grant on downgrade; their requests lose that field on upgrade.
+ * A major: `@3.0`'s answer is `.strict()` and would refuse `accountHooks`. The request
+ * drops the grant field; a downgrade gives an older shape a null grant.
  */
 export const hostNotificationHooksSaveV40 = defineRpcContract({
   method: "host.notificationHooks.save",

@@ -91,11 +91,7 @@ export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
  */
 export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
 
-/**
- * Client declaration that `openAck` can carry the team credential state. A host
- * at this protocol does not read it: it fills `openAck.hostCredentialState` for
- * every `/stream` client.
- */
+/** A host at this protocol does not read it: it fills `openAck.hostCredentialState` for every `/stream` client. */
 export const STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE = "teamCredentialState";
 
 /**

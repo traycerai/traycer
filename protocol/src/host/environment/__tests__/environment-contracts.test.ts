@@ -557,8 +557,6 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
         },
       ],
     });
-    // A legacy host's role-less row upgrades to Viewer, and Personal remains
-    // owner.
     expect(
       upgraded.environments.map((environment) =>
         grantedEnvironmentRole(environment.effectiveRole),
@@ -748,7 +746,6 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     });
-    // Each member from an older host upgrades with the Viewer role.
     expect(
       upgraded.members.map((member) =>
         grantedTeamMemberRole(member.effectiveRole),

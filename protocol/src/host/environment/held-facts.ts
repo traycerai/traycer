@@ -1,26 +1,15 @@
-/**
- * The line a review sheet draws for a held executable entry: what it runs or
- * holds, masked so that no credential is shown. One copy the host and the app
- * both draw it from.
- */
+// One copy the host and the app both draw the masked line from.
 import { z } from "zod";
 import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-/** The pieces of a string a token can hide among: words, `k=v` halves, URL parts. */
 export const PIECE_SEPARATORS = /[\s=&?:,;"']+/;
 
 const SHOWN_MAX = 8192;
 const MASK = "•••";
 const PIECES = new RegExp(`(${PIECE_SEPARATORS.source})`);
 
-/**
- * `text` as the sheet shows it to its owner: its shape, never a credential.
- * The migrator's own rule decides (`classifyCredential` over the pieces it
- * splits a value into): a word or piece that looks like a key, and a piece
- * that follows a credential's name (`--api-key <key>`, `TOKEN=<key>`), reads
- * `•••`.
- */
+/** The migrator's rule decides (`classifyCredential`); a piece after a credential's name also reads `•••`. */
 function masked(text: string): string {
   return (
     text
@@ -45,7 +34,6 @@ function masked(text: string): string {
   );
 }
 
-/** A fact as the sheet shows it: masked and bounded; null when there is none. */
 function shown(text: string): string | null {
   const bounded = masked(text).slice(0, SHOWN_MAX);
   return bounded.trim().length === 0 ? null : bounded;
@@ -67,7 +55,6 @@ const NO_FACTS: HeldFacts = {
   value: null,
 };
 
-/** A held stdio MCP server's definition, as the migration holds it. */
 const heldStdioDefinitionSchema = lazySchema(() =>
   z.object({
     definition: z.object({
@@ -78,10 +65,7 @@ const heldStdioDefinitionSchema = lazySchema(() =>
   }),
 );
 
-/**
- * The fields of a held value each line reads, and only those: a shell's path
- * and arguments, a setup script's text, a variable's or an override's value.
- */
+/** Only the fields each line reads. */
 const heldShellValueSchema = lazySchema(() =>
   z.object({ path: z.string(), args: z.array(z.string()) }),
 );
@@ -91,12 +75,8 @@ const heldSetupScriptValueSchema = lazySchema(() =>
 const heldStringValueSchema = lazySchema(() => z.object({ value: z.string() }));
 
 /**
- * What a held executable entry does, for its line on the sheet. A value that
- * does not parse for its kind has no facts. Never filled, because nothing on
- * this host knows them: a skill's description (the migration holds no
- * skill, and a held skill's content is not on this host) and an agent
- * definition's harness. No held change names when it runs, so the facts
- * carry no trigger.
+ * A value that does not parse for its kind has no facts. A skill's description and
+ * a definition's harness are never filled: nothing on this host knows them.
  */
 export function heldFactsOf(entry: {
   readonly kind: string;

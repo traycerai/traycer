@@ -595,22 +595,13 @@ export type ListChatRecordsResponseV14 = z.infer<
   typeof listChatRecordsResponseV14Schema
 >;
 
-// ─── `epic.listChatRecords@1.5` - who started the chat ──────────────────────
-//
-// Request unchanged from `@1.3`; the row gains one optional key, which an
-// older peer's schema strips.
+// `epic.listChatRecords@1.5`: request unchanged from `@1.3`; the row gains one
+// optional key, which an older peer's schema strips.
 
 /**
- * The person a chat's work is attributed to, on the row of the host that holds
- * the chat: its recorded creator; else its owner when the owner is a person;
- * else `"system"` (a chat owned by the host's environment with no recorded
- * creator).
- *
- * Optional rather than nullable, because absent is the honest answer twice
- * over: a record saved before the field carries none, and a foreign replica
- * row never does (the cloud row does not replicate the creator; the app reads
- * it from the host that holds the chat). Set with the record and never patched
- * afterwards, so no list revision moves for it.
+ * Who the chat's work is attributed to: its recorded creator, else a person owner,
+ * else `"system"`. Absent on a record saved before the field and on every foreign
+ * replica row. Set with the record and never patched, so no list revision moves for it.
  */
 const chatRecordStarterUserIdSchema = lazySchema(() =>
   z.string().min(1).optional(),
@@ -677,12 +668,7 @@ export type ChatRecordSummaryStreamV13 = z.infer<
   typeof chatRecordSummaryStreamV13Schema
 >;
 
-/**
- * The `host.chatRecords.subscribe@1.5` chat row: the `@1.3` stream row plus
- * `starterUserId`, with the list row's meaning ({@link
- * chatRecordSummaryV15Schema}). Both surfaces carry it because the app's table
- * takes rows from the list and from the stream's upserts.
- */
+/** The `@1.3` stream row plus `starterUserId`, as on the list row: the app's table takes rows from both. */
 export const chatRecordSummaryStreamV15Schema = lazySchema(() =>
   chatRecordSummaryStreamV13Schema.extend({
     starterUserId: chatRecordStarterUserIdSchema,
@@ -1456,10 +1442,7 @@ export type HostChatRecordsSubscribeServerFrameV14 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV14
 >;
 
-// ─── `host.chatRecords.subscribe@1.5` - who started the chat ────────────────
-//
-// The `upsert` row grows to {@link chatRecordSummaryStreamV15Schema}. A new
-// frozen set beside `@1.4`, every arm restated, for the reason `@1.4` gives.
+// `host.chatRecords.subscribe@1.5`: every arm restated beside `@1.4`, for `@1.4`'s reason.
 export const hostChatRecordsSubscribeServerFrameSchemaV15 = lazySchema(() =>
   z
     .discriminatedUnion("kind", [

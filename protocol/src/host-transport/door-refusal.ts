@@ -12,11 +12,8 @@ const CREDENTIAL_REASONS: ReadonlySet<HostDoorReason> = new Set([
 ]);
 
 /**
- * Whether a host's refusal goes to the connection's auth recovery. A
- * recognised `doorReason` decides alone, whatever code carries it; the code
- * decides only when the reason is absent (an older host) or one this client
- * does not know. `clock_skew` is not among them: a fresh token does not fix a
- * clock.
+ * A recognised `doorReason` decides alone; the code only when the reason is absent
+ * or unknown. `clock_skew` is excluded: a fresh token does not fix a clock.
  */
 export function isCredentialRefusal(details: FatalErrorDetails): boolean {
   const reason = readDoorReason(details.doorReason);

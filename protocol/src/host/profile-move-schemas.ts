@@ -4,11 +4,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { botIdSchema } from "@traycer/protocol/host/bot/schemas";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 
-/**
- * `providers.previewProfileMove` and `providers.commitProfileMove`.
- * Both are optional at 1.0, off the released floor. This file is the
- * schemas and the contracts. It registers no resolver.
- */
+/** Both methods are optional at 1.0, off the released floor; this file registers no resolver. */
 
 /** Same bounds as the bot row's `boundHostId`. That const is not exported. */
 const profileMoveHostIdSchema = lazySchema(() => z.string().min(1).max(255));
@@ -199,10 +195,8 @@ export type ProvidersPreviewProfileMoveResponse = z.infer<
 >;
 
 /**
- * A bot is never deferred; it moves by one cloud write at commit and its
- * outcome is `moved` even while one of its threads is in a turn; that
- * thread keeps the settings it started with; the count of targets that
- * move when their turns end never includes a bot.
+ * A bot is never deferred: one cloud write at commit, `moved` even while a thread is
+ * in a turn (that thread keeps its settings), so the deferred count never includes a bot.
  */
 const profileMoveResultSchema = lazySchema(() =>
   z.discriminatedUnion("outcome", [

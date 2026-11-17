@@ -29,11 +29,9 @@ export type AttachEnvironmentResponse = z.infer<
 >;
 
 /**
- * `epic.attachEnvironment@2.0`: the person's own host prepares the task for a
- * team's environment and attaches nothing. It answers once the task has a
- * home in the cloud (a local create still promoting is promoted and waited
- * for), with the same refusals as `@1.0`'s share gate. The attachment itself
- * is then the app's own call to the cloud on the person's sign-in.
+ * `epic.attachEnvironment@2.0`: the person's own host prepares the task and attaches
+ * nothing; it answers once the task has a cloud home, with `@1.0`'s share-gate
+ * refusals. The app then attaches on the person's sign-in.
  */
 export const attachEnvironmentRequestSchemaV20 = lazySchema(() =>
   z.object({

@@ -4605,13 +4605,10 @@ export class RemoteSession<
         entry.requestId,
         entry.method,
       );
-      // This one request refused at the door: the door's state, exactly as a
-      // refused open raises it.
       if (answered.doorRefusal !== null)
         this.options.auth.door?.refused(answered.doorRefusal);
-      // A transient refusal (a team member's admission the host cannot check
-      // now) is this call's no-dispatch attestation, as on a local `/rpc`
-      // reply: the caller may send it again, and nothing is minted for it.
+      // A transient refusal is this call's no-dispatch attestation: it may be sent again,
+      // and nothing is minted for it.
       const answer =
         wireError.retryable === true
           ? new RetryableTransportError({

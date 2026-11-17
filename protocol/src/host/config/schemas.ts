@@ -35,13 +35,7 @@ export type ConfigShellGetResponse = z.infer<
   typeof configShellGetResponseSchema
 >;
 
-/**
- * v1.1 adds `entries`: the shells this computer has configured, each with the
- * arguments it remembers for it. `args: null` means none are remembered and
- * the default applies, so an app states a shell save's selection with one
- * rule: the remembered arguments when present, otherwise
- * `defaultShellArgs(path)` (`@traycer/protocol/config/shell-family`).
- */
+/** `args: null`: none remembered, so the default applies. */
 export const configShellGetResponseSchemaV11 = lazySchema(() =>
   configShellGetResponseSchema.extend({
     entries: z.array(configShellEntrySchema),
@@ -52,19 +46,9 @@ export type ConfigShellGetResponseV11 = z.infer<
 >;
 
 /**
- * What the app states the `shell` item will be once a shell save is made, so
- * it can remember its edit and recognise its hold among the environment's held
- * changes (`settingsSaveItemEdit`):
- * - `shell`: this path with these arguments is selected;
- * - `system_default`: no shell is selected, and the item is deleted;
- * - `not_stated`: the caller predates this field (the upgrade from 1.1 fills
- *   it); the app expects no proposal.
- *
- * The host computes the item from its own config and proposes that; it never
- * writes the stated value over what it computes. When the two agree (whenever
- * the app's read of the computer is current) the save is confirmed without a
- * click; when they differ, the computer keeps its own value and the proposal
- * waits in the review list for one click, with no error.
+ * The host computes the item from its own config and never writes the stated
+ * value over it; a difference waits in the review list. `not_stated`: the app
+ * expects no proposal.
  */
 export const configShellSelectionSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -176,10 +160,7 @@ export const configShellAddRequestSchema = lazySchema(() =>
 );
 export type ConfigShellAddRequest = z.infer<typeof configShellAddRequestSchema>;
 
-/**
- * v1.2 adds `selection`. Add selects the shell it adds, so the app states
- * `{ path, args: defaultShellArgs(path) }`.
- */
+/** Add selects the shell, so the app states `{ path, args: defaultShellArgs(path) }`. */
 export const configShellAddRequestSchemaV12 = lazySchema(() =>
   configShellAddRequestSchema.extend({ selection: configShellSelectionSchema }),
 );
@@ -222,11 +203,7 @@ export type ConfigShellRemoveRequest = z.infer<
   typeof configShellRemoveRequestSchema
 >;
 
-/**
- * v1.2 adds `selection`: `system_default` when `path` is the current shell
- * (`config.shell.get`), else `not_stated`: removing a shell that is not the
- * current one changes no item, and the app expects no proposal.
- */
+/** `system_default` when `path` is the current shell, else `not_stated`. */
 export const configShellRemoveRequestSchemaV12 = lazySchema(() =>
   configShellRemoveRequestSchema.extend({
     selection: configShellSelectionSchema,
@@ -263,11 +240,7 @@ export type ConfigShellRevertArgsRequest = z.infer<
   typeof configShellRevertArgsRequestSchema
 >;
 
-/**
- * v1.2 adds `selection`: `{ path, args: defaultShellArgs(path) }` when `path`
- * is the current shell, else `not_stated`: reverting a shell that is not the
- * current one changes no item, and the app expects no proposal.
- */
+/** `{ path, args: defaultShellArgs(path) }` when `path` is the current shell, else `not_stated`. */
 export const configShellRevertArgsRequestSchemaV12 = lazySchema(() =>
   configShellRevertArgsRequestSchema.extend({
     selection: configShellSelectionSchema,

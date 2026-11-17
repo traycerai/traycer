@@ -203,11 +203,7 @@ export const environmentMovePlanUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
-/**
- * The configuration a move or another environment operation addresses: the
- * person's Personal one, or a team's. Nested in a request; the stage
- * evidence carries the same facts flat (`targetKind`).
- */
+/** The stage evidence carries the same facts flat (`targetKind`). */
 export const environmentOperationTargetSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -226,21 +222,9 @@ export type EnvironmentOperationTarget = z.infer<
 >;
 
 /**
- * What the app read of the person's Personal on the person's own sign-in, for
- * the sheet: each row of every item kind the item routes serve, and whether
- * Personal holds any secret. Personal's environment is `target.environmentId`.
- * The app sends the rows exactly as the route answered them, in the route's
- * order, read for this sheet and never from an older copy, so the sheet and
- * authn's accept see the same Personal as nearly as the two reads allow.
- *
- * `null` when the app could not read Personal; the computer then answers as
- * when the sheet is unavailable. For a team target the app sends `null` and
- * the computer does not read the field.
- *
- * The computer uses this only to draw the sheet ("Already in Personal" and
- * "Different from Personal", and whether Personal's secrets reach this
- * computer), never as a fact for the migrate: authn decides row by row at the
- * accept.
+ * Every row of every item kind the routes serve, as answered, read for this sheet;
+ * `null` when Personal could not be read, and always for a team. It only draws the
+ * sheet: authn decides each row at the accept.
  */
 export const environmentMovePersonalSchema = lazySchema(() =>
   z
@@ -266,11 +250,7 @@ export type EnvironmentMovePersonal = z.infer<
   typeof environmentMovePersonalSchema
 >;
 
-/**
- * `@2.0` names the configuration the move is for (`target`). A target that is
- * not the move's own is refused with `E_MOVE_NOT_AWAITING`, as a host whose
- * move is not waiting is. `personal` is what the sheet is drawn against.
- */
+/** A target that is not the move's own is refused with `E_MOVE_NOT_AWAITING`. */
 export const environmentMovePlanRequestSchemaV20 = lazySchema(() =>
   z.object({
     target: environmentOperationTargetSchema,
@@ -282,13 +262,8 @@ export type EnvironmentMovePlanRequestV20 = z.infer<
 >;
 
 /**
- * `@1.2`'s answer without `itemChoices`: a `@2.0` host always honours a
- * `stays` choice on a `moves` row, so there is nothing to advertise. Nor
- * does it carry the two retired lists the released shapes still declare,
- * `looksLikeAKey` and `sameNameInPersonal`: a variable is a value and is
- * never judged as a credential. A new major has no older sender, so no row
- * list or flag defaults. Reading a plan never stages, never ends an attempt
- * and never touches a staged file.
+ * No `itemChoices` (a `@2.0` host always honours `stays`) and no retired lists.
+ * Reading a plan never stages, ends an attempt or touches a staged file.
  */
 export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
   z.object({
@@ -320,10 +295,8 @@ export const environmentMovePlanV20 = defineRpcContract({
 });
 
 /**
- * Required by the registry for a new major, and never run: `@2.0` has no
- * downgrade to `@1.x`, so a host refuses a `@1.x` caller before upgrading
- * anything, and an app meets a `@1.x`-only host as unsupported. `@1.2`'s
- * request names no target, and `@2.0` cannot be read without one.
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.x` caller and an app
+ * meets a `@1.x`-only host as unsupported.
  */
 export const environmentMovePlanUpgradeV12ToV20 = defineUpgradePath<
   typeof environmentMovePlanV12,
@@ -418,17 +391,10 @@ export const environmentMoveAcceptV10 = defineRpcContract({
   responseSchema: environmentMoveAcceptResponseSchema,
 });
 
-// ── stage, start and outcome ───────────────────────────────────────────────
-//
-// The move in three calls: `stage` records the person's choices and answers
-// the evidence the app sends authn as its acceptance; `start` hands the host
-// that acceptance; `outcome` (and `environment.status@1.3`'s `move`) reads
-// where the started attempt stands. `plan@2.0`, `stage` and `start` refuse
-// with `E_MOVE_NOT_AWAITING` when this computer has no move waiting.
+// `plan@2.0`, `stage` and `start` refuse with `E_MOVE_NOT_AWAITING` when no move is waiting.
 
 const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/u));
 
-/** The person's `stays` on one `moves` row, by the row's key. */
 export const environmentMoveStaysChoiceSchema = lazySchema(() =>
   z.object({
     key: z.string().min(1).max(3072),
@@ -457,13 +423,8 @@ export type EnvironmentMoveStageRequest = z.infer<
 >;
 
 /**
- * The fields both evidence arms share. `attemptId` is minted by this stage.
- *
- * `keyChoices` is the request's, kept only for a key of a `moves` row whose
- * kind is `variable`, `env_override` or `secret`: one entry per key (the last
- * when a key repeats), ordered by the `moves` rows, every other key dropped.
- * An app that sends only choices on those rows, one per key, in the drawn
- * `moves` order, gets its request back exactly.
+ * `keyChoices` is kept only for keys of `moves` rows of kind `variable`,
+ * `env_override` or `secret`: one per key (the last), in `moves` order.
  */
 function environmentMoveEvidenceCommonShape() {
   return {
@@ -479,13 +440,9 @@ function environmentMoveEvidenceCommonShape() {
 }
 
 /**
- * `{ ...evidence, ...authorization }` is authn's acceptance request for that
- * arm, flat, with nothing to rename; `disclosureVersion` appears once. The
- * objects strip unknown keys, so a parsed answer holds exactly these. Staging
- * again ends the earlier attempt, whose id then answers `not_found`; a staged
- * attempt that is never started leaves `environment.status`'s `move` null,
- * survives a restart, and ends at the next stage, at Stop sharing or at the
- * personal purge. Refused with `E_MOVE_NOT_AWAITING` once a start has begun.
+ * `{ ...evidence, ...authorization }` is authn's acceptance request, flat. Staging
+ * again ends the earlier attempt (`not_found`); an unstarted attempt survives a
+ * restart and ends at the next stage, Stop sharing or the purge.
  */
 export const environmentMoveStageResponseSchema = lazySchema(() =>
   z.union([
@@ -521,10 +478,7 @@ export const environmentMoveStageV10 = defineRpcContract({
   responseSchema: environmentMoveStageResponseSchema,
 });
 
-/**
- * `start`'s and `outcome`'s answer: the attempt's outcome, or `not_found` for
- * an attempt this host does not hold (never staged, or ended).
- */
+/** `not_found`: never staged, or ended. */
 export const environmentMoveOutcomeAnswerSchema = lazySchema(() =>
   z.discriminatedUnion("state", [
     environmentMoveAttemptOutcomeSchema,
@@ -551,13 +505,8 @@ export type EnvironmentMoveStartRequest = z.infer<
 >;
 
 /**
- * Starts a staged attempt with authn's acceptance and answers at once what
- * `outcome` would. An unknown or ended attempt answers `not_found`; a
- * `planHash` other than the staged one, `needs_person` `plan_hash_mismatch`;
- * a started attempt named with another `acceptanceId`, `needs_person`
- * `move_acceptance_conflict`. The same triple again answers the recorded
- * outcome and restarts nothing. A staged attempt while no move awaits is
- * refused with `E_MOVE_NOT_AWAITING`.
+ * Answers at once what `outcome` would. The same triple again answers the recorded
+ * outcome and restarts nothing.
  */
 export const environmentMoveStartV10 = defineRpcContract({
   method: "environment.move.start",
@@ -675,12 +624,7 @@ export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-/**
- * One Personal folder retained at leave. Its own id may be a visible row's
- * id or an alias in the providers list; two folders of one account stay
- * separate entries. Credential kind determines whether sign-in is offered,
- * which cannot be inferred from that list's row status.
- */
+/** Two folders of one account stay separate entries; credential kind decides whether sign-in is offered. */
 export const environmentMovePersonalProfileSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,

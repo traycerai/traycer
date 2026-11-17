@@ -13,11 +13,7 @@ import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
  * optional manifest and the GUI meets `E_HOST_UNSUPPORTED`. Shapes:
  * `environment-schemas.ts`.
  *
- * Which carry the executable-write grant: `config.env.localOverride.set`,
- * `environment.agentDefinitions.put`, `environment.setup.put` and
- * `environment.undo`, the writes that reach an execution sink.
- * `environment.setup.retry` reruns content already authorised, and Review's
- * Apply goes through the dashboard, so neither takes one here.
+ * No method here carries an executable-write grant.
  *
  * `@1.1` MINORs, each with its upgrade from `@1.0`: every
  * `environment.secrets.*` request names the environment it addresses (null
@@ -275,12 +271,8 @@ export const hostRemoteAccessSetV20 = defineRpcContract({
 });
 
 /**
- * Required by the registry for a new major, and never run: `@2.0` has no
- * downgrade to `@1.0`, so a host refuses a `@1.0` caller before upgrading
- * anything, and an app meets a `@1.0`-only host as unsupported. Neither side
- * can be carried honestly: `{ enabled: true }` has no `@2.0` form, because
- * turning remote access on is the app's call to authn, and `@1.0`'s
- * `turning_off` is not `@2.0`'s `off`.
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.0` caller and an app
+ * meets a `@1.0`-only host as unsupported.
  */
 export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
   typeof hostRemoteAccessSetV10,
@@ -301,17 +293,9 @@ export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
 });
 
 /**
- * `host.status.refresh@1.0`: this computer reads its own row now, through the
- * status read it already runs, and answers once that read has ended, whether
- * the row was read, unreachable or refused. It has no refusals of its own. A
- * host with no environment domain running answers at once and does nothing.
- * The answer carries no result on purpose (see `hostStatusRefreshResponseSchema`).
- * Any person the door admits may call it, with no role: it reads only this
- * computer's own row. Registered in `ENVIRONMENT_RPC_METHODS` for the app's
- * Remote access caller, off `RELEASED_FLOOR_METHOD_NAMES` with
- * `degrade: { kind: "unsupported" }`, so a host without the method keeps its
- * two-minute status interval. Not an agent capability, and not on the
- * host-to-host allowlist.
+ * Reads this computer's own row now and answers once that read ends, with no result
+ * and no refusals. Any admitted person may call it. Off the released floor with
+ * `unsupported`, so an older host keeps its two-minute interval.
  */
 export const hostStatusRefreshV10 = defineRpcContract({
   method: "host.status.refresh",

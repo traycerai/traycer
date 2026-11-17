@@ -1340,11 +1340,8 @@ export const epicAttachEnvironmentV20 = defineRpcContract({
 });
 
 /**
- * Required by the registry for a new major, and never run: `@2.0` has no
- * downgrade to `@1.0`, so a host refuses a `@1.0` caller before upgrading
- * anything, and an app meets a `@1.0`-only host as unable to send it.
- * Neither side can be carried honestly: `@1.0` asks for the attachment and
- * `@2.0` never makes it, and `@2.0`'s prepare is not `@1.0`'s attached.
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.0` caller and an app
+ * meets a `@1.0`-only host as unsupported.
  */
 export const epicAttachEnvironmentUpgradeV10ToV20 = defineUpgradePath<
   typeof epicAttachEnvironmentV10,
@@ -2160,11 +2157,7 @@ export const epicListChatRecordsV15 = defineRpcContract({
   responseSchema: listChatRecordsResponseV15Schema,
 });
 
-/**
- * REQUEST and RESPONSE: the identity. A `@1.4` host's rows carry no
- * `starterUserId`, and absent is the honest answer for it: the key is
- * optional, and no value can be stated for that peer.
- */
+/** A `@1.4` host's rows carry no `starterUserId`, and absent is the honest answer for it. */
 export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
   typeof epicListChatRecordsV14,
   typeof epicListChatRecordsV15

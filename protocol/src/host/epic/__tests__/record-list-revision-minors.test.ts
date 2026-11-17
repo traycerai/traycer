@@ -563,8 +563,6 @@ describe("host.chatRecords.subscribe@1.4", () => {
   });
 });
 
-// ─── D. epic.listChatRecords@1.5 and host.chatRecords.subscribe@1.5 ─────────
-
 describe("epic.listChatRecords@1.5", () => {
   const V14_ROW = { ...CHAT_ROW, evicted: false };
 

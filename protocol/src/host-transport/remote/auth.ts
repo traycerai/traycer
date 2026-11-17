@@ -33,11 +33,7 @@ interface SessionCredentialPlane {
         refusal: FatalErrorDetails,
       ) => Promise<RemoteSessionAuthRecoveryOutcome>)
     | null;
-  /**
-   * Told of every refusal the host itself sent and of every open it admitted.
-   * A relay's session kill is not the host's refusal and is never reported.
-   * A host-to-host dialer has no use for it and leaves it out.
-   */
+  /** A relay's session kill is not the host's refusal and is never reported. */
   readonly door?: SessionDoorObserver;
 }
 

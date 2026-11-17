@@ -238,11 +238,7 @@ export const resolveCloudChatHeadResponseV10Schema = lazySchema(() =>
       chat: cloudChatSummaryV10Schema.nullable(),
       outcome: resolveCloudChatHeadOutcomeSchema,
     })
-    // The doc line above is a validated invariant, not prose: a "missing"
-    // outcome with a summary attached (or a resolved outcome without one)
-    // is a malformed response either way, and every consumer branches on
-    // `outcome.status` while reading `chat` - so the contract refuses the
-    // combination rather than letting one consumer discover it at runtime.
+    // Enforced, not prose: every consumer branches on `outcome.status` while reading `chat`.
     .superRefine((response, ctx) => {
       const chatMustBeNull = response.outcome.status === "missing";
       if ((response.chat === null) !== chatMustBeNull) {

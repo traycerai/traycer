@@ -17,14 +17,6 @@ import {
   sessionOpenPayloadSchema,
 } from "@traycer/protocol/host-transport/mux";
 
-/**
- * `doorReason` on the fatal-error payload (`/rpc`, `/stream`, relay `FATAL`)
- * and on a persistent `/rpc` response error, plus `namedUserId` on a session
- * OPEN's `authz`. An empty string fails the parse. A missing key stays
- * missing. An older fatal or response schema strips `doorReason`, and an
- * older OPEN schema strips `namedUserId`.
- */
-
 const FATAL_DETAILS = {
   code: "UNAUTHORIZED",
   reason: "refused at the door",

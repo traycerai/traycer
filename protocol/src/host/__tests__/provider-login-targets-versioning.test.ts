@@ -59,8 +59,7 @@ const codexSuccessV10 = providerCliStateSchemaV10.parse({
   auth: codexSuccessAuth,
 });
 
-// These populated values exercise old-line key preservation. They are
-// projection fixtures, not claims that a host emits these outcomes together.
+// Projection fixtures only, not claims that a host emits these outcomes together.
 const startV15Projection = {
   url: "https://login.example.test/start",
   started: false,
@@ -72,8 +71,6 @@ const startV15Projection = {
   targetRefusal: "not-available-yet",
 } as const;
 
-// Projection fixture only: the old schemas retain or strip fields, and this
-// does not claim the host emits these mutually exclusive outcomes together.
 const signInRequestFixture: ProviderLoginSignInRequest = {
   operationId: "8c6f4f97-8a2c-4b7e-9875-223456789abc",
   environmentId: "environment-fixture",

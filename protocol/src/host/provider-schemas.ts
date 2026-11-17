@@ -1655,11 +1655,8 @@ export type ManagedProfileDeliveryRefusal = z.infer<
 >;
 
 /**
- * What a person is told about an account that cannot be used right now, first
- * published by `providers.list@10.11`: `needs-sign-in` when only a sign-in can
- * restore it, `waiting` when it can resolve by itself (a delayed renewal or an
- * outage). A removed account is never a row; the list envelope's
- * `removedProfiles` carries it.
+ * `needs-sign-in`: only a sign-in restores it; `waiting`: it may resolve by itself. A
+ * removed account is never a row: the envelope's `removedProfiles` carries it.
  */
 export const providerProfilePersonNoticeSchema = lazySchema(() =>
   z.enum(["needs-sign-in", "waiting"]),
@@ -1684,11 +1681,7 @@ function unreadableProjectedProfile(input: unknown) {
   });
 }
 
-/**
- * The profile row `providers.list@10.9` and `@10.10` published, before 10.11
- * added aliases, the person notice, the Terminal flag and the other names.
- * Frozen lines read it so none of the 10.11 keys reaches an older reader.
- */
+/** The 10.9 and 10.10 row, so no 10.11 key reaches an older reader. */
 const providerProfileProjectionObjectSchemaV1010 = lazySchema(() =>
   providerProfileSchema.extend({
     recordVersion: z.literal(1).optional(),
@@ -1731,29 +1724,22 @@ const providerProfileProjectionSchemaV1010 = lazySchema(() =>
 );
 
 /**
- * Read projection: a future row is one disabled, explained row, never a lost
- * inventory.
- *
- * The four 10.11 keys live here and nowhere else: not on `providerProfileSchema`,
- * which every provider-state response shares, so the mutation echoes and the
- * released lines never carry them. Each falls back at its own field, so an
- * unknown value costs that key, not the row.
+ * A future row is one disabled, explained row, never a lost inventory. The four 10.11
+ * keys live only here, so mutation echoes and released lines never carry them; each
+ * falls back at its own field.
  */
 export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileProjectionObjectSchemaV1010
     .extend({
-      // Other ids that resolve to this row (the ids its folded duplicates
-      // had), so a chat, bot or interview pinned to one still finds it.
+      // The ids of its folded duplicates, so a chat, bot or interview pinned to one finds it.
       aliases: z.array(z.string().min(1)).optional().catch(undefined),
       personNotice: providerProfilePersonNoticeSchema
         .nullable()
         .optional()
         .catch(undefined),
-      // Whether this computer's Terminal login is the same account as this
-      // row.
+      // Whether this computer's Terminal login is this row's account.
       terminalOnThisComputer: z.boolean().optional().catch(undefined),
-      // The other names this account had before it became one row; empty once
-      // a person has chosen one (`providers.answerProfileName`).
+      // Empty once a person has chosen one (`providers.answerProfileName`).
       otherNames: z.array(z.string().min(1)).optional().catch(undefined),
     })
     .catch((context) => unreadableProjectedProfile(context.input)),
@@ -1780,11 +1766,7 @@ export type ProvidersSignOutProfileResponse = z.infer<
   typeof providersSignOutProfileResponseSchema
 >;
 
-/**
- * Sets the account's name on every computer and clears its other names (the
- * row's `otherNames`, `providers.list@10.11`). The name may be the one the
- * account already uses, which keeps it and clears the others.
- */
+/** Sets the name on every computer and clears `otherNames`; the current name is allowed. */
 export const providersAnswerProfileNameRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
@@ -1935,16 +1917,10 @@ export const providerProfileActionSchema = lazySchema(() =>
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
 /**
- * The environment profile a rename or recolor is for: the key of the
- * environment's `managed_profile` item after `<harnessId>:`, which the app
- * reads from authn's own `managed_profile` items and states only when exactly
- * one of them carries that key. A host's `providers.list` may say which
- * profile to look for, never what the key is. Rename and recolour take the
- * base: the item is the environment's copy of that profile with the new name
- * or colour laid over it, every other field, `enabled` included, kept. Null
- * when the profile has no entry in the environment (it is this computer's
- * own) and from a caller older than 2.2, whose request the upgrade fills with
- * null; either way the app expects no proposal.
+ * The key of the environment's `managed_profile` item after `<harnessId>:`, which the
+ * app reads from authn and states only when exactly one item carries it; a host may
+ * say which profile, never the key. Null for this computer's own profile or a caller
+ * older than 2.2: either way the app expects no proposal.
  */
 const environmentProfileIdStatementSchema = lazySchema(() =>
   z.string().min(1).nullable(),
@@ -1957,11 +1933,7 @@ export const providerProfileActionSchemaV22 = lazySchema(() =>
       type: z.literal("rename"),
       profileId: z.string(),
       label: z.string().min(1).max(64),
-      /**
-       * Null means either an older caller or a profile with no entry in the
-       * environment; both map to `local_only`, so the app sends null for a
-       * profile that is only on this computer and expects nothing.
-       */
+      /** Null for an older caller or a profile only on this computer; both map to `local_only`. */
       environmentProfileId: environmentProfileIdStatementSchema,
     }),
     z.object({
@@ -1972,11 +1944,7 @@ export const providerProfileActionSchemaV22 = lazySchema(() =>
       type: z.literal("recolor"),
       profileId: z.string(),
       accentColor: providerProfileAccentColorSchema,
-      /**
-       * Null means either an older caller or a profile with no entry in the
-       * environment; both map to `local_only`, so the app sends null for a
-       * profile that is only on this computer and expects nothing.
-       */
+      /** Null for an older caller or a profile only on this computer; both map to `local_only`. */
       environmentProfileId: environmentProfileIdStatementSchema,
     }),
     z.object({
@@ -2806,13 +2774,7 @@ export const providersListResponseSchemaV109Preimage = lazySchema(() =>
   }),
 );
 
-/**
- * Frozen `providers.list@10.10` response: the 10.10 envelope, row and profile
- * projection, before 10.11 added four keys to the profile projection and
- * `removedProfiles` to the envelope. The envelope is the hand-copied 10.8 one
- * and the profile projection is the frozen 10.10 one, so neither 10.11 key
- * set reaches this line.
- */
+/** Frozen `providers.list@10.10` response, so no 10.11 key reaches this line. */
 export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
@@ -2824,10 +2786,7 @@ export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
   }),
 );
 
-/**
- * Frozen `providers.list@10.11` response, before 10.12 added `offersSignIns`
- * to the envelope. It keeps the profile-sync projection and removed ids.
- */
+/** Frozen `providers.list@10.11` response, before 10.12's `offersSignIns`. */
 export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
@@ -2837,13 +2796,8 @@ export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
         profiles: z.array(providerProfileProjectionSchema).catch([]),
       }),
     ),
-    // The accounts a person removed, one entry each, first published by
-    // `providers.list@10.11`. A removed account is never a row, so this is the
-    // only place "Was removed" can come from: an id found here, as `profileId`
-    // or among `aliases`, was removed by a person; an id found in no row, no
-    // row's aliases and not here is unknown, not removed. Ids only. On the
-    // envelope for the reason `onHostOnly` is, and `.optional()` for the same
-    // construction-site reason.
+    // The ids a person removed, never rows: the only source of "Was removed". An id in no
+    // row, no row's aliases and not here is unknown, not removed. Optional as `onHostOnly` is.
     removedProfiles: z
       .array(
         z.object({
@@ -2859,11 +2813,8 @@ export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
 /** Frozen 10.12 envelope and rows, before key-record routing. */
 export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
   providersListResponseSchemaV1011Preimage.extend({
-    // True only when the computer that answered is in an environment whose
-    // profile-sync switch is on and it offers sign-ins by itself. A reader
-    // treats an absent key as false. First published by `providers.list@10.12`;
-    // optional, like `onHostOnly` and `removedProfiles`, so construction sites
-    // need not emit it and parsing does not insert a default.
+    // True only when the answering computer offers sign-ins by itself in a profile-sync
+    // environment; absent reads false. Optional, like `onHostOnly`, so no default is inserted.
     offersSignIns: z.boolean().optional(),
   }),
 );
@@ -3862,7 +3813,6 @@ export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
 >;
 
-/** `providers.setEnabled@2.2`: the profile action of {@link providerProfileActionSchemaV22}. */
 export const providersSetEnabledRequestSchemaV22 = lazySchema(() =>
   providersSetEnabledRequestSchema.extend({
     profileAction: providerProfileActionSchemaV22.nullable().default(null),
@@ -3872,10 +3822,7 @@ export type ProvidersSetEnabledRequestV22 = z.infer<
   typeof providersSetEnabledRequestSchemaV22
 >;
 
-// No released `providers.setEnabled@2.2` carries a `mode`: one that did was
-// withdrawn before any release. `enabled`, a required boolean since 2.0, stays
-// the whole enable request; 2.2 adds only the environment profile a rename or
-// recolor is for.
+// No released `providers.setEnabled@2.2` carries a `mode`: one that did was withdrawn.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({
@@ -4069,7 +4016,6 @@ export type ProvidersSetEnvOverrideRequestV21 = z.infer<
   typeof providersSetEnvOverrideRequestSchemaV21
 >;
 
-/** `providers.setEnvOverride@2.2`: sets or unsets a provider variable. */
 export const providersSetEnvOverrideRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
@@ -4489,9 +4435,8 @@ export const providersAwaitLoginRequestSchemaV23 = lazySchema(() =>
   }),
 );
 /**
- * 2.5 request. `recordedOperationId` is the `signInRequest.operationId` the
- * caller has recorded at authn on the person's own session; absent reads as
- * null. A computer ignores an id that is not this sign-in's own.
+ * `recordedOperationId`: the `signInRequest.operationId` the caller recorded at authn;
+ * absent reads null, and an id not this sign-in's own is ignored.
  */
 export const providersAwaitLoginRequestSchema = lazySchema(() =>
   z.object({
@@ -4602,9 +4547,8 @@ export const providersAwaitLoginResponseSchemaV23 = lazySchema(() =>
 );
 
 /**
- * Completed sign-in results, distinct from provider refusal and reader waits.
- * Signed-in ids name destination list rows. A leave-staged id names the exact
- * folder, which may be an alias in the computed list, not its admission handle.
+ * Signed-in ids name destination list rows; a leave-staged id names the exact folder,
+ * which may be an alias in the list, not its admission handle.
  */
 export const providerLoginProfileOutcomeSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -4638,7 +4582,6 @@ export type ProviderLoginProfileOutcome = z.infer<
   typeof providerLoginProfileOutcomeSchema
 >;
 
-/** Frozen 2.4 response. */
 export const providersAwaitLoginResponseSchemaV24 = lazySchema(() =>
   providersAwaitLoginResponseSchemaV23.extend({
     profileOutcome: providerLoginProfileOutcomeSchema
@@ -4649,11 +4592,9 @@ export const providersAwaitLoginResponseSchemaV24 = lazySchema(() =>
 );
 
 /**
- * What a caller records at authn before the computer uploads a completed
- * sign-in: `operationId` is the offer's transfer id, minted by the computer.
- * A computer sends it only on an unfinished answer, never with a final
- * `profileOutcome`; the schema does not enforce that, and a reader that sees
- * both takes the outcome as the answer. No email, account id, path or token.
+ * Recorded at authn before the computer uploads a completed sign-in; `operationId` is
+ * the computer's transfer id. Sent only on an unfinished answer: a reader seeing both
+ * takes `profileOutcome`. No email, account id, path or token.
  */
 export const providerLoginSignInRequestSchema = lazySchema(() =>
   z.object({
@@ -4925,11 +4866,7 @@ export type ProvidersNativeMutateRequestV14 = z.infer<
   typeof providersNativeMutateRequestSchemaV14
 >;
 
-/**
- * `providers.nativeMutate@1.5` request: `@1.4` with the `promoteToPersonal`
- * arm carrying `intentOperationId` (`nativePromoteToPersonalMutationSchemaV15`).
- * The field is on the arm, not on the request.
- */
+/** The field is on the arm, not on the request. */
 export const providersNativeMutateRequestSchemaV15 = lazySchema(() =>
   providersNativeMutateRequestSchemaV14.extend({
     mutation: nativeMutationSchemaV15,
@@ -5565,18 +5502,9 @@ export type ProvidersUsePackVersionRequest = z.infer<
 >;
 
 /**
- * The whole pack policy a pack save leaves, as the app states it: the
- * `pack_policy` item the app expects the host to propose, so it can remember
- * its edit and recognise its hold among the environment's held changes. The
- * app reads the other half from the pack's managed versions (`pinnedVersion`,
- * `autoDownload`). Null when the caller does not state it: the upgrade from the
- * previous minor fills null, and the app expects no proposal.
- *
- * The host computes the item from its own config and proposes that; it never
- * writes the stated value over what it computes. When the two agree (whenever
- * the app's read of the computer is current) the save is confirmed without a
- * click; when they differ, the computer keeps its own value and the proposal
- * waits in the review list for one click, with no error.
+ * The `pack_policy` item the app expects the host to propose, so it recognises its own
+ * hold; null (and the upgrade's fill) expects no proposal. The host proposes what it
+ * computes and never writes this over it; a difference waits in the review list.
  */
 export const providersPackPolicyStatementSchema = lazySchema(() =>
   z
