@@ -1,6 +1,9 @@
 import {
+  BOT_DEFAULT_COLOR,
+  isBotColorHex,
+} from "@traycer/protocol/host/bot/colors";
+import {
   BOT_APPEARANCE_UNRECOGNISED,
-  BOT_COLOR_COUNT,
   BOT_MASCOT_ACCESSORIES,
   BOT_MASCOT_EYEWEAR,
   type BotAppearance,
@@ -8,17 +11,13 @@ import {
   type BotMascotEyewear,
   type BotMascotShape,
 } from "@traycer/protocol/host/bot/schemas";
-import {
-  botColorAt,
-  derivedBotColorIndex,
-} from "../providers/profile-accent-color";
 
 /**
  * A bot's mascot: a pixel figure drawn straight on the page, with nothing
  * behind it. What it is (its
- * body, its colour, what it wears over its eyes and on its head) is each a
- * pure function of the bot's id unless a person chose one in the bot's
- * settings, so a rename changes none of it. What its eyes are doing follows
+ * body, what it wears over its eyes and on its head) is each a pure function
+ * of the bot's id unless a person chose one in the bot's settings, so a
+ * rename changes none of it. Its colour is the one the bot holds. What its eyes are doing follows
  * the bot ({@link MascotExpression}) and is no part of who it is.
  *
  * A choice this client cannot read (a newer writer's, read as
@@ -683,9 +682,8 @@ function rampAround(hue: number, saturation: number, base: number): MascotRamp {
   };
 }
 
-/** The default mascot: the teal blob, wearing nothing. */
+/** The default mascot's body. */
 export const DEFAULT_MASCOT_SHAPE: MascotShape = "blob";
-export const DEFAULT_MASCOT_RAMP: MascotRamp = rampAround(192, 32, 68);
 
 /** A dark lens, whatever the body's colour. */
 const LENS_COLOUR = hsl(220, 12, 7);
@@ -766,24 +764,37 @@ function hexToHsl(hex: string): readonly [number, number, number] {
 }
 
 /**
- * The ramp of colour `index`, on that colour's own hue: the first twelve
- * around a mid lightness, the deep twelve a step darker.
+ * The darkest and lightest base a body is drawn at. They bound the art's
+ * tones to the two the mascots were drawn and looked at in; they prove no
+ * contrast.
  */
-function rampForColor(index: number): MascotRamp {
-  const [hue, saturation] = hexToHsl(botColorAt(index));
-  const deep = index >= BOT_COLOR_COUNT / 2;
-  return rampAround(hue, Math.min(saturation, 85), deep ? 48 : 62);
+const BASE_LIGHTNESS_MIN = 48;
+const BASE_LIGHTNESS_MAX = 68;
+/** The most saturated a body is drawn. */
+const BASE_SATURATION_MAX = 85;
+
+const RAMPS = new Map<string, MascotRamp>();
+
+/**
+ * The ramp a saved colour is drawn in: on its own hue and saturation, around
+ * its own lightness held within the bounds above. One rule for every colour,
+ * whether or not a bot's settings still offer it.
+ */
+export function mascotRampOf(hex: string): MascotRamp {
+  const known = RAMPS.get(hex);
+  if (known !== undefined) return known;
+  const [hue, saturation, lightness] = hexToHsl(hex);
+  const ramp = rampAround(
+    hue,
+    Math.min(saturation, BASE_SATURATION_MAX),
+    Math.min(Math.max(lightness, BASE_LIGHTNESS_MIN), BASE_LIGHTNESS_MAX),
+  );
+  RAMPS.set(hex, ramp);
+  return ramp;
 }
 
-const COLOR_RAMPS: readonly MascotRamp[] = Array.from(
-  { length: BOT_COLOR_COUNT },
-  (_, index) => rampForColor(index),
-);
-
-/** The ramp of colour `index`, one of {@link BOT_COLOR_COUNT}. */
-export function mascotRampAt(index: number): MascotRamp {
-  return COLOR_RAMPS[index] ?? DEFAULT_MASCOT_RAMP;
-}
+/** The default mascot's colours: the ones a bot holding no colour is drawn in. */
+export const DEFAULT_MASCOT_RAMP: MascotRamp = mascotRampOf(BOT_DEFAULT_COLOR);
 
 /**
  * FNV-1a 32-bit over `salt` then the id, finished with murmur3's mixer, so
@@ -843,7 +854,8 @@ export function ownMascotAccessory(botId: string): BotMascotAccessory {
  * default mascot's for a choice this client cannot read. A part's default is
  * the one the bot's id gives it. An environment's main bot is the exception:
  * it is the bot every member meets first, so its body and what it wears
- * default to the default mascot's, and only its colour comes from its id.
+ * default to the default mascot's. A colour is never derived: it is the one
+ * the bot holds, else the default mascot's.
  */
 export function botMascot(
   botId: string,
@@ -861,7 +873,7 @@ export function botMascot(
       };
   return {
     shape: chosenShape(own.shape, look?.mark ?? null),
-    ramp: chosenRamp(botId, look?.color ?? null),
+    ramp: heldRamp(look?.color ?? null),
     eyewear: eyewear === null ? own.eyewear : readablePart(eyewear),
     accessory: accessory === null ? own.accessory : readablePart(accessory),
   };
@@ -887,11 +899,13 @@ function chosenShape(
   return isDrawn(mark.shape) ? mark.shape : own;
 }
 
-function chosenRamp(botId: string, color: BotAppearance["color"]): MascotRamp {
-  if (color === null) return mascotRampAt(derivedBotColorIndex(botId));
-  return color === BOT_APPEARANCE_UNRECOGNISED
-    ? DEFAULT_MASCOT_RAMP
-    : mascotRampAt(color);
+/**
+ * The ramp of the colour a look holds. A look read at an equal method
+ * version arrives unparsed, so anything but a saved colour (none, one this
+ * client cannot read, an older host's number) draws the default.
+ */
+function heldRamp(color: unknown): MascotRamp {
+  return isBotColorHex(color) ? mascotRampOf(color) : DEFAULT_MASCOT_RAMP;
 }
 
 /** The avatar sizes a mascot is drawn at, in CSS pixels. */
