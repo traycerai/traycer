@@ -42,6 +42,7 @@ import {
 } from "./bot-tab-surface-mocks";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 
 import {
@@ -102,6 +103,10 @@ import {
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
@@ -2442,6 +2447,7 @@ describe("<BotTabSurface /> beside the bots column under the app header", () => 
   afterEach(() => {
     shell.dispose();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
   });
 
   it("keeps the channel's own tabs, Search and settings buttons, and gives the app header no bot name and no Channel actions menu", () => {
@@ -2466,6 +2472,23 @@ describe("<BotTabSurface /> beside the bots column under the app header", () => 
     expect(screen.getByTestId("bot-tab-title").textContent).toContain(
       "Release Bot",
     );
+  });
+
+  it("draws the music controls in the channel header's title row, left of Search, and no row of their own", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+    render(surfaceUnderHeader(BOT_ID));
+
+    const group = screen.getByRole("group", { name: "Music playback" });
+    const search = screen.getByTestId("bot-channel-search-open");
+    const row = group.closest(".\\@container\\/title-strip");
+    expect(row).not.toBeNull();
+    expect(row?.contains(search)).toBe(true);
+    expect(
+      group.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

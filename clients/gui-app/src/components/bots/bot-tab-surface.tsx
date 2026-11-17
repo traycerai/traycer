@@ -7,6 +7,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import { createPortal } from "react-dom";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
@@ -2037,6 +2038,9 @@ function BotChannelActions({
   );
   return titleTarget === null ? (
     <>
+      <span className="ml-auto flex min-w-0 items-center">
+        <SoundtrackPlaybackControls placement="title-strip" />
+      </span>
       {props.onOpenSearch === null ? null : (
         <TooltipWrapper
           label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
@@ -2050,7 +2054,6 @@ function BotChannelActions({
             size="icon-sm"
             aria-label={`Search in ${props.title}`}
             data-testid="bot-channel-search-open"
-            className="ml-auto"
             onClick={props.onOpenSearch}
           >
             <Search aria-hidden="true" />
@@ -2065,7 +2068,6 @@ function BotChannelActions({
         aria-label="Channel settings"
         aria-expanded={settingsOpen}
         data-testid="bot-channel-settings-open"
-        className={props.onOpenSearch === null ? "ml-auto" : undefined}
         onClick={props.onToggleSettings}
       >
         <EllipsisVertical aria-hidden="true" />
@@ -2184,7 +2186,7 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     <div
       hidden={threadHasFocus}
       className={cn(
-        "flex min-w-0 items-center gap-2",
+        "@container/title-strip flex min-w-0 items-center gap-2",
         titleTarget !== null && "w-full",
         focusOwner !== null && "min-h-11",
       )}

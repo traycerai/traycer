@@ -16,9 +16,10 @@ import {
 } from "@tanstack/react-router";
 import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
 import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import { SystemTabModalSurface } from "@/components/layout/dialogs/system-tab-modal-host";
 import { LayoutOverrideContext } from "@/lib/layout-overrides";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -28,6 +29,13 @@ import type { TabRef } from "@/stores/tabs/types";
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
   soundtrackOffered: () => true,
+}));
+
+vi.mock("@/components/settings/settings-modal-content", () => ({
+  SettingsModalContent: () => <div data-testid="settings-body-stub" />,
+}));
+vi.mock("@/components/epics/history-modal-content", () => ({
+  HistoryModalContent: () => <div data-testid="history-body-stub" />,
 }));
 
 // The bodies are what these tests are not about; the mount around them is.
@@ -45,7 +53,6 @@ vi.mock("@/stores/tabs/registry", async (importOriginal) => {
 const DRAFT: TabRef = { kind: "draft", id: "draft-a" };
 const SETTINGS: TabRef = { kind: "settings", id: "settings" };
 const HISTORY: TabRef = { kind: "history", id: "history" };
-const TRACY: TabRef = { kind: "tracy", id: "tracy" };
 
 function groups(): HTMLElement[] {
   return screen.queryAllByRole("group", { name: "Music playback" });
@@ -107,7 +114,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
   vi.restoreAllMocks();
@@ -117,14 +123,21 @@ describe("the controls in the top-level surfaces", () => {
   it.each([
     ["a draft", DRAFT],
     ["Settings", SETTINGS],
-    ["Tracy", TRACY],
   ])("draws one group on %s", (_name, ref) => {
-    if (ref === TRACY) useTracySurfaceStore.getState().openSurface("host-a");
     setItems([ref], `tab:${ref.kind}:${ref.id}`, null);
 
     render(<TopLevelTabHost />);
 
     expect(groups()).toHaveLength(1);
+  });
+
+  it("draws none on Tracy, whose controls belong to the bot channel's header", () => {
+    const tracy: TabRef = { kind: "tracy", id: "tracy" };
+    setItems([tracy], `tab:${tracy.kind}:${tracy.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(groups()).toHaveLength(0);
   });
 
   it("draws none on History", () => {
@@ -181,11 +194,18 @@ describe("the controls under a real router's Settings overlay", () => {
       select: (state) => state.location.search.settingsOverlay === true,
     });
     return (
-      <div data-testid="modal">
+      <>
         {open ? (
-          <SoundtrackPlaybackControls placement="settings-modal" />
+          <DialogPrimitive.Root open>
+            <SystemTabModalSurface
+              active={{ kind: "settings", section: null }}
+              editingTheme={false}
+              onClose={() => undefined}
+              onPromote={() => undefined}
+            />
+          </DialogPrimitive.Root>
         ) : null}
-      </div>
+      </>
     );
   }
 
@@ -216,17 +236,18 @@ describe("the controls under a real router's Settings overlay", () => {
   it("draws the page's group alone, and the modal's alone once the overlay opens, and back", async () => {
     const router = await openApp();
     const page = screen.getByTestId("page");
-    const modal = screen.getByTestId("modal");
     expect(groups()).toHaveLength(1);
     expect(page.querySelector('[role="group"]')).not.toBeNull();
-    expect(modal.querySelector('[role="group"]')).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     await act(async () => {
       await router.navigate({ to: "/", search: { settingsOverlay: true } });
     });
     expect(groups()).toHaveLength(1);
     expect(page.querySelector('[role="group"]')).toBeNull();
-    expect(modal.querySelector('[role="group"]')).not.toBeNull();
+    // The dialog portals out of the router tree; its group is in its title bar.
+    const header = screen.getByRole("dialog").querySelector("header");
+    expect(header?.querySelector('[role="group"]')).not.toBeNull();
 
     await act(async () => {
       await router.navigate({ to: "/", search: {} });

@@ -391,8 +391,7 @@ function TopLevelSurfaceMount(props: {
           >
             {mount.tab.kind === "home" ||
             mount.tab.kind === "draft" ||
-            mount.tab.kind === "settings" ||
-            mount.tab.kind === "tracy" ? (
+            mount.tab.kind === "settings" ? (
               <SoundtrackPlaybackControls placement="surface" />
             ) : null}
             {/* A retained hidden tab must start its loading delay only when

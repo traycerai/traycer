@@ -33,6 +33,7 @@ function Frame(props: { readonly open: boolean }): ReactNode {
         title="Frame"
         contentClassName="h-1/4 w-1/4"
         dataAttributes={{}}
+        headerActions={null}
         promoteAriaLabel="Open as tab"
         promoteTestId="promote"
         closeTestId="close"
