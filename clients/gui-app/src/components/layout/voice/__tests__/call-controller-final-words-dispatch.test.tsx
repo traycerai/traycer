@@ -77,15 +77,8 @@ interface ConnectInput {
   readonly events: VoiceEngineEvents;
 }
 
-interface Exchange {
-  readonly answered: string | null;
-  readonly rejected: boolean;
-}
-
 interface FakeEngine {
   events: VoiceEngineEvents | null;
-  /** How each `exchangeSdp` the controller handed the engine settled. */
-  readonly exchanges: Exchange[];
   readonly connect: Mock<(input: ConnectInput) => Promise<void>>;
   readonly close: Mock<() => Promise<void>>;
 }
@@ -106,8 +99,6 @@ const fake = vi.hoisted(() => {
     engines: [] as FakeEngine[],
     // Set per test: the real service the controller's `useAuthService` reads.
     auth: { current: null as AuthService | null },
-    // When set, an engine's `connect` waits on it after the answer is taken.
-    connectGate: { current: null as Promise<void> | null },
     shellLive: vi.fn<(live: boolean) => Promise<void>>(),
     // The text of every `bot.conversation.send` the HostClient double was
     // asked to dispatch, in order.
@@ -256,19 +247,9 @@ vi.mock("@/lib/voice/gpt-live-engine", () => ({
   createBrowserGptLiveEngine: () => {
     const engine: FakeEngine = {
       events: null,
-      exchanges: [],
       connect: vi.fn<(input: ConnectInput) => Promise<void>>(async (input) => {
         engine.events = input.events;
-        await input.exchangeSdp("offer").then(
-          async (answered) => {
-            engine.exchanges.push({ answered, rejected: false });
-            await fake.connectGate.current;
-          },
-          (error: unknown) => {
-            engine.exchanges.push({ answered: null, rejected: true });
-            throw error;
-          },
-        );
+        await input.exchangeSdp("offer");
       }),
       close: vi.fn<() => Promise<void>>(() => Promise.resolve()),
     };
@@ -323,14 +304,9 @@ function profileResponse(userId: string): Response {
   );
 }
 
-/** A session projected into this window by a sibling, for `userId` on `token`. */
-
 /** The user each bearer belongs to, for the identity route. */
 const USER_OF_TOKEN: Record<string, string> = {
   "user-1-token": "user-1",
-  "user-1-rotated": "user-1",
-  "user-1-again": "user-1",
-  "user-2-token": "user-2",
 };
 
 function installFetch(): () => void {
@@ -397,6 +373,13 @@ const SEND_RESPONSE = {
 let host: MockRunnerHost;
 let service: AuthService;
 let restoreFetch: () => void = () => undefined;
+let queryClient: QueryClient;
+// Everything a test holds open, released and drained in `afterEach` whether or
+// not the test finished: the mutation and storage gates, and the sign-outs
+// waiting on storage.
+let heldGates: Deferred<void>[] = [];
+let pendingSignOuts: Promise<boolean>[] = [];
+
 function engine(): FakeEngine {
   const found = fake.engines.at(-1);
   if (found === undefined) throw new Error("no engine was created");
@@ -451,8 +434,9 @@ function speak(text: string): void {
 /** `signOut` has bumped the identity generation and waits on storage. */
 function startSignOutWaitingOnStorage(): Deferred<void> {
   const storage = deferred<void>();
+  heldGates.push(storage);
   vi.spyOn(host.tokenStore, "delete").mockImplementation(() => storage.promise);
-  void service.signOut();
+  pendingSignOuts.push(service.signOut());
   expect(useAuthStore.getState().status).toBe("signed-in");
   return storage;
 }
@@ -460,6 +444,7 @@ function startSignOutWaitingOnStorage(): Deferred<void> {
 /** A call send waits here, before its `mutationFn`, while `fake.hold` is set. */
 function holdCallSends(): Deferred<void> {
   const gate = deferred<void>();
+  heldGates.push(gate);
   fake.hold.current = gate.promise;
   return gate;
 }
@@ -470,7 +455,8 @@ beforeEach(async () => {
   fake.dispatched.length = 0;
   fake.hold.current = null;
   fake.held.count = 0;
-  fake.connectGate.current = null;
+  heldGates = [];
+  pendingSignOuts = [];
   fake.shellLive.mockReset();
   fake.shellLive.mockImplementation(() => Promise.resolve());
   fake.track.enabled = true;
@@ -517,7 +503,7 @@ beforeEach(async () => {
   });
   // The cache-level `onMutate` is awaited before the mutation's own `onMutate`
   // and its `mutationFn` (query-core `Mutation.execute`).
-  const queryClient = new QueryClient({
+  queryClient = new QueryClient({
     mutationCache: new MutationCache({
       onMutate: (_variables, mutation) => {
         if (
@@ -538,7 +524,32 @@ beforeEach(async () => {
   );
 });
 
-afterEach(() => {
+/** Resolves once no mutation is pending: terminal settlement, not a delay. */
+function mutationsSettled(): Promise<void> {
+  const cache = queryClient.getMutationCache();
+  return new Promise<void>((resolve) => {
+    const unsubscribe = cache.subscribe(() => {
+      if (queryClient.isMutating() === 0) {
+        unsubscribe();
+        resolve();
+      }
+    });
+    if (queryClient.isMutating() === 0) {
+      unsubscribe();
+      resolve();
+    }
+  });
+}
+
+afterEach(async () => {
+  // Before any disposal: release every hold, then wait for what they held.
+  fake.hold.current = null;
+  await act(async () => {
+    for (const gate of heldGates) gate.resolve();
+    await Promise.allSettled(pendingSignOuts);
+    await mutationsSettled();
+  });
+  expect(queryClient.isMutating()).toBe(0);
   cleanup();
   service.dispose();
   useAuthStore.getState().setSignedOut();
