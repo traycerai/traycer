@@ -71,7 +71,9 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
     renameTab: () => undefined,
     applyNestedRouteFocus: () => undefined,
     closeCanvasTab: () => undefined,
+    retireSeededOpenerPane: () => undefined,
     closedTilePayloadsByTabId: {},
+    seededOpenerPaneIdByTabId: {},
     pendingCreateArtifactIds: new Set<string>(),
   };
   const emptyCanvas = {

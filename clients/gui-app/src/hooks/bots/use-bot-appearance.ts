@@ -4,7 +4,6 @@ import type {
   BotListResponse,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
 import {
   NO_BOT_LOOK_SAVE,
   partsOf,
@@ -104,41 +103,4 @@ export function useBotIsMain(botId: string): boolean {
     state.directory.model.groups.some((group) => group.mainBotId === botId),
   );
   return surface ?? directory;
-}
-
-/**
- * The tint a channel's chosen background lays over the page: its colour at
- * one low opacity, in either theme.
- */
-const CHANNEL_TINT_CLASS = "bg-(--channel-tint)/10";
-
-/**
- * What a channel's tinted regions carry: the chosen background's colour (by
- * index), its class and its colour (as `--channel-tint`), each `undefined`
- * while the channel keeps the page's own.
- */
-interface ChannelBackground {
-  readonly index: number | undefined;
-  readonly className: string | undefined;
-  readonly color: string | undefined;
-}
-
-const NO_CHANNEL_BACKGROUND: ChannelBackground = {
-  index: undefined,
-  className: undefined,
-  color: undefined,
-};
-
-/**
- * The background chosen for a bot's channel, which its header and message
- * area carry; one this client cannot read keeps the page's own.
- */
-export function useChannelBackground(botId: string): ChannelBackground {
-  const index = useBotLook(botId)?.background ?? null;
-  if (typeof index !== "number") return NO_CHANNEL_BACKGROUND;
-  return {
-    index,
-    className: CHANNEL_TINT_CLASS,
-    color: botColorAt(index),
-  };
 }

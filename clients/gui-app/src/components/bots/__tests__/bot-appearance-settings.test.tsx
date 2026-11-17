@@ -1,5 +1,5 @@
 /**
- * A bot's icon, colour, eyewear, accessory and channel background (Tracy Bots
+ * A bot's icon, colour, eyewear and accessory (Tracy Bots
  * T147): the real
  * section, hooks and HostClient over a mock messenger whose host records each
  * `bot.updateAppearance` it is sent and answers it with the row it would
@@ -354,6 +354,15 @@ const EYEWEAR_NAMES: readonly string[] = [
   "Visor",
 ];
 
+/** A section's "Use the default" button, found through the section's own name. */
+function defaultIn(
+  section: "Icon" | "Colour" | "Eyewear" | "Accessory",
+): HTMLButtonElement {
+  return within(
+    screen.getByRole("region", { name: section }),
+  ).getByRole<HTMLButtonElement>("button", { name: "Use the default" });
+}
+
 /** The choice a section shows pressed. */
 function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
   const [pressed, ...rest] = within(
@@ -377,8 +386,8 @@ function chosenShape(): BotMascotShape {
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the five sections Icon, Colour, Eyewear, Accessory and Background", () => {
-    mount(BARE);
+  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background even where one was saved", () => {
+    mount({ ...BARE, background: 9 });
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
       "Icon",
@@ -392,10 +401,13 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.getByTestId("bot-settings-accessory").textContent).toContain(
       "Accessory",
     );
-    expect(screen.getByTestId("bot-settings-background").textContent).toContain(
-      "Background",
-    );
-    expect(screen.getAllByText("Use the default")).toHaveLength(5);
+    expect(screen.queryByText("Background")).toBeNull();
+    expect(
+      document.querySelector('[data-testid^="bot-settings-background"]'),
+    ).toBeNull();
+    for (const section of ["Icon", "Colour", "Eyewear", "Accessory"] as const) {
+      expect(defaultIn(section)).toBeTruthy();
+    }
   });
 
   it("is absent when the host does not support bot.updateAppearance", () => {
@@ -404,7 +416,6 @@ describe("<BotAppearanceSettings />", () => {
 
     expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
     expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
   });
 
   it("offers exactly the shapes it draws and writes the chosen one alone", async () => {
@@ -427,23 +438,16 @@ describe("<BotAppearanceSettings />", () => {
     });
   });
 
-  it("writes the chosen colour and the chosen background as their own partial payloads", async () => {
+  it("writes the chosen colour alone, carrying no background, over a bot that saved one", async () => {
     const user = userEvent.setup();
-    mount(BARE);
+    mount({ ...BARE, background: 9 });
 
     await user.click(screen.getByTestId("bot-settings-colour-14"));
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(1);
     });
-    await user.click(screen.getByTestId("bot-settings-background-5"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(2);
-    });
 
-    expect(mocks.appearanceWrites).toEqual([
-      { botId: BOT_ID, color: 14 },
-      { botId: BOT_ID, background: 5 },
-    ]);
+    expect(mocks.appearanceWrites).toEqual([{ botId: BOT_ID, color: 14 }]);
   });
 
   it("offers every eyewear and accessory and writes the chosen one alone", async () => {
@@ -515,41 +519,22 @@ describe("<BotAppearanceSettings />", () => {
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(4);
     });
-    await user.click(screen.getByTestId("bot-settings-background-default"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(5);
-    });
 
     expect(mocks.appearanceWrites).toEqual([
       { botId: BOT_ID, mark: null },
       { botId: BOT_ID, color: null },
       { botId: BOT_ID, eyewear: null },
       { botId: BOT_ID, accessory: null },
-      { botId: BOT_ID, background: null },
     ]);
   });
 
   it("offers Use the default only where a choice stands", () => {
     mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
 
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
-        .disabled,
-    ).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-colour-default")
-        .disabled,
-    ).toBe(false);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-eyewear-default")
-        .disabled,
-    ).toBe(false);
-    for (const section of ["accessory", "background"]) {
-      expect(
-        screen.getByTestId<HTMLButtonElement>(`bot-settings-${section}-default`)
-          .disabled,
-      ).toBe(true);
-    }
+    expect(defaultIn("Icon").disabled).toBe(true);
+    expect(defaultIn("Colour").disabled).toBe(false);
+    expect(defaultIn("Eyewear").disabled).toBe(false);
+    expect(defaultIn("Accessory").disabled).toBe(true);
   });
 
   it("offers no upload: neither a button nor a file input", () => {

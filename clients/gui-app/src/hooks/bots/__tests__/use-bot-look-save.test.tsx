@@ -513,7 +513,6 @@ describe("a run of look saves when a choice is made through another host", () =>
 
     expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
     expect(colourPressed(7)).toBe("true");
-    await userEvent.click(screen.getByTestId("bot-settings-background-2"));
     expect(second.writes).toHaveLength(0);
 
     act(() => {
@@ -525,13 +524,13 @@ describe("a run of look saves when a choice is made through another host", () =>
       botId: BOT_ID,
       accessory: "halo",
       color: 7,
-      background: 2,
     });
+    expect(takenOver.request).not.toHaveProperty("background");
     expect(second.writes).toHaveLength(1);
     expect(first.writes).toHaveLength(1);
     expect(cachedLook()).toEqual({ ...LISTED, ...SHADES });
     expect(pressedIn("eyewear")).toBe("Shades");
-    takenOver.answer({ ...CHOSEN, background: 2 });
+    takenOver.answer(CHOSEN);
   });
 
   it("keeps the saving indicator under a part the old host is still saving, beside the colour chosen through the new host, until both are answered", async () => {
