@@ -509,6 +509,37 @@ function answerSignInWith(awaitAnswer: {
   );
 }
 
+const ENVIRONMENT_MANAGED_LINE =
+  "This account is managed by your environment — sign in there.";
+
+/** The host answers `startLogin` with a started sign-in, then refuses the
+ *  `awaitLogin` because the account is held by the environment. */
+function refuseAwaitAsEnvironmentManaged(): void {
+  host.request.mockImplementation((method) =>
+    method === "providers.startLogin"
+      ? Promise.resolve({
+          url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy",
+          started: true,
+          profileId: PROFILE_ID,
+          userCode: null,
+        })
+      : Promise.resolve({}),
+  );
+  host.requestWithOptions.mockImplementation((method) =>
+    method === "providers.awaitLogin"
+      ? Promise.reject(
+          new HostRpcError({
+            code: "environment-managed",
+            message: ENVIRONMENT_MANAGED_LINE,
+            requestId: "request-environment-managed",
+            method: "providers.awaitLogin",
+            fatalDetails: null,
+          }),
+        )
+      : new Promise<unknown>(() => undefined),
+  );
+}
+
 function renderAntigravityReauth() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -691,6 +722,22 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       message: ANTIGRAVITY_REFUSAL.reason,
       hostSentence: false,
     });
+  });
+
+  it("reports the host's sentence as the failed attempt, marked as the host's, when the host refuses the account as environment-managed", async () => {
+    refuseAwaitAsEnvironmentManaged();
+    const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
+    renderAntigravityAddDialog(onFailedAttempt);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() =>
+      expect(onFailedAttempt).toHaveBeenCalledWith({
+        providerId: "antigravity",
+        message: ENVIRONMENT_MANAGED_LINE,
+        hostSentence: true,
+      }),
+    );
   });
 
   it("opens the verification link and starts a fresh sign-in from 'Try another account'", async () => {
