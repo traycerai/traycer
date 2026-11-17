@@ -267,6 +267,7 @@ function createStore(
   }));
 }
 
+// The host fake's switches and readouts stay here even where one file uses them: the fake reads them, and the shared lifecycle resets them.
 export let sent: ReadonlyArray<BotConversationSendRequest>;
 /** While set, the host refuses every send, as it refuses an answer to a settled question. */
 let refuseSends: boolean;
