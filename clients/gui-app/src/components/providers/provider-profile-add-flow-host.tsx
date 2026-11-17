@@ -83,6 +83,14 @@ function ProviderProfileAddFlowSession({
     providersQuery.data?.providers.find(
       (provider) => provider.providerId === providerId,
     ) ?? null;
+  // Read once, when the dialog first shows, and kept until this flow closes.
+  const [offersSignInsAtOpen, setOffersSignInsAtOpen] = useState<
+    boolean | null
+  >(null);
+  if (state !== null && offersSignInsAtOpen === null)
+    setOffersSignInsAtOpen(listOffersSignIns(providersQuery.data));
+  const offersSignIns =
+    offersSignInsAtOpen ?? listOffersSignIns(providersQuery.data);
 
   if (moveSession !== null) {
     return (
@@ -97,8 +105,7 @@ function ProviderProfileAddFlowSession({
     );
   }
   if (state === null) return null;
-  const switching =
-    switchSource !== null && listOffersSignIns(providersQuery.data);
+  const switching = switchSource !== null && offersSignIns;
   const signInProps = {
     state,
     client,

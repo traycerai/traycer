@@ -276,6 +276,7 @@ function ProviderProfileSignInDialog({
     client,
     state.providerId,
     target,
+    open,
   );
   const flow = useProviderDestinationLoginFlow(
     {
@@ -597,17 +598,30 @@ function ProviderProfileSignInDialog({
   );
 }
 
-/** Only on a computer that offers sign-ins by itself; read from the caller's cache, never fetched here. */
+/**
+ * Whether this dialog reads a completed sign-in's `profileOutcome`: only on a
+ * computer that offers sign-ins by itself, by the list `state` came from (read
+ * from the cache its caller keeps, never fetched here). Read once when the
+ * dialog opens and kept until it closes.
+ */
 function useAddProfileOutcomes(
   client: HostClient<HostRpcRegistry> | null,
   providerId: ProviderCliState["providerId"],
   target: ProviderLoginTarget | null,
+  open: boolean,
 ): {
   readonly offersSignIns: boolean;
   readonly profileOutcomes: CachedProviderProfilesReader | null;
 } {
   const source = target === null ? client : null;
-  const offersSignIns = listOffersSignIns(useCachedProvidersList(source));
+  const liveOffersSignIns = listOffersSignIns(useCachedProvidersList(source));
+  const [offersSignInsAtOpen, setOffersSignInsAtOpen] = useState<
+    boolean | null
+  >(open ? liveOffersSignIns : null);
+  if (open && offersSignInsAtOpen === null)
+    setOffersSignInsAtOpen(liveOffersSignIns);
+  if (!open && offersSignInsAtOpen !== null) setOffersSignInsAtOpen(null);
+  const offersSignIns = offersSignInsAtOpen ?? liveOffersSignIns;
   const reader = useCachedProviderProfilesReader(source, providerId);
   return {
     offersSignIns: target !== null || offersSignIns,
