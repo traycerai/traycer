@@ -1098,15 +1098,20 @@ export class HostDirectoryService implements IHostDirectoryService {
   /**
    * What this commit asks of the selection authority's fleet.
    *
-   * A listing that moves membership requests a refresh. The `hosts` check IS
-   * load-bearing for removals: `signed-out` commits an empty set, which would
-   * otherwise read as every host removed (`failed` returns before this).
-   *
    * On a shell with no local host the window narrator reads the discovery
    * conclusion against that fleet, and reads it on any render, not only on an
-   * emit. So the listing that would conclude discovery there concludes it only
-   * once its fleet refresh has settled; until then the narrator would read
-   * "concluded" over an empty fleet as "No host is available".
+   * emit. So a listing that would conclude discovery there concludes it only
+   * once a fleet refresh it triggered has settled; until then the narrator
+   * would read "concluded" over an empty fleet as "No host is available".
+   * That holds whether or not the listing moves membership: a newer era
+   * listing the same hosts is no evidence the authority has the fleet, and an
+   * older era's held refresh does not conclude for it (see
+   * {@link concludeAfterFleetRefresh}).
+   *
+   * Otherwise a listing that moves membership requests a refresh. The `hosts`
+   * check IS load-bearing for removals: `signed-out` commits an empty set,
+   * which would otherwise read as every host removed (`failed` returns before
+   * this).
    */
   private fleetStepFor(
     outcome: RemoteHostFetchOutcome,
@@ -1114,26 +1119,29 @@ export class HostDirectoryService implements IHostDirectoryService {
     concludedBefore: boolean,
   ): "none" | "request" | "hold-conclusion" {
     if (outcome.kind !== "hosts") return "none";
-    if (!listingMovesMembership(previousRemoteIds, outcome.entries)) {
-      return "none";
-    }
-    return concludedBefore || this.hasLocalHost ? "request" : "hold-conclusion";
+    if (!concludedBefore && !this.hasLocalHost) return "hold-conclusion";
+    return listingMovesMembership(previousRemoteIds, outcome.entries)
+      ? "request"
+      : "none";
   }
 
   /**
    * Waits for the fleet refresh a concluding listing triggered, then concludes
    * discovery for `era` - fenced like the commit itself, because a refresh for
-   * another era can commit while this one waits. A later identity, or a later
-   * credential's commit, owns the flag by then and this conclusion is dropped.
-   * A rejected refresh still concludes: the fleet is then as stale as it was,
-   * and that is the verdict to narrate.
+   * another era can commit while this one waits. The conclusion is dropped
+   * when the identity has changed, or when a commit for a different credential
+   * generation has landed since - including the `signed-out` that withdraws
+   * this listing; a same-era refresh joins this one instead of committing. It
+   * reads the last COMMITTED generation, not the live one: a rotation that has
+   * not committed anything yet leaves this conclusion standing. A rejected
+   * refresh still concludes: the fleet is then as stale as it was, and that is
+   * the verdict to narrate.
    */
   private async concludeAfterFleetRefresh(era: AuthEra): Promise<void> {
     await this.runnerHost.refreshHostFleet().catch(() => undefined);
     if (
       this.authContextId() !== era.identity ||
-      this.lastCommitCredentialGeneration !== era.credentialGeneration ||
-      !this.hasObservedRemoteListing
+      this.lastCommitCredentialGeneration !== era.credentialGeneration
     ) {
       return;
     }

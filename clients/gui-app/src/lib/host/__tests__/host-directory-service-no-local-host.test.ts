@@ -370,54 +370,37 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
     return observed;
   }
 
+  /** Every fleet refresh is held until the test releases it, by call order. */
   function heldFleetRefresh(host: MockRunnerHost): {
-    readonly called: () => boolean;
-    readonly release: () => void;
+    readonly calls: () => number;
+    readonly release: (call: number) => void;
   } {
-    let release: () => void = () => undefined;
-    const spy = vi.spyOn(host, "refreshHostFleet").mockImplementation(
+    const releases: (() => void)[] = [];
+    vi.spyOn(host, "refreshHostFleet").mockImplementation(
       () =>
         new Promise<void>((resolve) => {
-          release = resolve;
+          releases.push(resolve);
         }),
     );
     return {
-      called: () => spy.mock.calls.length > 0,
-      release: () => {
+      calls: () => releases.length,
+      release: (call) => {
+        const release = releases.at(call);
+        if (release === undefined) throw new Error(`no fleet refresh ${call}`);
         release();
       },
     };
   }
 
-  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
-    const host = makeHost(false, null);
-    const fleet = heldFleetRefresh(host);
-    const directory = await startedDirectory(host);
-    const observed = recordConcluded(directory);
-
-    const refreshed = directory.refresh();
-    await vi.waitFor(() => {
-      expect(fleet.called()).toBe(true);
-    });
-
-    expect(observed).not.toContain(true);
-    expect(directory.hasConcludedDiscovery()).toBe(false);
-
-    fleet.release();
-    await refreshed;
-
-    expect(observed).toContain(true);
-    expect(directory.hasConcludedDiscovery()).toBe(true);
-  });
-
-  it("a newer credential's sign-out during the held fleet refresh keeps discovery unconcluded", async () => {
-    const host = makeHost(false, null);
-    const fleet = heldFleetRefresh(host);
+  /** A directory for user-1 whose credential generation the test advances. */
+  async function rotatingDirectory(
+    host: MockRunnerHost,
+    outcomes: RemoteHostFetchOutcome[],
+  ): Promise<{
+    readonly directory: HostDirectoryService;
+    readonly rotate: () => void;
+  }> {
     let generation = 0;
-    const outcomes: RemoteHostFetchOutcome[] = [
-      { kind: "hosts", entries: [listedHost] },
-      { kind: "signed-out" },
-    ];
     const directory = makeDirectory({
       authContextId: () => "user-1",
       credentialGeneration: () => generation,
@@ -430,14 +413,99 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
       },
     });
     await directory.startSeeded();
+    return {
+      directory,
+      rotate: () => {
+        generation += 1;
+      },
+    };
+  }
+
+  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    const refreshed = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+
+    expect(observed).not.toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    fleet.release(0);
+    await refreshed;
+
+    expect(observed).toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("an unchanged listing from a newer credential holds until its own fleet refresh settles", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    void directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    rotate();
+    const newer = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    fleet.release(1);
+    await newer;
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("an older credential's fleet refresh settling while a newer one is held does not conclude", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    const older = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    rotate();
+    void directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+    fleet.release(0);
+    await older;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+  });
+
+  it("a newer credential's sign-out during the held fleet refresh withdraws the conclusion", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+    ]);
 
     const held = directory.refresh();
     await vi.waitFor(() => {
-      expect(fleet.called()).toBe(true);
+      expect(fleet.calls()).toBe(1);
     });
-    generation = 1;
+    rotate();
     await directory.refresh();
-    fleet.release();
+    fleet.release(0);
     await held;
 
     expect(directory.hasConcludedDiscovery()).toBe(false);
