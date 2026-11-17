@@ -4422,8 +4422,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   Legacy commands and interpolating headers are parsed but not drawn or sent
   back; their execution remains in the computers' files. Literal HTTP hooks
   remain editable even with a legacy held flag, which a save clears. The cloud
-  list has no Test, result, file path or Refresh. Its Delete confirm uses C30 row 2's Proposal, naming the computers that stop
-  sending it. An empty list has no sentence pending the owner's C30 choice.
+  list has no Test, result, file path or Refresh. Its Delete confirm names the computers that stop
+  sending it. An empty list has no sentence.
 - Team **Notification hooks** (`notification-hooks`) is its own Environment
   page, offered only when a team is picked. It reads the `notification_hooks`
   item at key `hooks`, `os: null`, through the existing sign-in item client,
@@ -4433,7 +4433,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   A form-check refusal's index is resolved against the exact list sent, so
   its foot line is attached only to the entry being edited. Conflicts use
   the existing Changed by line and reread the current list. There is no Test,
-  result, file path or Refresh. Its Delete confirm is built to C30 row 2's Proposal and names the team's
+  result, file path or Refresh. Its Delete confirm names the team's
   computers; the empty list adds no sentence.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
@@ -6018,7 +6018,7 @@ wrap`). Each row names the account its first usable match runs on, the
     - **Archived chats**, a card of one row, two on a team:
       - On a team only, first: **Archive idle agents automatically**
         (`environment/team-chat-auto-archive-row.tsx`, definition
-        `STORAGE.chatAutoArchive`, board C24's Proposal): "Tidy up chats
+        `STORAGE.chatAutoArchive`): "Tidy up chats
         agents started once they go quiet." The team's own setting, read and saved by the app on
         the person's sign-in (`GET` / `PUT
 /api/traycer/chat-auto-archive/teams/:teamId` on traycer-server,
