@@ -184,7 +184,7 @@ export interface SettingsSection {
  * The rail label names WHAT the page controls; the group heading names WHOSE
  * it is. Two pages that control the same thing at two scopes share word and
  * icon (Diagnostics). Two pages that control different things get different
- * words and icons (Sounds vs Notifications). Surfaces with no scope carrier
+ * words and icons (Sounds vs Alerts). Surfaces with no scope carrier
  * qualify the label themselves — report-issue route labels already do
  * ("App diagnostics" / "Host diagnostics"). The mobile header still shows
  * the bare section label; that case is unresolved, not an example of the rule.
@@ -223,8 +223,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelsTopLeft,
     group: "app",
   },
-  // Different controls than Account → Notifications, so a different word and
-  // icon (see the rail-table rule above). The id `app-notifications` now names
+  // A different word and icon than the retired Notifications page had (see the
+  // rail-table rule above). The id `app-notifications` now names
   // the soundtrack's page - the chimes moved to Alerts below, as the OS and
   // push rows did before them - and it stays, because ids are a compatibility
   // surface (routes, remembered tab paths, analytics, the panel table). Only a
@@ -238,8 +238,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // Which kinds of notification interrupt you on this device and how each
   // sounds, then the OS's own notification settings on the desktop or the
   // phone's push permission in the mobile app. Not "Notifications" and not the
-  // bell, which are Account → Notifications', a page that controls different
-  // things.
+  // bell: the word was the host page's (retired below), and the bell is the
+  // notification center, which this page does not change.
   {
     id: "alerts",
     label: "Alerts",
@@ -307,8 +307,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Coins,
     group: "account",
   },
-  // The host's notification automation (hooks). Different controls than
-  // Application → Sounds and Alerts, so it keeps the generic word and the bell.
+  // Retired with notification hooks, the last thing it held
+  // (`RETIRED_SETTINGS_SECTION_IDS`). The id stays so a remembered section, a
+  // link and a host-surface row resolve, and all of them open Alerts.
   {
     id: "notifications",
     label: "Notifications",
@@ -571,20 +572,22 @@ export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * path or a deep link still resolves, and they have no search collection.
  * Machine setup left the Environment group with the redesign; Agent
  * definitions became the Agents page's Definitions tab and Browser agent
- * access the Browser tab of Permissions.
+ * access the Browser tab of Permissions. Notifications went with notification
+ * hooks, the last thing it held; which kinds interrupt is set on Alerts.
  */
 const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
   "machine-setup",
   "agent-definitions",
   "browser-agent-access",
+  "notifications",
 ]);
 
 /**
  * The page that now holds what a section this build does not offer used to,
  * where one does: a remembered section or a link that names it opens that
- * page, as its route redirects there. Mostly retired sections; Sounds is not
- * retired, but a build without the soundtrack does not offer it, and its
- * chimes are on Alerts.
+ * page, as its route redirects there. Mostly retired sections (Notifications'
+ * nearest heir is Alerts); Sounds is not retired, but a build without the
+ * soundtrack does not offer it, and its chimes are on Alerts.
  */
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
@@ -592,6 +595,7 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   "agent-definitions": "agents",
   "browser-agent-access": "permissions",
   "app-notifications": "alerts",
+  notifications: "alerts",
 };
 
 /**

@@ -101,4 +101,10 @@ describe("<SettingsModalContent />", () => {
     expect(screen.getByTestId("sounds-page-probe")).toBeTruthy();
     expect(screen.queryByTestId("alerts-page-probe")).toBeNull();
   });
+
+  it("opens Alerts for a remembered Notifications, the retired host page", () => {
+    render(<SettingsModalContent section="notifications" />);
+
+    expect(screen.getByTestId("alerts-page-probe")).toBeTruthy();
+  });
 });

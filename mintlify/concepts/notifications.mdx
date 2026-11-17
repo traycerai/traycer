@@ -1,6 +1,6 @@
 ---
 title: "Notifications"
-description: "How Traycer tells you an agent needs you, failed, or finished: the notification center, tab indicators, OS and phone notifications, sounds, and hooks."
+description: "How Traycer tells you an agent needs you, failed, or finished: the notification center, tab indicators, OS and phone notifications, and sounds."
 ---
 
 Traycer notifies you when an agent needs your approval or an answer, when something fails, and when work finishes. The same notification can show up in several places:
@@ -12,7 +12,6 @@ Traycer notifies you when an agent needs your approval or an answer, when someth
 | [OS notifications](#os-notifications) | A system notification when no Traycer window has focus. |
 | [Phone](#push-notifications-on-your-phone) | A push notification from the mobile app, for the kinds turned on for that phone. |
 | [Sounds](#sounds) | A chime for each kind of notification. |
-| [Hooks](#hooks) | A script or URL the host calls, for your own automation. |
 
 ## Kinds Of Notification
 
@@ -80,7 +79,3 @@ The [mobile app](/account/mobile-app) can notify your phone of a host's notifica
 ## Sounds
 
 The app plays a chime for each severity while a Traycer window has focus, for the kinds that interrupt you. Choose the chimes, or turn them off, in [Settings › Alerts](/settings/alerts#chime). Chimes apply to every host.
-
-## Hooks
-
-A host can run a script or send an HTTP request whenever it creates a notification of the severities you choose, for example to post to a chat tool. Hooks are set up per host. See [Notification hooks](/settings/notifications#notification-hooks).
