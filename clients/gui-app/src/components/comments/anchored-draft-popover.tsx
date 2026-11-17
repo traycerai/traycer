@@ -7,6 +7,7 @@ import {
   transcriptRowKeyOf,
 } from "@/lib/sandbox/overlay-owner";
 import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { cn } from "@/lib/utils";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
 import {
@@ -117,6 +118,7 @@ export function AnchoredDraftPopover(props: {
   const paneContainer = usePanePortalContainer();
   const commentContainer = useContext(FrameCommentPortalContext);
   const focused = usePaneFocused();
+  const insets = useSafeAreaCollisionPadding();
   const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const pending = createThread.isPending || edit.isPending;
   const dismiss = useCallback((): boolean => {
@@ -213,7 +215,23 @@ export function AnchoredDraftPopover(props: {
       void computePosition(reference, floating, {
         strategy: "fixed",
         placement: "bottom-start",
-        middleware: [offset(8), flip(), shift({ padding: 8 })],
+        // An element taller than the window has room neither below nor above
+        // it, so the box moves over the element rather than off screen. The
+        // box is portalled outside `#root`, so it keeps clear of the device
+        // insets itself.
+        middleware: [
+          offset(8),
+          flip(),
+          shift({
+            crossAxis: true,
+            padding: {
+              top: insets.top + 8,
+              right: insets.right + 8,
+              bottom: insets.bottom + 8,
+              left: insets.left + 8,
+            },
+          }),
+        ],
       }).then(({ x, y }) => {
         if (active) {
           floating.style.left = `${x}px`;
@@ -226,7 +244,7 @@ export function AnchoredDraftPopover(props: {
       active = false;
       stop();
     };
-  }, [draft, paneContainer]);
+  }, [draft, paneContainer, insets]);
   const prepareAnchor = async (
     target: AnchoredCommentDraft,
   ): Promise<CommentAnchor | null> => {
