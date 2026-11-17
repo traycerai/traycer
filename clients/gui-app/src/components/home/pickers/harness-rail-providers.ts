@@ -111,16 +111,18 @@ export function resolveActiveProfileForHarness(input: {
     )
   )
     return null;
+  // Nothing browsed and nothing committed for this provider, and its Terminal
+  // login signed out: the one signed-in managed profile, as a new chat's
+  // default account. Ahead of the browsed match, which a null id would read as
+  // the Terminal row.
+  if (browsedProfileId === null && selectedProfileId === null) {
+    const sole = soleSignedInProfileFromRows(profiles);
+    if (sole !== null) return sole;
+  }
   const matchBrowsed = profiles.find(
     (profile) => profileCommitId(profile) === browsedProfileId,
   );
   if (matchBrowsed !== undefined) return profileCommitId(matchBrowsed);
-  // Nothing committed for this provider and its Terminal login signed out:
-  // the one signed-in managed profile, as a new chat's default account.
-  if (selectedProfileId === null) {
-    const sole = soleSignedInProfileFromRows(profiles);
-    if (sole !== null) return sole;
-  }
   if (
     resolveProfilePin(profiles, removedProfiles, selectedProfileId).kind !==
     "unknown"
