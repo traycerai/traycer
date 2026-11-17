@@ -4,6 +4,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
   EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
+  railEntryBrowseOnly,
   railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
@@ -683,31 +684,44 @@ describe("a signed-out Terminal login beside enabled, signed-in managed profiles
     });
   }
 
-  it("does not dim the tab when exactly one managed profile is signed in, and a click lands on that profile", () => {
+  it("does not dim the tab for one signed-in managed profile, and a click lands on that profile", () => {
     const profiles = [terminal, profile("work-uuid", "managed", "Work")];
 
     expect(railFor(profiles)[0].degraded).toBe(false);
+    expect(railEntryBrowseOnly(profiles)).toBe(false);
     expect(landing(profiles)).toBe("work-uuid");
   });
 
-  it("keeps the tab dimmed and landing on the Terminal login when two managed profiles are signed in", () => {
+  it("does not dim the tab for two signed-in managed profiles, and a click only browses: it commits nothing", () => {
     const profiles = [
       terminal,
       profile("a-uuid", "managed", "A"),
       profile("b-uuid", "managed", "B"),
     ];
 
-    expect(railFor(profiles)[0].degraded).toBe(true);
-    expect(landing(profiles)).toBeNull();
+    expect(railFor(profiles)[0].degraded).toBe(false);
+    expect(railEntryBrowseOnly(profiles)).toBe(true);
   });
 
-  it("keeps the tab dimmed when the only managed profile is signed out too", () => {
+  it("keeps the tab dimmed when no managed profile is signed in, and a click is not browse-only", () => {
     const profiles = [
       terminal,
       signedOut(profile("work-uuid", "managed", "Work")),
     ];
 
     expect(railFor(profiles)[0].degraded).toBe(true);
+    expect(railEntryBrowseOnly(profiles)).toBe(false);
+    expect(landing(profiles)).toBeNull();
+  });
+
+  it("changes nothing while the Terminal login is signed in", () => {
+    const profiles = [
+      profile("ambient", "ambient", "Claude Terminal account"),
+      profile("a-uuid", "managed", "A"),
+      profile("b-uuid", "managed", "B"),
+    ];
+
+    expect(railEntryBrowseOnly(profiles)).toBe(false);
     expect(landing(profiles)).toBeNull();
   });
 });
