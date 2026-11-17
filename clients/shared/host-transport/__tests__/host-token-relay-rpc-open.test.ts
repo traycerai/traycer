@@ -200,12 +200,7 @@ const RELAY_GRANT_BODY = JSON.stringify({
   session_grant_expires_in: 300,
 });
 
-/**
- * A relay dial whose attach-grant mint authn answers by `answer` (the 1-based
- * call number). With `recovers`, a sign-in refresh rotates the lease and
- * answers `rotated`; without it there is none, as on desktop main's relay.
- * Records the sign-in each mint carried.
- */
+/** `answer` is by 1-based mint call; without `recovers` there is no sign-in refresh, as on desktop main's relay. */
 function signInRelayHarness(
   answer: (call: number) => Response,
   recovers: boolean,
@@ -329,8 +324,7 @@ describe("relay door sign-in refusal", () => {
 
     try {
       test.transport.session.start();
-      // The second dial is the backoff's: it comes only if the first dial's
-      // second 401 left the session retrying.
+      // The backoff's dial comes only if the first dial's second 401 left the session retrying.
       await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(4), WAIT);
 
       expect(test.sentSignIns).toEqual([
@@ -358,8 +352,7 @@ describe("relay door sign-in refusal", () => {
 
     try {
       test.transport.session.start();
-      // A call parked before ready settles when a dial ends without a grant,
-      // so it marks the end of the first dial.
+      // A call parked before ready settles when a dial ends without a grant.
       const firstDialEnded = await test.transport.messenger
         .request(
           "host.status",

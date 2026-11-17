@@ -440,10 +440,6 @@ export function acquireHostConnection(hostId: string): HostConnectionLease {
   };
 }
 
-/**
- * Fires `hostId`'s armed reopens now (see `HostReconnectEngine.reopenNow`).
- * Nothing happens for a host this process holds no connection to.
- */
 export function reopenHostConnectionNow(hostId: string): void {
   records.get(hostId)?.reconnect.reopenNow();
 }

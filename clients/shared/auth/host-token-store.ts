@@ -1,19 +1,11 @@
-/**
- * The host-only tokens this app holds: one per (person, host), beside the
- * sign-in token, each with its end. A host-only token is all any host ever
- * receives from this app; the sign-in token only buys them at authn.
- *
- * Nothing but the token and its end is kept: no claims, and no account detail
- * beyond the person's id that keys the entry. Signing out removes that
- * person's entries.
- */
+// A host only ever receives a host-only token; the sign-in token only buys them at
+// authn. Nothing but the token and its end is kept.
 export interface HostToken {
   readonly token: string;
   /** Epoch milliseconds at which the token stops being accepted. */
   readonly expiresAtMs: number;
 }
 
-/** A token is usable for a new connection only before its end. */
 export function isUsableHostToken(
   token: HostToken | null,
   nowMs: number,
@@ -21,7 +13,6 @@ export function isUsableHostToken(
   return token !== null && token.expiresAtMs > nowMs;
 }
 
-/** Every token for every person, as persisted. */
 export type HostTokenTable = ReadonlyMap<
   string,
   ReadonlyMap<string, HostToken>
@@ -44,11 +35,7 @@ interface HostTokenFileV1 {
   >;
 }
 
-/**
- * The on-disk form, shared by every writer of one machine's file (the desktop
- * and the CLI). An entry that does not have the shape is dropped, never
- * repaired: the next open mints a fresh token for it.
- */
+// Shared by every writer of the machine's file; a malformed entry is dropped, never repaired.
 export function parseHostTokenFile(
   raw: unknown,
 ): Map<string, Map<string, HostToken>> {

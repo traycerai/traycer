@@ -1,16 +1,6 @@
-/**
- * A bot's settings on traycer-server (`/api/bots/*`), the app's own calls on
- * the person's sign-in: no host in the path, so they work with the bot's host
- * asleep. A sibling of `environment-directory.ts`, and it runs where that
- * runs: desktop in Electron main (traycer-server's CORS list does not take the
- * app renderer), the phone through its native request.
- *
- * Each request is sent once through the shell's `EnvironmentTransport`, which
- * never follows a redirect: a 3xx, or a browser's opaque redirect, is an
- * answered non-success. Nothing here throws, logs, or answers with any part of
- * the request; a refusal carries the server's own words only when they hold
- * nothing the request carried, and the generic words otherwise.
- */
+// No host in the path, so these work with the bot's host asleep. Runs in desktop
+// main or the phone's shell (traycer-server's CORS does not take the renderer).
+// A refusal carries the server's words only when they hold nothing the request did.
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
@@ -28,15 +18,6 @@ import { refusalMessageWithout } from "../environment/configuration-secrets";
 /** The writes run on the server's `standard` forward tier (60 s); the margin lets its own answer arrive first. */
 const BOT_SETUP_TIMEOUT_MS = 70_000;
 
-/**
- * A bot write that did not succeed:
- * - `unauthorized`: the server refused the sign-in (401);
- * - `refused`: any other 4xx, 403 included; `message` is the server's own
- *   words as the host's forwarder answered them, bounded and holding nothing
- *   the request carried, or the generic words when it gave none;
- * - `unavailable`: a 5xx, a redirect, or an answer this build cannot read;
- * - `no_response`: nothing answered in time.
- */
 export type BotSetupFailure =
   | { readonly kind: "unauthorized" }
   | {
@@ -47,10 +28,6 @@ export type BotSetupFailure =
   | { readonly kind: "unavailable" }
   | { readonly kind: "no_response" };
 
-/**
- * The bot's settings as a run-settings or reply-mode write left them: the
- * fields the bot's settings panel draws, and nothing else of the row.
- */
 export interface BotSetupRow {
   readonly botId: string;
   readonly harness: string;
@@ -64,7 +41,7 @@ export type BotSetupWriteResult =
   | { readonly kind: "ok"; readonly bot: BotSetupRow }
   | BotSetupFailure;
 
-/** A delete's answer: `deleted` is false when the bot was already archived, which is not a failure. */
+/** `deleted` is false when the bot was already archived, which is not a failure. */
 export type BotDeleteResult =
   | { readonly kind: "ok"; readonly deleted: boolean }
   | BotSetupFailure;
@@ -84,9 +61,8 @@ type PostResult =
   | BotSetupFailure;
 
 /**
- * `proxyToken` is the Google IAP id-token a staging desktop's main process
- * mints, sent as `Proxy-Authorization` ahead of the person's `Authorization`;
- * every other caller passes `null`.
+ * `proxyToken`: the IAP id-token a staging desktop's main mints, sent as
+ * `Proxy-Authorization`; every other caller passes `null`.
  */
 async function post(
   serverBaseUrl: string,
@@ -130,8 +106,8 @@ async function post(
     return {
       kind: "refused",
       status: answer.status,
-      // Both credentials the request carried are withheld from the server's
-      // text, which reaches the person's error and the app's log.
+      // Both credentials are withheld from the server's text, which reaches the person
+      // and the app's log.
       message: refusalMessageWithout(
         parsed,
         proxyToken === null ? [bearerToken] : [bearerToken, proxyToken],
@@ -144,7 +120,6 @@ async function post(
   return { kind: "ok", body: parsed };
 }
 
-/** An empty or non-JSON body (a proxy's HTML page) reads as `null`. */
 function jsonOrNull(text: string | null): unknown {
   if (text === null || text.length === 0) return null;
   try {
@@ -163,7 +138,6 @@ function rowOf(result: PostResult): BotSetupWriteResult {
     : { kind: "unavailable" };
 }
 
-/** `POST /api/bots/update-run-settings`: the harness, model, effort and profile the bot's next turn runs on. */
 export async function updateBotRunSettingsViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
@@ -189,10 +163,6 @@ export async function updateBotRunSettingsViaHttp(
   );
 }
 
-/**
- * `POST /api/bots/update-reply-mode`: how the bot answers a post, from the
- * next post on. `direct` on a team's bot is refused (422).
- */
 export async function updateBotReplyModeViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
@@ -212,12 +182,7 @@ export async function updateBotReplyModeViaHttp(
   );
 }
 
-/**
- * `POST /api/bots/delete`: archives the bot; a repeat answers
- * `deleted: false`. The answer's notices for the automations the bot set up
- * are not staged here: they come back to the bot's bound computer on its
- * bots read.
- */
+/** The answer's notices for the bot's automations reach its bound computer on its bots read. */
 export async function deleteBotViaHttp(
   serverBaseUrl: string,
   bearerToken: string,

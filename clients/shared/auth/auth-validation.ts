@@ -782,8 +782,7 @@ async function refreshAuthTokenOnceViaHttp(
           ...(clientKind === null ? {} : { clientKind }),
           ...(rotationCode === null ? {} : { rotationCode }),
         }),
-        // The body carries the refresh token: a redirect is answered here and
-        // never followed with it.
+        // Never follow a redirect: the body carries the refresh token.
         redirect: "manual",
         signal,
       }),
@@ -793,9 +792,7 @@ async function refreshAuthTokenOnceViaHttp(
     return { kind: "network-error" };
   }
 
-  // A redirect is not authn's answer: no pair, nothing refused, and the
-  // credential stays as it is, like every other non-2xx below that is not a
-  // refusal.
+  // A redirect is not authn's answer: nothing is refused and the credential stays.
   if (
     response.type === "opaqueredirect" ||
     (response.status >= 300 && response.status < 400)
@@ -938,8 +935,7 @@ async function exchangeCodeForTokensWithSignal(
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
         signal,
-        // The body carries the code and its verifier: a redirect is answered
-        // here, as a network error below, and never followed with them.
+        // Never follow a redirect: the body carries the code and its verifier.
         redirect: "manual",
       },
     );

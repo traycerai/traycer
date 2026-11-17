@@ -8,7 +8,6 @@ export interface LocalOwnerJarCase {
   readonly admitted: boolean;
 }
 
-/** The same ownership cases are exercised by the GUI and main jar selectors. */
 export const LOCAL_OWNER_JAR_CASES: readonly LocalOwnerJarCase[] = [
   {
     name: "a known team owner",

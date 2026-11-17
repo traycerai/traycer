@@ -1,14 +1,7 @@
 import { notificationHookRefusalSchema } from "./account-notification-schemas";
 import { NotificationHookRefusalError } from "./notification-hook-refusal";
-/**
- * `environment.configuration.items*`, `.revision`, `.mcpServers.*`,
- * `.policy.put`, `environment.history` and `environment.plans.*` as the app's
- * own calls to authn's environment routes (`environment-cloud.ts`). Each
- * function answers exactly what the host's and the pool's forwarder answered
- * for the same method (`packages/common/src/environments/configuration-
- * forwarding/settings.ts` in the internal repository), so a screen reads the
- * same shape whether a host served it or authn did.
- */
+// The configuration, MCP, policy, history and plans methods answered by authn
+// directly, in the shapes the host's forwarder answered.
 import { z } from "zod";
 import { providerIdOfHarness } from "@traycer/protocol/host/environment/item-identity";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
@@ -66,13 +59,10 @@ function mutationOutcome(answer: EnvironmentAnswer): {
 } {
   if (answer.status === 403) return { outcome: "forbidden", reason: null };
   if (isSuccess(answer)) return { outcome: "saved", reason: null };
-  // As the host's forwarder: any other answer, a 401 or a 5xx too, is the
-  // write's refusal. A redirect never reached authn.
+  // Any other answer, a 401 or 5xx too, is the write's refusal.
   if (isRedirect(answer)) throw settingsRefusal(answer);
   return { outcome: "refused", reason: errorBodyCode(answer.body) };
 }
-
-// ── items ───────────────────────────────────────────────────────────────────
 
 /** Authoritative even with zero hosts; never derived from a host or item rows. */
 export async function readConfigurationRevision(
@@ -102,8 +92,8 @@ export async function readConfigurationItems(
         `${environmentPath(environmentId)}/items?kind=${encodeURIComponent(kind)}`,
         null,
       );
-      // An authn older than this app has no route for a newer kind yet: that
-      // kind has no rows, and every other kind still reads.
+      // An older authn has no route for a newer kind: that kind has no rows, and every
+      // other kind still reads.
       if (
         answer.status === 400 &&
         errorBodyCode(answer.body) === "kind_not_item_route"
@@ -210,9 +200,6 @@ export async function deleteConfigurationItem(
   );
 }
 
-// ── MCP servers ─────────────────────────────────────────────────────────────
-
-/** An environment's `mcp_server` item: which server row it installs, and where. */
 interface McpServerItem {
   readonly key: string;
   readonly revision: number;
@@ -252,23 +239,21 @@ async function readMcpServerItems(
   });
 }
 
-/** What a list reads of a secret a server names. */
 interface ListedSecret {
   readonly name: string;
   readonly kind: string;
 }
 
 /**
- * Whether a bound secret is the server's own copy, which authn writes as an
- * `mcp_credential` named after the server and revokes with it; a picked
- * secret is only unbound.
+ * authn writes a server's own copy as an `mcp_credential` named after it and
+ * revokes it with the server; a picked secret is only unbound.
  */
 function ownCopyOf(server: AuthnMcpServer, secret: ListedSecret): boolean {
   const prefix = `MCP_${server.id.replace(/-/g, "").toUpperCase()}_`;
   return secret.kind === "mcp_credential" && secret.name.startsWith(prefix);
 }
 
-/** A server's credential as a list shows it: which secret holds it, never its value. */
+/** Which secret holds it, never its value. */
 function listedCredential(
   server: AuthnMcpServer,
   secrets: ReadonlyMap<string, ListedSecret>,
@@ -283,7 +268,6 @@ function listedCredential(
     ? server.credentials.customHeaders
     : server.credentials.pat;
   if (held.present) {
-    // A value still in the row goes with the server.
     if (held.secretId === null) {
       return { kind: "secret", secretId: null, secretName: null, owned: true };
     }
@@ -301,7 +285,6 @@ function listedCredential(
   return { kind: "none", secretId: null, secretName: null, owned: false };
 }
 
-/** The `mcp-servers` route body of a put's credential. */
 function credentialBody(
   credential: EnvironmentConfigurationMcpServerPutRequestV11["credential"],
   creating: boolean,
@@ -322,7 +305,7 @@ function credentialBody(
   }
 }
 
-/** The `mcp_server` item value; `offFor` omitted when empty, as released hosts parse it. */
+/** `offFor` omitted when empty, as released hosts parse it. */
 function mcpServerItemValue(
   mcpServerId: string,
   toolToggles: EnvironmentConfigurationMcpServerPutRequestV11["toolToggles"],
@@ -380,10 +363,8 @@ export async function listConfigurationMcpServers(
 }
 
 /**
- * `seenItemRevision` is the revision of the server's item the editor showed:
- * null for a new server, and for one shown with no item (switched off). An
- * edit whose item has moved since is refused as a revision conflict, and
- * authn checks the same revision when it writes.
+ * `seenItemRevision`: the server item's revision the editor showed, null when it
+ * showed none. An item moved since is a revision conflict.
  */
 export async function putConfigurationMcpServer(
   cloud: EnvironmentCloud,
@@ -391,8 +372,7 @@ export async function putConfigurationMcpServer(
   seenItemRevision: number | null,
 ): Promise<EnvironmentConfigurationMcpServerPutResponseV11> {
   const { environmentId, serverId, credential, offFor, ...body } = request;
-  // The broker binds a credential to an http destination; a stdio server
-  // has none to bind it to.
+  // The broker binds a credential to an http destination; a stdio server has none.
   if (
     body.transport === "stdio" &&
     credential.kind !== "none" &&
@@ -415,11 +395,8 @@ export async function putConfigurationMcpServer(
     return { outcome: "refused", reason: "revision_conflict", serverId: null };
   }
   if (serverId !== null) {
-    // An edit is one request: authn writes the row and its item, and a
-    // rename's old key, in one commit, so a refused edit changes nothing, its
-    // credential included. A server switched off has no item and stays off:
-    // its row alone is written, keeping the tool switches it was switched
-    // off with.
+    // One request: authn writes the row, its item and a rename's old key in one commit.
+    // A server switched off has no item and stays off: only its row is written.
     const { toolToggles, ...definition } = body;
     const answer = await sendSettings(
       cloud,
@@ -467,9 +444,8 @@ export async function putConfigurationMcpServer(
   const written = mutationOutcome(answer);
   if (written.outcome !== "saved") return { ...written, serverId: null };
   const saved = parseSettings(answer, authnMcpServerResponseSchema).server;
-  // The row reaches hosts only through its item: a row whose item cannot be
-  // written goes with it, and authn revokes the credentials it stored for the
-  // row with it.
+  // The row reaches hosts only through its item: a row whose item cannot be written
+  // is removed, and authn revokes its credentials with it.
   const rollBack = async (): Promise<void> => {
     try {
       await sendSettings(
@@ -517,8 +493,7 @@ export async function deleteConfigurationMcpServer(
 ): Promise<EnvironmentConfigurationWriteResponse> {
   const path = environmentPath(request.environmentId);
   const items = await readMcpServerItems(cloud, request.environmentId);
-  // The item first: its removal retires the server on every host, and a row
-  // with no item reaches none.
+  // The item first: its removal retires the server on every host.
   for (const item of items.filter(
     (row) => row.mcpServerId === request.serverId,
   )) {
@@ -556,8 +531,7 @@ export async function setConfigurationMcpServerEnabled(
   const held = items.find((row) => row.mcpServerId === request.serverId);
   if (!request.enabled) {
     if (held === undefined) return { outcome: "saved", reason: null };
-    // A tool switch writes the item alone: the row keeps them while the
-    // server is off, for the switch that puts it back.
+    // A tool switch writes the item alone: the row keeps them while the server is off.
     const kept = mutationOutcome(
       await sendSettings(
         cloud,
@@ -600,8 +574,6 @@ export async function setConfigurationMcpServerEnabled(
   return mutationOutcome(answer);
 }
 
-// ── policy, history ─────────────────────────────────────────────────────────
-
 export async function putConfigurationPolicy(
   cloud: EnvironmentCloud,
   request: EnvironmentConfigurationPolicyPutRequest,
@@ -633,15 +605,12 @@ export async function readConfigurationHistory(
     ),
     environmentHistoryResponseSchema,
   );
-  // The contract answers newest first; authn lists them oldest first.
-  // `toSorted` is stable, so entries of one time keep authn's order.
+  // The contract is newest first; authn lists oldest first. `toSorted` is stable.
   return {
     ...history,
     entries: history.entries.toSorted((a, b) => b.at - a.at),
   };
 }
-
-// ── plans ───────────────────────────────────────────────────────────────────
 
 function planStatus(
   connection: AuthnHarnessConnection,
@@ -699,27 +668,15 @@ export async function listConfigurationPlans(
   };
 }
 
-/**
- * The name a `managed_profile` row carries, as much of its value as the
- * unlink confirm reads. Not strict: the row holds more than the name.
- */
 const managedProfileNameSchema = z.object({
   name: z.string().min(1).max(64),
 });
 
-/** What authn says still works for a team once one of its plans is unlinked. */
 export interface ConfigurationPlanUnlinkPreview {
-  /** The other linked plans and the provider sign-ins the team keeps, by name. */
   readonly keepsWorking: readonly string[];
 }
 
-/**
- * The cloud part of the unlink confirm for `profileId`: the names of what
- * keeps working without that plan, named as the host's forwarder named them
- * (a linked plan by its profile's name, else its provider's, else its
- * harness; then each provider sign-in). The turns running on the plan are
- * counted by a computer, never here.
- */
+/** The turns running on the plan are counted by a computer, never here. */
 export async function readConfigurationPlanUnlinkPreview(
   cloud: EnvironmentCloud,
   environmentId: string,

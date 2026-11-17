@@ -1,12 +1,7 @@
 import { z } from "zod";
 import { composeRequestAbort, untilAborted } from "./request-abort";
 
-/**
- * Someone who is or was a member of an environment, as authn's person read
- * names them (`GET /api/v3/environments/:environmentId/people/:userId`). It
- * answers for a member who has since left, which the member directory no
- * longer lists.
- */
+// authn's person read also answers for a member who has left the environment.
 const environmentPersonSchema = z.strictObject({
   userId: z.string().min(1),
   name: z.string().nullable(),
@@ -15,12 +10,6 @@ const environmentPersonSchema = z.strictObject({
 });
 export type EnvironmentPerson = z.infer<typeof environmentPersonSchema>;
 
-/**
- * `found` for someone who is or was a member; `not-found` for authn's 404,
- * either `person_not_found` (no record of this person on the environment, a
- * malformed id included) or `environment_not_found` (this sign-in cannot read
- * the environment): both name nobody. Any other answer throws.
- */
 export type EnvironmentPersonResult =
   | { readonly kind: "found"; readonly person: EnvironmentPerson }
   | { readonly kind: "not-found" };
@@ -46,8 +35,7 @@ export async function fetchEnvironmentPerson(
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
         },
-        // A redirect is an answer that is not this read, never a hop to take
-        // with the sign-in attached.
+        // Carries a credential: never follow a redirect.
         redirect: "manual",
         signal: abort.signal,
       }),

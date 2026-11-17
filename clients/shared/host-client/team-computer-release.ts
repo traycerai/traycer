@@ -4,7 +4,6 @@ export type TeamComputerReleaseResult =
   | { readonly kind: "ok" }
   | { readonly kind: "not-found" }
   | { readonly kind: "not-computer" }
-  /** A Viewer of the team that owns the computer. */
   | { readonly kind: "read-only-seat" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
@@ -61,7 +60,6 @@ export async function releaseTeamComputerViaHttp(
   }
 }
 
-/** The refusal's `code`, or null when its body is unreadable or carries none. */
 async function refusalCode(
   response: Response,
   signal: AbortSignal,

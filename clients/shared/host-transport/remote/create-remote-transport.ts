@@ -82,9 +82,7 @@ export interface CreateRemoteTransportOptions<
    * `CREDENTIAL_UPDATE`. The sign-in token only buys them at authn.
    */
   readonly hostTokens: HostTokenSource;
-  /** Told of the host's own refusals and admissions; `null` for none. */
   readonly door: SessionDoorObserver | null;
-  /** Where the states this app raises itself for this host go. */
   readonly onState: HostTokenStateSink;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
@@ -284,8 +282,7 @@ export function createRemoteHostTransport<
       // at build time.
       const signInNow = (): string | null =>
         cloudAuthorized() ? deriveBearerToken(bearer) : null;
-      // One mint in `era`; `null` when the person signed out or was replaced
-      // while authn answered, so nothing of theirs is kept or raised.
+      // `null` when the person signed out or was replaced while authn answered.
       const mintInEra = async (
         signInToken: string,
         era: number,
@@ -297,11 +294,8 @@ export function createRemoteHostTransport<
         );
         return options.hostTokens.era(options.userId) === era ? minted : null;
       };
-      // authn refused the sign-in: refresh it once and mint again, the local
-      // door's rule (`hostTokenRevalidator`). Refused again, or any recovery
-      // answer but `rotated`, keeps the first provision: the relay's backoff,
-      // with no state. An invalid sign-in is ended by the auth service's own
-      // refresh, not here.
+      // authn refused the sign-in: refresh once and mint again. Any other outcome keeps
+      // the first provision: the relay's backoff, with no state.
       const mintAfterSignInRefresh = async (
         refused: RelayPassMintOutcome,
         era: number,
@@ -394,7 +388,6 @@ export function createRemoteHostTransport<
         // host-to-host dialer) passes `null` at its own constructor.
         livenessProbe: HOST_STATUS_LIVENESS_PROBE,
       });
-      // A renewed token reaches the open connection in place.
       const stopRenewals = options.hostTokens.subscribe((change) => {
         if (
           change.userId === options.userId &&

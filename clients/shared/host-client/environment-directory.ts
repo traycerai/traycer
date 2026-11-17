@@ -1,15 +1,5 @@
-/**
- * `GET /api/environments` on traycer-server: every environment the signed-in
- * person belongs to, in the protocol's own list shape, which the app joins with
- * authn's reads (the hosts' reports, the viewer's role) through
- * `enrichConfigurationList`.
- *
- * Reached only from desktop main or the phone's shell, which traycer-server
- * answers; the renderer asks through `IRunnerHost.listEnvironments`. The
- * sign-in token rides in the `Authorization` header only, and the request has
- * no body. It is sent once through the shell's `EnvironmentTransport`, which
- * never follows a redirect: a 3xx is a failure like any other.
- */
+// Reached only from desktop main or the phone's shell; the renderer asks through
+// `IRunnerHost.listEnvironments`. Sent once, following no redirect.
 import {
   environmentListResponseSchema,
   type EnvironmentListResponse,
@@ -19,12 +9,6 @@ import type { EnvironmentTransport } from "../environment/environment-cloud";
 
 const ENVIRONMENT_DIRECTORY_TIMEOUT_MS = 10_000;
 
-/**
- * - `unauthorized`: traycer-server refused the person's sign-in (401);
- * - `unavailable`: it answered with anything but the list (another status, a
- *   redirect, or a body that is not the list);
- * - `no_response`: nothing answered in time.
- */
 export type EnvironmentDirectoryResult =
   | { readonly kind: "ok"; readonly list: EnvironmentListResponse }
   | { readonly kind: "unauthorized" }

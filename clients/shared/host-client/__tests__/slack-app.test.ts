@@ -617,8 +617,6 @@ describe("a redirect answered to a Slack app request", () => {
         detail: `the server answered HTTP ${status} without a typed refusal`,
       });
 
-      // One request, to the route itself, told not to follow: the body with
-      // the app's secrets is not sent to the Location.
       const { url, init } = onlyCall(fetchMock);
       expect(url).toBe(`${BASE}/api/slack/apps/register`);
       expect(init.redirect).toBe("manual");

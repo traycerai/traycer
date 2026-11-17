@@ -1,7 +1,6 @@
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
 import type { AccountNotificationHook } from "./account-notification-schemas";
 
-/** A header template's first computer variable, in the spelling the form names. */
 export function notificationHookVariable(
   hook: NotificationHookConfig,
 ): string | null {
@@ -25,9 +24,8 @@ export type CloudNotificationHook = Omit<NotificationHookConfig, "action"> & {
 };
 
 /**
- * Legacy commands and templates live in their computers' files, not this
- * editor. A literal HTTP hook stays visible even if its legacy held flag was
- * true: the flag never prevented it from running on a computer.
+ * A literal HTTP hook stays visible even if its legacy held flag was true: the
+ * flag never stopped it running.
  */
 export function accountHooksForEditor(
   hooks: readonly AccountNotificationHook[],

@@ -211,7 +211,6 @@ class FakeRelay {
   readonly resumes: number[] = [];
   /** The bearer each session OPEN frame carried, in arrival order. */
   readonly openBearers: unknown[] = [];
-  /** The host-only authorization value each session OPEN frame carried. */
   readonly openAuthz: unknown[] = [];
   /** The `cloudAuthorized` value of every verdict update frame, in arrival order. */
   readonly verdictUpdates: unknown[] = [];

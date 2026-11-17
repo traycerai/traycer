@@ -260,8 +260,7 @@ function createHostTokenRemoteSessionAuth(
     },
     readCredentialUpdateBearer: readHostToken,
     currentFingerprint: readHostToken,
-    // `undefined` too: an untyped caller can omit the option, and a wrapper
-    // over nothing would turn "no revalidator" into an endless retry.
+    // A wrapper over nothing would turn "no revalidator" into an endless retry.
     revalidateForReconnect:
       auth === null || auth === undefined
         ? null

@@ -6,10 +6,7 @@ import {
   type HostTokenTable,
 } from "./host-token-store";
 
-/**
- * authn's answer to one mint, as the app acts on it. `not-a-member` is the only
- * answer that says the computer is a team's.
- */
+// `not-a-member` is the only answer that says the computer is a team's.
 export type HostTokenMintOutcome =
   | { readonly kind: "ok"; readonly token: HostToken }
   /** 403 `team_membership_required`: a live team computer, and not a member. */
@@ -22,26 +19,14 @@ export type HostTokenMintOutcome =
   | { readonly kind: "sign-in-rejected" }
   /** A transport failure or a 5xx: authn could not be reached. */
   | { readonly kind: "unavailable"; readonly detail: string }
-  /**
-   * Nothing was asked: this person holds no verified sign-in here (signed
-   * out, or not yet confirmed by authn). Raises no state.
-   */
   | { readonly kind: "no-sign-in" }
-  /**
-   * The person signed out, or another account replaced them, while this was
-   * asked: nothing was kept, and it raises no state.
-   */
   | { readonly kind: "superseded" };
 
-/**
- * What one renewal did. `delayed` names the hosts whose mint could not reach
- * authn: each keeps the token it holds until authn answers again.
- */
+// `delayed`: hosts whose mint could not reach authn; each keeps the token it holds.
 export type HostTokenRenewal =
   | { readonly kind: "renewed"; readonly delayed: readonly string[] }
   | { readonly kind: "already-current" }
   | { readonly kind: "no-sign-in" }
-  /** The person signed out or was replaced while it ran: report nothing. */
   | { readonly kind: "superseded" };
 
 export type HostTokenMint = (
@@ -50,13 +35,8 @@ export type HostTokenMint = (
   signal: AbortSignal | null,
 ) => Promise<HostTokenMintOutcome>;
 
-/**
- * The sign-in token this app may spend at authn for `userId`: present only
- * while that person's session is verified, `null` otherwise.
- */
 export type VerifiedSignIn = (userId: string) => string | null;
 
-/** Where the table lives: a file under the credentials lock, or secure storage. */
 export interface HostTokenPersistence {
   load(): Promise<HostTokenTable>;
   /** Applies `change` to the latest persisted table and returns the result, atomically. */
@@ -66,63 +46,32 @@ export interface HostTokenPersistence {
 }
 
 export interface HostTokenSource {
-  /**
-   * The token this process last knew for the pair, read synchronously at
-   * open. Only a token stored in the person's current {@link era} is returned.
-   */
+  /** Only a token stored in the person's current era is returned. */
   current(userId: string, hostId: string): HostToken | null;
-  /**
-   * An unexpired token for the pair: the one on disk, else a fresh mint.
-   * `fresh` skips the one on disk, after a host refused it. Concurrent asks for
-   * one pair share one mint.
-   */
+  /** Concurrent asks for one pair share one mint. */
   obtain(
     userId: string,
     hostId: string,
     fresh: boolean,
     signal: AbortSignal | null,
   ): Promise<HostTokenMintOutcome>;
-  /**
-   * Fresh tokens for `hostIds`, asked for right after the sign-in token was
-   * refreshed. One refresh buys at most one token per host, however many
-   * windows ask. `already-current` when every host's token was already minted
-   * with the sign-in this source holds now, so nothing was asked of authn.
-   */
+  /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
-  /**
-   * Keeps a token authn returned beside a relay pass, unless the person
-   * signed out or was replaced since `era`, the {@link era} the caller read
-   * before its mint.
-   */
+  /** Dropped if the person signed out or was replaced since `era`. */
   adopt(
     userId: string,
     hostId: string,
     token: HostToken,
     era: number,
   ): Promise<void>;
-  /**
-   * Signing out, or another account replacing this one: every token of that
-   * person goes, and their {@link era} advances at once, so anything begun
-   * before it keeps nothing and raises nothing.
-   */
+  /** Advances their era at once, so anything begun before keeps nothing. */
   forgetUser(userId: string): Promise<void>;
-  /**
-   * This person's era here. It advances each time {@link forgetUser} runs for
-   * them. A mint, an adoption or a state write that began in an earlier era is
-   * dropped. A value {@link isIssuedHostTokenEra} refuses is no era: work
-   * that reads it starts nothing.
-   */
+  /** Work begun in an earlier era is dropped; a value `isIssuedHostTokenEra` refuses starts nothing. */
   era(userId: string): number;
-  /**
-   * Where this source's mints take their sign-in token from, for a shell whose
-   * sign-in is known only once the app is up. A shell that mints elsewhere
-   * ignores it.
-   */
   bindSignIn(signIn: VerifiedSignIn): void;
   subscribe(listener: (change: HostTokenChange) => void): () => void;
 }
 
-/** Whether `era` is one a source issues: a non-negative safe integer. */
 export function isIssuedHostTokenEra(era: number): boolean {
   return Number.isSafeInteger(era) && era >= 0;
 }
@@ -130,7 +79,6 @@ export function isIssuedHostTokenEra(era: number): boolean {
 export function createHostTokenSource(deps: {
   readonly persistence: HostTokenPersistence;
   readonly mint: HostTokenMint;
-  /** `null` until {@link HostTokenSource.bindSignIn}: no mint before then. */
   readonly signIn: VerifiedSignIn | null;
   readonly now: () => number;
 }): HostTokenSource {
@@ -144,20 +92,15 @@ export function createHostTokenSource(deps: {
   );
   const listeners = new Set<(change: HostTokenChange) => void>();
   const inFlight = new Map<string, Promise<HostTokenMintOutcome>>();
-  // Which refresh of the sign-in token each pair was last minted with (that
-  // token's own end, never the token), so one refresh mints once per host.
-  // Process memory only: a restart mints once more at most.
+  // Each pair's minting refresh (its end, never the token), so a refresh mints once per
+  // host. Process memory only: a restart mints once more at most.
   const mintedWith = new Map<string, number>();
-  // Each person's era, advanced the moment they are forgotten, so nothing
-  // begun before a sign-out or a switch can put their token back.
   const eras = new Map<string, number>();
   const eraOf = (userId: string): number => eras.get(userId) ?? 0;
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
-  // The era each held token was stored in. A token read from disk at load
-  // carries none, and counts as the first era. A token is read back only in
-  // the era it was stored in, so advancing a person's era makes every token of
-  // theirs unreadable at once, before the update that deletes them lands.
+  // A token is read back only in the era it was stored in, so advancing an era hides
+  // every token of that person at once, before the delete lands.
   const storedIn = new Map<string, number>();
   const held = (userId: string, hostId: string): HostToken | null => {
     const token = table.get(userId)?.get(hostId) ?? null;
@@ -171,7 +114,6 @@ export function createHostTokenSource(deps: {
     for (const listener of Array.from(listeners)) listener(change);
   };
 
-  /** Writes the token unless `era` has ended; `false` when it was dropped. */
   const store = async (
     userId: string,
     hostId: string,
@@ -207,9 +149,8 @@ export function createHostTokenSource(deps: {
     if (signInToken === null) return Promise.resolve({ kind: "no-sign-in" });
     const key = keyOf(userId, hostId);
     const mark = readAccessTokenExpiryMs(signInToken);
-    // Keyed by the refresh too: a mint started before a refresh must not
-    // stand in for the one the refresh asks for. And by the era, so an ask
-    // after a sign-out never joins a mint begun before it.
+    // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
+    // not stand in for a later ask.
     const flightKey = `${key}\u0000${mark ?? "unknown"}\u0000${era}`;
     const running = inFlight.get(flightKey);
     if (running !== undefined) return running;
@@ -305,7 +246,6 @@ export function createHostTokenSource(deps: {
   };
 }
 
-/** A table that lives only as long as the process: dev runners and tests. */
 export function createMemoryHostTokenPersistence(): HostTokenPersistence {
   let table: HostTokenTable = new Map();
   return {

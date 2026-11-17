@@ -5,8 +5,6 @@ import {
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import { vi, type Mock } from "vitest";
 
-// Route body and strict request schema checked at internal commit
-// 5d1c2206dd9d882c0e0bfa5007089a487047206c.
 export const SIGN_IN_REQUEST_FIXTURE: ProviderLoginSignInRequest = {
   operationId: "8c6f4f97-8a2c-4b7e-9875-223456789abc",
   environmentId: "39c814a7-857f-4ca1-9db5-97342ad77fa9",

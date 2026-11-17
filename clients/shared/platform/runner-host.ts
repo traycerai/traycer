@@ -280,10 +280,8 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
-   * How the app's own calls to authn's environment routes are sent: each once,
-   * never following a redirect (`EnvironmentTransport`). The shell owns it
-   * because only the shell knows which request honours that: a phone's patched
-   * `fetch` ignores `redirect`.
+   * Each request sent once, never following a redirect. The shell owns it: a phone's
+   * patched `fetch` ignores `redirect`.
    */
   readonly environmentTransport: EnvironmentTransport;
 
@@ -528,30 +526,14 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
-  /**
-   * Every environment the signed-in person belongs to, read from traycer-server
-   * (`GET /api/environments`) with the user bearer, as
-   * `host-client/environment-directory.ts` reads it: the renderer joins it
-   * with authn's reads, so the list needs no computer awake. Run where the
-   * shell's other traycer-server calls run, for the same reason. Never throws.
-   */
+  /** Read from traycer-server so the list needs no computer awake. Never throws. */
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
-  /**
-   * Saves the account's auto-approve policy on traycer-server
-   * (`PUT /api/traycer/auto-policy`) with the user bearer, as
-   * `host-client/auto-policy-save.ts` sends it. Run where the shell's other
-   * traycer-server calls run, for the same reason. Never throws.
-   */
+  /** Never throws. */
   saveAutoPolicy(
     bearerToken: string,
     body: string,
   ): Promise<AutoPolicySaveResult>;
-  /**
-   * Attaches a task to a team's environment on traycer-server
-   * (`POST /api/tasks/environment-attachment`) with the user bearer, as
-   * `host-client/task-environment-attachment.ts` sends it. Run where the
-   * shell's other traycer-server calls run, for the same reason. Never throws.
-   */
+  /** Never throws. */
   attachTaskEnvironment(
     bearerToken: string,
     request: TaskEnvironmentAttachmentRequest,
@@ -660,12 +642,7 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /**
-   * A bot's settings (traycer-server `/api/bots/*`) with the person's bearer,
-   * with no host in the path. Same placement as the Slack app above, sent
-   * once and following no redirect. See `host-client/bot-setup.ts`. Never
-   * throw.
-   */
+  /** No host in the path. Never throws. */
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,
@@ -820,10 +797,8 @@ export interface IRunnerHost {
   readonly tokenStore: ITokenStore;
 
   /**
-   * The person's host-only tokens, one per host, kept beside the sign-in
-   * token: the only credential this app ever puts in a frame to a host.
-   * Desktop backs it with the main process's file, mobile with the native
-   * secure store; in-memory implementations keep the table in process.
+   * The only credential this app ever puts in a frame to a host. Desktop backs it
+   * with main's file, mobile with the secure store.
    */
   readonly hostTokens: HostTokenSource;
 
@@ -1157,12 +1132,7 @@ export interface IRunnerHost {
    */
   readonly statusBarTap: IStatusBarTapHost | null;
 
-  /**
-   * A team's chat auto-archive setting on traycer-server
-   * (`/api/traycer/chat-auto-archive/teams/:teamId`) with the user bearer,
-   * sent where the shell's other traycer-server calls are sent, through a
-   * request that follows no redirect. Never throw.
-   */
+  /** Follows no redirect. Never throws. */
   getTeamChatAutoArchive(
     bearerToken: string,
     teamId: string,

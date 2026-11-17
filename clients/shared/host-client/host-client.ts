@@ -148,12 +148,8 @@ export interface HostClientOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
   /**
-   * The messenger {@link HostClient.requestSingleAttemptFor} sends on: one
-   * send per call, below every layer that resends (transport retry, the
-   * credential-recovery retry). Absent, it is `messenger`, which is right
-   * only for a client whose messenger already sends once (a test fake, a
-   * standalone tool); a shell that wraps its messenger in a retry layer passes
-   * the unwrapped one here.
+   * One send per call, below every layer that resends. Defaults to `messenger`,
+   * right only when that already sends once; a retrying shell passes the unwrapped one.
    */
   readonly singleAttemptMessenger?: IHostMessenger<Registry>;
   readonly invalidator: IHostQueryInvalidator;
@@ -1089,11 +1085,8 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * One send to `entry`, never repeated: no transport retry and no resend
-   * after a credential recovery, whatever the failure. Scheduling, routing and
-   * the authority capture are the ordinary ones. For a best-effort nudge whose
-   * loss costs nothing and whose caller has promised it goes out once
-   * (Remote access's `host.status.refresh`).
+   * Never repeated, not even after a credential recovery: only for a best-effort
+   * nudge whose caller promised it goes out once.
    */
   requestSingleAttemptFor<Method extends keyof Registry & string>(
     entry: HostDirectoryEntry,

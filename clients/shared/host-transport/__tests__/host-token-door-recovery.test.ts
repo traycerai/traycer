@@ -324,8 +324,8 @@ describe("host-token refusal recovery", () => {
       expect(stateCalls).toEqual([]);
       expect(transport.session.isClosed()).toBe(false);
 
-      // The peer records OPEN before its awaited FATAL delivery completes.
-      // Wait for the handled refusal so backoff is armed before advancing time.
+      // The peer records OPEN before its FATAL delivery completes: wait for the handled
+      // refusal so backoff is armed before advancing time.
       await vi.waitFor(() =>
         expect(relayPeer.closeReasons).toContainEqual({
           code: 1000,

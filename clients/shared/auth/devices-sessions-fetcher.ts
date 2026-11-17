@@ -83,11 +83,7 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
   ).toString();
 }
 
-/**
- * Only a request with a body declares a JSON one: authn's JSON parser refuses
- * a body-less request that declares it (`FST_ERR_CTP_EMPTY_JSON_BODY`), as a
- * session revoke's DELETE is.
- */
+// authn refuses a body-less request that declares JSON (`FST_ERR_CTP_EMPTY_JSON_BODY`).
 function jsonHeaders(
   bearerToken: string,
   body: RequestInit["body"],
@@ -134,8 +130,7 @@ async function fetchAuthn(
         ...init,
         headers: jsonHeaders(bearerToken, init.body),
         signal: abort.signal,
-        // The bearer rides along: a redirect is answered here, as a failure,
-        // and never followed with it.
+        // Carries a credential: never follow a redirect.
         redirect: "manual",
       }),
       abort.signal,

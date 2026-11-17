@@ -1,18 +1,6 @@
-/**
- * The `environment.secrets.*` methods (Settings ▸ Secrets) as the app's own
- * calls to authn's environment secret routes, on the person's sign-in. Each
- * function answers what the host's and the pool's forwarder answered for the
- * same method (`packages/common/src/environments/configuration-forwarding/
- * secrets.ts` in the internal repository): path ids leave the request, the
- * body is exactly the fields authn takes, and the answer is the protocol's
- * arm. No value or body is kept or logged.
- *
- * Never answered here: create's `pending` arm and replaceValue's `pending`
- * arm (authn answers neither on a person's session; a refusal is an HTTP
- * error). A refusal other than replaceValue's `secret_version_stale` is the
- * caller's error with authn's message, bounded, and never one that holds the
- * request's own bearer or secret value ({@link refusalMessageWithout}).
- */
+// The app's own calls to authn's environment secret routes, on the person's sign-in.
+// No value or body is kept or logged; a refusal's message never carries the
+// request's bearer or a secret value.
 import { z } from "zod";
 import { environmentChangedBySchema } from "@traycer/protocol/framework/environment-stale-write";
 import {
@@ -108,10 +96,8 @@ const authnStaleSchema = lazySchema(() =>
 );
 
 /**
- * authn's row as the protocol's. `revoked` is false on every row because
- * authn's list answers live, unrevoked secrets only. The retired fields a
- * released desktop still requires get their values here
- * (`released-wire-rows.ts` holds them).
+ * `revoked` is false: authn lists live secrets only. Retired fields a released
+ * desktop still requires are filled here.
  */
 function secretOf(row: AuthnSecretRow): EnvironmentSecret {
   return {
@@ -127,7 +113,6 @@ function secretOf(row: AuthnSecretRow): EnvironmentSecret {
   };
 }
 
-/** A list row: the protocol's row plus the variable names the secret's value is set under. */
 function listRowOf(row: AuthnSecretRow): EnvironmentSecretV12 {
   return {
     ...secretOf(row),
@@ -136,7 +121,6 @@ function listRowOf(row: AuthnSecretRow): EnvironmentSecretV12 {
   };
 }
 
-/** authn's own text in a refusal's body, before anything is done to it. */
 function authnTextOf(body: unknown): string | null {
   if (typeof body !== "object" || body === null) return null;
   if ("error" in body && typeof body.error === "string") return body.error;
@@ -146,11 +130,9 @@ function authnTextOf(body: unknown): string | null {
 }
 
 /**
- * authn's human message, printable and bounded; the generic words when there
- * is none, or when it holds any of `withheld`: what this request carried that
- * is never shown (its bearer, and a secret value it sent). It goes into the
- * error the person sees, which also reaches the app's log. A bot write's
- * refusal from traycer-server takes the same words (`host-client/bot-setup.ts`).
+ * Bounded and printable; the generic words when there is none or it holds any of
+ * `withheld` (this request's bearer, a secret value it sent). It reaches the
+ * person and the app's log.
  */
 export function refusalMessageWithout(
   body: unknown,
@@ -169,12 +151,10 @@ export function refusalMessageWithout(
     : printable;
 }
 
-/** The secrets route's body for the create: the protocol's, with the consent as authn takes it. */
 function createBodyOf(
   request: EnvironmentSecretsCreateRequestV11,
 ): Record<string, unknown> {
-  // `mode` and `exportPolicy` are retired; authn's schema is strict and has no
-  // column for either, so they stop here.
+  // Retired: authn's strict schema has no column for either.
   const {
     plaintextConsent,
     environmentId: _environmentId,
@@ -185,12 +165,10 @@ function createBodyOf(
   return { ...rest, plaintextConsent: plaintextConsent !== null };
 }
 
-/** An answer, with what its request carried that authn's text must never show. */
 interface SecretsAnswer extends EnvironmentAnswer {
   readonly withheld: readonly string[];
 }
 
-/** One secrets call; `secretValue` is the secret value its body carries, if any. */
 async function send(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -212,7 +190,6 @@ async function send(
   };
 }
 
-/** The caller's error for an HTTP refusal. */
 function refusal(answer: SecretsAnswer): EnvironmentCloudError {
   if (answer.status === 401) {
     return new EnvironmentCloudError(
@@ -220,8 +197,6 @@ function refusal(answer: SecretsAnswer): EnvironmentCloudError {
       SIGN_IN_AGAIN_MESSAGE.secrets,
     );
   }
-  // A 403 is authn's refusal like any other, in its own words, as the host's
-  // forwarder answered it.
   if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
   return new EnvironmentCloudError(
@@ -234,7 +209,6 @@ function unreadable(): EnvironmentCloudError {
   return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
 }
 
-/** Parses a 2xx answer with `schema`, else throws the matching error. */
 function answerAs<T>(answer: SecretsAnswer, schema: z.ZodType<T>): T {
   if (!isSuccess(answer)) throw refusal(answer);
   const parsed = schema.safeParse(answer.body);
@@ -276,8 +250,8 @@ export async function createSecret(
   ) {
     return { outcome: "refused", code: "plane_removed" };
   }
-  // authn records the acceptance itself, at its own disclosure version: a
-  // different version shown here is not recorded as accepted.
+  // authn records the acceptance at its own disclosure version: a different version
+  // shown here is not recorded.
   if (
     request.plaintextConsent !== null &&
     request.plaintextConsent.disclosureVersion !==
@@ -293,8 +267,7 @@ export async function createSecret(
     createBodyOf(request),
     request.value,
   );
-  // A server address with no address of its own: the screen names what the
-  // person typed. Every other refusal keeps authn's own words.
+  // A server address with no address of its own: the screen names what was typed.
   if (
     answer.status === 422 &&
     errorBodyCode(answer.body) === "destination_unresolvable"
@@ -414,10 +387,7 @@ export async function undoSecretVersion(
   );
 }
 
-/**
- * `allowCurrent` is whether the removal may take a secret's current version;
- * the answer's shape follows it.
- */
+/** `allowCurrent` lets the removal take the current version; the answer's shape follows it. */
 export async function destroySecretVersion(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -460,8 +430,7 @@ export async function consentToSecret(
   environmentId: string,
   request: EnvironmentSecretsConsentRequestV11,
 ): Promise<EnvironmentSecretsConsentResponse> {
-  // authn's consent route records the plaintext-at-the-gateway disclosure for
-  // one secret and nothing else.
+  // The consent route records the disclosure for one secret and nothing else.
   if (
     request.disclosure !== "plaintext_gateway" ||
     request.scope !== "secret"

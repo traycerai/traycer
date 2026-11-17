@@ -16,7 +16,6 @@ export type ProfileRecordFailureKind = ProfileRecordFailure["kind"];
 
 export type ProfileRecordAction = "sign-out" | "remove" | "name";
 
-/** Coded role refusals keep their existing copy; all other refusals use the action's fallback. */
 export const PROFILE_RECORD_FAILURE_COPY = {
   unauthorized: "Please sign in again.",
   forbidden: "You don't have permission to do that.",
@@ -249,7 +248,7 @@ interface RecordAnswer {
   readonly body: unknown;
 }
 
-/** One direct app-session call. Neither a transport exception nor server text escapes. */
+/** Neither a transport exception nor server text escapes. */
 async function callRecord(
   authnBaseUrl: string,
   bearerToken: string,

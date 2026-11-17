@@ -611,7 +611,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           ? frame.error.code
           : "RPC_ERROR";
         const doorReason = frame.error.doorReason;
-        // The host's own code and reason: `keys_unavailable` keeps its state.
+        // `keys_unavailable` keeps its state.
         const refusal: FatalErrorDetails = {
           code: frame.error.code,
           reason: frame.error.message,
@@ -1113,9 +1113,8 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * Arms the dial a caller now owns with a release that ran before that
-   * caller could claim: it was still looking up its host-only token. The
-   * release then applies at publish, as it would had the claim come first.
+   * A release that ran while the caller was still looking up its host-only token
+   * applies at publish, as it would had the claim come first.
    */
   armReleaseBeforeReady(key: string): void {
     const slot = this.slots.get(key);

@@ -247,10 +247,8 @@ export interface HostReconnectEngine {
   /** Was `key`'s episode stamped within the window ending at `nowMs`? */
   readonly isWithinWakeEpisode: (key: object, nowMs: number) => boolean;
   /**
-   * Fires every lane whose reopen is armed, now rather than when its timer
-   * runs out: the person asked to retry. A lane with nothing armed is left
-   * alone, and the backoff each lane has earned stays, so a reopen refused
-   * again waits as long as it would have.
+   * Only armed lanes fire; each lane keeps the backoff it earned, so a reopen
+   * refused again waits as long as it would have.
    */
   readonly reopenNow: () => void;
   /** Drops every lane and episode. Called when the host's record is dropped. */
@@ -258,7 +256,6 @@ export interface HostReconnectEngine {
 }
 
 export function createHostReconnectEngine(): HostReconnectEngine {
-  // Each lane, with what reopens it now if its reopen is armed.
   const lanes = new Map<ReopenLane, () => void>();
   // Keyed by the caller's own object so a retired session's episode is
   // collectable with it rather than pinned by a string id nobody clears.

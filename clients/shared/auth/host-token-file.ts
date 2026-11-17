@@ -16,13 +16,8 @@ import {
   type HostTokenTable,
 } from "./host-token-store";
 
-/**
- * `~/.traycer/cli/<env>/host-tokens`, beside the credentials file: each
- * person's host-only tokens and their ends, keyed by person and host, and
- * nothing else. Mode 0600, replaced atomically, and only ever written while
- * holding the credentials file's own lock. The desktop's main process and the
- * CLI read and write it; no renderer touches it.
- */
+// Mode 0600, replaced atomically, written only under the credentials file's lock;
+// shared by desktop main and the CLI, never a renderer.
 export function hostTokensPath(environment: Environment): string {
   return join(dirname(cliCredentialsPath(environment)), "host-tokens");
 }

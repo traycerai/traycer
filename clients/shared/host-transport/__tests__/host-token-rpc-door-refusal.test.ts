@@ -1,9 +1,3 @@
-/**
- * A persistent local `/rpc` session whose per-request answer carries
- * `doorReason`. The consumer is `WsRpcClient` (which raises the door from
- * `HostRpcError.doorRefusal`) wrapped by `createAuthAwareMessenger` with
- * `hostTokenUnaryRevalidator`.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -113,8 +107,8 @@ interface RpcDoorReasonCase {
 
 type RpcDoorOutcome = Omit<RpcDoorReasonCase, "name" | "doorReason">;
 
-// Keyed by every current reason, so a reason added to the protocol fails to
-// compile here until it names its outcome, and then runs through the consumer.
+// Keyed by every reason, so a new protocol reason fails to compile here until it
+// names its outcome.
 const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
   keys_unavailable: {
     expectedKind: "keys-unavailable",

@@ -38,16 +38,11 @@ export function readAccountNotificationSettings(
   );
 }
 
-/**
- * The body names the hooks and no matrix, so authn leaves the stored matrix
- * as it is. A stale row gets one fresh read and one retry.
- */
+/** No matrix is sent, so authn keeps the stored one. */
 export async function saveAccountNotificationHooks(
   cloud: EnvironmentCloud,
   request: AccountNotificationHooksPutRequest,
 ): Promise<AccountNotificationSettingsResponse> {
-  // The host's contribution is sent as answered. Authn, not this client,
-  // judges its bounds; a 400 fails the same save without altering the list.
   let answer = await sendSettings(
     cloud,
     "PUT",

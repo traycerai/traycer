@@ -88,7 +88,6 @@ export type ClientHostUnaryRpcMethod = Exclude<
 >;
 export type HostStreamRpcMethod = keyof HostStreamRpcRegistry & string;
 
-/** The client route of `method`, unary or stream; `null` when none is declared. */
 export function hostRpcRouteOf(method: string): HostRpcRoute | null {
   return ROUTE_BY_METHOD.get(method) ?? null;
 }
@@ -505,8 +504,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.members.invite": "pool-only",
   "environment.members.noticeSeen": "pool-only",
   "environment.members.remove": "pool-only",
-  // A member's running turns and terminals: counted by the computer that runs
-  // them, so the one caller names that computer and the pool is never asked.
+  // Counted by the computer that runs them; the pool is never asked.
   "environment.members.removePreview": "target-host",
   "environment.members.seats": "pool-only",
   "environment.members.setRole": "pool-only",

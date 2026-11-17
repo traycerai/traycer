@@ -1091,7 +1091,6 @@ export class MockRunnerHost implements IRunnerHost {
     return { kind: "ok", app: next };
   }
 
-  // A bot's settings: same no-CORS-boundary parity as `listEnvironments`.
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,

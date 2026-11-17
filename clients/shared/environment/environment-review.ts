@@ -1,20 +1,6 @@
-/**
- * The review list, a hold's apply and discard, the notices and Undo, as the
- * app's own calls to authn on the person's sign-in (`environment-cloud.ts`).
- *
- * - `GET …/review?include=operation`: every hold with its operation, put or
- *   delete, and the live item it would replace.
- * - `POST …/review/held/:heldId/apply` with the hold's revision and the live
- *   revision the person saw: authn checks both, and consumes the hold, in one
- *   transaction.
- * - `POST …/review/held/:heldId/discard` with the hold's revision.
- * - The same list read for the app's own saves: each hold's address, origin
- *   and a digest of its value, never the value.
- * - `GET …/notices` and `POST …/changes/:revision/undo`.
- *
- * Each answer authn gives that a person acts on is an outcome here, not an
- * error: a hold that moved, a live item that moved, a hold already gone.
- */
+// authn checks a hold's revision and the live one and consumes the hold in one
+// transaction. The app's own saves match holds by digest, never value. Answers a
+// person acts on (a moved hold or live item, a hold gone) are outcomes, not errors.
 import { z } from "zod";
 import {
   environmentItemKindSchema,
@@ -54,17 +40,11 @@ import {
   type EnvironmentHttpMethod,
 } from "./environment-cloud";
 
-/**
- * The words of each failure, as the host's review client said them: a call
- * nothing answered, and one authn did not take.
- */
 const OFFLINE_MESSAGE = "This needs a connection to your environment.";
 const REVIEW_OFFLINE_MESSAGE = "Connect to review these settings.";
 const REFUSED_MESSAGE = "Your environment did not accept this change.";
-/** The words a notice that no longer names an undoable change is refused with. */
 const NOTICE_GONE_MESSAGE = "This notice is no longer available.";
 
-/** One review, notice or Undo call; nothing answering is `offline`'s words. */
 async function sendReview(
   cloud: EnvironmentCloud,
   method: EnvironmentHttpMethod,
@@ -81,17 +61,12 @@ async function sendReview(
   }
 }
 
-/**
- * A non-success the call has no outcome for: a plain refusal whatever its
- * status, as the host gave it. A redirect never reached authn.
- */
 function reviewRefusal(answer: EnvironmentAnswer): EnvironmentCloudError {
   return isRedirect(answer)
     ? new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE)
     : new EnvironmentCloudError("refused", REFUSED_MESSAGE);
 }
 
-/** A read's answer parsed with `schema`; an answer that does not parse is refused too. */
 function parseReview<T>(answer: EnvironmentAnswer, schema: z.ZodType<T>): T {
   if (!isSuccess(answer)) throw reviewRefusal(answer);
   const parsed = schema.safeParse(answer.body);
@@ -104,18 +79,10 @@ function heldPath(environmentId: string, heldId: string, verb: string): string {
   return `${environmentPath(environmentId)}/review/held/${encodeURIComponent(heldId)}/${verb}`;
 }
 
-// ── the review sheet, the notices and Undo, as the screens read them ───────
-
-/**
- * One held change as the review sheet lists it: the protocol's row, with its
- * line masked by the protocol's own rule, and what Apply names. A held value
- * is read for that line alone; it is never kept, logged or shown unmasked.
- */
+/** A held value is read for the masked line alone; never kept, logged or shown unmasked. */
 export type ReviewHeldEntry = EnvironmentReviewEntryV12 & {
   readonly op: "put" | "delete";
-  /** The hold's version: Apply and Discard name exactly this one. */
   readonly heldRevision: number;
-  /** The live item's revision the list read; null when there is none. */
   readonly liveRevision: number | null;
 };
 
@@ -126,11 +93,6 @@ const NO_HELD_FACTS = {
   value: null,
 } as const;
 
-/**
- * The holds of an environment's review (`GET …/review?include=operation`:
- * every hold with its operation and the live item it would replace), each as
- * the sheet lists it.
- */
 export async function readReviewHolds(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -148,7 +110,7 @@ export interface ReviewHeldProjectionInput {
   } | null;
 }
 
-/** One operation-view read, projected before its answer enters a query cache. */
+/** Projected before its answer enters a query cache. */
 export async function readProjectedReviewHolds<Projection>(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -195,14 +157,6 @@ export async function readProjectedReviewHolds<Projection>(
   return holds;
 }
 
-/**
- * The review sheet's choice on one hold:
- * - `applied`: written (approve) or dropped (discard);
- * - `conflict`: approve only: the live item moved since the list read it;
- * - `gone`: the hold moved or is no longer there; the reread draws the row
- *   as it is now;
- * - `forbidden`: not the person's to make.
- */
 export interface ReviewChoiceOutcome {
   readonly outcome: "applied" | "conflict" | "gone" | "forbidden";
 }
@@ -224,12 +178,7 @@ function choiceOutcome(
   return { outcome: "applied" };
 }
 
-/**
- * Apply one hold: its revision, and the live revision its applier expects.
- * authn checks both and consumes the hold in one transaction, so of two
- * windows applying the same hold one writes it; the other is answered a
- * replay of that write, or that the hold is gone.
- */
+/** Of two windows applying one hold, one writes it; the other gets a replay of that write or `gone`. */
 export async function applyHeldChange(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -254,10 +203,6 @@ export async function applyHeldChange(
   );
 }
 
-/**
- * Apply sends the hold's revision and the live revision the person saw;
- * Discard sends the hold's revision.
- */
 export async function applyReviewChoice(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -283,28 +228,18 @@ export async function applyReviewChoice(
   );
 }
 
-// ── the app's own holds ─────────────────────────────────────────────────────
-
-/**
- * A hold as the app matches it against a save it made: its address, the
- * host and generation that proposed it, and a digest of its value. The value
- * itself is read only to take that digest and is never returned.
- */
+/** The value is read only to take its digest and is never returned. */
 export interface HeldChangeForMatch {
   readonly heldId: string;
-  /** The hold's version: Apply names exactly this one. */
   readonly revision: number;
   readonly kind: string;
   readonly key: string;
   readonly os: string | null;
   readonly op: "put" | "delete";
   readonly hostId: string;
-  /** Null for a hold stored before authn recorded it; such a hold matches no save. */
+  /** Null for a hold stored before authn recorded it; it matches no save. */
   readonly sharingGeneration: number | null;
-  /**
-   * {@link settingValueDigest} of the held value; null for a delete, and for
-   * a value that is no item value, which then matches no save.
-   */
+  /** Null for a delete and for a value that is no item value; either matches no save. */
   readonly valueDigest: string | null;
 }
 
@@ -313,7 +248,6 @@ export function settingValueDigest(value: SettingValue): Promise<string> {
   return webCryptoSha256Hex(utf8Bytes(canonicalSettingValue(value)));
 }
 
-/** The environment's holds (`GET …/review?include=operation`), each as a save is matched against it. */
 export async function readHeldChangesForMatch(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -359,7 +293,7 @@ const noticeAddressSchema = z.tuple([
   z.enum(ITEM_OS_VALUES).nullable(),
 ]);
 
-/** A notice's id: the change it names, opaque to the screen; made and read here only. */
+/** Opaque to the screen; made and read here only. */
 function noticeIdOf(row: AuthnNoticeRow): string {
   return JSON.stringify([row.revision, row.kind, row.key, row.os]);
 }
@@ -374,12 +308,8 @@ function changedByOf(
 }
 
 /**
- * The environment's notices as the page lists them: every change of the last
- * 30 days that displaced a value Undo can restore, listed while no later
- * change on its key superseded it. Listing needs `read` on the environment
- * and its Undo needs `write`, so `undoAvailable` says only that nothing
- * superseded the change, not that this reader may undo it. The one page that
- * draws notices is Personal's, whose reader always has `write`.
+ * `undoAvailable` says only that nothing superseded the change, not that this
+ * reader may undo it: listing needs `read`, Undo `write`.
  */
 export async function readNotices(
   cloud: EnvironmentCloud,
@@ -407,25 +337,21 @@ export async function readNotices(
       source: row.source,
       from: changedByOf(row.hostId, row.hostName),
       writtenAt: row.writtenAt,
-      // Nothing superseded it; whether this reader may undo it is their role's.
       undoAvailable: true,
     });
   }
   return notices;
 }
 
-/** What an Undo answers: authn applies it at once, so it is never `pending`. */
+/** authn applies an Undo at once, so it is never `pending`. */
 export type UndoOutcome = Exclude<
   EnvironmentWriteOutcome,
   { readonly outcome: "pending" }
 >;
 
 /**
- * Undo of one notice (`POST …/changes/:revision/undo`), answered as the
- * host's `environment.undo` was: a later change on the key is `stale`, and a
- * change Undo cannot restore is refused. A 403 is read by its code: authn
- * asks a grant of the host alone, so `executable_write_needs_grant` is
- * `needs_grant`, and any other is the person's role.
+ * authn asks a grant of the host alone, so a 403 `executable_write_needs_grant` is
+ * `needs_grant`; any other 403 is the person's role.
  */
 export async function undoNotice(
   cloud: EnvironmentCloud,

@@ -158,8 +158,7 @@ async function call(
               },
         body,
         signal: abort.signal,
-        // The bearer rides along: a redirect is answered here, as a failure,
-        // and never followed with it.
+        // The bearer rides in a header: never follow a redirect.
         redirect: "manual",
       }),
       abort.signal,
@@ -489,8 +488,10 @@ const replacedConnectionSchema = z.object({
 });
 const refusalCodeSchema = z.object({ code: z.string() });
 
-/** The binding is read by exact record id on the same app session, immediately
- * before the write. No server text or transport error escapes this boundary. */
+/**
+ * Read by exact record id on the same session just before the write. No server
+ * text or transport error escapes.
+ */
 export async function replaceEnvironmentApiKeyViaHttp(
   authnBaseUrl: string,
   bearer: string,

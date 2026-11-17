@@ -10,16 +10,11 @@ import {
 } from "./environment-cloud";
 
 /**
- * What the app hands the computer so it can draw a move into Personal
- * (`personal` on `environment.move.plan@2.0` and `environment.move.stage`):
- * every row of the item kinds the move compares, as the route answered them,
- * in the route's order, and whether Personal holds any secret, never a
- * secret's declaration. The computer draws the sheet from it and never reads
- * Personal itself; authn still decides each row at the acceptance.
+ * Whether Personal holds any secret, never a secret's declaration. The computer
+ * draws the sheet from this and never reads Personal; authn decides each row.
  */
 export type PersonalForMove = NonNullable<EnvironmentMovePersonal>;
 
-/** The most items the plan and stage requests carry (`environmentMovePersonalSchema`). */
 export const PERSONAL_FOR_MOVE_MAX_ITEMS = 4096;
 
 /** `auto_policy` is a setting of the configuration, not a row a move compares. */
@@ -30,10 +25,8 @@ const environmentMeSchema = z.object({
 });
 
 /**
- * The person's Personal, read on their own sign-in, or `null` when it could
- * not be read whole: the computer then answers that Personal is unavailable
- * rather than drawing a sheet from part of it. Over the bound is not read
- * whole either.
+ * `null` when Personal could not be read whole (over the bound too): the computer
+ * then answers unavailable rather than draw from part of it.
  */
 export async function readPersonalForMove(
   cloud: EnvironmentCloud,
@@ -53,8 +46,6 @@ export async function readPersonalForMove(
     if (items.length > PERSONAL_FOR_MOVE_MAX_ITEMS) return null;
     return { items, holdsSecrets: secrets.secrets.length > 0 };
   } catch {
-    // Any refusal, failure or unreadable answer: the sheet's own
-    // "unavailable" covers it, and the reason is not the person's to act on.
     return null;
   }
 }
