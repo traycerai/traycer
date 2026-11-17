@@ -137,8 +137,8 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- a bot's appearance ------------------------------------------------ //
 
 /**
- * How many colours a bot's icon and its channel's background choose
- * among: the GUI's twelve profile hues in two tones each.
+ * How many colours a bot's icon chooses among: the GUI's twelve profile hues
+ * in two tones each.
  */
 export const BOT_COLOR_COUNT = 24;
 const botColorIndexSchema = lazySchema(() =>
@@ -212,16 +212,14 @@ export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
 /**
  * What a person chose for a bot's look, as it is written: every value one
  * this protocol knows. Each choice is `null` for the default the GUI derives
- * from the bot's id: its own mascot, its own colour, what its id has it wear,
- * and no background of the channel's own. Clearing a choice brings back exactly the derived look.
+ * from the bot's id: its own mascot, its own colour and what its id has it
+ * wear. Clearing a choice brings back exactly the derived look.
  */
 export const botAppearanceChoiceSchema = lazySchema(() =>
   z.object({
     mark: botAppearanceMarkSchema.nullable(),
     /** The colour the mascot is drawn in, by index. */
     color: botColorIndexSchema.nullable(),
-    /** The colour the channel's background is tinted with, by index. */
-    background: botColorIndexSchema.nullable(),
     eyewear: botMascotEyewearSchema.nullable(),
     accessory: botMascotAccessorySchema.nullable(),
   }),
@@ -255,10 +253,6 @@ export const botAppearanceSchema = lazySchema(() =>
       .nullable()
       .catch(BOT_UNRECOGNISED_MARK),
     color: z
-      .union([botColorIndexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
-      .nullable()
-      .catch(BOT_APPEARANCE_UNRECOGNISED),
-    background: z
       .union([botColorIndexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
       .nullable()
       .catch(BOT_APPEARANCE_UNRECOGNISED),
@@ -453,7 +447,6 @@ export const botUpdateAppearanceRequestSchema = lazySchema(() =>
     botId: botIdSchema,
     mark: botAppearanceMarkSchema.nullable().optional(),
     color: botColorIndexSchema.nullable().optional(),
-    background: botColorIndexSchema.nullable().optional(),
     eyewear: botMascotEyewearSchema.nullable().optional(),
     accessory: botMascotAccessorySchema.nullable().optional(),
   }),
