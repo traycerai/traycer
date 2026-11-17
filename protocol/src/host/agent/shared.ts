@@ -1555,10 +1555,14 @@ export type SendAgentMessageRequestV11 = z.infer<
 >;
 
 /**
- * `agent.sendMessage@1.2` - adds `attachments`: file names of images in the
- * SENDER's own transcript, sent with the message as images. The host resolves
- * each name against the sender chat's image attachments, most recent first;
- * the receiver gets the image itself, not a description of it. Empty sends
+ * `agent.sendMessage@1.2` - adds `attachments`: images in the SENDER's own
+ * transcript, sent with the message as images. An entry is a file name, or the
+ * 64-hex sha256 of an image a bot conversation delivery gave the sender. A
+ * 64-hex entry is first looked up as a hash, and a hash is looked up only among
+ * the images the sender's own resume triggers record as delivered. Failing
+ * that, an entry is matched by file name against the sender chat's image
+ * attachments, most recent first.
+ * The receiver gets the image itself, not a description of it. Empty sends
  * text only.
  */
 export const sendAgentMessageRequestSchemaV12 = lazySchema(() =>
