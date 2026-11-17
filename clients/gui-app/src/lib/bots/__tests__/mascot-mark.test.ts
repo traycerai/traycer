@@ -739,10 +739,11 @@ describe("glasses, drawn as wide eyes", () => {
   ];
   const SHUT: MascotPose = { expression: "away", beat: 0 };
   const BLINK = working(3);
+  const GLANCE = working(1);
   const OPEN: readonly MascotPose[] = [
     MASCOT_AT_REST,
     working(0),
-    working(1),
+    GLANCE,
     working(2),
   ];
 
@@ -840,7 +841,8 @@ describe("glasses, drawn as wide eyes", () => {
     (shape, size, cell, offset) => {
       const between = betweenTheEyes(shape, size, cell, offset);
       expect(between.length).toBeGreaterThan(0);
-      for (const pose of OPEN) {
+      const poses = size === 16 ? OPEN.filter((pose) => pose !== GLANCE) : OPEN;
+      for (const pose of poses) {
         const wide = fillsByOrigin(drawn(shape, "glasses", size, pose));
         const bare = fillsByOrigin(drawn(shape, "none", size, pose));
 
@@ -848,6 +850,86 @@ describe("glasses, drawn as wide eyes", () => {
           between.map((origin) => bare.get(origin)),
         );
       }
+    },
+  );
+
+  /** The pixel origins of the squares drawn in `fill`, as numbers. */
+  function originsOf(
+    drawing: MascotMarkDrawing,
+    fill: string,
+  ): Array<readonly [number, number]> {
+    return [...fillsByOrigin(drawing)].flatMap(([origin, drawnFill]) => {
+      const [x, y] = origin.split(",").map(Number);
+      return drawnFill === fill ? [[x, y] as const] : [];
+    });
+  }
+
+  const SMALL_CASES = MASCOT_SHAPES.map((shape) => [shape] as const);
+
+  it.each(SMALL_CASES)(
+    "gives each open eye of a %s at 16 px one white beside its pupil, a different white for each, and no other white",
+    (shape) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      for (const pose of OPEN) {
+        const drawing = drawn(shape, "glasses", 16, pose);
+        const whites = originsOf(drawing, ramp.white);
+        const pupils = originsOf(drawing, ramp.eye);
+        const beside = pupils.map(([px, py]) =>
+          whites.filter(([wx, wy]) => wy === py && Math.abs(wx - px) === 2),
+        );
+
+        expect(whites).toHaveLength(2);
+        expect(pupils).toHaveLength(2);
+        expect(beside.every((own) => own.length > 0)).toBe(true);
+        expect(new Set(beside.flat().map(([x]) => x)).size).toBe(2);
+      }
+    },
+  );
+
+  it.each(CASES.filter(([, size]) => size !== 16))(
+    "gives each open eye of a %s at %i px a white cell touching its pupil",
+    (shape, size, cell) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      for (const pose of OPEN) {
+        const drawing = drawn(shape, "glasses", size, pose);
+        const whites = originsOf(drawing, ramp.white);
+        const pupils = originsOf(drawing, ramp.eye);
+
+        expect(pupils).toHaveLength(2);
+        for (const [px, py] of pupils) {
+          expect(
+            whites.some(
+              ([wx, wy]) => Math.abs(wx - px) + Math.abs(wy - py) === cell,
+            ),
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
+  it.each(SMALL_CASES)(
+    "joins a %s's two eyes at 16 px on the glance as white then pupil across columns 2 to 5, with the body as bare outside them",
+    (shape) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      const wide = drawn(shape, "glasses", 16, GLANCE);
+      const bare = fillsByOrigin(drawn(shape, "none", 16, GLANCE));
+      const row = [...fillsByOrigin(wide)]
+        .filter(([, fill]) => fill === ramp.white || fill === ramp.eye)
+        .map(([origin]) => origin.split(",").map(Number));
+      const rowY = new Set(row.map(([, y]) => y));
+
+      expect([...rowY]).toHaveLength(1);
+      const column = (x: number): number => 1 + x * 2;
+      expect(row.map(([x]) => x).toSorted((a, b) => a - b)).toEqual(
+        [2, 3, 4, 5].map(column),
+      );
+      const outside = [...rowY].flatMap((y) =>
+        [0, 1, 6].map((x) => `${String(column(x))},${String(y)}`),
+      );
+      const wideFills = fillsByOrigin(wide);
+      expect(outside.map((origin) => wideFills.get(origin))).toEqual(
+        outside.map((origin) => bare.get(origin)),
+      );
     },
   );
 

@@ -551,9 +551,19 @@ function smallFaceOf(
   if (eyewear === "visor") {
     return shut ? band("lens") : [...band("lens"), [2 + beat, "white"]];
   }
-  const eyes = smallEyesOf(shut, blink, beat === 1);
+  const glance = beat === 1;
+  const eyes = smallEyesOf(shut, blink, glance);
   if (eyewear === "none" || shut || blink) return eyes;
-  return [[1, "white"], [5, "white"], ...eyes];
+  const whites: ReadonlyArray<readonly [number, MascotTone]> = glance
+    ? [
+        [2, "white"],
+        [4, "white"],
+      ]
+    : [
+        [1, "white"],
+        [5, "white"],
+      ];
+  return [...whites, ...eyes];
 }
 
 /** What the small drawing carries, on its top row. */
