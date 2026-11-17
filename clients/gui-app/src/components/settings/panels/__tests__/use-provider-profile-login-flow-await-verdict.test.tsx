@@ -179,6 +179,8 @@ function queryClientWrapper(): (props: {
   };
 }
 
+const onFailedSpy = vi.fn<(message: string, hostSentence: boolean) => void>();
+
 function LoginFlowHarness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly existingProfileId: string | null;
@@ -252,7 +254,7 @@ function LoginFlowHarness(props: {
     touchLogin,
     ensurePack,
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
-    onFailed: () => undefined,
+    onFailed: (message, hostSentence) => onFailedSpy(message, hostSentence),
   });
 
   return (
@@ -303,6 +305,7 @@ function awaitEndedCalls(warn: {
 }
 
 afterEach(() => {
+  onFailedSpy.mockReset();
   cleanup();
   vi.restoreAllMocks();
 });
@@ -448,4 +451,25 @@ describe("useProviderProfileLoginFlow - an await that ends without a verdict", (
       expect(screen.getByTestId("flow-refusal").textContent).toBe("none");
     },
   );
+
+  it("reports the host's sentence to the caller as a host sentence, and an ordinary rejection as not", async () => {
+    vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      awaitLoginImpl: () => environmentManagedRejection(),
+    });
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(onFailedSpy).toHaveBeenCalledWith(ENVIRONMENT_MANAGED_LINE, true);
+
+    cleanup();
+    onFailedSpy.mockReset();
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      awaitLoginImpl: () => transportRejection(),
+    });
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(onFailedSpy).toHaveBeenCalledWith(NOT_FINISHED, false);
+  });
 });

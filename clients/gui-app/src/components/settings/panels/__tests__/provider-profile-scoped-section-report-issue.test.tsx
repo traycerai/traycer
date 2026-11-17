@@ -206,6 +206,22 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
     expect(JSON.stringify(context)).not.toContain("opencode");
   });
 
+  it("shows the host's own sentence in place of the generic line when the host sent one, keeping Retry", () => {
+    renderSection({
+      failedAttempt: {
+        providerId: "opencode",
+        message: "This account is managed by your environment — sign in there.",
+        hostSentence: true,
+      },
+    });
+
+    screen.getByText(
+      "This account is managed by your environment — sign in there.",
+    );
+    expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("renders no failure banner (and no report action) when there is no failed attempt", () => {
     renderSection({ failedAttempt: null });
 
