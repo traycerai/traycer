@@ -195,6 +195,19 @@ describe("toastFromHostError", () => {
     );
   });
 
+  it("shows the host's own sentence when it refuses an account as environment-managed", () => {
+    toastFromHostError(
+      makeError(
+        "environment-managed",
+        "This account is managed by your environment — sign in there.",
+      ),
+      "Couldn't confirm sign-in.",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "This account is managed by your environment — sign in there.",
+    );
+  });
+
   it("shows last-owner copy when the host message preserves that reason", () => {
     toastFromHostError(
       makeError("RPC_ERROR", "Cannot revoke the last owner"),
