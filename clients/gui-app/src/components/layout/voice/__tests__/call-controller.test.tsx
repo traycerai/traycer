@@ -3171,6 +3171,8 @@ describe("a call dialled from a message box", () => {
             seed={null}
             keptDraft={null}
             quote={null}
+            moved={null}
+            notice={null}
             onSent={() => false}
           />
         </TooltipProvider>

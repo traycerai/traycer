@@ -663,14 +663,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "host.accountSettings.refresh": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
-  "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
   "host.notifications.setConfig": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.notifications.setLongTurnAlert": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

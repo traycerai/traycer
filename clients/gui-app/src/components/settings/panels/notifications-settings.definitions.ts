@@ -2,15 +2,15 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // Account notifications read and save through authn without a computer.
-// The long-turn alert is drawn on the picked computer's Overview tab.
+// Which kinds of notification interrupt is the device's, under
+// Application → Alerts.
 export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Notifications",
     description:
-      "What gets surfaced to you, and what your automation receives.",
+      "What your automation receives when a host creates a notification.",
     keywords: [
-      "alerts",
       "inbox",
       "filter",
       "automation",

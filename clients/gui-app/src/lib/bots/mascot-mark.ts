@@ -366,13 +366,27 @@ function faceOf(
     return shut || blink ? closed : [...lenses("white"), ...pupils];
   }
   if (eyewear === "shades") {
-    const shift = glance || blink ? 1 : 0;
-    const row = blink ? y + 1 : y;
-    const glints: readonly Stamp[] = [
-      [left + shift, row, "white"],
-      [right - 1 + shift, row, "white"],
+    // On the glance the shades slip a row down the face and the eyes look
+    // over them; on every other beat they sit over the eyes.
+    const slip = glance ? 1 : 0;
+    const frame: Stamp[] = [
+      ...[y + slip, y + 1 + slip].flatMap((row) =>
+        lensColumns.map((x): Stamp => [x, row, "lens"]),
+      ),
+      ...bridge("lens").map(([x, row, tone]): Stamp => [x, row + slip, tone]),
     ];
-    return [...lenses("lens"), ...bridge("lens"), ...(shut ? [] : glints)];
+    if (shut) return frame;
+    const glints: readonly Stamp[] = [
+      [left, y + slip, "white"],
+      [right - 1, y + slip, "white"],
+    ];
+    const over: readonly Stamp[] = glance
+      ? [
+          [left, y, "eye"],
+          [right, y, "eye"],
+        ]
+      : [];
+    return [...frame, ...glints, ...over];
   }
   if (eyewear === "visor") {
     const band = Array.from({ length: right - left + 1 }, (_, at): Stamp => [

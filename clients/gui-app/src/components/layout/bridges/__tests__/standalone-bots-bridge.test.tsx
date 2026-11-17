@@ -325,6 +325,7 @@ function nativeTarget() {
     ),
     playChime: vi.fn(),
     onToastClick: vi.fn(),
+    notifies: () => true,
   };
 }
 

@@ -77,7 +77,7 @@ content, not by taste.
 
 - **Stacked groups** (`settings-group.tsx`) is the default: named groups of
   rows down one scroll, everything on the page visible at once. General,
-  Browser, Sounds, Opening behavior and most others.
+  Browser, Alerts, Opening behavior and most others.
 - **The rail** (`settings-master-detail.tsx`) is for a page that is a
   collection of like things (Providers) or too long to scan in one scroll
   (Layout, Appearance). It shows one area at a time, so it costs a click per
@@ -236,10 +236,12 @@ predicates; it never imports the assembled index or the search consumer.
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
   `availableWhen` is its own AND its group's. The merged groups (General ▸
-  Agents, Browser ▸ Agents, Alerts ▸ Notifications) are drawn in every shell,
-  so each gated row in them carries its own predicate (Agent roles, OS
-  notifications, Push notifications). A contribution target is not a
-  container: contributing never changes the target's availability.
+  Agents, Browser ▸ Agents) are drawn in every shell, so each gated row in
+  them carries its own predicate (Agent roles). Alerts ▸ System is drawn only
+  where one of its rows is (`isAlertsSystemGroupAvailable`), and each row
+  still carries its own predicate (OS notifications, Push notifications). A
+  contribution target is not a container: contributing never changes the
+  target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
   an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
   `undefined` are the same, never truthiness, never `status ?? description`,
@@ -275,8 +277,8 @@ predicates; it never imports the assembled index or the search consumer.
 - Shared rendering components take definitions through typed props:
   `LogDetailGroup` takes its page's `group` (anchored on App Diagnostics,
   folded into the page on host Diagnostics), each `LogLevelControl` carries
-  its `row`, and the chime / severity / link-kind rows are keyed members of
-  their owning collection.
+  its `row`, and the Alerts kind rows and the link-kind rows are keyed
+  members of their owning collection.
 - `MOD_ENTER_LABEL` lives in `general-settings.definitions.ts`: the steering
   row's label and description are built from it there, and the panel imports
   it for the switch's accessible name, so the result and the row print the
@@ -925,8 +927,9 @@ computer it sits under the host picker; if it follows you it sits under
 Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
-- **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Alerts, Keybindings, Layout, Diagnostics.
+- **Application** - General, Appearance, Browser, Opening behavior, Sounds
+  (only in a build with a soundtrack), Alerts, Keybindings, Layout,
+  Diagnostics.
 - **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
   and Delete account on mobile. Read through the window's own host, never
   through the picker. The list is headed **Signed-in sessions**, with "Browser,
@@ -1937,14 +1940,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): **Chimes**
-  (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert, untitled because the page is already named for it; and, in a build
-  with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
-  on and off switch (the palette's Soundtrack action flips the same setting);
-  **Playback controls**, drawn only while Music is on and off by default, which
-  puts previous, pause and next in a task's status row
+  `/settings/app-notifications`): **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`) and nothing else, so the page is
+  offered only in a build with something to play (`isSoundtrackRowAvailable`;
+  `visibleSettingsSections` withholds the section otherwise, and the mobile
+  app never offers it). Where it is withheld, its route and a remembered
+  section open Alerts (`RETIRED_SECTION_REPLACEMENTS`), where its chimes went;
+  the id is not retired. **Music** is the soundtrack's only on and off switch
+  (the palette's Soundtrack action flips the same setting); **Playback
+  controls**, drawn only while Music is on and off by default, puts previous,
+  pause and next in a task's status row
   (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
   chrome carries the soundtrack; then its volume and what it follows, which stay
   editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
@@ -1958,17 +1963,37 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   it off. The switch is disabled until this window holds a session, which a
   launch that kept the pause does not until Play, and the line under it counts
   the audio time, holding through a pause, then names the saved session with
-  **Show in folder**. The id still says notifications: the OS and push rows moved
-  to Alerts, and ids do not change.
-- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
-  group, **Notifications** (anchor `alerts-notifications`), where the alerts
-  themselves are configured. **OS notifications** on a desktop with the
-  system-settings bridge (`system-notification-settings-section.tsx`),
-  **Push notifications** and its four severity switches in the phone app
-  (`push-permission-section.tsx`; no "on this device" qualifier, since
-  "device" is the UI word for a host), and **Notification events**, a
-  pointer to the selected host's Notifications page, in every shell. It was
-  the Sounds page's second group; it moved because push is not a sound.
+  **Show in folder**. The id still says notifications: the chimes, and the OS
+  and push rows before them, moved to Alerts, and ids do not change.
+- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): what
+  interrupts the person on THIS device. One table
+  (`alerts-notification-kinds-section.tsx`, anchor `alerts-notifications`),
+  a row per kind - Needs action, Failure, Done, Info, each with its own
+  anchor - and columns Kind / Notify / Chime. **Notify** is
+  `notificationNotify` in the settings store, kept by this app and never by a
+  host (on by default except Info). It governs the in-app toast, the OS
+  notification request and the chime together: the display path asks
+  `NotificationDisplayTarget.notifies` before any of them
+  (`lib/notifications/notification-display.ts`, fed by
+  `useNotificationNotifies`), and a kind that is off is settled there with its
+  display receipt taken, so turning it on later never replays it. It never
+  touches the row: the bell still lists it and the unread count and tab
+  markers still count it. An app-local row reaches another window only
+  through the desktop's foreground relay, so a refused one is still sent,
+  marked `inboxOnly`: main relays it to a focused window, raises no OS
+  notification with none focused, and the receiving window merges the row
+  without a toast or chime. **Chime** is the per-kind picker that was on
+  Sounds (`notification-chime-select.tsx`), same stored value
+  (`notificationChimeSounds`). In the phone app the switch column is **Push**:
+  the per-phone push mute (`usePushSeveritySwitches`), and there is no
+  separate in-app switch - the same muted set also gates the toast while the
+  app is in front, except while push is not on or the set has not loaded, when
+  every kind shows. Then **System** (`alerts-system`), drawn only where it has
+  a row: **OS notifications** on a desktop with the system-settings bridge
+  (`system-notification-settings-section.tsx`), **Push notifications** in the
+  phone app (`push-permission-section.tsx`; no "on this device" qualifier,
+  since "device" is the UI word for a host). On the phone System comes first,
+  because its row says whether the Push switches can move.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides
@@ -4383,8 +4408,9 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   retries once. Successful saves refresh each already-connected computer once;
   offline computers pick the change up through their ordinary account read.
   SMTP configuration, its password and the email matrix column stay local.
-  The computer's Overview has a **Notifications** tab for the long-turn alert
-  and the hooks that live only on that computer, including Test, its result,
+  Which kinds of notification interrupt is the device's, under Application →
+  Alerts. The computer's Overview has a **Notifications** tab for the hooks
+  that live only on that computer, including Test, its result,
   file path and Refresh. A whole-file save retains the unshown account hooks
   from the same snapshot. A computer's save also waits for the account write:
   `host.notificationHooks.save@4.0` returns the host-classified contribution,

@@ -4,6 +4,7 @@ import { sessionAnnotationImageAtoms } from "../annotation-image-atoms";
 
 const session = vi.hoisted(() => new Map<string, Uint8Array>());
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   sessionImageBytes: (hash: string) => session.get(hash) ?? null,
   getImageBytes: () => Promise.resolve(undefined),
 }));

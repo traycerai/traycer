@@ -269,7 +269,7 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   chooseOption: vi.fn(),
   answerQuestion: null,
   answerQuestions: null,
-  discussQuestion: null,
+  questionBox: "post-1",
   failedRequest: () => null,
   openTurn: null,
   sessionChatId: null,

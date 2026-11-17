@@ -1,7 +1,4 @@
-import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
-import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
-import { useNativeQuoteRequest } from "@/components/chat/quote/use-native-quote-request";
-import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
+import { QuoteArea } from "@/components/chat/quote/quote-area";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { type ChatMessageActions } from "@/components/chat/chat-message";
 import {
@@ -3336,16 +3333,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     minimapInViewRefreshRef.current();
   }, []);
 
-  // Quote-to-composer: track selections inside the transcript wrapper below and
-  // surface the floating quote button. The hook attaches no listeners while the
-  // setting is off, so a disabled affordance costs nothing. Where a quote goes
-  // is the surface's (`QuoteSinkContext`): this chat's draft unless a bot's
-  // view says otherwise, and nowhere - no quote offered - in a view without a
-  // box.
-  const quoteReplyEnabled = useSettingsStore(
-    (state) => state.quoteReplyEnabled,
-  );
-  const quoteSink = use(QuoteSinkContext);
   const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   // This tile's `minimap` region, registered here because this is the
@@ -3364,25 +3351,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
-  const quoteEnabled =
-    quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
-  const quoteSelection = useQuoteSelection({
-    containerRef: transcriptContainerRef,
-    enabled: quoteEnabled,
-  });
-  // The phone's path to the same draft: a native shell's edit-menu "Quote"
-  // item, where no mouseup ever arms the popover. Same gate, same draft, and
-  // the same return from an open-as-chat view the popover's quote makes.
-  useNativeQuoteRequest({
-    containerRef: transcriptContainerRef,
-    enabled: quoteEnabled,
-    onQuote: (snapshot) => {
-      if (quoteSink === null) return;
-      quoteSink(taskId, snapshot);
-      subagentDrillIn.close();
-      quoteSelection.dismiss();
-    },
-  });
+  const quoteAreaActive = visible && !systemOverlayActive;
 
   // Registry-backed, keyed by tile instance id, so expanded
   // activity groups survive a remount of this SAME instance - retention-cap or
@@ -5182,20 +5151,21 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   />
                 ) : null}
               </div>
-              {quoteSink !== null && quoteSelection.snapshot !== null ? (
-                <QuoteSelectionPopover
-                  snapshot={quoteSelection.snapshot}
-                  onQuote={(snapshot) => quoteSink(taskId, snapshot)}
-                  onDismiss={quoteSelection.dismiss}
-                  // A task chat's quote goes into its draft, and under an
-                  // open-as-chat view the composer holding it is hidden. So a
-                  // quote taken there returns to the chat, as a terminal quote
-                  // reveals the chat it was added to.
-                  onQuoted={closeSubagentDrillIn}
-                  boundaryRef={transcriptContainerRef}
-                  bottomOverlayInsetPx={endInset}
-                />
-              ) : null}
+              {/* Where a quote goes is the surface's (`QuoteSinkContext`):
+                  this chat's draft unless a bot's view says otherwise, and
+                  nowhere, no quote offered, in a view without a box. */}
+              <QuoteArea
+                chatId={taskId}
+                containerRef={transcriptContainerRef}
+                active={quoteAreaActive}
+                bottomOverlayInsetPx={endInset}
+                // A task chat's quote goes into its draft, and under an
+                // open-as-chat view the composer holding it is hidden. So a
+                // quote taken there, by the button or the native item,
+                // returns to the chat, as a terminal quote reveals the chat
+                // it was added to.
+                onQuoted={closeSubagentDrillIn}
+              />
               <SubagentChatView
                 drillIn={subagentDrillIn}
                 messages={messages}

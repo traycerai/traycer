@@ -106,6 +106,14 @@ import {
   userBearerClaims,
 } from "../../auth/__tests__/jws-fixture";
 
+const liveWindows = vi.hoisted(
+  (): {
+    current: ReadonlyArray<{
+      readonly isDestroyed: () => boolean;
+      readonly isFocused: () => boolean;
+    }>;
+  } => ({ current: [] }),
+);
 const featureSettings = vi.hoisted(() => ({
   agentRoles: false,
   agentFeedback: true,
@@ -393,7 +401,7 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     fromWebContents: vi.fn(() => null),
-    getAllWindows: vi.fn(() => []),
+    getAllWindows: vi.fn(() => liveWindows.current),
   },
   Notification: {
     isSupported: (): boolean => false,
@@ -863,6 +871,7 @@ beforeEach(() => {
   ipcMainState.syncListeners.clear();
   sentMessages.length = 0;
   recordedMainLoggerCalls.entries.length = 0;
+  liveWindows.current = [];
   vi.unstubAllGlobals();
   featureSettings.agentRoles = false;
   featureSettings.agentFeedback = true;
@@ -6206,6 +6215,7 @@ describe("RunnerIpcBridge", () => {
       foregroundAppLocal: {
         userId: "user-1",
         entry: { id: "host.error:failure-1", updatedAt: 40 },
+        inboxOnly: false,
       },
     };
 
@@ -6434,6 +6444,103 @@ describe("RunnerIpcBridge", () => {
     expect(await show(null)).toBe("undeliverable");
     expect(await show(undefined)).toBe("undeliverable");
     bridge.dispose();
+  });
+
+  describe("notificationShow with app-local context", () => {
+    const entry = { id: "host.error:failure-1", updatedAt: 40 };
+
+    async function installBridge() {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const focusedWindow = buildWindow();
+      const senderWindow = buildWindow();
+      registry.add("window-focused", 101, focusedWindow);
+      registry.add("window-sender", 202, senderWindow);
+      focusedWindow.setFocused(true);
+      liveWindows.current = [focusedWindow, senderWindow];
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const handler = ipcMainState.handlers.get(
+        RunnerHostInvoke.notificationShow,
+      );
+      if (handler === undefined) throw new Error("notificationShow missing");
+      const sender = Object.assign(new EventEmitter(), { id: 202 });
+      const event = { sender, senderFrame: { parent: null } };
+      const show = (foregroundAppLocal: unknown) =>
+        handler(
+          event,
+          "Traycer",
+          "Background agent failed",
+          null,
+          "app-local:host.error:failure-1",
+          "user-1:host.error:failure-1:40",
+          "app-local",
+          foregroundAppLocal,
+          undefined,
+        );
+      const foregroundDisplays = () =>
+        focusedWindow.sentMessages.filter(
+          (message) =>
+            message.channel === RunnerHostEvent.notificationForegroundDisplay,
+        );
+      return { bridge, foregroundDisplays, show };
+    }
+
+    // Timeout for the dynamic import of the whole IPC surface (see the first
+    // case in this file).
+    it(
+      "relays an inbox-only display to the focused window with its flag, and shows no native notification",
+      { timeout: 30_000 },
+      async () => {
+        const { bridge, foregroundDisplays, show } = await installBridge();
+
+        expect(await show({ userId: "user-1", entry, inboxOnly: true })).toBe(
+          "presented",
+        );
+
+        expect(foregroundDisplays()).toEqual([
+          {
+            channel: RunnerHostEvent.notificationForegroundDisplay,
+            payload: expect.objectContaining({
+              foregroundAppLocal: { userId: "user-1", entry, inboxOnly: true },
+            }),
+          },
+        ]);
+        bridge.dispose();
+      },
+    );
+
+    it.each([
+      ["missing", { userId: "user-1", entry }],
+      ["a string", { userId: "user-1", entry, inboxOnly: "true" }],
+      ["a number", { userId: "user-1", entry, inboxOnly: 1 }],
+      ["null", { userId: "user-1", entry, inboxOnly: null }],
+    ])(
+      "rejects foreground app-local context whose inboxOnly is %s",
+      async (_name, context) => {
+        const { bridge, foregroundDisplays, show } = await installBridge();
+
+        await expect(show(context)).rejects.toThrow(
+          "notifications.show requires foreground app-local context or null",
+        );
+
+        expect(foregroundDisplays()).toEqual([]);
+        bridge.dispose();
+      },
+    );
   });
 
   it("routes a chat notification click to the window that already has the chat open, not MRU", async () => {

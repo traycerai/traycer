@@ -19,7 +19,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -55,11 +54,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import {
-  BotLooksContext,
-  botLooksOf,
-  useChannelBackground,
-} from "@/hooks/bots/use-bot-appearance";
+import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import type {
   BotDirectoryRecord,
   BotRecord,
@@ -106,6 +101,7 @@ import {
   type TracyChannelView,
 } from "@/lib/bots/tracy-place";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -207,6 +203,7 @@ export function BotTabSurface(props: {
 }): ReactNode {
   const { botId, hostId } = props;
   useClaimBotSurfaceFocus();
+  const admitted = useBotDraftsAdmitted();
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
@@ -226,7 +223,16 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <TracySurfaceShell botId={botId} hostId={hostId} />
+      {/* What the person has not sent, wherever this tree holds it - a box's
+          edit, a send that failed, quotes waiting for their box, a card's
+          answer - is the signed-in account's. At a change of account the
+          tree goes while the drafts store still holds the outgoing one's,
+          and the next account's starts once the store is its own (T186). */}
+      {admitted ? (
+        <TracySurfaceShell botId={botId} hostId={hostId} />
+      ) : (
+        <BotTabConnecting />
+      )}
     </TabHostProvider>
   );
 }
@@ -1878,7 +1884,7 @@ function environmentBotsOf(
 function BotTabConnecting(): ReactNode {
   return (
     <div
-      className="flex h-full items-center justify-center text-muted-foreground"
+      className="flex size-full items-center justify-center text-muted-foreground"
       aria-busy="true"
       data-testid="bot-tab-connecting"
     >
@@ -2170,7 +2176,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     props.level2 === "menu" || props.level2 === "bar"
       ? (botHeaderSlot?.target ?? null)
       : null;
-  const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
@@ -2229,12 +2234,9 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       ref={setHeader}
       hidden={threadHasFocus}
       data-testid="bot-channel-header"
-      data-channel-background={background.index}
-      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && titleTarget === null && "pt-3",
-        background.className,
       )}
     >
       {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
@@ -2248,13 +2250,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-tab-activity-count"
-            corner={null}
-            noun="active"
-          />
         </TabsTrigger>
       </TabsList>
     </header>

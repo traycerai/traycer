@@ -412,6 +412,7 @@ describe("preload foreground-notification buffering", () => {
       foregroundAppLocal: {
         userId: "user-1",
         entry: { id: "host.error:failure-1", updatedAt: 40 },
+        inboxOnly: false,
       },
     };
 

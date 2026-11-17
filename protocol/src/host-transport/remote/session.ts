@@ -55,6 +55,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markTargetAnswer,
   negotiatedVersionMeetsRequirement,
   transportFailureBeforeSend,
   RetryableTransportError,
@@ -4751,7 +4752,7 @@ export class RemoteSession<
       // A transient refusal (a team member's admission the host cannot check
       // now) is this call's no-dispatch attestation, as on a local `/rpc`
       // reply: the caller may send it again, and nothing is minted for it.
-      entry.reject(
+      const answer =
         wireError.retryable === true
           ? new RetryableTransportError({
               code: answered.code,
@@ -4768,8 +4769,9 @@ export class RemoteSession<
               doorRefusal: answered.doorRefusal,
               replaySafetyFromKey: false,
             })
-          : answered,
-      );
+          : answered;
+      markTargetAnswer(answer);
+      entry.reject(answer);
       return;
     }
     try {

@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -75,7 +75,6 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -1906,72 +1905,30 @@ describe("<BotTabSurface /> focused notification presence", () => {
   });
 });
 describe("<BotTabSurface /> channel background", () => {
-  const TINT_CLASS = "bg-(--channel-tint)/10";
-
-  function header(): HTMLElement {
-    return screen.getByTestId("bot-channel-header");
-  }
-
-  function chooseBackground(background: number | null): void {
-    mocks.state.listAppearance = new Map([
-      [BOT_ID, { mark: null, color: null, background }],
-    ]);
-  }
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   afterEach(() => {
     document.documentElement.classList.remove("dark");
   });
 
   it.each([false, true])(
-    "tints the header with the chosen colour at one low opacity (dark: %s)",
+    "keeps the page's own colour in the header and everywhere else though the bot saved a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
-      chooseBackground(7);
+      mocks.state.listAppearance = new Map([
+        [BOT_ID, { mark: null, color: null, background: 7 }],
+      ]);
       render(surface());
 
-      expect(header().classList.contains(TINT_CLASS)).toBe(true);
-      expect(header().getAttribute("data-channel-background")).toBe("7");
-      expect(header().style.getPropertyValue("--channel-tint")).toBe(
-        botColorAt(7),
-      );
+      const header = screen.getByTestId("bot-channel-header");
+      expect(header.hasAttribute("data-channel-background")).toBe(false);
+      expect(header.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(header.className).not.toContain("channel-tint");
+      expect(document.body.querySelector(TINT)).toBeNull();
     },
   );
-
-  it("tints neither the bot column nor the composer nor the thread panel", () => {
-    chooseBackground(7);
-    render(surface());
-
-    for (const region of [
-      screen.getByTestId("stub-sidebar"),
-      screen.getByTestId("stub-channel"),
-    ]) {
-      expect(region.hasAttribute("data-channel-background")).toBe(false);
-      expect(region.querySelector(`[data-channel-background]`)).toBeNull();
-      expect(region.classList.contains(TINT_CLASS)).toBe(false);
-    }
-    expect(
-      screen
-        .getByRole("textbox", { name: "Channel box" })
-        .closest(`.${CSS.escape(TINT_CLASS)}`),
-    ).toBeNull();
-    expect(
-      screen
-        .getByRole("textbox", { name: "Thread box" })
-        .closest(`.${CSS.escape(TINT_CLASS)}`),
-    ).toBeNull();
-  });
-
-  it.each([
-    ["names no appearance", null],
-    ["chose none", "none"],
-  ] as const)("keeps the page's own header when the bot %s", (_name, how) => {
-    if (how === "none") chooseBackground(null);
-    render(surface());
-
-    expect(header().classList.contains(TINT_CLASS)).toBe(false);
-    expect(header().hasAttribute("data-channel-background")).toBe(false);
-    expect(header().style.getPropertyValue("--channel-tint")).toBe("");
-  });
 });
 
 describe("<BotTabSurface /> header mascot while the bot replies", () => {

@@ -51,6 +51,7 @@ import {
  */
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   getImageBytes: (hash: string) =>
     Promise.resolve(
       hash === "d".repeat(64) ? new Uint8Array([1, 2, 3, 4]) : undefined,

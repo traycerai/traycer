@@ -48,6 +48,13 @@ const globalScopeOverrides = vi.hoisted(
     current: { client: null },
   }),
 );
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -223,6 +230,10 @@ function buildRouter(initialPath: string) {
     history: createMemoryHistory({ initialEntries: [initialPath] }),
   });
 }
+
+afterEach(() => {
+  soundtrackOfferedMock.value = false;
+});
 
 describe("<SettingsSidebar /> leader hints", () => {
   beforeEach(() => {
@@ -879,51 +890,57 @@ describe("<SettingsSidebar /> scope groups", () => {
     ]);
   });
 
-  it("files each rendered row under its group's heading", async () => {
-    const aside = await renderRail();
+  it.each([true, false])(
+    "files each rendered row under its group's heading (soundtrack offered: %s)",
+    async (soundtrackOffered) => {
+      soundtrackOfferedMock.value = soundtrackOffered;
+      const aside = await renderRail();
 
-    // Walk the rail in document order, filing every row under the heading
-    // above it. Guide has no heading, so its rows are the ones before the
-    // first.
-    const filed = new Map<string, Array<string>>();
-    let current = GROUP_HEADING_BY_ID.guide;
-    filed.set(current, []);
-    for (const node of aside.querySelectorAll<HTMLElement>(
-      "h2, [data-testid^='settings-sidebar-item-']",
-    )) {
-      if (node.tagName === "H2") {
-        current = node.textContent;
-        filed.set(current, []);
-        continue;
+      // Walk the rail in document order, filing every row under the heading
+      // above it. Guide has no heading, so its rows are the ones before the
+      // first.
+      const filed = new Map<string, Array<string>>();
+      let current = GROUP_HEADING_BY_ID.guide;
+      filed.set(current, []);
+      for (const node of aside.querySelectorAll<HTMLElement>(
+        "h2, [data-testid^='settings-sidebar-item-']",
+      )) {
+        if (node.tagName === "H2") {
+          current = node.textContent;
+          filed.set(current, []);
+          continue;
+        }
+        filed
+          .get(current)
+          ?.push(
+            node.dataset.testid?.replace("settings-sidebar-item-", "") ?? "",
+          );
       }
-      filed
-        .get(current)
-        ?.push(
-          node.dataset.testid?.replace("settings-sidebar-item-", "") ?? "",
-        );
-    }
 
-    // Desktop: Delete account is offered by the installed mobile app only.
-    const expected = new Map<string, Array<string>>();
-    for (const [id, group] of EXPECTED_SECTION_GROUPS) {
-      if (id === "delete-account") continue;
-      // Machine setup, Agent definitions and Browser agent access are retired
-      // from navigation; Members is a team's page, and the default pick is
-      // Personal.
-      if (
-        id === "machine-setup" ||
-        id === "agent-definitions" ||
-        id === "browser-agent-access" ||
-        id === "members" ||
-        id === "notification-hooks"
-      ) {
-        continue;
+      // Desktop: Delete account is offered by the installed mobile app only.
+      const expected = new Map<string, Array<string>>();
+      for (const [id, group] of EXPECTED_SECTION_GROUPS) {
+        if (id === "delete-account") continue;
+        // Sounds holds only the soundtrack, so a build without one has no row.
+        if (id === "app-notifications" && !soundtrackOffered) continue;
+        // Machine setup, Agent definitions and Browser agent access are retired
+        // from navigation; Members is a team's page, and the default pick is
+        // Personal.
+        if (
+          id === "machine-setup" ||
+          id === "agent-definitions" ||
+          id === "browser-agent-access" ||
+          id === "members" ||
+          id === "notification-hooks"
+        ) {
+          continue;
+        }
+        const heading = GROUP_HEADING_BY_ID[group];
+        expected.set(heading, [...(expected.get(heading) ?? []), id]);
       }
-      const heading = GROUP_HEADING_BY_ID[group];
-      expected.set(heading, [...(expected.get(heading) ?? []), id]);
-    }
-    expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
-  });
+      expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
+    },
+  );
 
   it("renders the host picker once, after Account and Environment and before the host rows", async () => {
     const aside = await renderRail();

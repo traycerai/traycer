@@ -157,6 +157,7 @@ export function measureTileStripGeometry(input: {
   const originX = stripRect.left - el.scrollLeft;
   return {
     slots,
+    otherLaneSlots: [],
     // Tile tabs are not grouped.
     groups: [],
     runGap: 0,

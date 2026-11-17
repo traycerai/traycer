@@ -171,7 +171,7 @@ export function useBotFailedRequest(args: {
           channelId !== null &&
           senderUserId !== null &&
           senderUserId === viewerUserId
-            ? (text) => onEdit({ requestId, text, content: null })
+            ? (text) => onEdit({ requestId, text, content: null, held: [] })
             : null,
       };
     },

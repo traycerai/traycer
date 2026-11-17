@@ -210,8 +210,6 @@ function makeHostClient(
       registry,
       requestId: () => "computer-notifications-account-save",
       handlers: {
-        "host.notifications.getLongTurnAlert": () => ({ thresholdMs: null }),
-        "host.notifications.setLongTurnAlert": (request) => request,
         "host.notificationHooks.status": () => {
           statusReadCount += 1;
           return status;

@@ -144,16 +144,6 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "phone",
     ],
   },
-  notificationLongTurnAlert: {
-    kind: "row",
-    group: "notificationsTab",
-    search: { contributesTo: "notificationsTab" },
-    label: "Alert when a turn runs longer than",
-    description:
-      "Notifies you once per turn. Time waiting on your approval or answer doesn't count.",
-    availableWhen: alwaysAvailable,
-    keywords: ["long", "running", "stuck", "duration", "turn"],
-  },
   notificationHooks: {
     kind: "group",
     search: { contributesTo: "notificationsTab" },
