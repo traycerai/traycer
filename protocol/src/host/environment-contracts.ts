@@ -23,7 +23,8 @@ import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
  * `environment.secrets.*` request names the environment it addresses (null
  * for the host's own) and `versions` answers a secret's removal;
  * `environment.status` answers the move's consent and planes;
- * `environment.review` answers the retrospective sheet's record. Each is a MINOR because every addition is additive and an
+ * `environment.review` answers the retrospective sheet's record. Each is a
+ * MINOR because every addition is additive and an
  * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
  * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
  * why the fields those releases require are filled from
@@ -300,17 +301,17 @@ export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
 });
 
 /**
- * `host.status.refresh@1.0`: this computer reads its own row now, through
- * the status read it already runs, and answers once that read has ended,
- * whether the row was read, unreachable or refused. It has no refusals of its
- * own. A host with no environment domain running answers at once and does
- * nothing. The answer carries no result on purpose (see
- * `hostStatusRefreshResponseSchema`). Any person the door admits may call
- * it, with no role: it reads only this computer's own row. Registered in
- * `ENVIRONMENT_RPC_METHODS` for the app's Remote access caller, off
- * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, so
- * a host without the method keeps today's two-minute interval. Not an agent
- * capability, and not on the host-to-host allowlist.
+ * `host.status.refresh@1.0`: this computer reads its own row now, through the
+ * status read it already runs, and answers once that read has ended, whether
+ * the row was read, unreachable or refused. It has no refusals of its own. A
+ * host with no environment domain running answers at once and does nothing.
+ * The answer carries no result on purpose (see `hostStatusRefreshResponseSchema`).
+ * Any person the door admits may call it, with no role: it reads only this
+ * computer's own row. Registered in `ENVIRONMENT_RPC_METHODS` for the app's
+ * Remote access caller, off `RELEASED_FLOOR_METHOD_NAMES` with
+ * `degrade: { kind: "unsupported" }`, so a host without the method keeps its
+ * two-minute status interval. Not an agent capability, and not on the
+ * host-to-host allowlist.
  */
 export const hostStatusRefreshV10 = defineRpcContract({
   method: "host.status.refresh",

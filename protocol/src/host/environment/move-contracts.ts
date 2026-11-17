@@ -112,7 +112,8 @@ export const environmentMovePlanV10 = defineRpcContract({
  *
  * `sameNameInPersonal` is retired with `looksLikeAKey`: the host sorts every
  * row into the four groups of `@1.0`, so no plan this host builds has a row
- * here, and `RETIRED_SAME_NAME_IN_PERSONAL_ROWS` is what fills it. The KEY stays because `cli-v1.5.2` and `cli-v1.5.3`
+ * here, and `RETIRED_SAME_NAME_IN_PERSONAL_ROWS` is what fills it. The KEY
+ * stays because `cli-v1.5.2` and `cli-v1.5.3`
  * declare it on this released version. It differs from `looksLikeAKey` in one
  * way worth naming: the released schema gives it `.default([])`, so a PARSER
  * tolerates its absence. That is not a licence to omit it when producing one -

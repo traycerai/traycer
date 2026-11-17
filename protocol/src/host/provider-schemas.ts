@@ -3872,11 +3872,10 @@ export type ProvidersSetEnabledRequestV22 = z.infer<
   typeof providersSetEnabledRequestSchemaV22
 >;
 
-// A `providers.setEnabled@2.2` was once opened to carry an optional tri-state
-// `mode` for a three-way Auto/On/Off settings control, and withdrawn before
-// any release; no released baseline carries it. `enabled` - a required
-// boolean since 2.0 - stays the whole enable request. The 2.2 above adds
-// only the environment profile a rename or recolor is for.
+// No released `providers.setEnabled@2.2` carries a `mode`: one that did was
+// withdrawn before any release. `enabled`, a required boolean since 2.0, stays
+// the whole enable request; 2.2 adds only the environment profile a rename or
+// recolor is for.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({
@@ -5569,20 +5568,15 @@ export type ProvidersUsePackVersionRequest = z.infer<
  * The whole pack policy a pack save leaves, as the app states it: the
  * `pack_policy` item the app expects the host to propose, so it can remember
  * its edit and recognise its hold among the environment's held changes. The
- * app reads the other half from the pack's managed versions
- * (`pinnedVersion`, `autoDownload`). Null when the caller does not state it:
- * the upgrade from the previous minor fills null, and the app expects no
- * proposal.
+ * app reads the other half from the pack's managed versions (`pinnedVersion`,
+ * `autoDownload`). Null when the caller does not state it: the upgrade from the
+ * previous minor fills null, and the app expects no proposal.
  *
- * It is the app's statement of the item it expects. The host computes the
- * item from its own config exactly as today and proposes that; it never
- * writes the stated value over what it computes. When the two agree, which is
- * whenever the app's read of the computer is current, the app's remembered
- * value matches the hold and the save is confirmed without a click. When they
- * differ, the computer keeps its own value, the change is saved here and
- * proposed, and it waits in the review list for one click; no error is
- * raised. An older caller that states nothing keeps today's behaviour and the
- * app expects nothing.
+ * The host computes the item from its own config and proposes that; it never
+ * writes the stated value over what it computes. When the two agree (whenever
+ * the app's read of the computer is current) the save is confirmed without a
+ * click; when they differ, the computer keeps its own value and the proposal
+ * waits in the review list for one click, with no error.
  */
 export const providersPackPolicyStatementSchema = lazySchema(() =>
   z

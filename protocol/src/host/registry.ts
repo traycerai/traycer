@@ -6003,7 +6003,8 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
 
 // v2.2 names the environment profile a rename or recolor is for
 // (`environmentProfileId`), so the app can state the `managed_profile` item
-// it expects and recognise its own hold. A 2.1 caller names none: the upgrade fills null, and the app expects no proposal. A 2.2
+// it expects and recognise its own hold. A 2.1 caller names none: the
+// upgrade fills null, and the app expects no proposal. A 2.2
 // request to a 2.1 host is re-parsed onto the 2.1 request, whose non-strict
 // action objects strip the key. The response is unchanged.
 export const providersSetEnabledV22 = defineRpcContract({

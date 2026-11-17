@@ -1525,10 +1525,10 @@ export type NativeMutationV12 = z.infer<typeof nativeMutationSchemaV12>;
 
 /**
  * `providers.nativeMutate@1.5`'s `promoteToPersonal`: `@1.3`'s arm plus
- * `intentOperationId`, the app's `mcp_promote` intent for this server, or
- * null. Read only when `entryKind` is `mcp`; the intent binds the server's
- * name alone, which the arm already names. Null, and every `@1.3` or `@1.4`
- * caller, keeps today's path exactly.
+ * `intentOperationId`, the app's `mcp_promote` intent for this server, or null.
+ * Read only when `entryKind` is `mcp`; the intent binds the server's name alone,
+ * which the arm already names. Null, and every `@1.3` or `@1.4` caller, takes
+ * the path without an intent.
  */
 export const nativePromoteToPersonalMutationSchemaV15 = lazySchema(() =>
   nativePromoteToPersonalMutationSchema.safeExtend({
@@ -1680,13 +1680,13 @@ export type NativeMutationResultV14 = z.infer<
  * A mutation's refusal codes on `providers.nativeMutate@1.5`: `@1.4`'s plus
  * seven that only the `promoteToPersonal` arm answers, for both entry kinds.
  * The host answers them with a null `detail`, so no host sentence reaches a
- * `@1.5` caller, and never to a `@1.4` or older caller, which gets today's
- * throw or today's `unsupported_action` with today's text.
+ * `@1.5` caller, and never to a `@1.4` or older caller, which gets the throw or
+ * the `unsupported_action` with text it already reads.
  *
  * - `needs_connection`: no answer from authn, or no environment read yet.
  * - `upload_refused`: authn refused the promote upload, for any reason.
- * - `needs_grant`: the old path, with a null intent and a null
- *   executable-write grant.
+ * - `needs_grant`: the path with a null intent and a null executable-write
+ *   grant.
  *
  * The arm's other refusals (the entry is gone, a skill is not ready, the
  * editor role, a name taken) stay `unsupported_action` with text.

@@ -53,22 +53,18 @@ export type ConfigShellGetResponseV11 = z.infer<
 
 /**
  * What the app states the `shell` item will be once a shell save is made, so
- * it can remember its edit and recognise its hold among the environment's
- * held changes (`settingsSaveItemEdit`):
+ * it can remember its edit and recognise its hold among the environment's held
+ * changes (`settingsSaveItemEdit`):
  * - `shell`: this path with these arguments is selected;
  * - `system_default`: no shell is selected, and the item is deleted;
  * - `not_stated`: the caller predates this field (the upgrade from 1.1 fills
  *   it); the app expects no proposal.
  *
- * It is the app's statement of the item it expects. The host computes the
- * item from its own config exactly as today and proposes that; it never
- * writes the stated value over what it computes. When the two agree, which is
- * whenever the app's read of the computer is current, the app's remembered
- * value matches the hold and the save is confirmed without a click. When they
- * differ, the computer keeps its own value, the change is saved here and
- * proposed, and it waits in the review list for one click; no error is
- * raised. An older caller that states nothing keeps today's behaviour and the
- * app expects nothing.
+ * The host computes the item from its own config and proposes that; it never
+ * writes the stated value over what it computes. When the two agree (whenever
+ * the app's read of the computer is current) the save is confirmed without a
+ * click; when they differ, the computer keeps its own value and the proposal
+ * waits in the review list for one click, with no error.
  */
 export const configShellSelectionSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [

@@ -17,13 +17,11 @@
  * For the shell methods and the two pack methods the request carries the
  * app's statement of the item it expects (`selection` for a shell save,
  * `policy` for a pack save). The host computes the item from its own config
- * exactly as today and proposes that; it never writes the stated value over
- * what it computes. When the two agree, which is whenever the app's read of
- * the computer is current, the app's remembered value matches the hold and
- * the save is confirmed without a click. When they differ, the computer keeps
- * its own value, the change is saved here and proposed, and it waits in the
- * review list for one click; no error is raised. An older caller that states
- * nothing keeps today's behaviour and the app expects nothing. Rename and
+ * and proposes that; it never writes the stated value over what it computes.
+ * When the two agree (whenever the app's read of the computer is current) the
+ * save is confirmed without a click; when they differ, the computer keeps its
+ * own value and the proposal waits in the review list for one click, with no
+ * error. A caller that states nothing gets no expected proposal. Rename and
  * recolour keep the base-taking form.
  *
  * A save whose item a host can only build from what it alone holds is
@@ -213,8 +211,8 @@ export type SettingsSaveMapping =
   /**
    * A skill removed from this host's global settings. The host's managed
    * entries decide whether it also deletes a leftover item of the retired
-   * `skill` kind, on its own token, as it does today. Either way there is no
-   * proposal and no hold, so the app remembers nothing.
+   * `skill` kind, on its own token. Either way there is no proposal and no
+   * hold, so the app remembers nothing.
    */
   | { readonly kind: "retired_item_delete" }
   /**
