@@ -23,7 +23,6 @@ import {
   SoundtrackWarmupBridge,
 } from "@/components/layout/bridges/soundtrack-signals-bridge";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
-import { PushMuteReadsBridge } from "@/components/layout/bridges/push-mute-reads-bridge";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
@@ -118,9 +117,6 @@ export function RootComponent() {
           whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
       <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
-      {/* The phone's push switches, read for the toast gate the controller
-          above asks at each arrival. */}
-      <PushMuteReadsBridge />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller.
