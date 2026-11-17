@@ -1,94 +1,106 @@
 import { create } from "zustand";
+import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 
-/** A draft block, the host whose chat holds it, and who decided it. */
-export interface FeedbackDraftDecisionAddress {
+/** A draft block and the host whose chat holds it. */
+export interface FeedbackDraftAddress {
   readonly hostId: string;
-  readonly userId: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly blockId: string;
 }
 
-interface HeldDecision {
-  readonly address: FeedbackDraftDecisionAddress;
-  readonly stamp: ToolCallFeedbackDraftStamp;
-}
+const sessionIds = new WeakMap<RequestContext, number>();
+let nextSessionId = 1;
 
-interface FeedbackDraftDecisionState {
-  readonly decisions: ReadonlyMap<string, HeldDecision>;
-  record: (
-    address: FeedbackDraftDecisionAddress,
-    stamp: ToolCallFeedbackDraftStamp,
-  ) => void;
-  /** Every account's decision on one draft: its authoritative state arrived. */
-  retireDraft: (
-    hostId: string,
-    epicId: string,
-    chatId: string,
-    blockId: string,
-  ) => void;
-  /** Every decision on one host: its signed-in account changed. */
-  retireHost: (hostId: string) => void;
+/**
+ * The account session a request context belongs to. A host client replaces
+ * its context object on every identity change and keeps it through a bearer
+ * rotation (`HostClient.setRequestContext`), so one object is one session: a
+ * switch away and back to the same account is a new session.
+ */
+export function feedbackDraftSessionId(context: RequestContext): number {
+  const known = sessionIds.get(context);
+  if (known !== undefined) return known;
+  const id = nextSessionId;
+  nextSessionId += 1;
+  sessionIds.set(context, id);
+  return id;
 }
 
 export function feedbackDraftDecisionKey(
-  address: FeedbackDraftDecisionAddress,
+  sessionId: number,
+  draft: FeedbackDraftAddress,
 ): string {
   return JSON.stringify([
-    address.hostId,
-    address.userId,
-    address.epicId,
-    address.chatId,
-    address.blockId,
+    sessionId,
+    draft.hostId,
+    draft.epicId,
+    draft.chatId,
+    draft.blockId,
   ]);
 }
 
-function without(
-  decisions: ReadonlyMap<string, HeldDecision>,
-  drop: (held: HeldDecision) => boolean,
-): ReadonlyMap<string, HeldDecision> | null {
-  const next = new Map(Array.from(decisions).filter(([, held]) => !drop(held)));
-  return next.size === decisions.size ? null : next;
+interface FeedbackDraftDecisionState {
+  /** The session every entry below belongs to; `null` before the first. */
+  readonly sessionId: number | null;
+  readonly decisions: ReadonlyMap<string, ToolCallFeedbackDraftStamp>;
+  /** Drafts whose notification row resolved in this session. */
+  readonly resolved: ReadonlySet<string>;
+  /** Holds `stamp`, unless the draft's row already resolved. */
+  record: (
+    sessionId: number,
+    draft: FeedbackDraftAddress,
+    stamp: ToolCallFeedbackDraftStamp,
+  ) => void;
+  /** The draft's row resolved: its own state answers from now on. */
+  resolve: (sessionId: number, draft: FeedbackDraftAddress) => void;
 }
 
+const EMPTY = {
+  decisions: new Map<string, ToolCallFeedbackDraftStamp>(),
+  resolved: new Set<string>(),
+};
+
 /**
- * The answer that sent or skipped a draft, held from that answer until the
- * draft's notification row resolves or its host's account changes.
+ * The answer that sent or skipped a draft, held for the account session that
+ * decided it until the draft's notification row resolves.
  *
- * A decision made on the draft's card must keep its notification row settled
- * after the card closes, and the row's own resolve has no time bound. Only
- * the deciding stamp is held, never the request that produced it, and it is
- * keyed by the account that decided, so another account reads nothing here.
+ * A decision made on the draft's card must keep its row settled after the
+ * card closes, and the row's own resolve has no time bound. Only the deciding
+ * stamp is held, in memory and never persisted. Every entry belongs to one
+ * session: the first write from a newer session drops the older session's
+ * entries, and a reader asks only for its own session's, so an account change
+ * retires them whether or not anything was mounted to see it. A resolve is
+ * remembered for the session, so an answer that lands after it holds nothing.
  */
 export const useFeedbackDraftDecisionStore = create<FeedbackDraftDecisionState>(
   (set) => ({
-    decisions: new Map(),
-    record: (address, stamp) =>
+    sessionId: null,
+    ...EMPTY,
+    record: (sessionId, draft, stamp) =>
       set((state) => {
-        const next = new Map(state.decisions);
-        next.set(feedbackDraftDecisionKey(address), { address, stamp });
-        return { decisions: next };
+        const base = state.sessionId === sessionId ? state : EMPTY;
+        const key = feedbackDraftDecisionKey(sessionId, draft);
+        if (base.resolved.has(key)) {
+          return base === state ? state : { sessionId, ...EMPTY };
+        }
+        const decisions = new Map(base.decisions);
+        decisions.set(key, stamp);
+        return { sessionId, decisions, resolved: base.resolved };
       }),
-    retireDraft: (hostId, epicId, chatId, blockId) =>
+    resolve: (sessionId, draft) =>
       set((state) => {
-        const next = without(
-          state.decisions,
-          ({ address }) =>
-            address.hostId === hostId &&
-            address.epicId === epicId &&
-            address.chatId === chatId &&
-            address.blockId === blockId,
-        );
-        return next === null ? state : { decisions: next };
-      }),
-    retireHost: (hostId) =>
-      set((state) => {
-        const next = without(
-          state.decisions,
-          ({ address }) => address.hostId === hostId,
-        );
-        return next === null ? state : { decisions: next };
+        const base = state.sessionId === sessionId ? state : EMPTY;
+        const key = feedbackDraftDecisionKey(sessionId, draft);
+        if (base.resolved.has(key) && !base.decisions.has(key)) {
+          return base === state ? state : { sessionId, ...EMPTY };
+        }
+        const decisions = new Map(base.decisions);
+        decisions.delete(key);
+        const resolved = new Set(base.resolved);
+        resolved.add(key);
+        return { sessionId, decisions, resolved };
       }),
   }),
 );

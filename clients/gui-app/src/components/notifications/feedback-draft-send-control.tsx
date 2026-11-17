@@ -40,7 +40,7 @@ export function FeedbackDraftSendControl(props: {
   };
   const decide = useChatFeedbackDraftDecideMutation(client, draft);
   const decision = useChatFeedbackDraftDecisionState(client, draft);
-  useRetireFeedbackDraftDecision(draft, props.resolved);
+  useRetireFeedbackDraftDecision(client, draft, props.resolved);
   const settled = decision.settled;
   if (settled !== null && settled.state === "sent") {
     return (

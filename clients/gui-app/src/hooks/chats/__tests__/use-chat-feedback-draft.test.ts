@@ -11,6 +11,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
@@ -91,16 +92,14 @@ const DECIDE_REQUEST = {
 
 const GC_WINDOW_MS = 6 * 60 * 1000;
 
-const USER_A = createRequestContextFixture({
-  origin: "renderer",
-  bearerToken: "token-a",
-  identity: { userId: "user-a", username: "a", providerHandle: null },
-});
-const USER_B = createRequestContextFixture({
-  origin: "renderer",
-  bearerToken: "token-b",
-  identity: { userId: "user-b", username: "b", providerHandle: null },
-});
+/** A new context object each call: the host client mints one per identity change, so a return to the same account is a new session. */
+function contextFor(user: "a" | "b"): RequestContext {
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: `token-${user}`,
+    identity: { userId: `user-${user}`, username: user, providerHandle: null },
+  });
+}
 
 interface Harness {
   readonly spine: HostClient<HostRpcRegistry>;
@@ -124,7 +123,7 @@ function buildHarness(
     }),
     findHostById: () => mockLocalHostEntry,
   });
-  spine.setRequestContext(USER_A);
+  spine.setRequestContext(contextFor("a"));
   return {
     spine,
     client: spine.createRequester(mockLocalHostEntry),
@@ -141,7 +140,7 @@ async function advance(ms: number): Promise<void> {
 
 async function switchIdentity(
   spine: HostClient<HostRpcRegistry>,
-  context: typeof USER_A,
+  context: RequestContext,
 ): Promise<void> {
   await act(async () => {
     spine.setRequestContext(context);
@@ -162,10 +161,39 @@ async function decideFromClosedCard(harness: Harness): Promise<void> {
   await advance(GC_WINDOW_MS);
 }
 
+/** A reader of the draft's decision state, as its notification row mounts one. */
+function mountReader(harness: Harness) {
+  return renderHook(
+    () => useChatFeedbackDraftDecisionState(harness.client, DRAFT),
+    { wrapper: harness.wrapper },
+  );
+}
+
+/** A decision whose answer the test delivers by hand. */
+function heldDecision(): {
+  readonly handler: () => Promise<ChatFeedbackDraftDecideResponse>;
+  readonly answer: (response: ChatFeedbackDraftDecideResponse) => void;
+} {
+  let answer: (response: ChatFeedbackDraftDecideResponse) => void = () => {};
+  return {
+    handler: () =>
+      new Promise<ChatFeedbackDraftDecideResponse>((resolve) => {
+        answer = resolve;
+      }),
+    answer: (response) => {
+      answer(response);
+    },
+  };
+}
+
 describe("feedback draft decision state", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useFeedbackDraftDecisionStore.setState({ decisions: new Map() });
+    useFeedbackDraftDecisionStore.setState({
+      sessionId: null,
+      decisions: new Map(),
+      resolved: new Set(),
+    });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -175,53 +203,71 @@ describe("feedback draft decision state", () => {
     const harness = buildHarness(() => SENT);
     await decideFromClosedCard(harness);
 
-    const row = renderHook(
-      () => useChatFeedbackDraftDecisionState(harness.client, DRAFT),
-      { wrapper: harness.wrapper },
-    );
+    const row = mountReader(harness);
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
   });
 
   it("drops the held decision once the draft's row has resolved", async () => {
     const harness = buildHarness(() => SENT);
     await decideFromClosedCard(harness);
-    const row = renderHook(
-      () => useChatFeedbackDraftDecisionState(harness.client, DRAFT),
-      { wrapper: harness.wrapper },
-    );
+    const row = mountReader(harness);
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
 
-    renderHook(() => useRetireFeedbackDraftDecision(DRAFT, true), {
-      wrapper: harness.wrapper,
-    });
+    renderHook(
+      () => useRetireFeedbackDraftDecision(harness.client, DRAFT, true),
+      { wrapper: harness.wrapper },
+    );
 
     expect(row.result.current.settled).toBeNull();
   });
 
-  it("retires held decisions when the signed-in account changes, and never shows them to another account", async () => {
+  it("never shows a held decision to the account that returns after another, once the mutation is collected", async () => {
     const harness = buildHarness(() => SENT);
     await decideFromClosedCard(harness);
-    const row = renderHook(
-      () => useChatFeedbackDraftDecisionState(harness.client, DRAFT),
-      { wrapper: harness.wrapper },
-    );
+    const row = mountReader(harness);
     expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
 
-    await switchIdentity(harness.spine, USER_B);
+    await switchIdentity(harness.spine, contextFor("b"));
     expect(row.result.current.settled).toBeNull();
 
-    await switchIdentity(harness.spine, USER_A);
+    await switchIdentity(harness.spine, contextFor("a"));
     expect(row.result.current.settled).toBeNull();
   });
 
-  it("records nothing for an answer that lands after the account changed", async () => {
-    let answer: (response: ChatFeedbackDraftDecideResponse) => void = () => {};
-    const harness = buildHarness(
-      () =>
-        new Promise<ChatFeedbackDraftDecideResponse>((resolve) => {
-          answer = resolve;
-        }),
+  it("shows nothing to the account that returns after another while no reader was mounted", async () => {
+    const harness = buildHarness(() => SENT);
+    await decideFromClosedCard(harness);
+
+    await switchIdentity(harness.spine, contextFor("b"));
+    await switchIdentity(harness.spine, contextFor("a"));
+
+    const row = mountReader(harness);
+    expect(row.result.current.settled).toBeNull();
+  });
+
+  it("shows nothing to a returning account while the earlier session's mutation is still cached", async () => {
+    const harness = buildHarness(() => SENT);
+    const card = renderHook(
+      () => useChatFeedbackDraftDecideMutation(harness.client, DRAFT),
+      { wrapper: harness.wrapper },
     );
+    const decided = card.result.current.mutateAsync(DECIDE_REQUEST);
+    await advance(1_000);
+    await expect(decided).resolves.toEqual(SENT);
+    card.unmount();
+    const row = mountReader(harness);
+    expect(row.result.current.settled).toEqual(SENT.feedbackDraft);
+
+    await switchIdentity(harness.spine, contextFor("b"));
+    expect(row.result.current.settled).toBeNull();
+
+    await switchIdentity(harness.spine, contextFor("a"));
+    expect(row.result.current.settled).toBeNull();
+  });
+
+  it("holds nothing for an answer that lands after the account changed and returned", async () => {
+    const held = heldDecision();
+    const harness = buildHarness(held.handler);
     const card = renderHook(
       () => useChatFeedbackDraftDecideMutation(harness.client, DRAFT),
       { wrapper: harness.wrapper },
@@ -232,20 +278,70 @@ describe("feedback draft decision state", () => {
     );
     await advance(1_000);
 
-    await switchIdentity(harness.spine, USER_B);
-    answer(SENT);
+    await switchIdentity(harness.spine, contextFor("b"));
+    await switchIdentity(harness.spine, contextFor("a"));
+    held.answer(SENT);
     await advance(1_000);
     // The identity change aborted the request before its answer arrived.
     expect(await decided).toBe("failed");
     card.unmount();
-    await switchIdentity(harness.spine, USER_A);
     await advance(GC_WINDOW_MS);
 
-    const row = renderHook(
-      () => useChatFeedbackDraftDecisionState(harness.client, DRAFT),
-      { wrapper: harness.wrapper },
-    );
+    const row = mountReader(harness);
     expect(row.result.current.settled).toBeNull();
     expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+  });
+
+  it("holds nothing for an answer delivered in the instant the context it was sent in changed", async () => {
+    const held = heldDecision();
+    const harness = buildHarness(held.handler);
+    const card = renderHook(
+      () => useChatFeedbackDraftDecideMutation(harness.client, DRAFT),
+      { wrapper: harness.wrapper },
+    );
+    const decided = card.result.current.mutateAsync(DECIDE_REQUEST).then(
+      () => "answered",
+      () => "failed",
+    );
+    await advance(1_000);
+
+    await act(async () => {
+      held.answer(SENT);
+      harness.spine.setRequestContext(contextFor("b"));
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(await decided).toBe("answered");
+    card.unmount();
+    await switchIdentity(harness.spine, contextFor("a"));
+    await advance(GC_WINDOW_MS);
+
+    const row = mountReader(harness);
+    expect(row.result.current.settled).toBeNull();
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+  });
+
+  it("holds nothing for an answer that lands after the draft's row resolved", async () => {
+    const held = heldDecision();
+    const harness = buildHarness(held.handler);
+    const card = renderHook(
+      () => useChatFeedbackDraftDecideMutation(harness.client, DRAFT),
+      { wrapper: harness.wrapper },
+    );
+    const decided = card.result.current.mutateAsync(DECIDE_REQUEST);
+    await advance(1_000);
+    renderHook(
+      () => useRetireFeedbackDraftDecision(harness.client, DRAFT, true),
+      { wrapper: harness.wrapper },
+    );
+
+    held.answer(SENT);
+    await advance(1_000);
+    await expect(decided).resolves.toEqual(SENT);
+
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
+    card.unmount();
+    await advance(GC_WINDOW_MS);
+    const row = mountReader(harness);
+    expect(row.result.current.settled).toBeNull();
   });
 });

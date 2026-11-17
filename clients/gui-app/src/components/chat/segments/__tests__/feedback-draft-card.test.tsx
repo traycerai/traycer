@@ -111,7 +111,7 @@ function decideCardDraft(
     .build(queryClient, {
       mutationKey: feedbackDraftMutationKeys.decide({
         hostId: SCOPE.hostId,
-        userId: null,
+        sessionId: null,
         epicId: SCOPE.epicId,
         chatId: SCOPE.chatId,
         blockId: "block-1",
@@ -123,7 +123,11 @@ function decideCardDraft(
 
 beforeEach(() => {
   queryClient = new QueryClient();
-  useFeedbackDraftDecisionStore.setState({ decisions: new Map() });
+  useFeedbackDraftDecisionStore.setState({
+    sessionId: null,
+    decisions: new Map(),
+    resolved: new Set(),
+  });
   mocks.mutate.mockReset();
   mocks.supported = true;
   mocks.canAct = true;

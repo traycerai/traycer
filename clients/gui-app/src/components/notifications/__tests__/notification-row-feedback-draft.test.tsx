@@ -17,10 +17,14 @@ import type {
 } from "@traycer/protocol/host/chat/feedback-draft";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
-import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
+import {
+  feedbackDraftSessionId,
+  useFeedbackDraftDecisionStore,
+} from "@/stores/chats/feedback-draft-decision-store";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 interface BoundaryState {
@@ -163,6 +167,12 @@ function renderRow(
   return render(rowTree(row, onActivate));
 }
 
+/** The session the row's client resolves to: `null` while it has no request context. */
+function rowSessionId(): number | null {
+  const context = mocks.state.client?.getRequestContext() ?? null;
+  return context === null ? null : feedbackDraftSessionId(context);
+}
+
 /** A decision made on the draft at `chatId` of the row's host and epic. */
 function decideDraftIn(
   chatId: string,
@@ -173,10 +183,7 @@ function decideDraftIn(
     .build(queryClient, {
       mutationKey: feedbackDraftMutationKeys.decide({
         hostId: ORIGIN_HOST_ID,
-        userId:
-          mocks.state.client === null
-            ? null
-            : mocks.state.client.getRequestContextUserId(),
+        sessionId: rowSessionId(),
         epicId: "epic-1",
         chatId,
         blockId: "block-1",
@@ -194,7 +201,11 @@ function decideElsewhere(
 }
 
 beforeEach(() => {
-  useFeedbackDraftDecisionStore.setState({ decisions: new Map() });
+  useFeedbackDraftDecisionStore.setState({
+    sessionId: null,
+    decisions: new Map(),
+    resolved: new Set(),
+  });
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
   mocks.state.supported = true;
@@ -372,14 +383,26 @@ describe("<NotificationRow /> feedback draft rows", () => {
   it("drops the held decision on its draft once the row resolves", () => {
     const address = {
       hostId: ORIGIN_HOST_ID,
-      userId: "user-a",
       epicId: "epic-1",
       chatId: "chat-1",
       blockId: "block-1",
     };
-    useFeedbackDraftDecisionStore
-      .getState()
-      .record(address, { ...STAMP, state: "sent", decidedAt: 6_000 });
+    const client = mocks.state.client;
+    if (client === null) throw new Error("the beforeEach builds a client");
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "token-a",
+        identity: { userId: "user-a", username: "a", providerHandle: null },
+      }),
+    );
+    const sessionId = rowSessionId();
+    if (sessionId === null) throw new Error("the client has a session");
+    useFeedbackDraftDecisionStore.getState().record(sessionId, address, {
+      ...STAMP,
+      state: "sent",
+      decidedAt: 6_000,
+    });
     const view = renderRow(buildRow({}), vi.fn());
     expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(1);
 
