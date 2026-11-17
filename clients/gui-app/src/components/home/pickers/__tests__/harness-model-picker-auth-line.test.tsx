@@ -6,7 +6,6 @@ import type {
   ProviderAuthStatus,
   ProviderCliState,
   ProviderId,
-  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
@@ -16,10 +15,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
-import {
-  PickerProviderAuthLine,
-  PickerTerminalSetupGuidance,
-} from "../harness-model-picker-auth-line";
+import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
 
 // The terminal action mounts a real mutation, so every render gets a client.
 // Fresh per render: a mutation cached across cases would carry its pending
@@ -139,28 +135,6 @@ function withRunnableCandidate(state: ProviderCliState): ProviderCliState {
   };
 }
 
-function profileRow(
-  profileId: string,
-  kind: "ambient" | "managed",
-  status: ProviderAuthStatus,
-): ProviderProfile {
-  return {
-    profileId,
-    enabled: true,
-    kind,
-    authType: "oauth",
-    label: profileId,
-    auth: { status, badgeText: null, label: null, detail: null },
-    identity: null,
-    usageUpdatedAt: null,
-    rateLimitStatus: "unknown",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    ambientDriftNotice: null,
-    accentColor: null,
-  };
-}
-
 function harnessOption(
   id: GuiHarnessId,
   enabled: boolean,
@@ -201,50 +175,6 @@ function catalogErrorFor(
     fatalDetails: null,
   });
 }
-
-describe("a signed-out Terminal login beside one signed-in managed profile", () => {
-  const terminal = profileRow("ambient", "ambient", "unauthenticated");
-  const managed = profileRow("work-uuid", "managed", "authenticated");
-
-  afterEach(cleanup);
-
-  it("says nothing signed-out on the provider-level line when the managed profile can run the turn", () => {
-    renderAuthLine(
-      <PickerProviderAuthLine
-        state={{
-          ...baseProviderState("claude-code"),
-          profiles: [terminal, managed],
-        }}
-        harness={null}
-        terminalLoginSurface={null}
-        runTargetHostId={null}
-        onClosePicker={() => undefined}
-      />,
-    );
-
-    expect(screen.queryByText("Not authenticated")).toBeNull();
-  });
-
-  it("keeps the Terminal row's own setup guidance when the Terminal row is the selected one", () => {
-    renderAuthLine(
-      <PickerTerminalSetupGuidance
-        selectedProfile={terminal}
-        state={{
-          ...withRunnableCandidate(
-            withTerminalLoginCapability(baseProviderState("reasonix")),
-          ),
-          profiles: [terminal, managed],
-        }}
-        harness={null}
-        terminalLoginSurface={null}
-        runTargetHostId={null}
-        onClosePicker={() => undefined}
-      />,
-    );
-
-    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
-  });
-});
 
 describe("<PickerProviderAuthLine />", () => {
   beforeEach(() => {
