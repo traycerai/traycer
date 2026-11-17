@@ -2867,7 +2867,10 @@ describe("<BotThreadPanel /> the split panel's unread boundary", () => {
     expect(divider?.nextElementSibling?.textContent).toContain(
       "First new reply",
     );
-    expect(boundaryTarget()).not.toBe("");
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
     expect(
       screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
     ).toBe("");
@@ -2893,7 +2896,10 @@ describe("<BotThreadPanel /> the split panel's unread boundary", () => {
     expect(divider?.nextElementSibling?.textContent).toContain(
       "Merged part two",
     );
-    expect(boundaryTarget()).not.toBe("");
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
     expect(
       screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
     ).toBe("");

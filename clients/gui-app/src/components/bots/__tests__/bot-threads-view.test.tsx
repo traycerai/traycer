@@ -2838,4 +2838,207 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
 
     expect(highlightedIds()).toEqual([replyId("team-new", 1)]);
   });
+
+  describe("a landing on the unread divider that cannot happen yet", () => {
+    const THREAD = "team-new";
+
+    /** Reply `n` as a colleague's row; reply 4 is the bot's, answering reply 1, so it draws a badge. */
+    function replyMessage(n: number): { message: Message; rowId: string } {
+      const id = replyId(THREAD, n);
+      if (n === 4) {
+        return {
+          message: {
+            ...botReply({
+              messageId: id,
+              text: `reply ${String(n)}`,
+              timestamp: n * 1_000,
+            }),
+            repliesTo: replyId(THREAD, 1),
+          },
+          rowId: `assistant:ts:${String(n * 1_000)}`,
+        };
+      }
+      return {
+        message: {
+          ...memberPost({
+            messageId: id,
+            requestId: id,
+            lines: [`reply ${String(n)}`],
+            timestamp: n * 1_000,
+            resolvedBy: null,
+          }),
+          sender: { type: "user", userId: COLLEAGUE },
+        },
+        rowId: id,
+      };
+    }
+
+    /** The thread's window of five replies holds exactly `ordinals` (from 0). */
+    function hydrate(ordinals: readonly number[]): void {
+      const session = mocks.threadSessions[THREAD].store;
+      const entries = ordinals.map((ordinal) => ({
+        ordinal,
+        ...replyMessage(ordinal + 1),
+      }));
+      act(() => {
+        session.setState({
+          messages: entries.map((entry) => entry.message),
+          transcriptWindow: {
+            ...session.getState().transcriptWindow,
+            rowCount: 5,
+            spans: entries.map((entry) => ({
+              fromOrdinal: entry.ordinal,
+              rowIds: [entry.rowId],
+              rowContext: {},
+              messageIds: [entry.message.messageId],
+              eventIds: [],
+              contextBytes: 0,
+            })),
+          },
+        });
+      });
+    }
+
+    /** Five replies, the cursor on the second; the third, the first unread, is not loaded. */
+    async function mountWithMissingBoundary(): Promise<{
+      scrolled: MockInstance<Element["scrollIntoView"]>;
+      pill: HTMLElement;
+      badge: () => HTMLElement;
+    }> {
+      const scrolled = recordScrolls();
+      followedThreads(THREAD);
+      mocks.hosted[TEAM].cursors = {
+        cursors: { [THREAD]: { messageId: replyId(THREAD, 2), seq: 2_000 } },
+        latest: { [THREAD]: { messageId: replyId(THREAD, 5), seq: 5_000 } },
+      };
+      withReplies(TEAM, THREAD, replyTexts(5), 5_000);
+      windowedSession(THREAD);
+      hydrate([0, 1, 3, 4]);
+      mount();
+      await waitFor(() => expect(listed()).toEqual([THREAD]));
+      const full = within(await revealFull(THREAD));
+      await full.findByText("reply 5");
+      return {
+        scrolled,
+        pill: await screen.findByTestId("bot-threads-unread-pill"),
+        badge: () =>
+          full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+      };
+    }
+
+    function scrolledToDivider(
+      scrolled: MockInstance<Element["scrollIntoView"]>,
+    ): boolean {
+      return scrolled.mock.contexts.some(
+        (context) =>
+          context instanceof HTMLElement &&
+          context.hasAttribute("data-unread-divider"),
+      );
+    }
+
+    it("does not pull the page to the divider when the reply that holds it loads after a reply's badge was used, though the badge's highlight is long gone", async () => {
+      const { scrolled, pill, badge } = await mountWithMissingBoundary();
+      expect(dividersIn(THREAD)).toHaveLength(0);
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.click(pill);
+      fireEvent.click(badge());
+      expect(highlightedRows(THREAD)).toHaveLength(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500);
+      });
+      expect(highlightedRows(THREAD)).toEqual([]);
+      vi.useRealTimers();
+
+      hydrate([0, 1, 2, 3, 4]);
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+
+      expect(rowUnderDivider(THREAD)).toBe(replyId(THREAD, 3));
+      expect(scrolledToDivider(scrolled)).toBe(false);
+    });
+
+    it("lands on the divider of a fresh unread press once the reply that holds it has loaded", async () => {
+      const { scrolled, pill, badge } = await mountWithMissingBoundary();
+      fireEvent.click(pill);
+      fireEvent.click(badge());
+      hydrate([0, 1, 2, 3, 4]);
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      expect(scrolledToDivider(scrolled)).toBe(false);
+
+      fireEvent.click(pill);
+
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    /** Four rows loaded and read-enabled, then the session's snapshot is withdrawn, which turns reading off. */
+    async function mountWithReadingOff(): Promise<{
+      scrolled: MockInstance<Element["scrollIntoView"]>;
+      pill: HTMLElement;
+      badge: () => HTMLElement;
+      enableReading: () => void;
+    }> {
+      const scrolled = recordScrolls();
+      followedThreads(THREAD);
+      unreadFrom({ threadId: THREAD, count: 5, ownAt: [], readTo: 2 });
+      mocks.replyRows[THREAD] = mocks.replyRows[THREAD].map((row, index) =>
+        index === 3
+          ? {
+              ...botReply({
+                messageId: replyId(THREAD, 4),
+                text: "reply 4",
+                timestamp: 4_000,
+              }),
+              repliesTo: replyId(THREAD, 1),
+            }
+          : row,
+      );
+      mount();
+      await waitFor(() => expect(listed()).toEqual([THREAD]));
+      const full = within(await revealFull(THREAD));
+      await full.findByText("reply 5");
+      const pill = await screen.findByTestId("bot-threads-unread-pill");
+      const store = mocks.threadSessions[THREAD].store;
+      act(() => store.setState({ snapshotLoaded: false }));
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(0));
+      return {
+        scrolled,
+        pill,
+        badge: () =>
+          full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+        enableReading: () =>
+          act(() => store.setState({ snapshotLoaded: true })),
+      };
+    }
+
+    it("scrolls to the divider once, when reading is enabled again after the unread press found the card's reading off", async () => {
+      const { scrolled, pill, enableReading } = await mountWithReadingOff();
+
+      fireEvent.click(pill);
+      expect(scrolledToDivider(scrolled)).toBe(false);
+      enableReading();
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() =>
+        expect(
+          scrolled.mock.contexts.filter((c) => c === divider),
+        ).toHaveLength(1),
+      );
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    it("does not scroll to the divider when reading is enabled again after a reply's badge was used while it was off", async () => {
+      const { scrolled, pill, badge, enableReading } =
+        await mountWithReadingOff();
+
+      fireEvent.click(pill);
+      fireEvent.click(badge());
+      enableReading();
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      expect(scrolledToDivider(scrolled)).toBe(false);
+    });
+  });
 });

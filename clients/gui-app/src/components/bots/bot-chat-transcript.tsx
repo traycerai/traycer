@@ -872,6 +872,7 @@ function BotChatTranscriptBody(props: {
             <BotTranscriptRows
               ref={transcriptRef}
               flow={flow}
+              readingEnabled={reading.enabled}
               replies={repliesBase}
               intro={intro}
               header={listHeader}
@@ -924,6 +925,7 @@ function BotChatTranscriptBody(props: {
 function BotTranscriptRows(props: {
   readonly ref: RefObject<HTMLDivElement | null>;
   readonly flow: BotTranscriptFlow | null;
+  readonly readingEnabled: boolean;
   /** What the rows' badges read, but for the rows above and landing, which the flow's rows give. */
   readonly replies: RepliesBase | null;
   readonly intro: ChannelIntro | null;
@@ -958,6 +960,7 @@ function BotTranscriptRows(props: {
           reportVisibleRange={props.reportVisibleRange}
           fold={flow.fold}
           unreadVisit={flow.unread?.visit ?? 0}
+          readingEnabled={props.readingEnabled}
         />
       </TasklessMarkdownLinkProvider>
     );
@@ -1015,6 +1018,7 @@ function BotTranscriptFlowRows(props: {
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
   readonly fold: BotTranscriptFold | null;
   readonly unreadVisit: number;
+  readonly readingEnabled: boolean;
 }): ReactNode {
   const { header, messages, transcriptWindow, reportVisibleRange, fold } =
     props;
@@ -1045,13 +1049,21 @@ function BotTranscriptFlowRows(props: {
     boundaryVisit: props.unreadVisit,
     onUnfold: fold !== null && folded ? fold.onUnfold : null,
   });
-  useFlowBoundaryLanding({
+  const cancelBoundaryLanding = useFlowBoundaryLanding({
     ref: landingRef,
     shown,
     visit: props.unreadVisit,
+    enabled: props.readingEnabled,
     onUnfold: fold !== null && folded ? fold.onUnfold : null,
   });
-  const replies = useFlowReplies(props.replies, shown, folded, land);
+  const openReply = useCallback(
+    (messageId: string) => {
+      cancelBoundaryLanding();
+      land(messageId);
+    },
+    [cancelBoundaryLanding, land],
+  );
+  const replies = useFlowReplies(props.replies, shown, folded, openReply);
   const range = ordinalRangeOf(shown);
   const fromOrdinal = range?.fromOrdinal ?? null;
   const toOrdinal = range?.toOrdinal ?? null;
@@ -1138,14 +1150,20 @@ function useFlowBoundaryLanding(args: {
   readonly ref: RefObject<HTMLDivElement | null>;
   readonly shown: readonly TranscriptListRow[];
   readonly visit: number;
+  readonly enabled: boolean;
   readonly onUnfold: (() => void) | null;
-}): void {
+}): () => void {
   const boundary = useContext(BotUnreadBoundaryContext);
   const rowId = boundary?.rowId ?? null;
   const handled = useRef(0);
-  const { ref, shown, visit, onUnfold } = args;
+  const { ref, shown, visit, enabled, onUnfold } = args;
+  const cancel = useCallback(() => {
+    // An explicit destination wins for this visit, even after its highlight expires.
+    handled.current = visit;
+  }, [visit]);
   useEffect(() => {
-    if (visit === 0 || handled.current === visit || rowId === null) return;
+    if (!enabled || visit === 0 || handled.current === visit || rowId === null)
+      return;
     if (
       !shown.some((row) => row.kind === "hydrated" && row.model.id === rowId)
     ) {
@@ -1158,7 +1176,8 @@ function useFlowBoundaryLanding(args: {
     if (divider === undefined || divider === null) return;
     divider.scrollIntoView({ block: "start" });
     handled.current = visit;
-  }, [onUnfold, ref, rowId, shown, visit]);
+  }, [enabled, onUnfold, ref, rowId, shown, visit]);
+  return cancel;
 }
 
 /** What a row's badge reads, but for the rows above it and landing, which its list gives. */

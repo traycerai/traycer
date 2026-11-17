@@ -20,9 +20,17 @@ async function open(page: Page): Promise<void> {
   await expect(page.locator(DIVIDER)).toHaveCount(1);
 }
 
-/** Whether the divider's box lies inside its nearest scrolling ancestor. */
-async function dividerInScroller(page: Page): Promise<boolean> {
-  return page.locator(DIVIDER).evaluate((divider) => {
+/**
+ * What the transcript's scroller shows of the divider: the scroller is the
+ * divider's nearest ancestor that scrolls, and `inside` is whether the
+ * divider's whole box lies within the scroller's box. With `scrollToTop`, the
+ * scroller is first put at its top.
+ */
+async function dividerAgainstScroller(
+  page: Page,
+  scrollToTop: boolean,
+): Promise<{ readonly inside: boolean }> {
+  return page.locator(DIVIDER).evaluate((divider, toTop) => {
     let scroller: HTMLElement | null = divider.parentElement;
     while (
       scroller !== null &&
@@ -34,10 +42,11 @@ async function dividerInScroller(page: Page): Promise<boolean> {
       scroller = scroller.parentElement;
     }
     if (scroller === null) throw new Error("no scroller above the divider");
+    if (toTop) scroller.scrollTop = 0;
     const box = divider.getBoundingClientRect();
     const frame = scroller.getBoundingClientRect();
-    return box.top >= frame.top && box.bottom <= frame.bottom;
-  });
+    return { inside: box.top >= frame.top && box.bottom <= frame.bottom };
+  }, scrollToTop);
 }
 
 test("the unread banner lands on the New divider and paints no highlight", async ({
@@ -45,9 +54,18 @@ test("the unread banner lands on the New divider and paints no highlight", async
 }) => {
   await open(page);
 
+  // The channel opens near its newest posts: put the scroller at its top, which
+  // leaves the divider out of it, so the landing is the banner's and not the
+  // page's opening position.
+  await expect
+    .poll(async () => (await dividerAgainstScroller(page, true)).inside)
+    .toBe(false);
+
   await page.locator(BANNER).getByRole("button").first().click();
   await nextFrames(page, 3);
 
-  await expect.poll(() => dividerInScroller(page)).toBe(true);
+  await expect
+    .poll(async () => (await dividerAgainstScroller(page, false)).inside)
+    .toBe(true);
   await expect(page.locator(HIGHLIGHTED)).toHaveCount(0);
 });
