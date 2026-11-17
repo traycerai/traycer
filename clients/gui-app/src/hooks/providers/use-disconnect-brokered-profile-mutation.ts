@@ -1,9 +1,13 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import {
+  readHarnessConnectionKind,
   readManagedProfileBinding,
   type ManagedProfileBinding,
 } from "@traycer-clients/shared/environment/configuration-settings";
-import { SETTINGS_REFUSED_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  SETTINGS_REFUSED_MESSAGE,
+  type EnvironmentCloud,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { spendScopeKeysEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import type {
@@ -58,23 +62,25 @@ export function brokeredProfileConnection(
 
 /**
  * Whether the row's account is the one the environment's entry is bound to.
- * A Claude setup token carries no account, so it disconnects the entry it
- * names when that entry holds no account either.
+ * A Claude setup token carries no account: on an entry that holds none either,
+ * it is the entry's only while the entry's live connection is a setup token.
  */
-function bindsRowAccount(
+function rowAccountMatch(
   connection: BrokeredProfileConnection,
   binding: ManagedProfileBinding,
-): boolean {
+): "bound" | "setup-token" | "other" {
   const identity = connection.credentialIdentity;
   const key = binding.spendScopeKey;
   if (identity?.kind === "spend-scoped")
-    return key !== null && spendScopeKeysEqual(identity.spendScopeKey, key);
-  if (identity?.kind === "accountless") return key === null;
-  return (
-    connection.providerId === "claude-code" &&
+    return key !== null && spendScopeKeysEqual(identity.spendScopeKey, key)
+      ? "bound"
+      : "other";
+  if (identity?.kind === "accountless" && key === null) return "bound";
+  return connection.providerId === "claude-code" &&
     identity?.kind === "unidentified" &&
     key === null
-  );
+    ? "setup-token"
+    : "other";
 }
 
 const UNLINK_METHOD = "environment.plans.unlink";
@@ -101,11 +107,28 @@ function bindingChanged(): HostRpcError {
   });
 }
 
+/** One authn read of the sign-out, on the sign-in the operation began on. */
+function readOnSignIn<T>(
+  cloud: EnvironmentCloud | null,
+  read: (cloud: EnvironmentCloud) => Promise<T>,
+): Promise<T> {
+  return withHostQueryErrorBoundary(UNLINK_METHOD, async () => {
+    cloudVerdictPreflight(UNLINK_METHOD)();
+    if (cloud === null) throw hostClientUnavailableError(UNLINK_METHOD);
+    try {
+      return await read(cloud);
+    } catch (error) {
+      throw environmentCloudHostError(UNLINK_METHOD, error);
+    }
+  });
+}
+
 /**
  * Disconnects the row's connection at authn on the person's own sign-in, at
  * the entry's own binding version (the row's presence counter is this
  * computer's). An entry with no live connection is already disconnected; an
- * entry bound to another account, or any failure, changes nothing.
+ * entry bound to another account, a setup-token row whose entry's connection
+ * is not a setup token, or any failure, changes nothing.
  */
 export function useDisconnectBrokeredProfile(): UseMutationResult<
   void,
@@ -116,25 +139,29 @@ export function useDisconnectBrokeredProfile(): UseMutationResult<
   return useMutation<void, HostRpcError, BrokeredProfileConnection>({
     mutationFn: async (connection) => {
       const cloud = source === null ? null : source();
-      const binding = await withHostQueryErrorBoundary(
-        UNLINK_METHOD,
-        async () => {
-          cloudVerdictPreflight(UNLINK_METHOD)();
-          if (cloud === null) throw hostClientUnavailableError(UNLINK_METHOD);
-          try {
-            return await readManagedProfileBinding(
-              cloud,
-              connection.environmentId,
-              providerIdToGuiHarnessId(connection.providerId),
-              connection.environmentProfileId,
-            );
-          } catch (error) {
-            throw environmentCloudHostError(UNLINK_METHOD, error);
-          }
-        },
+      const harness = providerIdToGuiHarnessId(connection.providerId);
+      const binding = await readOnSignIn(cloud, (signedIn) =>
+        readManagedProfileBinding(
+          signedIn,
+          connection.environmentId,
+          harness,
+          connection.environmentProfileId,
+        ),
       );
       if (binding === null) return;
-      if (!bindsRowAccount(connection, binding)) throw bindingChanged();
+      const match = rowAccountMatch(connection, binding);
+      if (match === "other") throw bindingChanged();
+      if (match === "setup-token") {
+        const kind = await readOnSignIn(cloud, (signedIn) =>
+          readHarnessConnectionKind(
+            signedIn,
+            connection.environmentId,
+            harness,
+            connection.environmentProfileId,
+          ),
+        );
+        if (kind !== "setup_token") throw bindingChanged();
+      }
       if (typeof binding.bindingVersion !== "number") throw refusedDisconnect();
       const send = beginEnvironmentCloudOperation(
         cloud === null ? null : () => cloud,
