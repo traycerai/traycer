@@ -42,6 +42,7 @@ const fixture = vi.hoisted(() => ({
     | "cached-bound-error"
     | "empty",
   bindingRefetch: vi.fn(),
+  boundEnvironmentId: "bound-environment",
   auth: {
     signOutProfileRecord: vi.fn<ProfileRecordClient["signOutProfileRecord"]>(),
     removeProfileRecord: vi.fn<ProfileRecordClient["removeProfileRecord"]>(),
@@ -119,7 +120,7 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
       return {
         kind: "binding",
         query: {
-          data: { environment: { environmentId: "bound-environment" } },
+          data: { environment: { environmentId: fixture.boundEnvironmentId } },
           isError: true,
           refetch: fixture.bindingRefetch,
         },
@@ -130,7 +131,7 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
       query: {
         data:
           fixture.bindingAnswer === "bound"
-            ? { environment: { environmentId: "bound-environment" } }
+            ? { environment: { environmentId: fixture.boundEnvironmentId } }
             : undefined,
         refetch: fixture.bindingRefetch,
       },
@@ -252,19 +253,21 @@ const ITEMS_URL =
 const CONNECTIONS_URL =
   "https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections";
 const CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${ENTRY_PROFILE_ID}`;
+const MEMBER_PROFILE_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+const MEMBER_CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${MEMBER_PROFILE_ID}`;
 
 function json(status: number, body: unknown): EnvironmentTransportAnswer {
   return { status, text: JSON.stringify(body) };
 }
 
-/** authn's `managed_profile` item for the row's entry, and its connection rows. */
-interface ModelledEntry {
+/** authn's `managed_profile` family for the row: its entry, a folded member, the family's connection. */
+interface ModelledFamily {
   bindingVersion: number;
   spendScopeKey: SpendScopeKey | null;
-  connected: boolean;
+  connection: "connected" | "pending" | null;
   connectionKind: string;
   signedOutByPerson: boolean;
-  mergedInto: string | null;
+  member: boolean;
 }
 
 function readsIdentity(request: EnvironmentTransportRequest): boolean {
@@ -276,62 +279,78 @@ function readsIdentity(request: EnvironmentTransportRequest): boolean {
   );
 }
 
-function itemValue(entry: ModelledEntry, identity: boolean) {
+function itemValue(
+  family: ModelledFamily,
+  identity: boolean,
+  mergedInto: string | null,
+) {
   const released = {
     name: "Work account",
     color: null,
     harnessId: "claude",
     accountIdentity: null,
-    needsLink: !entry.connected,
+    needsLink: family.connection !== "connected",
     enabled: true,
   };
   if (!identity) return released;
   return {
     ...released,
-    bindingVersion: entry.bindingVersion,
-    custodyVersion: 1,
-    ...(entry.spendScopeKey === null
+    bindingVersion: family.bindingVersion,
+    custodyVersion: family.bindingVersion,
+    ...(family.spendScopeKey === null
       ? {}
-      : { spendScopeKey: entry.spendScopeKey }),
-    ...(entry.signedOutByPerson
+      : { spendScopeKey: family.spendScopeKey }),
+    ...(family.signedOutByPerson
       ? { custodianSignOutCause: "signed-out-by-person" }
       : {}),
-    ...(entry.mergedInto === null ? {} : { mergedInto: entry.mergedInto }),
+    ...(mergedInto === null ? {} : { mergedInto }),
+  };
+}
+
+function itemRow(
+  family: ModelledFamily,
+  identity: boolean,
+  profileId: string,
+  mergedInto: string | null,
+) {
+  return {
+    kind: "managed_profile",
+    key: `claude:${profileId}`,
+    os: "any",
+    value: itemValue(family, identity, mergedInto),
+    revision: family.bindingVersion,
+    updatedAt: 1,
+    writtenBy: { source: "live", hostId: null, hostName: null },
   };
 }
 
 function itemsAnswer(
-  entry: ModelledEntry,
+  family: ModelledFamily,
   request: EnvironmentTransportRequest,
 ): EnvironmentTransportAnswer {
   const identity = readsIdentity(request);
-  if (!identity && entry.mergedInto !== null) return json(200, { items: [] });
+  const entry = itemRow(family, identity, ENTRY_PROFILE_ID, null);
   return json(200, {
-    items: [
-      {
-        kind: "managed_profile",
-        key: `claude:${ENTRY_PROFILE_ID}`,
-        os: "any",
-        value: itemValue(entry, identity),
-        revision: entry.bindingVersion,
-        updatedAt: 1,
-        writtenBy: { source: "broker", hostId: null, hostName: null },
-      },
-    ],
+    items:
+      family.member && identity
+        ? [entry, itemRow(family, identity, MEMBER_PROFILE_ID, ENTRY_PROFILE_ID)]
+        : [entry],
   });
 }
 
-function connectionsAnswer(entry: ModelledEntry): EnvironmentTransportAnswer {
+function connectionsAnswer(family: ModelledFamily): EnvironmentTransportAnswer {
+  const connection = family.connection;
   return json(200, {
     connections: [
       {
-        profileId: entry.connected
-          ? ENTRY_PROFILE_ID
-          : "1e2d3c4b-5a69-4788-9a0b-c1d2e3f4a5b6",
+        profileId:
+          connection === null
+            ? "1e2d3c4b-5a69-4788-9a0b-c1d2e3f4a5b6"
+            : ENTRY_PROFILE_ID,
         harnessId: "claude",
-        bindingVersion: entry.connected ? entry.bindingVersion : null,
-        kind: entry.connectionKind,
-        status: entry.connected ? "connected" : "absent",
+        bindingVersion: connection === null ? null : family.bindingVersion,
+        kind: family.connectionKind,
+        status: connection ?? "absent",
         linkedBy: null,
       },
     ],
@@ -339,7 +358,7 @@ function connectionsAnswer(entry: ModelledEntry): EnvironmentTransportAnswer {
 }
 
 function disconnectAnswer(
-  entry: ModelledEntry,
+  family: ModelledFamily,
   request: EnvironmentTransportRequest,
 ): EnvironmentTransportAnswer {
   const expected =
@@ -348,50 +367,65 @@ function disconnectAnswer(
     "expectedBindingVersion" in request.body
       ? request.body.expectedBindingVersion
       : null;
-  if (expected !== entry.bindingVersion)
+  if (expected !== family.bindingVersion)
     return json(409, {
       code: "binding-changed",
       message: "The provider connection changed. Refresh and try again.",
     });
-  const deleted = entry.connected;
-  entry.bindingVersion += 1;
-  entry.connected = false;
-  entry.signedOutByPerson = true;
+  const deleted = family.connection !== null;
+  family.bindingVersion += 1;
+  family.connection = null;
+  family.signedOutByPerson = true;
   return json(200, { disconnected: deleted });
 }
 
+function namesFamily(family: ModelledFamily, url: string): boolean {
+  return (
+    url === CONNECTION_URL || (family.member && url === MEMBER_CONNECTION_URL)
+  );
+}
+
 /**
- * authn's routes for one entry, as the final tree serves them. The items GET
- * strips the binding fields unless the reader names `managed_profile_identity`
- * (managed-profile-projection.ts:11-26). A DELETE whose version is not the
- * item's is 409 `binding-changed` (harness-binding-cas.ts:71-93); one that
- * matches deletes the connection rows, re-puts the item at a new version with
- * `custodianSignOutCause` (harness-connections.ts:2700-2745, families.ts:563)
- * and answers whether a row was deleted (:2842-2910). The connections list
- * names the entry while it has a row, and a fresh entry otherwise (:826-880).
+ * authn's routes for one family, as the final tree serves them. The items GET
+ * strips the binding fields and leaves a folded member out unless the reader
+ * names `managed_profile_identity` (managed-profile-projection.ts:11-26). A
+ * DELETE at any id of the family checks the entry's version: anything else is
+ * 409 `binding-changed` (harness-binding-cas.ts:53-93). A match deletes every
+ * connection row of the family, a pending reconnect included, re-puts each
+ * item at a new version with `custodianSignOutCause`, kept while nothing
+ * serves (harness-connections.ts:2700-2850, families.ts:559-638), and answers
+ * whether a row was deleted. An id no family owns is 404
+ * `harness_profile_unknown` (harness-connections.ts:2627-2648). The
+ * connections list names the family by its entry id while it has a row, and a
+ * fresh entry otherwise (:826-880).
  */
 function modelAuthn(
-  entry: ModelledEntry,
+  family: ModelledFamily,
 ): (request: EnvironmentTransportRequest) => EnvironmentTransportAnswer {
   return (request) => {
     if (request.method === "GET" && request.url === ITEMS_URL)
-      return itemsAnswer(entry, request);
+      return itemsAnswer(family, request);
     if (request.method === "GET" && request.url === CONNECTIONS_URL)
-      return connectionsAnswer(entry);
-    if (request.method === "DELETE" && request.url === CONNECTION_URL)
-      return disconnectAnswer(entry, request);
+      return connectionsAnswer(family);
+    if (request.method === "DELETE" && namesFamily(family, request.url))
+      return disconnectAnswer(family, request);
+    if (request.method === "DELETE")
+      return json(404, {
+        code: "harness_profile_unknown",
+        message: "the environment has no owning managed profile",
+      });
     return json(404, { code: "not_found" });
   };
 }
 
-function liveEntry(spendScopeKey: SpendScopeKey | null): ModelledEntry {
+function liveFamily(spendScopeKey: SpendScopeKey | null): ModelledFamily {
   return {
     bindingVersion: 4812,
     spendScopeKey,
-    connected: true,
+    connection: "connected",
     connectionKind: spendScopeKey === null ? "setup_token" : "oauth",
     signedOutByPerson: false,
-    mergedInto: null,
+    member: false,
   };
 }
 
@@ -552,6 +586,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.authnAnswer = () => ({ status: 500, text: null });
     fixture.offersSignIns = false;
     fixture.bindingAnswer = "bound";
+    fixture.boundEnvironmentId = "bound-environment";
     fixture.bindingRefetch.mockReset();
     fixture.auth.signOutProfileRecord.mockReset().mockResolvedValue({
       kind: "ok",
@@ -819,6 +854,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
   describe("an unmapped brokered row", () => {
     beforeEach(() => {
       fixture.supportsSignOut = true;
+      fixture.boundEnvironmentId = "env-a";
       useAuthStore.setState({ status: "signed-in" });
     });
 
@@ -862,7 +898,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     }
 
     it("disconnects at authn at the entry's binding version, then signs out on the host", async () => {
-      fixture.authnAnswer = modelAuthn(liveEntry(SPEND_SCOPE_KEY));
+      fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
       installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
 
@@ -878,7 +914,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     });
 
     it("disconnects a Claude setup token on an entry that holds no account", async () => {
-      fixture.authnAnswer = modelAuthn(liveEntry(null));
+      fixture.authnAnswer = modelAuthn(liveFamily(null));
       installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SETUP_TOKEN_IDENTITY));
 
@@ -900,7 +936,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     it("changes nothing for a setup-token row whose entry's connection is not a setup token", async () => {
       fixture.authnAnswer = modelAuthn({
-        ...liveEntry(null),
+        ...liveFamily(null),
         connectionKind: "oauth",
       });
       const messenger = installOrderedSignOutClient();
@@ -920,7 +956,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     it("changes nothing when the entry is bound to another account", async () => {
       fixture.authnAnswer = modelAuthn(
-        liveEntry({ ...SPEND_SCOPE_KEY, accountId: "synthetic-other-account" }),
+        liveFamily({ ...SPEND_SCOPE_KEY, accountId: "synthetic-other-account" }),
       );
       const messenger = installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
@@ -938,7 +974,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     });
 
     it("changes nothing when the disconnect fails", async () => {
-      const authn = modelAuthn(liveEntry(SPEND_SCOPE_KEY));
+      const authn = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
       fixture.authnAnswer = (request) =>
         request.method === "DELETE"
           ? json(400, { code: "synthetic-refusal" })
@@ -958,8 +994,8 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     it("signs out on the host when authn holds the entry but no connection", async () => {
       fixture.authnAnswer = modelAuthn({
-        ...liveEntry(SPEND_SCOPE_KEY),
-        connected: false,
+        ...liveFamily(SPEND_SCOPE_KEY),
+        connection: null,
       });
       installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
@@ -975,23 +1011,114 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       ]);
     });
 
-    it("signs out on the host when the entry was folded into another", async () => {
+    it("disconnects the entry a folded member's row was folded into", async () => {
       fixture.authnAnswer = modelAuthn({
-        ...liveEntry(SPEND_SCOPE_KEY),
-        mergedInto: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        ...liveFamily(SPEND_SCOPE_KEY),
+        member: true,
       });
+      installOrderedSignOutClient();
+      renderDialog({
+        ...unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY),
+        environmentProfileId: MEMBER_PROFILE_ID,
+      });
+
+      confirmSignOut();
+
+      await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
+      expect(fixture.order).toEqual([
+        "authn GET",
+        "authn DELETE",
+        "host signOutProfile",
+      ]);
+    });
+
+    it("cancels a pending reconnect of an entry the person already signed out", async () => {
+      const family: ModelledFamily = {
+        ...liveFamily(SPEND_SCOPE_KEY),
+        connection: "pending",
+        signedOutByPerson: true,
+      };
+      fixture.authnAnswer = modelAuthn(family);
       installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
 
       confirmSignOut();
 
       await waitFor(() => expect(fixture.openChanges).toEqual([false]));
-      expect(fixture.authnRequests).toEqual([ITEMS_READ]);
-      expect(fixture.order).toEqual(["authn GET", "host signOutProfile"]);
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
+      expect(family.connection).toBeNull();
+      expect(fixture.order).toEqual([
+        "authn GET",
+        "authn DELETE",
+        "host signOutProfile",
+      ]);
+    });
+
+    it("changes nothing when this computer is bound to another environment", async () => {
+      fixture.boundEnvironmentId = "bound-environment";
+      fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain(
+          "This connection changed. Refresh and try again.",
+        ),
+      );
+      expect(fixture.authnRequests).toEqual([]);
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
+    });
+
+    it("signs out on the host when the disconnect finds no family", async () => {
+      const authn = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
+      fixture.authnAnswer = (request) =>
+        request.method === "DELETE"
+          ? json(404, {
+              code: "harness_profile_unknown",
+              message: "the environment has no owning managed profile",
+            })
+          : authn(request);
+      installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
+      expect(fixture.order).toEqual([
+        "authn GET",
+        "authn DELETE",
+        "host signOutProfile",
+      ]);
+    });
+
+    it("changes nothing when the entry moves between the read and the disconnect", async () => {
+      const family = liveFamily(SPEND_SCOPE_KEY);
+      const authn = modelAuthn(family);
+      fixture.authnAnswer = (request) => {
+        if (request.method === "DELETE") family.bindingVersion += 1;
+        return authn(request);
+      };
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+
+      confirmSignOut();
+
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain("Couldn't sign out."),
+      );
+      expect(fixture.authnRequests).toEqual([ITEMS_READ, disconnectAt(4812)]);
+      expect(family.connection).toBe("connected");
+      expect(messenger.calls).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
     });
 
     it("completes on a second Sign out when the host failed after the disconnect landed", async () => {
-      fixture.authnAnswer = modelAuthn(liveEntry(SPEND_SCOPE_KEY));
+      fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
       const messenger = failingHostThenSucceeding();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
 
@@ -1020,12 +1147,14 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         ITEMS_READ,
         disconnectAt(4812),
         ITEMS_READ,
+        disconnectAt(4813),
       ]);
       expect(fixture.order).toEqual([
         "authn GET",
         "authn DELETE",
         "host signOutProfile",
         "authn GET",
+        "authn DELETE",
         "host signOutProfile",
       ]);
     });
