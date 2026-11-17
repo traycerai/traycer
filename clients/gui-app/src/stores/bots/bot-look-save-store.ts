@@ -1,15 +1,8 @@
 import { create } from "zustand";
 import type { BotUpdateAppearanceRequest } from "@traycer/protocol/host/bot/schemas";
 
-/**
- * The parts of a bot's look one choice names; a part left out is kept. A
- * channel's background is never one: a channel takes the page's own, from
- * the viewer's theme.
- */
-export type BotLookChange = Omit<
-  BotUpdateAppearanceRequest,
-  "botId" | "background"
->;
+/** The parts of a bot's look one choice names; a part left out is kept. */
+export type BotLookChange = Omit<BotUpdateAppearanceRequest, "botId">;
 
 export type BotLookPart = keyof BotLookChange;
 

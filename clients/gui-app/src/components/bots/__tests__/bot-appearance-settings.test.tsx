@@ -63,7 +63,7 @@ const mocks = vi.hoisted(() => ({
   inFlight: 0,
   maxInFlight: 0,
   /** The look `bot.list` answers with; a held write's answer becomes it. */
-  listed: { mark: null, color: null, background: null } as BotAppearance,
+  listed: { mark: null, color: null } as BotAppearance,
   /** The next `bot.list` read answers with the look it started with only once this resolves. */
   listGate: null as Promise<void> | null,
   listReads: 0,
@@ -104,7 +104,16 @@ import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const BARE: BotAppearance = { mark: null, color: null, background: null };
+const BARE: BotAppearance = { mark: null, color: null };
+
+/**
+ * A look as a host of the same method version still delivers it: raw, with the
+ * channel background it once carried. Nothing reads it, and nothing parses it away.
+ */
+const STALE_BACKGROUND: BotAppearance & { readonly background: number } = {
+  ...BARE,
+  background: 9,
+};
 
 function botRow(appearance: BotAppearance): BotDirectoryRecord {
   return {
@@ -136,10 +145,6 @@ function applied(
   return {
     mark: request.mark === undefined ? appearance.mark : request.mark,
     color: request.color === undefined ? appearance.color : request.color,
-    background:
-      request.background === undefined
-        ? appearance.background
-        : request.background,
     eyewear:
       request.eyewear === undefined ? appearance.eyewear : request.eyewear,
     accessory:
@@ -386,8 +391,8 @@ function chosenShape(): BotMascotShape {
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background even where one was saved", () => {
-    mount({ ...BARE, background: 9 });
+  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background though the host still delivers one", () => {
+    mount(STALE_BACKGROUND);
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
       "Icon",
@@ -438,9 +443,9 @@ describe("<BotAppearanceSettings />", () => {
     });
   });
 
-  it("writes the chosen colour alone, carrying no background, over a bot that saved one", async () => {
+  it("writes the chosen colour alone, carrying no background, over a look the host still delivers a background with", async () => {
     const user = userEvent.setup();
-    mount({ ...BARE, background: 9 });
+    mount(STALE_BACKGROUND);
 
     await user.click(screen.getByTestId("bot-settings-colour-14"));
     await waitFor(() => {
@@ -498,7 +503,6 @@ describe("<BotAppearanceSettings />", () => {
     mount({
       mark: { kind: "mascot", shape: "cat" },
       color: 2,
-      background: 9,
       eyewear: "visor",
       accessory: "bow",
     });
@@ -529,7 +533,7 @@ describe("<BotAppearanceSettings />", () => {
   });
 
   it("offers Use the default only where a choice stands", () => {
-    mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
+    mount({ mark: null, color: 2, eyewear: "glasses" });
 
     expect(defaultIn("Icon").disabled).toBe(true);
     expect(defaultIn("Colour").disabled).toBe(false);

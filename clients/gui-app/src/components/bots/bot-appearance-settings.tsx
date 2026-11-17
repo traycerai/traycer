@@ -72,7 +72,6 @@ export function BotAppearanceSettings(props: {
   const appearance: BotAppearance = look ?? {
     mark: null,
     color: null,
-    background: null,
     eyewear: null,
     accessory: null,
   };

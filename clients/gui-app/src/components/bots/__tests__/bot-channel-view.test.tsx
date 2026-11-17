@@ -564,8 +564,11 @@ let mountLanding: BotChannelLanding | null = null;
 /** How many tiles the next mount is told the installed app shows; `null` off it. */
 let mountTiles: MobileTileCount | null = null;
 
-/** The background the surface's list names for the bot on the next mount. */
-let mountBackground: BotAppearance["background"] = null;
+/**
+ * The channel background a host of the same method version still delivers on
+ * the bot's look on the next mount, raw as it arrives, or `null` for none.
+ */
+let mountStaleBackground: number | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -576,10 +579,11 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
+  const deliveredLook: BotAppearance & {
+    readonly background: number | null;
+  } = { mark: null, color: null, background: mountStaleBackground };
   const looks: BotLooks = {
-    appearances: new Map([
-      [BOT_ID, { mark: null, color: null, background: mountBackground }],
-    ]),
+    appearances: new Map([[BOT_ID, deliveredLook]]),
     main: null,
   };
   const runnerHost = createFakeRunnerHost({});
@@ -690,7 +694,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  mountBackground = null;
+  mountStaleBackground = null;
   document.documentElement.classList.remove("dark");
 });
 
@@ -700,10 +704,10 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
     '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   it.each([false, true])(
-    "keeps the page's own colour in the message area and everywhere else though the bot saved a background (dark: %s)",
+    "keeps the page's own colour in the message area and everywhere else though the host still delivers the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
-      mountBackground = 11;
+      mountStaleBackground = 11;
       mount({ openThreadPostId: "post-1" });
 
       const area = screen.getByTestId("bot-channel-messages");
