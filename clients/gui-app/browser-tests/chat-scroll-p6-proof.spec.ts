@@ -293,6 +293,37 @@ function installP6Recorder(): void {
         }
       },
     });
+    // A command the list holds until its layout settles runs later from the
+    // list's own frame, so the write above cannot name who asked for it. The
+    // list schedules that hold from `runWhenReady`; its per-frame re-check
+    // reschedules under the same name and is left out.
+    const work: unknown = listState(node)?.scheduledWork;
+    if (isRecord(work) && typeof work.frame === "function") {
+      const frame = work.frame;
+      work.frame = (...args: unknown[]): unknown => {
+        const stack = new Error().stack ?? "";
+        if (
+          args[1] === "imperativeScrollReady" &&
+          stack.includes("runWhenReady")
+        ) {
+          const askedBy = stack
+            .split("\n")
+            .slice(2, 26)
+            .map((line) => {
+              const frameLine = line.trim();
+              const named = /at (?:Object\.)?([\w$.<>]+) /.exec(frameLine)?.[1];
+              return named ?? /([^/\s(]+:\d+):\d+\)?$/.exec(frameLine)?.[1];
+            })
+            .filter((name): name is string => name !== undefined)
+            .join(" < ");
+          note(
+            `list holds a scroll command, asked for by ${askedBy} [${readAnchor(node)}]`,
+          );
+        }
+        const scheduled: unknown = Reflect.apply(frame, work, args);
+        return scheduled;
+      };
+    }
     const scrollTop = Object.getOwnPropertyDescriptor(
       Element.prototype,
       "scrollTop",
