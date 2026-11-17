@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ChatFeedbackDraftDecideRequest,
@@ -10,13 +16,13 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 interface BoundaryState {
   row: MergedNotificationRow | null;
   originEntry: HostDirectoryEntry | null;
   supported: boolean | null;
-  data: ChatFeedbackDraftDecideResponse | undefined;
   client: HostClient<HostRpcRegistry> | null;
 }
 
@@ -25,7 +31,6 @@ const mocks = vi.hoisted(() => {
     row: null,
     originEntry: null,
     supported: true,
-    data: undefined,
     client: null,
   };
   return {
@@ -59,14 +64,17 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.state.client,
 }));
-vi.mock("@/hooks/chats/use-chat-feedback-draft", () => ({
-  useChatFeedbackDraftSupported: () => mocks.state.supported,
-  useChatFeedbackDraftDecideMutation: () => ({
-    data: mocks.state.data,
-    isPending: false,
-    mutate: mocks.mutate,
-  }),
-}));
+vi.mock("@/hooks/chats/use-chat-feedback-draft", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/chats/use-chat-feedback-draft")
+    >();
+  return {
+    ...actual,
+    useChatFeedbackDraftSupported: () => mocks.state.supported,
+    useChatFeedbackDraftDecideMutation: () => ({ mutate: mocks.mutate }),
+  };
+});
 
 import { NotificationRow } from "@/components/notifications/notification-row";
 
@@ -123,28 +131,45 @@ function buildRow(
   };
 }
 
+let queryClient = new QueryClient();
+
 function renderRow(
   row: MergedNotificationRow,
   onActivate: (row: MergedNotificationRow) => void,
 ): void {
   mocks.state.row = row;
   render(
-    <ul>
-      <NotificationRow
-        feedId={row.feedId}
-        highlightRelocation={false}
-        onActivate={onActivate}
-        onAcknowledge={vi.fn()}
-      />
-    </ul>,
+    <QueryClientProvider client={queryClient}>
+      <ul>
+        <NotificationRow
+          feedId={row.feedId}
+          highlightRelocation={false}
+          onActivate={onActivate}
+          onAcknowledge={vi.fn()}
+        />
+      </ul>
+    </QueryClientProvider>,
   );
+}
+
+/** A decision another surface (the draft's card) made on `block-1`. */
+function decideElsewhere(
+  response: Promise<ChatFeedbackDraftDecideResponse>,
+): void {
+  void queryClient
+    .getMutationCache()
+    .build(queryClient, {
+      mutationKey: feedbackDraftMutationKeys.decide("block-1"),
+      mutationFn: () => response,
+    })
+    .execute(undefined);
 }
 
 beforeEach(() => {
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
   mocks.state.supported = true;
-  mocks.state.data = undefined;
+  queryClient = new QueryClient();
   mocks.state.client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
@@ -201,27 +226,59 @@ describe("<NotificationRow /> feedback draft rows", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
-  it("confirms a sent draft and withdraws Send", () => {
-    mocks.state.data = {
-      kind: "settled",
-      feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
-    };
+  it("confirms a draft sent from its card and withdraws Send", async () => {
     renderRow(buildRow({}), vi.fn());
-    expect(screen.getByText("Sent to the Traycer team.")).toBeTruthy();
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+      }),
+    );
+    expect(await screen.findByText("Sent to the Traycer team.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
-  it("shows why a send failed and keeps Send available", () => {
-    mocks.state.data = {
-      kind: "settled",
-      feedbackDraft: {
-        ...STAMP,
-        state: "failed",
-        failureReason: "Network unreachable",
-      },
-    };
+  it("withdraws Send for a draft skipped on its card", async () => {
     renderRow(buildRow({}), vi.fn());
-    expect(screen.getByText(/Network unreachable/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "skipped", decidedAt: 6_000 },
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    });
+    expect(screen.queryByText("Sent to the Traycer team.")).toBeNull();
+  });
+
+  it("holds Send while the card's decision is out", async () => {
+    renderRow(buildRow({}), vi.fn());
+    decideElsewhere(new Promise(() => {}));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+  });
+
+  it("shows why a send from the card failed and keeps Send available", async () => {
+    renderRow(buildRow({}), vi.fn());
+    decideElsewhere(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: {
+          ...STAMP,
+          state: "failed",
+          failureReason: "Network unreachable",
+        },
+      }),
+    );
+    expect(await screen.findByText(/Network unreachable/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 });

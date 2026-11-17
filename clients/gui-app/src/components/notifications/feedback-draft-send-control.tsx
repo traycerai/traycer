@@ -3,6 +3,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   useChatFeedbackDraftDecideMutation,
+  useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import { newFeedbackDraftClientActionId } from "@/lib/chats/feedback-draft-client-action-id";
@@ -15,8 +16,11 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
  * card in the chat, where both can be read first.
  *
  * `resolved` is the row's own state (the draft was sent or skipped, here or
- * on its card): Send is then withdrawn. A host that cannot send draws
- * nothing, and the row still opens the draft's card.
+ * on its card): Send is then withdrawn. The row's resolve can trail the
+ * decision, so a decision made in this window - here or on the card - counts
+ * as soon as it is answered: sent or skipped withdraws Send, failed keeps it
+ * with the reason. A host that cannot send draws nothing, and the row still
+ * opens the draft's card.
  */
 export function FeedbackDraftSendControl(props: {
   readonly hostId: string;
@@ -28,7 +32,9 @@ export function FeedbackDraftSendControl(props: {
   const supported = useChatFeedbackDraftSupported(props.hostId);
   const client = useHostClientForHostId(props.hostId);
   const decide = useChatFeedbackDraftDecideMutation(client, props.blockId);
-  const settled = decide.data === undefined ? null : decide.data.feedbackDraft;
+  const decision = useChatFeedbackDraftDecisionState(props.blockId);
+  const settled =
+    decision.response === null ? null : decision.response.feedbackDraft;
   if (settled !== null && settled.state === "sent") {
     return (
       <p
@@ -39,7 +45,13 @@ export function FeedbackDraftSendControl(props: {
       </p>
     );
   }
-  if (props.resolved || supported === false) return null;
+  if (
+    props.resolved ||
+    supported === false ||
+    (settled !== null && settled.state === "skipped")
+  ) {
+    return null;
+  }
   return (
     <div className="flex min-w-0 flex-col items-start gap-1 text-ui-xs">
       {settled !== null && settled.state === "failed" ? (
@@ -55,7 +67,7 @@ export function FeedbackDraftSendControl(props: {
       <Button
         type="button"
         size="sm"
-        disabled={decide.isPending || client === null}
+        disabled={decision.isPending || client === null}
         data-testid="notification-feedback-draft-send"
         onClick={() => {
           decide.mutate({
@@ -69,7 +81,7 @@ export function FeedbackDraftSendControl(props: {
         }}
       >
         Send
-        {decide.isPending ? (
+        {decision.isPending ? (
           <AgentSpinningDots
             className="size-3"
             testId={undefined}

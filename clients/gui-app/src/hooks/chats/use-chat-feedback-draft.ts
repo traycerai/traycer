@@ -1,15 +1,21 @@
 import { useMemo } from "react";
-import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type {
-  ChatFeedbackDraftDecideRequest,
-  ChatFeedbackDraftDecideResponse,
-  ChatFeedbackDraftPreviewResponse,
+  Mutation,
+  UseMutationResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
+import {
+  chatFeedbackDraftDecideResponseSchema,
+  type ChatFeedbackDraftDecideRequest,
+  type ChatFeedbackDraftDecideResponse,
+  type ChatFeedbackDraftPreviewResponse,
 } from "@traycer/protocol/host/chat/feedback-draft";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import { toast } from "sonner";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
@@ -104,4 +110,51 @@ export function useChatFeedbackDraftDecideMutation(
       },
     },
   });
+}
+
+/** Where the decisions on one draft stand, across every surface offering them. */
+export interface ChatFeedbackDraftDecisionState {
+  readonly isPending: boolean;
+  /** The newest answer a decision got, `null` while none has one. */
+  readonly response: ChatFeedbackDraftDecideResponse | null;
+}
+
+function selectDecideAttempt(
+  mutation: Mutation,
+): ChatFeedbackDraftDecisionState {
+  const parsed = chatFeedbackDraftDecideResponseSchema.safeParse(
+    mutation.state.data,
+  );
+  return {
+    isPending: mutation.state.status === "pending",
+    response: parsed.success ? parsed.data : null,
+  };
+}
+
+/**
+ * The decisions made on a draft in this window, whichever surface made them:
+ * the draft's card and its notification row each run their own mutation
+ * under the draft's key, and a Send on one must settle the other without
+ * waiting for the row's resolve to come back from the host.
+ */
+export function useChatFeedbackDraftDecisionState(
+  blockId: string,
+): ChatFeedbackDraftDecisionState {
+  const mutationKey = useMemo(
+    () => feedbackDraftMutationKeys.decide(blockId),
+    [blockId],
+  );
+  const attempts = useMutationStateOf(
+    { mutationKey, status: undefined, exact: true },
+    selectDecideAttempt,
+  );
+  return useMemo(
+    () => ({
+      isPending: attempts.some((attempt) => attempt.isPending),
+      response:
+        attempts.findLast((attempt) => attempt.response !== null)?.response ??
+        null,
+    }),
+    [attempts],
+  );
 }
