@@ -1,9 +1,12 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  type RenderResult,
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,6 +20,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
+import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 interface BoundaryState {
@@ -133,12 +137,12 @@ function buildRow(
 
 let queryClient = new QueryClient();
 
-function renderRow(
+function rowTree(
   row: MergedNotificationRow,
   onActivate: (row: MergedNotificationRow) => void,
-): void {
+): ReactNode {
   mocks.state.row = row;
-  render(
+  return (
     <QueryClientProvider client={queryClient}>
       <ul>
         <NotificationRow
@@ -148,24 +152,49 @@ function renderRow(
           onAcknowledge={vi.fn()}
         />
       </ul>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
-/** A decision another surface (the draft's card) made on `block-1`. */
-function decideElsewhere(
+function renderRow(
+  row: MergedNotificationRow,
+  onActivate: (row: MergedNotificationRow) => void,
+): RenderResult {
+  return render(rowTree(row, onActivate));
+}
+
+/** A decision made on the draft at `chatId` of the row's host and epic. */
+function decideDraftIn(
+  chatId: string,
   response: Promise<ChatFeedbackDraftDecideResponse>,
-): void {
-  void queryClient
+): Promise<ChatFeedbackDraftDecideResponse> {
+  return queryClient
     .getMutationCache()
     .build(queryClient, {
-      mutationKey: feedbackDraftMutationKeys.decide("block-1"),
+      mutationKey: feedbackDraftMutationKeys.decide({
+        hostId: ORIGIN_HOST_ID,
+        userId:
+          mocks.state.client === null
+            ? null
+            : mocks.state.client.getRequestContextUserId(),
+        epicId: "epic-1",
+        chatId,
+        blockId: "block-1",
+      }),
       mutationFn: () => response,
     })
     .execute(undefined);
 }
 
+/** A decision another surface (the draft's card) made on the row's draft. */
+function decideElsewhere(
+  response: Promise<ChatFeedbackDraftDecideResponse>,
+): void {
+  void decideDraftIn("chat-1", response);
+}
+
 beforeEach(() => {
+  useFeedbackDraftDecisionStore.setState({ decisions: new Map() });
   mocks.state.row = null;
   mocks.state.originEntry = AVAILABLE_ORIGIN;
   mocks.state.supported = true;
@@ -182,7 +211,10 @@ beforeEach(() => {
   });
   mocks.mutate.mockClear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("<NotificationRow /> feedback draft rows", () => {
   it("sends the draft without diagnostics using a fresh action id per click and does not open the row", () => {
@@ -236,6 +268,29 @@ describe("<NotificationRow /> feedback draft rows", () => {
     );
     expect(await screen.findByText("Sent to the Traycer team.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
+  it("ignores a sent decision on another chat's draft that shares the block id", async () => {
+    vi.useFakeTimers();
+    renderRow(buildRow({}), vi.fn());
+
+    await decideDraftIn(
+      "chat-2",
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...STAMP, state: "sent", decidedAt: 6_000 },
+      }),
+    );
+    // Query notifies its observers on a timer; advance past it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.queryByText("Sent to the Traycer team.")).toBeNull();
   });
 
   it("withdraws Send for a draft skipped on its card", async () => {
@@ -312,5 +367,24 @@ describe("<NotificationRow /> feedback draft rows", () => {
       "disabled",
       false,
     );
+  });
+
+  it("drops the held decision on its draft once the row resolves", () => {
+    const address = {
+      hostId: ORIGIN_HOST_ID,
+      userId: "user-a",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "block-1",
+    };
+    useFeedbackDraftDecisionStore
+      .getState()
+      .record(address, { ...STAMP, state: "sent", decidedAt: 6_000 });
+    const view = renderRow(buildRow({}), vi.fn());
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(1);
+
+    view.rerender(rowTree(buildRow({ resolvedAt: 5_000 }), vi.fn()));
+
+    expect(useFeedbackDraftDecisionStore.getState().decisions.size).toBe(0);
   });
 });

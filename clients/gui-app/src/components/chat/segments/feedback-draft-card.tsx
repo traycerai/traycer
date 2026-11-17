@@ -126,14 +126,19 @@ function LiveFeedbackDraftCard(
   );
   const supported = useChatFeedbackDraftSupported(hostId);
   const client = useHostClientForHostId(hostId);
-  const decide = useChatFeedbackDraftDecideMutation(client, blockRef.blockId);
-  const decision = useChatFeedbackDraftDecisionState(blockRef.blockId);
+  const draftRef = { ...blockRef, hostId };
+  const decide = useChatFeedbackDraftDecideMutation(client, draftRef);
+  const decision = useChatFeedbackDraftDecisionState(client, draftRef);
   const readOnly = liveReadOnlyReason(canAct, supported);
   // The settled stamp also arrives as a row update; until it does, the
-  // response is what the card shows.
-  const settled = decide.data === undefined ? null : decide.data.feedbackDraft;
+  // answer to a decision made here or on the draft's notification row is
+  // what the card shows.
+  const settled = decision.settled;
   const draft =
-    settled !== null && props.draft.state === "pending" ? settled : props.draft;
+    settled !== null &&
+    (props.draft.state === "pending" || props.draft.state === "failed")
+      ? settled
+      : props.draft;
   return (
     <FeedbackDraftView
       id={props.id}

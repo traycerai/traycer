@@ -16,12 +16,12 @@ import {
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
+import { useFeedbackDraftDecisionStore } from "@/stores/chats/feedback-draft-decision-store";
 import { FeedbackDraftCard } from "@/components/chat/segments/feedback-draft-card";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
-  decideData: undefined as ChatFeedbackDraftDecideResponse | undefined,
   supported: true as boolean | null,
   canAct: true as boolean | null,
 }));
@@ -37,10 +37,7 @@ vi.mock("@/hooks/chats/use-chat-feedback-draft", async (importActual) => {
   return {
     ...actual,
     useChatFeedbackDraftSupported: () => mocks.supported,
-    useChatFeedbackDraftDecideMutation: () => ({
-      mutate: mocks.mutate,
-      data: mocks.decideData,
-    }),
+    useChatFeedbackDraftDecideMutation: () => ({ mutate: mocks.mutate }),
     useChatFeedbackDraftPreviewQuery: () => ({
       isPending: false,
       data: {
@@ -105,10 +102,29 @@ function renderCard(
   );
 }
 
+/** A decision on the card's draft, made on another surface or on the card. */
+function decideCardDraft(
+  response: Promise<ChatFeedbackDraftDecideResponse>,
+): Promise<ChatFeedbackDraftDecideResponse> {
+  return queryClient
+    .getMutationCache()
+    .build(queryClient, {
+      mutationKey: feedbackDraftMutationKeys.decide({
+        hostId: SCOPE.hostId,
+        userId: null,
+        epicId: SCOPE.epicId,
+        chatId: SCOPE.chatId,
+        blockId: "block-1",
+      }),
+      mutationFn: () => response,
+    })
+    .execute(undefined);
+}
+
 beforeEach(() => {
   queryClient = new QueryClient();
+  useFeedbackDraftDecisionStore.setState({ decisions: new Map() });
   mocks.mutate.mockReset();
-  mocks.decideData = undefined;
   mocks.supported = true;
   mocks.canAct = true;
   useToolOpenStore.setState({ openIds: new Set() });
@@ -214,14 +230,30 @@ describe("FeedbackDraftCard", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
-  it("shows the settled stamp the decision answered before the row update lands", () => {
-    mocks.decideData = {
-      kind: "settled",
-      feedbackDraft: { ...PENDING, state: "skipped", decidedAt: 5 },
-    };
+  it("shows the settled stamp the decision answered before the row update lands", async () => {
+    await decideCardDraft(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...PENDING, state: "skipped", decidedAt: 5 },
+      }),
+    );
     renderCard(PENDING, SCOPE);
 
-    expect(screen.getByText("Skipped")).toBeTruthy();
+    expect(await screen.findByText("Skipped")).toBeTruthy();
+  });
+
+  it("shows a draft as sent when its notification row's decision sent it", async () => {
+    renderCard(PENDING, SCOPE);
+    await decideCardDraft(
+      Promise.resolve({
+        kind: "settled",
+        feedbackDraft: { ...PENDING, state: "sent", decidedAt: 5 },
+      }),
+    );
+
+    expect(await screen.findByText("Sent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
   });
 
   it("offers Send again on a failed send, with its reason", () => {
@@ -238,14 +270,7 @@ describe("FeedbackDraftCard", () => {
 
   it("holds Send and Skip while a decision on the draft is out from elsewhere", async () => {
     renderCard(PENDING, SCOPE);
-    void queryClient
-      .getMutationCache()
-      .build(queryClient, {
-        mutationKey: feedbackDraftMutationKeys.decide("block-1"),
-        mutationFn: () =>
-          new Promise<ChatFeedbackDraftDecideResponse>(() => {}),
-      })
-      .execute(undefined);
+    void decideCardDraft(new Promise(() => {}));
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(

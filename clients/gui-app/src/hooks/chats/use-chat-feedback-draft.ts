@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type {
   Mutation,
   UseMutationResult,
@@ -11,7 +11,10 @@ import {
   type ChatFeedbackDraftPreviewResponse,
 } from "@traycer/protocol/host/chat/feedback-draft";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostClient,
+  HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -19,6 +22,12 @@ import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import { toast } from "sonner";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
+import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import {
+  feedbackDraftDecisionKey,
+  useFeedbackDraftDecisionStore,
+} from "@/stores/chats/feedback-draft-decision-store";
 
 const DECIDE_METHOD = "chat.feedbackDraft.decide" as const;
 const PREVIEW_METHOD = "chat.feedbackDraft.preview" as const;
@@ -28,6 +37,18 @@ export interface FeedbackDraftBlockRef {
   readonly epicId: string;
   readonly chatId: string;
   readonly blockId: string;
+}
+
+/** A draft block and the host whose chat holds it. */
+export interface FeedbackDraftDecisionRef extends FeedbackDraftBlockRef {
+  readonly hostId: string;
+}
+
+function decideMutationKey(
+  draft: FeedbackDraftDecisionRef,
+  userId: string | null,
+): readonly (string | null)[] {
+  return feedbackDraftMutationKeys.decide({ ...draft, userId });
 }
 
 /**
@@ -84,28 +105,59 @@ export function feedbackDraftRefusalMessage(
 }
 
 /**
+ * The account a decision was sent as. Its answer is recorded under that
+ * account and no other; an identity change on the host aborts every request
+ * still in flight (`HostClient.setRequestContext`), so no answer lands after
+ * one.
+ */
+interface DecisionContext {
+  readonly userId: string | null;
+}
+
+function decidingStamp(
+  response: ChatFeedbackDraftDecideResponse | null,
+): ToolCallFeedbackDraftStamp | null {
+  const stamp = response === null ? null : response.feedbackDraft;
+  return stamp !== null && (stamp.state === "sent" || stamp.state === "skipped")
+    ? stamp
+    : null;
+}
+
+/**
  * Send or Skip on a draft. The settled stamp also reaches the transcript as a
- * row update; the response is what the card shows until it does.
+ * row update; the response is what the card shows until it does. An answer
+ * that sends or skips the draft is held in the decision store for the
+ * draft's notification row, under the account that decided.
  */
 export function useChatFeedbackDraftDecideMutation(
-  client: HostClient<HostRpcRegistry> | null,
-  blockId: string,
+  client: HostRequester<HostRpcRegistry> | null,
+  draft: FeedbackDraftDecisionRef,
 ): UseMutationResult<
   ChatFeedbackDraftDecideResponse,
   HostRpcError,
-  ChatFeedbackDraftDecideRequest
+  ChatFeedbackDraftDecideRequest,
+  DecisionContext
 > {
-  return useHostMutation<HostRpcRegistry, typeof DECIDE_METHOD>({
+  const userId = useRequestContextUserId(client);
+  const record = useFeedbackDraftDecisionStore((state) => state.record);
+  return useHostMutation<
+    HostRpcRegistry,
+    typeof DECIDE_METHOD,
+    DecisionContext
+  >({
     client,
     method: DECIDE_METHOD,
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: feedbackDraftMutationKeys.decide(blockId),
-      // The draft's notification row reads this decision after the card that
-      // made it has closed, until the row's own resolve arrives, which has no
-      // bound: the default five minutes would bring Send back on a slow one.
-      gcTime: Infinity,
-      onSuccess: (response) => {
+      mutationKey: decideMutationKey(draft, userId),
+      onMutate: () => ({
+        userId: client === null ? null : client.getRequestContextUserId(),
+      }),
+      onSuccess: (response, _variables, context) => {
+        const stamp = decidingStamp(response);
+        if (stamp !== null && context.userId !== null) {
+          record({ ...draft, userId: context.userId }, stamp);
+        }
         const refusal = feedbackDraftRefusalMessage(response);
         if (refusal !== null) toast.error(refusal);
       },
@@ -120,15 +172,18 @@ export function useChatFeedbackDraftDecideMutation(
 export interface ChatFeedbackDraftDecisionState {
   readonly isPending: boolean;
   /**
-   * The answer that decided the draft when one has, else the newest answer a
-   * decision got, `null` while none has one.
+   * The stamp that decided the draft when an answer has, else the newest
+   * answer's stamp, `null` while no answer carries one.
    */
+  readonly settled: ToolCallFeedbackDraftStamp | null;
+}
+
+interface DecideAttempt {
+  readonly isPending: boolean;
   readonly response: ChatFeedbackDraftDecideResponse | null;
 }
 
-function selectDecideAttempt(
-  mutation: Mutation,
-): ChatFeedbackDraftDecisionState {
+function selectDecideAttempt(mutation: Mutation): DecideAttempt {
   const parsed = chatFeedbackDraftDecideResponseSchema.safeParse(
     mutation.state.data,
   );
@@ -138,42 +193,76 @@ function selectDecideAttempt(
   };
 }
 
-function decidesDraft(
-  response: ChatFeedbackDraftDecideResponse | null,
-): boolean {
-  const stamp = response === null ? null : response.feedbackDraft;
-  return (
-    stamp !== null && (stamp.state === "sent" || stamp.state === "skipped")
-  );
-}
-
 /**
- * The decisions made on a draft in this window, whichever surface made them:
- * the draft's card and its notification row each run their own mutation
- * under the draft's key, and a Send on one must settle the other without
- * waiting for the row's resolve to come back from the host.
+ * The decisions made on a draft in this window by the account signed in on
+ * its host, whichever surface made them: the draft's card and its
+ * notification row each run their own mutation, and a Send on one must
+ * settle the other without waiting for the row's resolve to come back from
+ * the host. The held decision outlives the attempts that made it; the
+ * attempts still answer for a decision in flight and for a failed one.
+ *
+ * An identity change on the host retires every decision held for it.
  */
 export function useChatFeedbackDraftDecisionState(
-  blockId: string,
+  client: HostRequester<HostRpcRegistry> | null,
+  draft: FeedbackDraftDecisionRef,
 ): ChatFeedbackDraftDecisionState {
+  const { hostId, epicId, chatId, blockId } = draft;
+  const userId = useRequestContextUserId(client);
   const mutationKey = useMemo(
-    () => feedbackDraftMutationKeys.decide(blockId),
-    [blockId],
+    () => decideMutationKey({ hostId, epicId, chatId, blockId }, userId),
+    [hostId, epicId, chatId, blockId, userId],
   );
   const attempts = useMutationStateOf(
     { mutationKey, status: undefined, exact: true },
     selectDecideAttempt,
   );
-  return useMemo(
-    () => ({
-      isPending: attempts.some((attempt) => attempt.isPending),
-      // Answers can land out of submission order, and only one attempt can
-      // decide the draft: a sent or skipped answer outranks any failure.
-      response:
-        attempts.find((attempt) => decidesDraft(attempt.response))?.response ??
-        attempts.findLast((attempt) => attempt.response !== null)?.response ??
-        null,
-    }),
-    [attempts],
+  const held = useFeedbackDraftDecisionStore((state) =>
+    userId === null
+      ? null
+      : (state.decisions.get(
+          feedbackDraftDecisionKey({ hostId, userId, epicId, chatId, blockId }),
+        )?.stamp ?? null),
   );
+  const retireHost = useFeedbackDraftDecisionStore((state) => state.retireHost);
+  useEffect(() => {
+    if (client === null) return undefined;
+    return client.onChange((event) => {
+      if (event.reason === "auth-changed") retireHost(hostId);
+    });
+  }, [client, hostId, retireHost]);
+  return useMemo(() => {
+    // Answers can land out of submission order, and only one attempt can
+    // decide the draft: a sent or skipped answer outranks any failure.
+    const deciding =
+      held ??
+      attempts
+        .map((attempt) => decidingStamp(attempt.response))
+        .find((stamp) => stamp !== null) ??
+      null;
+    const newest =
+      attempts.findLast((attempt) => attempt.response !== null)?.response ??
+      null;
+    return {
+      isPending: attempts.some((attempt) => attempt.isPending),
+      settled: deciding ?? (newest === null ? null : newest.feedbackDraft),
+    };
+  }, [attempts, held]);
+}
+
+/**
+ * Drops the held decision on a draft once its notification row has resolved:
+ * the row's own state answers from then on.
+ */
+export function useRetireFeedbackDraftDecision(
+  draft: FeedbackDraftDecisionRef,
+  resolved: boolean,
+): void {
+  const { hostId, epicId, chatId, blockId } = draft;
+  const retireDraft = useFeedbackDraftDecisionStore(
+    (state) => state.retireDraft,
+  );
+  useEffect(() => {
+    if (resolved) retireDraft(hostId, epicId, chatId, blockId);
+  }, [resolved, hostId, epicId, chatId, blockId, retireDraft]);
 }
