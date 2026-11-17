@@ -689,6 +689,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     expect(onFailedAttempt).toHaveBeenCalledWith({
       providerId: "antigravity",
       message: ANTIGRAVITY_REFUSAL.reason,
+      hostSentence: false,
     });
   });
 
