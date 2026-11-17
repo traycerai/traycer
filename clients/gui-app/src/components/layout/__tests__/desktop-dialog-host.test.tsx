@@ -305,7 +305,7 @@ function createBaseRunnerHost(): IRunnerHost {
     browserView: null,
     sandboxArtifacts: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
-    refreshHostFleet: () => Promise.resolve(),
+    refreshHostFleet: () => Promise.resolve({ kind: "published" as const }),
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",

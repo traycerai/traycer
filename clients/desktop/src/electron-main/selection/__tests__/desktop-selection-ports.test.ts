@@ -163,7 +163,7 @@ function nextSnapshotWhere(
  * The natural double for "two overlapping refreshes" is one keyed on call
  * order - `calls.length === 1 ? firstCall : secondCall`. It encodes an
  * assumption that is not true: WHICH refresh arrives first is decided by an
- * async race, not by the order the test started them. `refreshOrThrow` awaits
+ * async race, not by the order the test started them. `refreshWith` awaits
  * `readLocalHostId()` - a REAL filesystem read - before it ever calls this
  * double, so two overlapping refreshes are both suspended in libuv's
  * threadpool, and under a saturated pool their reads complete out of
@@ -1437,6 +1437,149 @@ describe("DesktopHostFleetSource", () => {
   });
 });
 
+describe("DesktopHostFleetSource.refresh outcome", () => {
+  async function signedInFleet(
+    listRegisteredHosts: () => Promise<HostListFetchResult>,
+    session: { readonly verified: boolean },
+  ): Promise<{
+    readonly fleet: DesktopHostFleetSource;
+    readonly identity: FakeIdentitySource;
+  }> {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    if (session.verified) {
+      setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    } else {
+      authSession.set(signedInSnapshot("user-a", "token-1"));
+    }
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts,
+    });
+    return { fleet, identity };
+  }
+
+  it("reports published for an adopted registry read", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports published for a signed-out refresh, which adopts the empty fleet", async () => {
+    const fleet = buildFleetSource({
+      identity: new FakeIdentitySource(null, 0),
+      authSession: new DesktopAuthSession(),
+      host: new FakeHostLifecycle(),
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable when the registry read is refused", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "network-error" }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable instead of rejecting when the registry read throws", async () => {
+    const { fleet } = await signedInFleet(
+      async () => {
+        throw new Error("socket hang up");
+      },
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable for an unverified session, which never reaches the registry", async () => {
+    let registryCalls = 0;
+    const { fleet } = await signedInFleet(
+      async () => {
+        registryCalls += 1;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+      { verified: false },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    expect(registryCalls).toBe(0);
+    fleet.dispose();
+  });
+
+  it("reports superseded for a read that completes after its identity was retired", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet, identity } = await signedInFleet(registry.fetch, {
+      verified: true,
+    });
+
+    const inFlight = fleet.refresh();
+    await registry.started(0);
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+
+    await expect(inFlight).resolves.toEqual({ kind: "superseded" });
+    fleet.dispose();
+  });
+
+  it("reports superseded for a read a newer completion has already replaced", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet } = await signedInFleet(registry.fetch, { verified: true });
+
+    const older = fleet.refresh();
+    await registry.started(0);
+    const newer = fleet.refresh();
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+    await expect(newer).resolves.toEqual({ kind: "published" });
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+
+    await expect(older).resolves.toEqual({ kind: "superseded" });
+    fleet.dispose();
+  });
+
+  it("reports superseded once the source is disposed", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "ok", response: { hosts: [] } }),
+      { verified: true },
+    );
+    fleet.dispose();
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "superseded" });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // DesktopHostFleetSource / publishRegistryResponse (redesign P4.1/F22)
 // ---------------------------------------------------------------------------
@@ -1485,7 +1628,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
   /**
    * ONE fetch per refresh - the arithmetic the whole move rests on.
    *
-   * Added after a probe: doubling the fetch inside `refreshOrThrow` DID turn
+   * Added after a probe: doubling the fetch inside `refreshWith` DID turn
    * this suite red, but for the wrong reason. The arm it broke drives
    * `listRegisteredHosts` with a CALL-ORDERED fake (`calls.length === 1 ? … : …`),
    * so an extra call shifts which promise each caller gets and the failure is

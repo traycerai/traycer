@@ -102,6 +102,7 @@ import type {
   SelectionReattachRequired,
   SelectionRevisioned,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 /**
  * Sync-channel signatures (renderer/preload → main, `ipcRenderer.sendSync`
@@ -154,7 +155,7 @@ export interface SelectionAuthorityInvokeMap {
    */
   refreshFleet: {
     args: [];
-    result: void;
+    result: FleetRefreshOutcome;
   };
 }
 

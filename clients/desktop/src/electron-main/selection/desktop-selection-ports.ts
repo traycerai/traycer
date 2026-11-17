@@ -15,6 +15,7 @@
  * None of them is wire surface: they are constructor inputs to the engine.
  */
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostListItem,
   HostListResponse,
@@ -397,13 +398,14 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * is what makes the guarantee independent of who remembers to wrap.
    *
    * Failing to refresh costs one stale cycle, which the next identity change,
-   * local-host change or explicit call re-reads anyway - strictly cheaper than
-   * any way of surfacing it.
+   * local-host change or explicit call re-reads anyway. The outcome says which
+   * happened, for the one caller that acts on it (the renderer's directory,
+   * through the `refreshFleet` invoke); a throw is `unavailable`.
    */
-  async refresh(): Promise<void> {
-    if (this.disposed) return;
+  async refresh(): Promise<FleetRefreshOutcome> {
+    if (this.disposed) return { kind: "superseded" };
     try {
-      await this.refreshOrThrow();
+      return await this.refreshWith(null);
     } catch (error: unknown) {
       // WARN, not debug: this is now the single place a thrown refresh is
       // reported anywhere in the process, so it must not be the quiet level.
@@ -411,6 +413,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.options.log.warn("[selection-fleet] registry refresh threw", {
         error: String(error),
       });
+      return { kind: "unavailable" };
     }
   }
 
@@ -445,10 +448,6 @@ export class DesktopHostFleetSource implements HostFleetSource {
     }
   }
 
-  private async refreshOrThrow(): Promise<void> {
-    await this.refreshWith(null);
-  }
-
   private async adoptRegistryResponse(read: PushedRegistryRead): Promise<void> {
     await this.refreshWith(read);
   }
@@ -463,7 +462,9 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * signed-out and unverified branches, publishing before adopting - is a rule
    * about ADOPTING registry rows, not about who read them.
    */
-  private async refreshWith(pushed: PushedRegistryRead | null): Promise<void> {
+  private async refreshWith(
+    pushed: PushedRegistryRead | null,
+  ): Promise<FleetRefreshOutcome> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -486,7 +487,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           generation,
         },
       );
-      return;
+      return { kind: "superseded" };
     }
     // The time the registry was OBSERVED, which is what adoption is ordered
     // on. A fetch of our own is stamped HERE - at its start, before the await
@@ -507,15 +508,16 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // `readAtMs` here is this observation's own time, not a registry read's:
       // signing out is a fact about the account learned right now, and it must
       // supersede any read that observed the fleet before it - in every scope.
-      this.applyFetched(
-        generation,
-        seq,
-        this.localIdentitySeq,
-        null,
-        { personal: [], team: [] },
-        readAtMs,
+      return adoptionOutcome(
+        this.applyFetched(
+          generation,
+          seq,
+          this.localIdentitySeq,
+          null,
+          { personal: [], team: [] },
+          readAtMs,
+        ),
       );
-      return;
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
     this.localIdentitySeq += 1;
@@ -542,7 +544,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         generation,
       });
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
-      return;
+      return { kind: "unavailable" };
     }
     if (pushed !== null) {
       // The host has already made the read this branch would make. It arrives
@@ -551,17 +553,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // rows it could not refresh marks them stale, which the subscription
       // forwards anyway: they are still the freshest personal rows anyone has.
       // It speaks for the personal scope alone (see `RegistryScope`).
-      this.publishAndAdopt(
-        identity,
-        generation,
-        seq,
-        identitySeq,
-        localHostId,
-        pushed.response,
-        scopeRows(pushed.response, PUSH_SCOPES),
-        readAtMs,
+      return adoptionOutcome(
+        this.publishAndAdopt(
+          identity,
+          generation,
+          seq,
+          identitySeq,
+          localHostId,
+          pushed.response,
+          scopeRows(pushed.response, PUSH_SCOPES),
+          readAtMs,
+        ),
       );
-      return;
     }
     let result: HostListFetchResult;
     try {
@@ -587,17 +590,19 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // Same rule as the thrown arm above: a refused registry read keeps the
       // known rows AND still adopts this machine's own identity.
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
-      return;
+      return { kind: "unavailable" };
     }
-    this.publishAndAdopt(
-      identity,
-      generation,
-      seq,
-      identitySeq,
-      localHostId,
-      result.response,
-      scopeRows(result.response, REGISTRY_SCOPES),
-      readAtMs,
+    return adoptionOutcome(
+      this.publishAndAdopt(
+        identity,
+        generation,
+        seq,
+        identitySeq,
+        localHostId,
+        result.response,
+        scopeRows(result.response, REGISTRY_SCOPES),
+        readAtMs,
+      ),
     );
   }
 
@@ -624,13 +629,13 @@ export class DesktopHostFleetSource implements HostFleetSource {
     response: HostListResponse,
     scoped: ScopedRows,
     readAtMs: number,
-  ): void {
+  ): boolean {
     const current = generation === this.options.identity.current().generation;
     const admitted: ScopedRows = {
       personal: this.admitScope("personal", scoped, current, seq, readAtMs),
       team: this.admitScope("team", scoped, current, seq, readAtMs),
     };
-    if (admitted.personal === null && admitted.team === null) return;
+    if (admitted.personal === null && admitted.team === null) return false;
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
       response: current
@@ -642,7 +647,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           }
         : response,
     });
-    this.applyFetched(
+    return this.applyFetched(
       generation,
       seq,
       identitySeq,
@@ -773,7 +778,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
 
   /**
    * Adopts a local-identity read that has no registry rows to travel with -
-   * the failure arms of `refreshOrThrow`. Same fences as
+   * the failure arms of `refreshWith`. Same fences as
    * `refreshLocalIdentity`, in the same order: the generation guard drops a
    * read that straddled an account switch, the seq guard drops one a newer
    * writer has superseded, and the value guard keeps an unchanged id from
@@ -816,8 +821,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
     localHostId: string | null,
     scoped: ScopedRows,
     readAtMs: number,
-  ): void {
-    if (this.disposed) return;
+  ): boolean {
+    if (this.disposed) return false;
     if (generation !== this.options.identity.current().generation) {
       // A late completion for a RETIRED identity. It is still published -
       // stamped with the generation it was fetched under, which is exactly
@@ -830,7 +835,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         localHostId,
         projectFleetRows([...(scoped.personal ?? []), ...(scoped.team ?? [])]),
       );
-      return;
+      return false;
     }
     // Same-identity ordering (see `refreshSeq`), per scope: a scope whose
     // newer completion was adopted while this one awaited is declined, so an
@@ -844,7 +849,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.options.log.debug("[selection-fleet] dropped a superseded refresh", {
         seq,
       });
-      return;
+      return false;
     }
     for (const scope of adopting) {
       const watermark = this.watermarks[scope];
@@ -870,6 +875,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       });
     }
     this.publishAt(generation);
+    return true;
   }
 
   /** Publishes under the generation that is current right now. */
@@ -1178,4 +1184,9 @@ export function createDesktopLocalHostEnsurePort(
       };
     },
   };
+}
+
+/** A read this port adopted reached the authority; one it declined did not. */
+function adoptionOutcome(adopted: boolean): FleetRefreshOutcome {
+  return adopted ? { kind: "published" } : { kind: "superseded" };
 }

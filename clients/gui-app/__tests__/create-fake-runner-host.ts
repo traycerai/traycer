@@ -70,7 +70,7 @@ export function createFakeRunnerHost(
     // change (redesign P1.2 F6). Result-free and idempotent by contract, so
     // the inert default is the honest one; a test that cares overrides it to
     // republish its own snapshot, exactly as a real shell does.
-    refreshHostFleet: () => Promise.resolve(),
+    refreshHostFleet: () => Promise.resolve({ kind: "published" as const }),
     // `null` = this shell owns no registry cadence, so a consumer keeps its own
     // timer. The same answer the browser/dev topology gives.
     onRegisteredHostsChange: () => null,

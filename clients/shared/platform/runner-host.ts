@@ -995,9 +995,14 @@ export interface IRunnerHost {
    * Idempotent and unscoped by design: it asserts nothing about membership -
    * only that the authority's copy is stale - so a duplicate or late call
    * costs one refetch and can never publish something false. Callers are the
-   * membership mutations themselves, not surfaces reacting to them.
+   * membership mutations themselves, and the host directory, which reads the
+   * outcome to decide whether discovery may conclude over the fleet.
+   *
+   * Never rejects: a thrown or refused read is `unavailable`, mapped at the
+   * shell boundary by every implementer, so no caller needs a catch to learn
+   * what happened.
    */
-  refreshHostFleet(): Promise<void>;
+  refreshHostFleet(): Promise<FleetRefreshOutcome>;
 
   /**
    * Subscribes to the shell's own registry reads, when the shell OWNS the
@@ -1415,6 +1420,22 @@ export interface IPushPermissionHost {
  * One shell-owned registry read, delivered to a consumer that would otherwise
  * have fetched it itself. See `IRunnerHost.onRegisteredHostsChange`.
  */
+/**
+ * What one {@link IRunnerHost.refreshHostFleet} call did to the selection
+ * authority's fleet.
+ *
+ * - `published`: a fleet snapshot read for the current identity reached the
+ *   authority (a signed-out empty fleet included - that is an answer).
+ * - `unavailable`: the read failed or was refused, and nothing was published.
+ *   The authority keeps whatever fleet it had, possibly none.
+ * - `superseded`: the read finished but was not adopted - the identity moved
+ *   during it, or a newer read had already been adopted.
+ */
+export type FleetRefreshOutcome =
+  | { readonly kind: "published" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "superseded" };
+
 export interface RegisteredHostsChange {
   /** The account these rows were FETCHED under; `null` when signed out. */
   readonly identityKey: string | null;
