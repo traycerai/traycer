@@ -1,5 +1,6 @@
 import {
   BotUnreadBoundaryContext,
+  BotUnreadPageNavigationContext,
   type BotTranscriptUnread,
 } from "@/components/bots/bot-unread-boundary";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -1049,6 +1050,7 @@ function BotTranscriptFlowRows(props: {
     boundaryVisit: props.unreadVisit,
     onUnfold: fold !== null && folded ? fold.onUnfold : null,
   });
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
   const cancelBoundaryLanding = useFlowBoundaryLanding({
     ref: landingRef,
     shown,
@@ -1058,10 +1060,11 @@ function BotTranscriptFlowRows(props: {
   });
   const openReply = useCallback(
     (messageId: string) => {
+      pageNavigation?.cancel();
       cancelBoundaryLanding();
       land(messageId);
     },
-    [cancelBoundaryLanding, land],
+    [cancelBoundaryLanding, land, pageNavigation],
   );
   const replies = useFlowReplies(props.replies, shown, folded, openReply);
   const range = ordinalRangeOf(shown);
@@ -1156,13 +1159,20 @@ function useFlowBoundaryLanding(args: {
   const boundary = useContext(BotUnreadBoundaryContext);
   const rowId = boundary?.rowId ?? null;
   const handled = useRef(0);
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
   const { ref, shown, visit, enabled, onUnfold } = args;
   const cancel = useCallback(() => {
     // An explicit destination wins for this visit, even after its highlight expires.
     handled.current = visit;
   }, [visit]);
   useEffect(() => {
-    if (!enabled || visit === 0 || handled.current === visit || rowId === null)
+    if (
+      !enabled ||
+      visit === 0 ||
+      handled.current === visit ||
+      rowId === null ||
+      (pageNavigation !== null && !pageNavigation.isPending(visit))
+    )
       return;
     if (
       !shown.some((row) => row.kind === "hydrated" && row.model.id === rowId)
@@ -1176,7 +1186,8 @@ function useFlowBoundaryLanding(args: {
     if (divider === undefined || divider === null) return;
     divider.scrollIntoView({ block: "start" });
     handled.current = visit;
-  }, [enabled, onUnfold, ref, rowId, shown, visit]);
+    pageNavigation?.cancel();
+  }, [enabled, onUnfold, pageNavigation, ref, rowId, shown, visit]);
   return cancel;
 }
 

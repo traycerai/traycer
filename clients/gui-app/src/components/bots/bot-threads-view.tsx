@@ -1,10 +1,12 @@
 import { createPortal } from "react-dom";
+import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -27,6 +29,7 @@ import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
 import {
+  BotUnreadPageNavigationContext,
   useBotUnreadBoundary,
   type BotTranscriptUnread,
 } from "@/components/bots/bot-unread-boundary";
@@ -292,6 +295,19 @@ function ThreadCards(props: {
     ),
   );
   const unfold = useBotThreadFoldStore((state) => state.unfold);
+  const pendingVisit = useRef<number | null>(null);
+  const cancelLanding = useCallback(() => {
+    pendingVisit.current = null;
+  }, []);
+  const pageNavigation = useMemo(
+    () => ({
+      cancel: cancelLanding,
+      isPending: (visit: number) => pendingVisit.current === visit,
+    }),
+    [cancelLanding],
+  );
+  useThreadsScrollIntent(scroller, cancelLanding);
+  const visitCounter = useRef(0);
   const [landing, setLanding] = useState<{
     readonly threadId: string;
     readonly visit: number;
@@ -306,7 +322,9 @@ function ThreadCards(props: {
     const threadId = card.dataset.threadId;
     if (threadId === undefined) return;
     unfold(threadId);
-    setLanding((last) => ({ threadId, visit: (last?.visit ?? 0) + 1 }));
+    visitCounter.current += 1;
+    pendingVisit.current = visitCounter.current;
+    setLanding({ threadId, visit: visitCounter.current });
     // The card's rows land on their divider once it is drawn; a card that
     // draws none is shown from its top.
     if (card.querySelector("[data-unread-divider]") === null) {
@@ -314,7 +332,7 @@ function ThreadCards(props: {
     }
   };
   return (
-    <>
+    <BotUnreadPageNavigationContext value={pageNavigation}>
       {bannerSlot === null || (unread.length === 0 && !markRead.failed)
         ? null
         : createPortal(
@@ -351,8 +369,55 @@ function ThreadCards(props: {
           );
         })}
       </ul>
-    </>
+    </BotUnreadPageNavigationContext>
   );
+}
+
+/** Programmatic scrolling is not a new destination; only the person's input retires it. */
+function useThreadsScrollIntent(
+  scroller: HTMLElement | null,
+  cancel: () => void,
+): void {
+  useEffect(() => {
+    if (scroller === null) return undefined;
+    const keydown = (event: KeyboardEvent) => {
+      if (isThreadsScrollKey(event)) cancel();
+    };
+    const pointerdown = (event: PointerEvent) => {
+      if (event.target === scroller) cancel();
+    };
+    scroller.addEventListener("wheel", cancel, { passive: true });
+    scroller.addEventListener("touchmove", cancel, { passive: true });
+    scroller.addEventListener("keydown", keydown);
+    scroller.addEventListener("pointerdown", pointerdown);
+    return () => {
+      scroller.removeEventListener("wheel", cancel);
+      scroller.removeEventListener("touchmove", cancel);
+      scroller.removeEventListener("keydown", keydown);
+      scroller.removeEventListener("pointerdown", pointerdown);
+    };
+  }, [cancel, scroller]);
+}
+
+function isThreadsScrollKey(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || isEditableEventTarget(event.target))
+    return false;
+  if (
+    event.target instanceof Element &&
+    event.target.closest(
+      'button, a, select, [role="button"], [role="listbox"], [role="menu"], [role="slider"], [role="tree"], [role="grid"]',
+    ) !== null
+  )
+    return false;
+  return [
+    "ArrowUp",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
+    " ",
+  ].includes(event.key);
 }
 
 /**

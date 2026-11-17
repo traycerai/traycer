@@ -1,5 +1,7 @@
+import { BotUnreadPageNavigationContext } from "@/components/bots/bot-unread-boundary";
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -1216,6 +1218,7 @@ function useThreadOpening(
 } {
   const ref = useRef<HTMLDivElement | null>(null);
   const timer = useRef<number | null>(null);
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
   const [highlighted, setHighlighted] = useState(false);
   useEffect(
     () => () => {
@@ -1224,6 +1227,7 @@ function useThreadOpening(
     [],
   );
   const show = useCallback(() => {
+    pageNavigation?.cancel();
     ref.current?.scrollIntoView({ block: "nearest" });
     if (timer.current !== null) window.clearTimeout(timer.current);
     setHighlighted(true);
@@ -1231,7 +1235,7 @@ function useThreadOpening(
       timer.current = null;
       setHighlighted(false);
     }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, []);
+  }, [pageNavigation]);
   const opening = useMemo(
     () => ({ messageId, conversationId, show }),
     [conversationId, messageId, show],

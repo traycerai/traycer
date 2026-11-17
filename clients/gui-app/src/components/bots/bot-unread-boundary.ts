@@ -26,6 +26,12 @@ export interface BotTranscriptUnread extends UnreadBoundary {
   readonly visit: number;
 }
 
+/** Cards share one page destination; an explicit destination in any card retires it. */
+export const BotUnreadPageNavigationContext = createContext<{
+  readonly cancel: () => void;
+  readonly isPending: (visit: number) => boolean;
+} | null>(null);
+
 /** A visual boundary belongs to a visit, not to the advancing read cursor. */
 export function useBotUnreadBoundary(args: {
   readonly identity: string;

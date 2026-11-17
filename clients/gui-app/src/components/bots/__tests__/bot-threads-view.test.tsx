@@ -2841,6 +2841,16 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
 
   describe("a landing on the unread divider that cannot happen yet", () => {
     const THREAD = "team-new";
+    const OTHER = "team-other";
+    const TO_REPLY_1 = /^Replying to .*: reply 1$/;
+    const TO_OPENING_POST = /^Replying to .*: Ship the release\?$/;
+    const OPENING_POST_ID = conversationRequestMessageId("req-team-new");
+    /** The message reply 4 of the thread answers. */
+    let answers = replyId(THREAD, 1);
+
+    beforeEach(() => {
+      answers = replyId(THREAD, 1);
+    });
 
     /** Reply `n` as a colleague's row; reply 4 is the bot's, answering reply 1, so it draws a badge. */
     function replyMessage(n: number): { message: Message; rowId: string } {
@@ -2853,7 +2863,7 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
               text: `reply ${String(n)}`,
               timestamp: n * 1_000,
             }),
-            repliesTo: replyId(THREAD, 1),
+            repliesTo: answers,
           },
           rowId: `assistant:ts:${String(n * 1_000)}`,
         };
@@ -2900,29 +2910,57 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
     }
 
     /** Five replies, the cursor on the second; the third, the first unread, is not loaded. */
-    async function mountWithMissingBoundary(): Promise<{
+    async function mountWithMissingBoundary(input: {
+      /** The message reply 4 answers, which its badge names. */
+      readonly answers: string;
+      /** A second card, read through, whose last reply carries a badge to its reply 1. */
+      readonly withReadCard: boolean;
+    }): Promise<{
       scrolled: MockInstance<Element["scrollIntoView"]>;
       pill: HTMLElement;
-      badge: () => HTMLElement;
+      badge: (threadId: string, name: RegExp) => HTMLElement;
     }> {
       const scrolled = recordScrolls();
-      followedThreads(THREAD);
+      answers = input.answers;
+      mocks.posts[TEAM] = { [OPENING_POST_ID]: "Ship the release?" };
+      followedThreads(...(input.withReadCard ? [THREAD, OTHER] : [THREAD]));
       mocks.hosted[TEAM].cursors = {
         cursors: { [THREAD]: { messageId: replyId(THREAD, 2), seq: 2_000 } },
         latest: { [THREAD]: { messageId: replyId(THREAD, 5), seq: 5_000 } },
       };
       withReplies(TEAM, THREAD, replyTexts(5), 5_000);
+      if (input.withReadCard) {
+        unreadFrom({ threadId: OTHER, count: 3, ownAt: [], readTo: 3 });
+        mocks.replyRows[OTHER] = mocks.replyRows[OTHER].map((row, index) =>
+          index === 2
+            ? {
+                ...botReply({
+                  messageId: replyId(OTHER, 3),
+                  text: "reply 3",
+                  timestamp: 3_000,
+                }),
+                repliesTo: replyId(OTHER, 1),
+              }
+            : row,
+        );
+      }
       windowedSession(THREAD);
       hydrate([0, 1, 3, 4]);
       mount();
-      await waitFor(() => expect(listed()).toEqual([THREAD]));
-      const full = within(await revealFull(THREAD));
-      await full.findByText("reply 5");
+      await waitFor(() =>
+        expect(listed()).toEqual(
+          input.withReadCard ? [THREAD, OTHER] : [THREAD],
+        ),
+      );
+      await within(await revealFull(THREAD)).findByText("reply 5");
+      if (input.withReadCard) {
+        await within(await revealFull(OTHER)).findByText("reply 3");
+      }
       return {
         scrolled,
         pill: await screen.findByTestId("bot-threads-unread-pill"),
-        badge: () =>
-          full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+        badge: (threadId, name) =>
+          within(card(threadId)).getByRole("button", { name }),
       };
     }
 
@@ -2937,12 +2975,15 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
     }
 
     it("does not pull the page to the divider when the reply that holds it loads after a reply's badge was used, though the badge's highlight is long gone", async () => {
-      const { scrolled, pill, badge } = await mountWithMissingBoundary();
+      const { scrolled, pill, badge } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
       expect(dividersIn(THREAD)).toHaveLength(0);
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       fireEvent.click(pill);
-      fireEvent.click(badge());
+      fireEvent.click(badge(THREAD, TO_REPLY_1));
       expect(highlightedRows(THREAD)).toHaveLength(1);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_500);
@@ -2958,15 +2999,167 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
     });
 
     it("lands on the divider of a fresh unread press once the reply that holds it has loaded", async () => {
-      const { scrolled, pill, badge } = await mountWithMissingBoundary();
+      const { scrolled, pill, badge } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
       fireEvent.click(pill);
-      fireEvent.click(badge());
+      fireEvent.click(badge(THREAD, TO_REPLY_1));
       hydrate([0, 1, 2, 3, 4]);
       await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
       expect(scrolledToDivider(scrolled)).toBe(false);
 
       fireEvent.click(pill);
 
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    /** The page's one scroller, which the person scrolls. */
+    function pageScroller(): HTMLElement {
+      return screen.getByTestId("bot-threads-scroll");
+    }
+
+    /** Hydrates the missing reply, which must not pull the page, then a fresh press of the pill must land. */
+    async function expectNoStealThenFreshPressLands(
+      scrolled: MockInstance<Element["scrollIntoView"]>,
+      pill: HTMLElement,
+    ): Promise<void> {
+      hydrate([0, 1, 2, 3, 4]);
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      expect(scrolledToDivider(scrolled)).toBe(false);
+
+      fireEvent.click(pill);
+
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    }
+
+    it("does not pull the page to the divider when the reply that holds it loads after the badge naming the thread's opening post was used, and a fresh press lands", async () => {
+      const { scrolled, pill, badge } = await mountWithMissingBoundary({
+        answers: OPENING_POST_ID,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      fireEvent.click(badge(THREAD, TO_OPENING_POST));
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    it("does not pull the page to the divider when the reply that holds it loads after a badge was used in another card, and a fresh press lands", async () => {
+      const { scrolled, pill, badge } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: true,
+      });
+
+      fireEvent.click(pill);
+      fireEvent.click(badge(OTHER, TO_REPLY_1));
+
+      await expectNoStealThenFreshPressLands(scrolled, pill);
+    });
+
+    /** What the person does to scroll the page by hand: the event type it sends to the scroller, and the action. */
+    const PERSON_SCROLLS: ReadonlyArray<readonly [string, string, () => void]> =
+      [
+        [
+          "the wheel",
+          "wheel",
+          () => fireEvent.wheel(pageScroller(), { deltaY: 120 }),
+        ],
+        [
+          "a touch drag",
+          "touchmove",
+          () => {
+            fireEvent.touchStart(pageScroller(), {
+              touches: [{ clientX: 0, clientY: 200 }],
+            });
+            fireEvent.touchMove(pageScroller(), {
+              touches: [{ clientX: 0, clientY: 100 }],
+            });
+          },
+        ],
+        [
+          "a scroll key",
+          "keydown",
+          () => fireEvent.keyDown(pageScroller(), { key: "PageDown" }),
+        ],
+        [
+          "a press on the scrollbar",
+          "pointerdown",
+          () => fireEvent.pointerDown(pageScroller()),
+        ],
+      ];
+
+    /** Sends `act` and says whether an event of `type` reached the page's scroller from it. */
+    function reachedScroller(type: string, act: () => void): boolean {
+      const seen = vi.fn();
+      pageScroller().addEventListener(type, seen);
+      act();
+      pageScroller().removeEventListener(type, seen);
+      return seen.mock.calls.length > 0;
+    }
+
+    it.each(PERSON_SCROLLS)(
+      "does not pull the page to the divider when the reply that holds it loads after the person scrolled the page with %s, and a fresh press lands",
+      async (_name, type, scrollThePage) => {
+        const { scrolled, pill } = await mountWithMissingBoundary({
+          answers,
+          withReadCard: false,
+        });
+
+        fireEvent.click(pill);
+        expect(dividersIn(THREAD)).toHaveLength(0);
+        expect(scrolledToDivider(scrolled)).toBe(false);
+        expect(reachedScroller(type, scrollThePage)).toBe(true);
+
+        await expectNoStealThenFreshPressLands(scrolled, pill);
+      },
+    );
+
+    it("still lands on the divider when the reply that holds it loads after only the pill's own scroll to the card ran its scroll events", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      // The pill's smooth scroll to the card's top is the page scrolling by itself.
+      expect(
+        reachedScroller("scroll", () => fireEvent.scroll(pageScroller())),
+      ).toBe(true);
+      hydrate([0, 1, 2, 3, 4]);
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
+      const [divider] = dividersIn(THREAD);
+      await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
+      expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    });
+
+    it("still lands on the divider when the reply that holds it loads after a key pressed on a control inside a card and a press inside a card, neither of which scrolls the page", async () => {
+      const { scrolled, pill } = await mountWithMissingBoundary({
+        answers,
+        withReadCard: false,
+      });
+
+      fireEvent.click(pill);
+      const control = within(card(THREAD)).getAllByRole("button")[0];
+      expect(card(THREAD).contains(control)).toBe(true);
+      expect(
+        reachedScroller("keydown", () =>
+          fireEvent.keyDown(control, { key: "PageDown" }),
+        ),
+      ).toBe(true);
+      expect(
+        reachedScroller("pointerdown", () =>
+          fireEvent.pointerDown(card(THREAD)),
+        ),
+      ).toBe(true);
+      hydrate([0, 1, 2, 3, 4]);
+
+      await waitFor(() => expect(dividersIn(THREAD)).toHaveLength(1));
       const [divider] = dividersIn(THREAD);
       await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
       expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
