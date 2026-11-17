@@ -133,7 +133,6 @@
                       "settings/appearance",
                       "settings/browser",
                       "settings/opening-behavior",
-                      "settings/sounds",
                       "settings/alerts",
                       "settings/keybindings",
                       "settings/diagnostics",
@@ -220,6 +219,10 @@
     ]
   },
   "redirects": [
+    {
+      "source": "/settings/sounds",
+      "destination": "/settings/alerts"
+    },
     {
       "source": "/panels/chats",
       "destination": "/panels/agents"

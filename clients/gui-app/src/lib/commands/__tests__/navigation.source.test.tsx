@@ -1,5 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
 import { navigationSource } from "@/lib/commands/sources/navigation.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import {
@@ -69,6 +76,7 @@ describe("navigationSource", () => {
 
   afterEach(() => {
     cleanup();
+    soundtrackOfferedMock.value = false;
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
@@ -135,6 +143,7 @@ describe("navigationSource", () => {
   });
 
   it("distinguishes application Sounds from account Notifications", () => {
+    soundtrackOfferedMock.value = true;
     const items = captureSettingsSubpage("/");
     const app = items.find((i) => i.id === "nav:settings/app-notifications");
     const account = items.find((i) => i.id === "nav:settings/notifications");
@@ -143,6 +152,13 @@ describe("navigationSource", () => {
     expect(app?.keywords).toContain("notifications");
     expect(account?.label).toBe("Notifications");
     expect(account?.statusBadge).toBe("Account");
+  });
+
+  it("lists Sounds only where a soundtrack is offered, and Alerts either way", () => {
+    soundtrackOfferedMock.value = false;
+    const without = captureSettingsSubpage("/").map((i) => i.id);
+    expect(without).not.toContain("nav:settings/app-notifications");
+    expect(without).toContain("nav:settings/alerts");
   });
 
   it("lists the Secrets page, and none of the retired pages, in the settings sub-page", () => {

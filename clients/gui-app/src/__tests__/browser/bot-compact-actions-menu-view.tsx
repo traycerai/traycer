@@ -49,6 +49,7 @@ import {
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -79,6 +80,11 @@ import "@/index.css";
  * snapshot, so the channel pane stays in its connecting state; `?form=desktop`
  * skips the phone-form flags, so a wide window gets the desktop form. With
  * neither, the page is the phone form with the snapshot delivered.
+ *
+ * The drafts bridge the app mounts above every tab
+ * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
+ * the bot tab shows its tree only once the signed-in account's own drafts are
+ * read (T186), here from the page's own storage.
  */
 const QUERY = new URLSearchParams(window.location.search);
 const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
@@ -474,9 +480,11 @@ function buildRouter() {
             <WindowsBridgeContext.Provider value={windowsBridgeValue}>
               <TooltipProvider>
                 <SignedIn>
-                  <RequestContextGate>
-                    <Page />
-                  </RequestContextGate>
+                  <BotDraftsPersistLifecycleBridge>
+                    <RequestContextGate>
+                      <Page />
+                    </RequestContextGate>
+                  </BotDraftsPersistLifecycleBridge>
                 </SignedIn>
               </TooltipProvider>
             </WindowsBridgeContext.Provider>

@@ -450,28 +450,6 @@ const CASES: readonly {
     body: "Long-running analysis • Provider is taking longer than expected",
   },
   {
-    name: "long-turn alert",
-    entry: {
-      ...BASE,
-      kind: "agent.stalled",
-      severity: "failure",
-      outcome: "errored",
-      payload: {
-        kind: "agent_stalled",
-        epicId: "epic-1",
-        chatId: "chat-1",
-        agentId: "agent-1",
-        agentName: "Long-running analysis",
-        taskTitle: "Notification reliability",
-        reason: "long_turn",
-        title: "Turn running long",
-        outcome: "errored",
-      },
-    },
-    title: "Notification reliability",
-    body: "Long-running analysis • Running longer than the time you set",
-  },
-  {
     name: "stall reason this build does not know (an older client reading a newer host's reason)",
     entry: {
       ...BASE,

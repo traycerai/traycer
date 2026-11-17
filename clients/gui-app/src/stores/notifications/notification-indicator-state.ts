@@ -1,5 +1,4 @@
 import {
-  HOST_NOTIFICATION_LONG_TURN_REASON,
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
   type HostNotificationCloudEntryV28,
   type HostNotificationsCloudFeedRowV18,
@@ -533,16 +532,7 @@ function terminalWinnersForEntity(
 }
 
 function isTerminalEntry(entry: HostNotificationCloudEntryV28): boolean {
-  if (isLongTurnAlertEntry(entry)) return false;
   return entry.severity === "failure" || entry.severity === "done";
-}
-
-function isLongTurnAlertEntry(entry: HostNotificationCloudEntryV28): boolean {
-  return (
-    entry.kind === "agent.stalled" &&
-    "reason" in entry.payload &&
-    entry.payload.reason === HOST_NOTIFICATION_LONG_TURN_REASON
-  );
 }
 
 function terminalEntryIsNewer(

@@ -126,6 +126,8 @@ function Box(props: {
         seed={null}
         keptDraft={null}
         quote={null}
+        moved={null}
+        notice={null}
         onSent={() => false}
       />
     </BotTestRunnerHost>

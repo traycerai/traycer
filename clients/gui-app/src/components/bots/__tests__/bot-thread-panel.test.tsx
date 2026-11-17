@@ -103,10 +103,10 @@ import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import {
-  BOT_BOX_DRAFTS_PERSIST_KEY,
   storedBoxDraftsOf,
   type StoredBoxDraft,
 } from "@/lib/bots/bot-box-draft-storage";
+import { botBoxDraftsKey } from "@/lib/persist";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
@@ -758,6 +758,8 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     const taking = listed("user-teammate");
     const panel = mountPanel(taking, []);
     const box = editableIn(screen.getByTestId("bot-thread-composer-input"));
+    // The person puts the focus in the box, then types.
+    await user.click(box);
     typeInto(box, "Which job?");
 
     // Claimed: the room drops the earlier host's threads, and the new host
@@ -823,10 +825,24 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
 });
 
 describe("<BotThreadPanel /> what its box holds unsent", () => {
+  const ACCOUNT_ID = "user-drafts-account";
+
+  // The store reads and writes only once an account is signed in: points it at
+  // the account's key, as signing in does.
+  beforeEach(async () => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(ACCOUNT_ID) });
+    await useBotDraftsStore.persist.rehydrate();
+  });
+
+  afterEach(() => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(null) });
+    localStorage.removeItem(botBoxDraftsKey(ACCOUNT_ID));
+  });
+
   /** The draft this device holds for the bot's box under `key`. */
   function storedBox(key: string): StoredBoxDraft | undefined {
     const parsed: unknown = JSON.parse(
-      localStorage.getItem(BOT_BOX_DRAFTS_PERSIST_KEY) ?? "null",
+      localStorage.getItem(botBoxDraftsKey(ACCOUNT_ID)) ?? "null",
     );
     const stored =
       isRecord(parsed) && isRecord(parsed.state)
@@ -836,9 +852,11 @@ describe("<BotThreadPanel /> what its box holds unsent", () => {
   }
 
   it("keeps the thread's draft under the thread, apart from the channel's, on the device and in its box when the thread opens again", () => {
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, CONVERSATION_ID, "For the channel", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, CONVERSATION_ID, {
+      text: "For the channel",
+      content: null,
+      held: [],
+    });
     const thread = listed("user-teammate");
     const box = (): HTMLElement =>
       editableIn(screen.getByTestId("bot-thread-composer-input"));
@@ -1231,6 +1249,8 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     const view = mountPanel(POSTED, []);
     const box = replyBox();
+    // The person puts the focus in the box, then types.
+    act(() => box.focus());
     typeInto(box, "And the nightly?");
     expect(document.activeElement).toBe(box);
 
@@ -1995,6 +2015,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       requestId: POST_REQUEST,
       text: "Ship the release today?",
       content: null,
+      held: [],
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
@@ -2143,6 +2164,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       requestId: POST_REQUEST,
       text: "Ship it?",
       content: null,
+      held: [],
     });
   });
 
@@ -2627,5 +2649,36 @@ describe("<BotThreadPanel /> a member's quote above a plain line, stored in two 
     mountPanel(listed("user-teammate"), []);
 
     expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
+  });
+});
+
+describe("<BotThreadPanel /> a reply box whose stored draft names images still being read (T186)", () => {
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  it("shows the stored text in a reply box that cannot be edited or sent until the person discards it, and then gives an empty reply box", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    useBotDraftsStore.setState({
+      boxesReading: { [BOT_ID]: { "anchor-1": { text: "Stored reply" } } },
+    });
+    mountPanel(listed("user-teammate"), []);
+
+    const input = screen.getByTestId("bot-thread-composer-input");
+    expect(input).toHaveProperty("value", "Stored reply");
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-thread-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+
+    await user.click(screen.getByTestId("bot-thread-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull();
+    expect(textOf(boxInput("Reply in the thread"))).toBe("");
   });
 });
