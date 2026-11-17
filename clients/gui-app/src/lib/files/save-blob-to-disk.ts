@@ -10,6 +10,7 @@ interface FsaFileHandle {
 interface FsaWritable {
   write: (data: Blob) => Promise<void>;
   close: () => Promise<void>;
+  abort: () => Promise<void>;
 }
 interface SaveFilePickerType {
   readonly description: string;
@@ -109,7 +110,9 @@ export async function downloadBlobToDevice(
   blob: Blob,
   suggestedName: string,
   fileSave: IFileSaveHost | null,
+  beforeSave: (() => void) | null,
 ): Promise<SavedFile | null> {
+  beforeSave?.();
   const download = fileSave?.downloadFile ?? null;
   if (download === null) {
     // Never silently fall through to a chooser: on a shell whose `saveFile` is
@@ -119,13 +122,11 @@ export async function downloadBlobToDevice(
     if (!canDownloadToDevice(fileSave)) {
       throw new Error("This device has no download destination.");
     }
-    return saveBlobToDisk(blob, suggestedName, fileSave);
+    return saveBlobToDisk(blob, suggestedName, fileSave, beforeSave);
   }
-  return download({
-    name: suggestedName,
-    type: blob.type,
-    bytes: await blob.arrayBuffer(),
-  });
+  const bytes = await blob.arrayBuffer();
+  beforeSave?.();
+  return download({ name: suggestedName, type: blob.type, bytes });
 }
 
 /**
@@ -166,13 +167,13 @@ export async function saveBlobToDisk(
   blob: Blob,
   suggestedName: string,
   fileSave: IFileSaveHost | null,
+  beforeSave: (() => void) | null,
 ): Promise<SavedFile | null> {
+  beforeSave?.();
   if (fileSave !== null) {
-    return fileSave.saveFile({
-      name: suggestedName,
-      type: blob.type,
-      bytes: await blob.arrayBuffer(),
-    });
+    const bytes = await blob.arrayBuffer();
+    beforeSave?.();
+    return fileSave.saveFile({ name: suggestedName, type: blob.type, bytes });
   }
 
   if (typeof window.showSaveFilePicker === "function") {
@@ -181,9 +182,18 @@ export async function saveBlobToDisk(
         suggestedName,
         types: buildSaveFilePickerTypes(blob, suggestedName),
       });
+      beforeSave?.();
       const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      try {
+        beforeSave?.();
+        await writable.write(blob);
+        beforeSave?.();
+        await writable.close();
+      } catch (error) {
+        // Cleanup must not replace the write or cancellation failure.
+        await writable.abort().catch(() => undefined);
+        throw error;
+      }
       return { name: handle.name, path: null };
     } catch (err) {
       // User dismissed the picker — a no-op; never fall through to a download.
@@ -196,6 +206,7 @@ export async function saveBlobToDisk(
     }
   }
 
+  beforeSave?.();
   const url = URL.createObjectURL(blob);
   try {
     const anchor = document.createElement("a");

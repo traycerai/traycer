@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -81,6 +82,11 @@ import { ChatMessage as ChatMessageRow } from "@/components/chat/chat-message";
 import { rowPaintsNothing } from "@/components/chat/chat-special-segment";
 import { cn } from "@/lib/utils";
 import { BotSessionStatusSlotContext } from "@/components/bots/bot-session-status-context";
+import {
+  fullscreenSurface,
+  useFullscreenPinnedRowKeys,
+  yieldFullscreen,
+} from "@/lib/sandbox/overlay-owner";
 
 /**
  * What a bot chat is to the person reading it: the bot's channel or one of
@@ -741,6 +747,15 @@ function BotChatTranscriptBody(props: {
             messages={messages}
             transcriptWindow={transcriptWindow}
             reportVisibleRange={state.reportVisibleTranscriptRange}
+            holdTranscriptOrdinal={
+              handle.store.getState().holdTranscriptOrdinal
+            }
+            flowKey={transcriptFlowScopeKey(
+              store,
+              baselineEpoch,
+              transcriptWindow,
+              profile,
+            )}
             list={
               <ChatMessages
                 minimapEnabled={props.minimapEnabled}
@@ -779,6 +794,21 @@ function BotChatTranscriptBody(props: {
  * the page's flow (`flow`), or else the list of their own (`list`), whose
  * first row sits under `header`.
  */
+/** A retained row's holds belong to this session, baseline and account only. */
+function transcriptFlowScopeKey(
+  sessionGeneration: number,
+  baselineEpoch: number,
+  window: TranscriptWindow | null,
+  profile: { readonly userId: string } | null,
+): string {
+  return JSON.stringify([
+    sessionGeneration,
+    baselineEpoch,
+    window?.epoch ?? null,
+    profile?.userId ?? null,
+  ]);
+}
+
 function BotTranscriptRows(props: {
   readonly ref: RefObject<HTMLDivElement | null>;
   readonly flow: BotTranscriptFlow | null;
@@ -791,6 +821,8 @@ function BotTranscriptRows(props: {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
+  readonly holdTranscriptOrdinal: (ordinal: number) => () => void;
+  readonly flowKey: string;
   readonly list: ReactNode;
 }): ReactNode {
   const { ref, flow, intro, header, instanceId, hostId } = props;
@@ -809,11 +841,13 @@ function BotTranscriptRows(props: {
     rows = (
       <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
         <BotTranscriptFlowRows
+          key={props.flowKey}
           header={header}
           replies={props.replies}
           messages={props.messages}
           transcriptWindow={props.transcriptWindow}
           reportVisibleRange={props.reportVisibleRange}
+          holdTranscriptOrdinal={props.holdTranscriptOrdinal}
           fold={flow.fold}
           mark={flow.mark}
         />
@@ -883,6 +917,7 @@ function BotTranscriptFlowRows(props: {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
+  readonly holdTranscriptOrdinal: (ordinal: number) => () => void;
   readonly fold: BotTranscriptFold | null;
   readonly mark: BotTranscriptMark | null;
 }): ReactNode {
@@ -900,29 +935,82 @@ function BotTranscriptFlowRows(props: {
     [messages, transcriptWindow],
   );
   const folded = fold !== null && rows.length > fold.maxRows;
-  const shown = useMemo(
+  const visibleRows = useMemo(
     () =>
       fold !== null && folded ? rows.slice(rows.length - fold.tail) : rows,
     [fold, folded, rows],
   );
-  const hidden = rows.length - shown.length;
+  const pinnedRowKeys = useFullscreenPinnedRowKeys();
+  const shown = useMemo(() => {
+    if (!folded || pinnedRowKeys.length === 0) return visibleRows;
+    const visibleKeys = new Set(visibleRows.map((row) => row.key));
+    const pins = new Set(pinnedRowKeys);
+    return rows.filter((row) => visibleKeys.has(row.key) || pins.has(row.key));
+  }, [folded, pinnedRowKeys, rows, visibleRows]);
+  const hidden = rows.length - visibleRows.length;
   const {
     ref: landingRef,
     highlightedRowId,
     open: land,
   } = useFlowLanding({
-    shown,
+    shown: visibleRows,
     onUnfold: fold !== null && folded ? fold.onUnfold : null,
   });
-  const replies = useFlowReplies(props.replies, shown, folded, land);
+  const heldRows = useRef(
+    new Map<
+      string,
+      { readonly ordinal: number; readonly release: () => void }
+    >(),
+  );
+  const holdTranscriptOrdinal = props.holdTranscriptOrdinal;
+  useLayoutEffect(() => {
+    const pins = new Set(pinnedRowKeys);
+    const wanted = new Map<string, number>();
+    for (const row of rows) {
+      if (
+        row.kind !== "hydrated" ||
+        row.ordinal === null ||
+        !pins.has(row.key)
+      ) {
+        continue;
+      }
+      wanted.set(row.key, row.ordinal);
+    }
+    for (const [key, hold] of heldRows.current) {
+      if (wanted.get(key) === hold.ordinal) continue;
+      heldRows.current.delete(key);
+      hold.release();
+    }
+    for (const [key, ordinal] of wanted) {
+      if (heldRows.current.has(key)) continue;
+      heldRows.current.set(key, {
+        ordinal,
+        release: holdTranscriptOrdinal(ordinal),
+      });
+    }
+  }, [holdTranscriptOrdinal, pinnedRowKeys, rows]);
+  useLayoutEffect(() => {
+    const container = landingRef.current;
+    const holds = heldRows.current;
+    return () => {
+      const surface = fullscreenSurface();
+      if (surface !== null && container?.contains(surface)) yieldFullscreen();
+      for (const hold of holds.values()) hold.release();
+      holds.clear();
+    };
+  }, [landingRef]);
+
+  const replies = useFlowReplies(props.replies, visibleRows, folded, land);
   const markRowId =
     mark === null
       ? null
       : replyRowIdFor(
-          shown.flatMap((row) => (row.kind === "hydrated" ? [row.model] : [])),
+          visibleRows.flatMap((row) =>
+            row.kind === "hydrated" ? [row.model] : [],
+          ),
           mark.messageId,
         );
-  const range = ordinalRangeOf(shown);
+  const range = ordinalRangeOf(visibleRows);
   const fromOrdinal = range?.fromOrdinal ?? null;
   const toOrdinal = range?.toOrdinal ?? null;
   const windowed = transcriptWindow !== null;
@@ -982,6 +1070,7 @@ function BotTranscriptFlowRows(props: {
           ) : (
             <div
               key={row.key}
+              data-row-key={row.key}
               data-message-id={row.model.id}
               className={cn(
                 "w-full rounded-md px-4 pb-0.5",

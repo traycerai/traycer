@@ -51,8 +51,13 @@ export async function performImageAction(params: {
   // the share leg rather than a second download.
   const saved =
     params.action === "share"
-      ? await saveBlobToDisk(blob, params.suggestedName, params.fileSave)
-      : await downloadBlobToDevice(blob, params.suggestedName, params.fileSave);
+      ? await saveBlobToDisk(blob, params.suggestedName, params.fileSave, null)
+      : await downloadBlobToDevice(
+          blob,
+          params.suggestedName,
+          params.fileSave,
+          null,
+        );
   if (saved !== null) {
     toastSavedFile(
       saved,

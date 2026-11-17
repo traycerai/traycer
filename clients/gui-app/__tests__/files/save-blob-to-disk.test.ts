@@ -53,6 +53,7 @@ describe("saveBlobToDisk", () => {
         new Blob(["png"], { type: "image/png" }),
         "diagram.png",
         null,
+        null,
       ),
     ).resolves.toBeNull();
     expect(createObjectURL).not.toHaveBeenCalled();
@@ -88,6 +89,7 @@ describe("saveBlobToDisk", () => {
         new Blob(["png"], { type: "image/png" }),
         "diagram.png",
         null,
+        null,
       ),
     ).resolves.toEqual({ name: "diagram.png", path: null });
     expect(createWritable).toHaveBeenCalledTimes(1);
@@ -112,14 +114,19 @@ describe("saveBlobToDisk", () => {
 
     const blob = new Blob(["png"], { type: "image/png" });
     await expect(
-      saveBlobToDisk(blob, "diagram.png", {
-        saveFile,
-        openSavedFile: () => Promise.resolve(),
-        downloadFile: null,
-        downloadUrl: null,
+      saveBlobToDisk(
+        blob,
+        "diagram.png",
+        {
+          saveFile,
+          openSavedFile: () => Promise.resolve(),
+          downloadFile: null,
+          downloadUrl: null,
 
-        saveRoute: "download",
-      }),
+          saveRoute: "download",
+        },
+        null,
+      ),
     ).resolves.toEqual({
       name: "diagram.png",
       path: "/tmp/diagram.png",
@@ -153,13 +160,18 @@ describe("downloadBlobToDevice", () => {
 
     const blob = new Blob(["png"], { type: "image/png" });
     await expect(
-      downloadBlobToDevice(blob, "usage.png", {
-        saveFile,
-        openSavedFile: null,
-        downloadFile,
-        downloadUrl: null,
-        saveRoute: "share",
-      }),
+      downloadBlobToDevice(
+        blob,
+        "usage.png",
+        {
+          saveFile,
+          openSavedFile: null,
+          downloadFile,
+          downloadUrl: null,
+          saveRoute: "share",
+        },
+        null,
+      ),
     ).resolves.toEqual({
       name: "usage.png",
       path: "file:///docs/Traycer/usage.png",
@@ -190,6 +202,7 @@ describe("downloadBlobToDevice", () => {
           downloadUrl: null,
           saveRoute: "download",
         },
+        null,
       ),
     ).resolves.toEqual({ name: "usage.png", path: "/tmp/usage.png" });
     expect(saveFile).toHaveBeenCalledTimes(1);
@@ -212,6 +225,7 @@ describe("downloadBlobToDevice", () => {
       downloadBlobToDevice(
         new Blob(["png"], { type: "image/png" }),
         "usage.png",
+        null,
         null,
       ),
     ).resolves.toEqual({ name: "usage.png", path: null });
@@ -260,6 +274,7 @@ describe("canDownloadToDevice", () => {
         new Blob(["x"], { type: "image/png" }),
         "u.png",
         shell,
+        null,
       ),
     ).rejects.toThrow("no download destination");
     expect(shell.saveFile).not.toHaveBeenCalled();

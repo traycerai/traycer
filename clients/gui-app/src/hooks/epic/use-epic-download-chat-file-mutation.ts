@@ -100,6 +100,7 @@ export function useEpicDownloadChatFile(input: {
             new Blob([bytes], { type: variables.mediaType }),
             variables.fileName,
             fileSave,
+            null,
           );
           if (saved === null) return;
           toastSavedFile(

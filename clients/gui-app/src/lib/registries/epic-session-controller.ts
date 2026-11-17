@@ -1,6 +1,6 @@
 /**
- * The tab-owned epic session controller: one per authenticated renderer, one
- * logical entry per epic with tab-id membership.
+ * The epic session controller: one per authenticated renderer, one logical
+ * entry per epic with independent tab membership and artifact-reader demand.
  *
  * ## The principle
  *
@@ -24,11 +24,11 @@
  * open-set reconciler renderer parking uses (`lib/epics/epic-parking-open-tabs.ts`),
  * so background open, restore, duplicate, draft swap, close and window transfer
  * all flow through one place. Every open tab is a member; every way a tab
- * leaves releases the departing membership, and the last one releases the
- * session.
+ * leaves releases its membership. The last tab releases tab demand; an
+ * admitted artifact reader can keep the same session alive without a tab.
  *
- * A member gets a SESSION only while something DEMANDS residency, and demand
- * has exactly two sources:
+ * A member gets a SESSION only while something DEMANDS residency. Tab demand
+ * has two sources:
  *
  *  - a SURFACE: a pane, visible or retained, is showing the tab;
  *  - UNOBSERVED METADATA: the tab record has no real name yet
@@ -38,6 +38,11 @@
  *    one-shot: the session is built hidden and held by the METADATA HOLD until
  *    its first real title is observed, bounded by the existing pending-title
  *    backstop (`TITLE_GENERATION_PENDING_TIMEOUT_MS`).
+ *
+ * Artifact readers are a third, revocable source of demand. They reserve
+ * against the same live and in-flight population before construction, without
+ * a tab, metadata hold or write-through. Same-host tabs share their entry;
+ * a conflicting tab revokes the preview before its own handle is published.
  *
  * A hidden tab with a real name has neither, so its entry starts SUSPENDED and
  * builds nothing - exactly what it was before tabs owned sessions, and what
@@ -110,6 +115,7 @@
  */
 import { appLogger } from "@/lib/logger";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { EpicReaderReservation } from "@/stores/epics/open-epic/session-registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
@@ -400,9 +406,56 @@ interface ActiveRun {
   cleanup: () => void;
 }
 
+export interface ArtifactReaderKey {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly rowKey: string;
+}
+
+export type ArtifactReaderSnapshot =
+  | {
+      readonly kind:
+        | "deferred"
+        | "reserved"
+        | "acquiring"
+        | "revoking"
+        | "revoked"
+        | "closed";
+      readonly generation: number;
+    }
+  | {
+      readonly kind: "ready";
+      readonly generation: number;
+      readonly handle: OpenEpicStoreHandle;
+      readonly hostClient: HostClient<HostRpcRegistry>;
+    }
+  | {
+      readonly kind: "refused";
+      readonly generation: number;
+      readonly reason: "host-conflict" | "access";
+    };
+
+export interface ArtifactReaderToken {
+  read(): ArtifactReaderSnapshot;
+  subscribe(listener: () => void): () => void;
+  retry(): void;
+  release(): void;
+}
+
+interface ArtifactReaderDemand {
+  readonly key: ArtifactReaderKey;
+  readonly authEpoch: number;
+  readonly listeners: Set<() => void>;
+  references: number;
+  snapshot: ArtifactReaderSnapshot;
+  entry: ControllerEntry | null;
+}
+
 interface ControllerEntry {
   readonly epicId: string;
   readonly tabs: Map<string, TabMembership>;
+  readonly readers: Set<ArtifactReaderDemand>;
+  readerReservation: EpicReaderReservation | null;
   /**
    * The session this entry HOLDS - the synchronous truth every arm reads
    * (the provider's `sessionRef`). Updated in the same tick as the registry.
@@ -535,6 +588,7 @@ function readOwnerIdentityKey(
 }
 
 export interface EpicSessionController {
+  acquireArtifactReader(key: ArtifactReaderKey): ArtifactReaderToken;
   /**
    * Bring membership in line with the open tabs: one entry per epic, keyed by
    * epic, holding every open tab id for it. Told the set rather than reading
@@ -577,6 +631,8 @@ export interface EpicSessionController {
 function createEpicSessionController(): EpicSessionController {
   const registry = getOpenEpicRegistry();
   const entries = new Map<string, ControllerEntry>();
+  const readers = new Map<string, ArtifactReaderDemand>();
+  let readerGeneration = 0;
   /**
    * Surfaces are tracked apart from entries: a surface can attach a tick
    * before membership lands (a test harness opening the tab in a layout
@@ -614,6 +670,195 @@ function createEpicSessionController(): EpicSessionController {
     for (const listener of Array.from(listeners)) listener();
   }
 
+  function setReaderSnapshot(
+    reader: ArtifactReaderDemand,
+    next: ArtifactReaderSnapshot,
+  ): void {
+    reader.snapshot = next;
+    for (const listener of reader.listeners) listener();
+  }
+
+  function detachReader(reader: ArtifactReaderDemand): void {
+    const entry = reader.entry;
+    reader.entry = null;
+    if (entry === null) return;
+    entry.readers.delete(reader);
+    if (entry.readers.size > 0) return;
+    const reservation = entry.readerReservation;
+    entry.readerReservation = null;
+    reservation?.release();
+    if (entry.tabs.size > 0) return;
+    entries.delete(entry.epicId);
+    cancelRun(entry);
+    cancelGapDeadline(entry);
+    cancelMetadataHold(entry);
+    detachWriteThroughs(entry);
+    entry.backoff.cancel();
+    entry.session = null;
+    entry.published = null;
+    entry.demandHeld = false;
+  }
+
+  function retireReader(
+    reader: ArtifactReaderDemand,
+    reason: "revoked" | "access" | "host-conflict",
+  ): void {
+    setReaderSnapshot(
+      reader,
+      reason === "revoked"
+        ? { kind: "revoked", generation: ++readerGeneration }
+        : { kind: "refused", reason, generation: ++readerGeneration },
+    );
+    detachReader(reader);
+  }
+
+  function retireEntryReaders(entry: ControllerEntry): void {
+    for (const reader of Array.from(entry.readers))
+      retireReader(reader, "revoked");
+  }
+
+  function syncReaderSnapshots(entry: ControllerEntry): void {
+    for (const reader of Array.from(entry.readers)) {
+      if (reader.authEpoch !== authEpoch || signedOutFence) {
+        retireReader(reader, "access");
+        continue;
+      }
+      const handle = entry.published;
+      const client = entry.sessionHostClient;
+      if (handle === null || client === null) continue;
+      if (
+        handle.hostId !== reader.key.hostId ||
+        client.getRequestContextUserId() !== readUserId()
+      ) {
+        retireReader(reader, "access");
+        continue;
+      }
+      const previous = reader.snapshot;
+      if (previous.kind === "ready") {
+        if (previous.handle !== handle || previous.hostClient !== client) {
+          retireReader(reader, "revoked");
+        }
+        continue;
+      }
+      setReaderSnapshot(reader, {
+        kind: "ready",
+        generation: ++readerGeneration,
+        handle,
+        hostClient: client,
+      });
+    }
+  }
+
+  function attachReader(reader: ArtifactReaderDemand): void {
+    if (
+      reader.authEpoch !== authEpoch ||
+      signedOutFence ||
+      readUserId() === null
+    ) {
+      retireReader(reader, "access");
+      return;
+    }
+    const { epicId, hostId } = reader.key;
+    let entry = entries.get(epicId);
+    const heldHostId =
+      entry === undefined
+        ? (registry.peek(epicId)?.hostId ?? null)
+        : (entry.session?.hostId ?? readTargetHostId(entry));
+    if (heldHostId !== null && heldHostId !== hostId) {
+      retireReader(reader, "host-conflict");
+      return;
+    }
+    let reservation = entry?.readerReservation ?? null;
+    if (reservation === null) reservation = registry.reserveReader(epicId);
+    if (reservation === null) {
+      setReaderSnapshot(reader, {
+        kind: "deferred",
+        generation: ++readerGeneration,
+      });
+      return;
+    }
+    if (entry === undefined) {
+      entry = createEntry(epicId);
+      entry.requestedHostId = hostId;
+      entry.seededCreateHost = false;
+      entry.metadataDemandSpent = true;
+      entries.set(epicId, entry);
+    }
+    entry.readerReservation = reservation;
+    entry.readers.add(reader);
+    reader.entry = entry;
+    entry.suspended = false;
+    setReaderSnapshot(reader, {
+      kind: "acquiring",
+      generation: ++readerGeneration,
+    });
+    requestReconcile(epicId);
+    syncReaderSnapshots(entry);
+  }
+
+  function acquireArtifactReader(key: ArtifactReaderKey): ArtifactReaderToken {
+    const mapKey = JSON.stringify([
+      authEpoch,
+      key.hostId,
+      key.epicId,
+      key.rowKey,
+    ]);
+    let reader = readers.get(mapKey);
+    if (reader === undefined) {
+      reader = {
+        key,
+        authEpoch,
+        references: 0,
+        listeners: new Set(),
+        entry: null,
+        snapshot: { kind: "reserved", generation: ++readerGeneration },
+      };
+      readers.set(mapKey, reader);
+      attachReader(reader);
+    }
+    const demand = reader;
+    demand.references += 1;
+    let closed: ArtifactReaderSnapshot | null = null;
+    const ownListeners = new Set<() => void>();
+    const notify = (): void => {
+      for (const listener of ownListeners) listener();
+    };
+    demand.listeners.add(notify);
+    return {
+      read: () => closed ?? demand.snapshot,
+      subscribe: (listener) => {
+        ownListeners.add(listener);
+        return () => {
+          ownListeners.delete(listener);
+        };
+      },
+      retry: () => {
+        if (closed !== null) return;
+        if (demand.snapshot.kind === "ready") {
+          const current = demand.snapshot;
+          setReaderSnapshot(demand, {
+            ...current,
+            generation: ++readerGeneration,
+          });
+          return;
+        }
+        if (demand.entry === null) attachReader(demand);
+      },
+      release: () => {
+        if (closed !== null) return;
+        closed = { kind: "closed", generation: ++readerGeneration };
+        demand.listeners.delete(notify);
+        demand.references -= 1;
+        if (demand.references === 0) {
+          readers.delete(mapKey);
+          detachReader(demand);
+        }
+        notify();
+        ownListeners.clear();
+      },
+    };
+  }
+
   function surfaceCount(epicId: string): number {
     return surfaces.get(epicId)?.size ?? 0;
   }
@@ -624,6 +869,7 @@ function createEpicSessionController(): EpicSessionController {
     // Every change to an entry ends here, so this is where the write-throughs
     // are brought back in line with the handle it holds.
     syncWriteThroughs(entry);
+    syncReaderSnapshots(entry);
     entry.tabSnapshots = new Map();
     emit();
   }
@@ -634,7 +880,12 @@ function createEpicSessionController(): EpicSessionController {
   function writeThroughHandleFor(
     entry: ControllerEntry,
   ): OpenEpicStoreHandle | null {
-    if (entries.get(entry.epicId) !== entry || signedOutFence) return null;
+    if (
+      entries.get(entry.epicId) !== entry ||
+      signedOutFence ||
+      entry.tabs.size === 0
+    )
+      return null;
     const handle = entry.session?.handle ?? null;
     // A session built under another identity is on its way out (the run's
     // identity arm discards it); it writes nothing into this one's caches.
@@ -963,6 +1214,7 @@ function createEpicSessionController(): EpicSessionController {
    */
   function onAuthBoundary(): void {
     authEpoch += 1;
+    for (const reader of readers.values()) retireReader(reader, "access");
     for (const entry of Array.from(entries.values())) {
       cancelRun(entry);
       cancelGapDeadline(entry);
@@ -994,6 +1246,8 @@ function createEpicSessionController(): EpicSessionController {
     return {
       epicId,
       tabs: new Map(),
+      readers: new Set(),
+      readerReservation: null,
       session: null,
       published: null,
       demandHeld: false,
@@ -1025,12 +1279,34 @@ function createEpicSessionController(): EpicSessionController {
     };
   }
 
+  /** Revoke a preview's foreign host before a real tab can publish its handle. */
+  function prepareReaderEntryForTab(
+    entry: ControllerEntry,
+  ): ControllerEntry | undefined {
+    if (entry.tabs.size !== 0 || entry.readers.size === 0) return entry;
+    const tabHostId =
+      sessionCreatedEpicHostId(entry.epicId) ??
+      useSelectionAuthorityStore.getState().effectiveHostId;
+    const previous = entry.session;
+    const readerHostId = previous?.hostId ?? readTargetHostId(entry);
+    if (tabHostId === null || readerHostId === tabHostId) return entry;
+    retireEntryReaders(entry);
+    if (previous !== null) {
+      registry.releaseForRetryRebuild(entry.epicId, "keep", {
+        hostStamp: previous.hostId,
+        ownerIdentityKey: previous.ownerIdentityKey,
+      });
+    }
+    return undefined;
+  }
+
   function syncOpenTabs(
     open: ReadonlyMap<string, ReadonlyArray<string>>,
   ): void {
     const touched: string[] = [];
     for (const [epicId, tabIds] of open) {
       let entry = entries.get(epicId);
+      if (entry !== undefined) entry = prepareReaderEntryForTab(entry);
       const created = entry === undefined;
       if (entry === undefined) {
         entry = createEntry(epicId);
@@ -1044,6 +1320,15 @@ function createEpicSessionController(): EpicSessionController {
     }
     for (const [epicId, entry] of Array.from(entries)) {
       if (open.has(epicId)) continue;
+      if (entry.readers.size > 0) {
+        departTabs(entry, []);
+        if (entry.demandHeld) {
+          entry.demandHeld = false;
+          registry.releaseMounted(epicId);
+        }
+        requestReconcile(epicId);
+        continue;
+      }
       leave(entry);
     }
     for (const epicId of touched) requestReconcile(epicId);
@@ -1180,8 +1465,21 @@ function createEpicSessionController(): EpicSessionController {
 
   // ── Demand ────────────────────────────────────────────────────────────────
 
+  function wantsMountedDemand(entry: ControllerEntry): boolean {
+    return (
+      entry.tabs.size > 0 &&
+      (surfaceCount(entry.epicId) > 0 ||
+        entry.metadataHold !== null ||
+        needsMetadataHold(entry))
+    );
+  }
+
   function wantsDemand(entry: ControllerEntry): boolean {
-    return surfaceCount(entry.epicId) > 0 || entry.metadataHold !== null;
+    return (
+      entry.readers.size > 0 ||
+      surfaceCount(entry.epicId) > 0 ||
+      entry.metadataHold !== null
+    );
   }
 
   /**
@@ -1190,6 +1488,14 @@ function createEpicSessionController(): EpicSessionController {
    * (`acquireMounted`, with its `retireIfDead`).
    */
   function settleDemand(entry: ControllerEntry): void {
+    if (
+      entry.readers.size > 0 &&
+      entry.demandHeld &&
+      !wantsMountedDemand(entry)
+    ) {
+      entry.demandHeld = false;
+      registry.releaseMounted(entry.epicId);
+    }
     if (wantsDemand(entry)) return;
     if (!entry.demandHeld) {
       // A hidden session held at no demand (a Retry that adopted a warm
@@ -1399,11 +1705,13 @@ function createEpicSessionController(): EpicSessionController {
       userId: readUserId(),
       targetHostId,
       authorityAttached: selection.attached,
-      ownershipClaimed: Array.from(entry.tabs.values()).some(
-        (tab) => tab.ownership === "claimed" || tab.ownership === "browser",
-      ),
+      ownershipClaimed:
+        entry.readers.size > 0 ||
+        Array.from(entry.tabs.values()).some(
+          (tab) => tab.ownership === "claimed" || tab.ownership === "browser",
+        ),
       parked: isEpicParked(entry.epicId),
-      mounted: surfaceCount(entry.epicId) > 0,
+      mounted: entry.readers.size > 0 || surfaceCount(entry.epicId) > 0,
       // Owner-identity discriminator (R-1), read off THE SESSION'S host - the
       // same client the stream runs on, not the app-wide one - and paired
       // with the host the reading DESCRIBES, so the two cannot drift.
@@ -1469,7 +1777,7 @@ function createEpicSessionController(): EpicSessionController {
       inputs.mounted ? "mounted" : "hidden",
       // Taking demand is an acquisition, so the key has to move when a
       // surface starts wanting a session the controller holds no unit on.
-      wantsDemand(entry) && !entry.demandHeld ? "wants" : "",
+      wantsMountedDemand(entry) && !entry.demandHeld ? "wants" : "",
     ].join(KEY_SEPARATOR);
   }
 
@@ -1511,6 +1819,7 @@ function createEpicSessionController(): EpicSessionController {
 
   /** Clear THIS controller's reference; the registry decides the retirement. */
   function forgetSession(entry: ControllerEntry): void {
+    retireEntryReaders(entry);
     entry.session = null;
     entry.published = null;
     entry.demandHeld = false;
@@ -1675,12 +1984,17 @@ function createEpicSessionController(): EpicSessionController {
     // outright where the runtime has none or a CSP refuses the script URL.
     let nextHandle: OpenEpicStoreHandle;
     try {
-      nextHandle = registry.acquireMounted(epicId, createHandle);
+      if (!wantsMountedDemand(entry) && entry.readerReservation !== null) {
+        nextHandle = entry.readerReservation.acquire(createHandle);
+      } else {
+        nextHandle = registry.acquireMounted(epicId, createHandle);
+      }
     } catch (error: unknown) {
       failConstruction(entry, targetHostId, error);
       return;
     }
-    entry.demandHeld = true;
+    entry.demandHeld =
+      wantsMountedDemand(entry) || entry.readerReservation === null;
     entry.constructionFailed = false;
     // The stamp is written once, at construction. When the registry returns
     // a WARM handle the factory never ran and the stamp names the host the
@@ -1789,7 +2103,8 @@ function createEpicSessionController(): EpicSessionController {
     entry.run = run;
     const createHandle = handleFactoryFor(entry, env, inputs);
     const current = settleSessionIdentity(entry, inputs);
-    if (current === null || (wantsDemand(entry) && !entry.demandHeld)) {
+    if (run.cancelled || entries.get(entry.epicId) !== entry) return;
+    if (current === null || (wantsMountedDemand(entry) && !entry.demandHeld)) {
       acquireForRun({ entry, run, inputs, createHandle });
       return;
     }
@@ -2178,6 +2493,7 @@ function createEpicSessionController(): EpicSessionController {
       const mounted = registry.peek(entry.epicId);
       if (mounted === session.handle) continue;
       if (mounted !== null) {
+        retireEntryReaders(entry);
         // A replacement landing through this controller's own re-point tail
         // updates `session` before it notifies; anything else is that tail's
         // adoption arm's to observe.
@@ -2200,6 +2516,12 @@ function createEpicSessionController(): EpicSessionController {
   // ── Wiring ────────────────────────────────────────────────────────────────
 
   registry.subscribe(onRegistryChanged);
+  registry.subscribeReaderCapacityAvailable(() => {
+    for (const reader of readers.values()) {
+      if (reader.references > 0 && reader.snapshot.kind === "deferred")
+        attachReader(reader);
+    }
+  });
   subscribeEpicParking(onParkingChanged);
   useSelectionAuthorityStore.subscribe(requestReconcileAll);
   useAuthStore.subscribe((state, previous) => {
@@ -2225,6 +2547,7 @@ function createEpicSessionController(): EpicSessionController {
   subscribeAnyHostRowChanged(requestReconcileAll);
 
   return {
+    acquireArtifactReader,
     syncOpenTabs,
     attachSurface,
     readTabSnapshot: (epicId, tabId) => {
@@ -2280,6 +2603,8 @@ function createEpicSessionController(): EpicSessionController {
       };
     },
     __resetForTests: () => {
+      for (const reader of readers.values()) retireReader(reader, "revoked");
+      readers.clear();
       for (const entry of Array.from(entries.values())) {
         cancelRun(entry);
         cancelGapDeadline(entry);

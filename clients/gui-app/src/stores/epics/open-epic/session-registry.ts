@@ -700,6 +700,8 @@ export class OpenEpicSessionRegistry {
   private readonly environment: RendererRuntimeEnvironment =
     createRendererRuntimeEnvironment();
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
+  private readonly readerReservations = new Map<string, Set<symbol>>();
+  private readonly readerMaxLive: number | (() => number);
   private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
   private readonly capExemptionSeenReasons = new Map<
     string,
@@ -760,6 +762,7 @@ export class OpenEpicSessionRegistry {
   private readonly epicDisposalGeneration = new Map<string, number>();
 
   constructor(options: OpenEpicSessionRegistryOptions) {
+    this.readerMaxLive = options.maxLive;
     this.sessions = createSessionRegistry<EpicRegistrySession>({
       environment: this.environment,
       policy: {
@@ -860,6 +863,89 @@ export class OpenEpicSessionRegistry {
 
   size(): number {
     return this.sessions.size();
+  }
+
+  private hasReaderCapacity(): boolean {
+    let pending = 0;
+    for (const epicId of this.readerReservations.keys()) {
+      if (this.sessions.peek(epicId) === null) pending += 1;
+    }
+    const maximum =
+      typeof this.readerMaxLive === "function"
+        ? this.readerMaxLive()
+        : this.readerMaxLive;
+    return this.sessions.size() + pending < maximum;
+  }
+
+  /** A preview reserves against live and pending entries before its factory runs. */
+  reserveReader(epicId: string): EpicReaderReservation | null {
+    return this.sessions.transact(() => {
+      const shared = this.readerReservations.get(epicId);
+      if (
+        shared === undefined &&
+        this.sessions.peek(epicId) === null &&
+        !this.hasReaderCapacity()
+      ) {
+        this.sessions.evictOldestEligible(
+          (entry) =>
+            !this.readerReservations.has(entry.key) &&
+            this.isEligibleForCapEviction(entry.key),
+        );
+        if (!this.hasReaderCapacity()) return null;
+      }
+      const reservations = shared ?? new Set<symbol>();
+      const token = Symbol();
+      const generation = this.disposalGeneration;
+      reservations.add(token);
+      this.readerReservations.set(epicId, reservations);
+      const current = (): boolean =>
+        this.disposalGeneration === generation &&
+        this.readerReservations.get(epicId) === reservations &&
+        reservations.has(token);
+      this.sessions.notify();
+      return {
+        acquire: (factory) =>
+          this.sessions.transact(() => {
+            if (!current()) {
+              throw new DOMException("Artifact reader retired", "AbortError");
+            }
+            this.retireIfDead(epicId);
+            const session = this.sessions.materialize(
+              epicId,
+              EPIC_SESSION_SCOPE,
+              () => {
+                const handle = factory();
+                if (!current()) {
+                  handle.dispose();
+                  throw new DOMException(
+                    "Artifact reader retired",
+                    "AbortError",
+                  );
+                }
+                return this.createSession(epicId, handle);
+              },
+            );
+            this.sessions.notify();
+            return session.handle;
+          }),
+        release: () => {
+          if (!current()) return;
+          reservations.delete(token);
+          if (reservations.size === 0) this.readerReservations.delete(epicId);
+          this.sessions.notify();
+        },
+      };
+    });
+  }
+
+  subscribeReaderCapacityAvailable(listener: () => void): () => void {
+    let available = this.hasReaderCapacity();
+    return this.sessions.subscribe(() => {
+      const next = this.hasReaderCapacity();
+      const opened = next && !available;
+      available = next;
+      if (opened) listener();
+    });
   }
 
   private epicCapActivityBlocker(
@@ -1789,6 +1875,7 @@ export class OpenEpicSessionRegistry {
 
   disposeAll(): void {
     this.scheduleCapGraceRecheck(null);
+    this.readerReservations.clear();
     this.sessions.transact(() => {
       this.sessions.disposeAll();
       this.capExemptionEpisodes.clear();
@@ -1980,6 +2067,11 @@ export class OpenEpicSessionRegistry {
   prune(): void {
     this.sessions.pruneWarm();
   }
+}
+
+export interface EpicReaderReservation {
+  acquire(factory: () => OpenEpicStoreHandle): OpenEpicStoreHandle;
+  release(): void;
 }
 
 function unsubscribeSession(session: EpicRegistrySession): void {

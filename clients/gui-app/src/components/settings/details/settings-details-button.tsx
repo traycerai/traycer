@@ -88,6 +88,7 @@ function DetailsSession(props: {
         }),
         "traycer-settings-diagnostics.json",
         runner?.fileSave ?? null,
+        null,
       );
     },
   });

@@ -1,3 +1,4 @@
+import { BotArtifactReferenceCard } from "./bot-artifact-reference-card";
 import { useContext, useEffect, type ReactElement } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
@@ -55,12 +56,21 @@ export function BotSurfaceCard(props: {
 }): ReactElement | null {
   const cards = useContext(BotSurfaceCardsContext);
   if (cards === null) return null;
-  return <SurfaceCard {...props} cards={cards} />;
+  if (props.surface.kind === "artifact") {
+    return (
+      <BotArtifactReferenceCard
+        surface={props.surface}
+        title={props.postText}
+        rowKey={props.messageId ?? ""}
+      />
+    );
+  }
+  return <SurfaceCard {...props} surface={props.surface} cards={cards} />;
 }
 
 function SurfaceCard(props: {
   readonly messageId: string | null;
-  readonly surface: BotSurfaceReference;
+  readonly surface: Exclude<BotSurfaceReference, { kind: "artifact" }>;
   readonly postText: string;
   readonly cards: BotSurfaceCards;
 }): ReactElement {

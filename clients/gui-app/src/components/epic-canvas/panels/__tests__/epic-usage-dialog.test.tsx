@@ -708,6 +708,8 @@ describe("<EpicUsageDialog />", () => {
         // This harness mounts no runner host, so there is no native save
         // route and the download falls through to the browser APIs.
         null,
+        // No cancellation lifetime: this export is not tied to a reader.
+        null,
       );
     });
     expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({
