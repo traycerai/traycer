@@ -6441,7 +6441,6 @@ export const providersSetEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-/** `providers.setEnvOverride@2.2` retains its installed request line. */
 export const providersSetEnvOverrideV22 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 2, minor: 2 } as const,
@@ -6459,7 +6458,6 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-/** Projects the current provider variable request onto the strict 1.0 line. */
 export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnvOverrideV22,
   typeof providersSetEnvOverrideV10

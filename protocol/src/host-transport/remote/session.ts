@@ -290,10 +290,8 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * checked by CODE rather than by any recovery flag because the two are
  * orthogonal: the same code arrives both retryable (the host's JWKS lookup
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
- * evidence. A refusal that carries a `doorReason` is the host's door answering
- * about the person, so it is credential plane too, whatever its code
- * (`keys_unavailable` rides `NETWORK_ERROR`, `membership_removed` a
- * team-membership code).
+ * evidence. A refusal carrying a `doorReason` is credential plane whatever its
+ * code (`keys_unavailable` rides `NETWORK_ERROR`).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
