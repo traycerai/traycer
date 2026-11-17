@@ -196,6 +196,16 @@ function movedStatusOf(
   });
 }
 
+/** `applied` of `total` item statuses, applied ones first. */
+function itemStatusesOf(
+  applied: number,
+  total: number,
+): readonly ("applied" | "pending")[] {
+  return Array.from({ length: total }, (_, index) =>
+    index < applied ? "applied" : "pending",
+  );
+}
+
 /** The finished move with all three items applied. */
 function movedStatus(): EnvironmentStatusResponseV13 {
   return movedStatusOf(["applied", "applied", "applied"]);
@@ -495,14 +505,13 @@ describe("<MoveProgressDialog />", () => {
       await settle();
       expect(screen.getByTestId("move-progress-dialog-progress")).toBeTruthy();
 
-      harness.feed.answer = movedStatus();
+      harness.feed.answer = movedStatusOf(itemStatusesOf(23, 45));
       await deliverNextStatusRead();
 
       expect(screen.getByText("Old laptop is on Personal")).toBeTruthy();
       expect(screen.queryByTestId("move-progress-dialog-progress")).toBeNull();
-      expect(
-        screen.getByTestId("move-progress-dialog-done-count").textContent,
-      ).toBe("3 of 3 items applied");
+      // After the switch the status lists Personal's items, not this move's.
+      expect(screen.queryByText(/items applied/)).toBeNull();
       expect(
         screen.getByRole("progressbar").getAttribute("aria-valuenow"),
       ).toBe("100");
@@ -514,35 +523,6 @@ describe("<MoveProgressDialog />", () => {
       expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
     });
-
-    it("counts the items the computer reports applied, not every item it reports", async () => {
-      mount(movedStatusOf(["applied", "applied", "pending"]));
-      openDialog();
-      await settle();
-
-      expect(
-        screen.getByTestId("move-progress-dialog-done-count").textContent,
-      ).toBe("2 of 3 items applied");
-    });
-
-    it.each([
-      ["not connected yet", { ...movedStatus(), reachability: "reconnecting" }],
-      ["not connected", { ...movedStatus(), reachability: "offline" }],
-      ["connected with nothing to move", movedStatusOf([])],
-    ] as const)(
-      "shows the done view without a count when the computer is %s",
-      async (_name, status) => {
-        mount(status);
-        openDialog();
-        await settle();
-
-        expect(screen.getByText("Old laptop is on Personal")).toBeTruthy();
-        expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
-        expect(
-          screen.queryByTestId("move-progress-dialog-done-count"),
-        ).toBeNull();
-      },
-    );
 
     it("closes itself after four seconds", async () => {
       mount(movedStatus());

@@ -9,7 +9,6 @@ import {
 } from "@/components/settings/move/move-progress-line";
 import {
   hostSettingsCardState,
-  moveItemCounts,
   moveProgressText,
   moveStoppedText,
 } from "@/components/settings/panels/host-overview-settings-card-model";
@@ -103,15 +102,8 @@ function MoveProgressDialogBody(props: {
           status: data,
         };
   let view: ReactNode;
-  if (moved && data !== null) {
-    view = (
-      <MoveDoneView
-        hostName={target.hostName}
-        {...moveItemCounts(data)}
-        connected={data.reachability === "connected"}
-        onDone={onClose}
-      />
-    );
+  if (moved) {
+    view = <MoveDoneView hostName={target.hostName} onDone={onClose} />;
   } else if (state?.kind === "move_stopped") {
     view = (
       <MoveStoppedView
@@ -180,26 +172,14 @@ function MovingView(props: {
 
 function MoveDoneView(props: {
   readonly hostName: string;
-  readonly applied: number;
-  readonly total: number;
-  readonly connected: boolean;
   readonly onDone: () => void;
 }): ReactNode {
-  const { applied, total } = props;
   const title = `${props.hostName} is on Personal`;
-  // Until the computer's new reader has answered, its items are the ones it
-  // opened from cache, not this move's.
-  const counted = props.connected && total > 0;
   return (
     <>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
       </DialogHeader>
-      {counted ? (
-        <p data-testid="move-progress-dialog-done-count">
-          {`${String(applied)} of ${String(total)} items applied`}
-        </p>
-      ) : null}
       <UpdateProgressBar percent={100} label={title} className={undefined} />
       <DialogDescription>
         {"It uses Personal's settings from now. This closes by itself."}
