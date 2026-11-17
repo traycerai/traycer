@@ -80,6 +80,7 @@ import {
   type RecordingLimitId,
   type RecordingQuality,
 } from "@/lib/soundtrack/recording";
+import { isCallVoiceName } from "@/lib/voice/call-voice";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -306,6 +307,14 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
+   * The voice calls speak in on this device, as the provider names it, or
+   * `null` for the deployment's default. One choice for every bot, and
+   * device-local like the rest of this store: it is how the person hears
+   * calls here, not a fact about a bot or the account. A name the deployment
+   * no longer offers stays saved (`resolveCallVoice`).
+   */
+  callVoice: string | null;
+  /**
    * Prefix prepended verbatim to the branch name pre-filled when creating a
    * new worktree (no separator is auto-appended - the user types it, e.g.
    * `traycer/`, `anurag/`, `feat-`). Empty string means no prefix.
@@ -432,6 +441,7 @@ export interface SettingsState {
   setDefaultEditor: (id: DefaultOpenTarget | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setCallVoice: (value: string | null) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
   setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
@@ -492,6 +502,7 @@ type PersistedSettingsState = Pick<
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "callVoice"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
   | "linkOpen"
@@ -582,6 +593,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    callVoice: state.callVoice,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
     linkOpen: state.linkOpen,
@@ -640,6 +652,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultEditor: "vscode",
       voiceInputEnabled: false,
       voiceLanguage: "auto",
+      callVoice: null,
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
@@ -731,6 +744,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setCallVoice: makeSetter(set, "callVoice"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
       setBrowserSearchEngine: (browserSearchEngine) =>
@@ -858,8 +872,10 @@ export const useSettingsStore = create<SettingsState>()(
       // `resolvePersistedDefaultSelection`). `artifactIconColors` is
       // re-derived because a blob saved before a node kind existed (html,
       // canvas, file) has no colour for it, and that kind's glyph would render
-      // untinted forever while every other kind is coloured. Every other field
-      // keeps the default shallow merge behavior.
+      // untinted forever while every other kind is coloured. `callVoice` is
+      // re-derived because only a provider voice name can be a choice:
+      // anything else comes back as none. Every other field keeps the
+      // default shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -884,6 +900,9 @@ export const useSettingsStore = create<SettingsState>()(
             typeof persisted.showRecentHistory === "boolean"
               ? persisted.showRecentHistory
               : true,
+          callVoice: isCallVoiceName(persisted.callVoice)
+            ? persisted.callVoice
+            : null,
           worktreeBranchPrefix:
             typeof merged.worktreeBranchPrefix === "string" &&
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
