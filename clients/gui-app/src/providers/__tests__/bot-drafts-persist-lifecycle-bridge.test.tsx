@@ -5,7 +5,7 @@
  * (modules of its own over the same storage, as a restart leaves it), so the
  * bridge, the stores and the testing library share one set of modules.
  * Account switches over the real channel and its box are in
- * `bot-channel-question-card.test.tsx`.
+ * `bot-channel-question-card-moved.test.tsx`.
  */
 import {
   afterEach,
