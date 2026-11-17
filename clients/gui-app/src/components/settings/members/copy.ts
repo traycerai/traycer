@@ -470,10 +470,6 @@ export function cancelRoleChangeAriaLabel(
   return `Cancel the change to ${ROLE_WORDS[nextRole]} for ${memberName}`;
 }
 
-export function planUnlinkTitle(planLabel: string, teamName: string): string {
-  return `Unlink ${planLabel} from ${teamName}`;
-}
-
 export function planUnlinkLead(teamName: string): string {
   return `${teamName}'s agents stop using this plan. Nothing about a sandbox changes: sandbox charges use ${teamName} credits, not the plan.`;
 }
