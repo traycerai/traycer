@@ -75,6 +75,7 @@ import { useAuthService, useHostClient } from "@/lib/host";
 import { useNotificationsServingHostEntry } from "@/hooks/host/use-notifications-serving-host-entry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
+import { useNotificationNotifies } from "@/hooks/notifications/use-notification-notifies";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
@@ -412,6 +413,7 @@ function NotificationsSessionBody(
   );
   const authService = useAuthService();
   const showNotification = useNotificationShow();
+  const notifies = useNotificationNotifies();
   const { activate } = useNotificationActivationWithNavigate(props.navigate);
   const mergedActions = useMergedNotificationsActions();
   const windowsBridge = useWindowsBridge();
@@ -1331,6 +1333,7 @@ function NotificationsSessionBody(
               showNotification,
               playChime: playNotificationChime,
               onToastClick: (row) => onToastClickRef.current(row),
+              notifies,
             }).catch(() => {
               // The feed remains authoritative if presentation fails.
             });
@@ -1388,6 +1391,7 @@ function NotificationsSessionBody(
                   showNotification,
                   playChime: playNotificationChime,
                   onToastClick: (row) => onToastClickRef.current(row),
+                  notifies,
                 },
                 streamHostId,
               ).catch(() => {
@@ -1412,6 +1416,7 @@ function NotificationsSessionBody(
       servingHostId,
       windowId,
       showNotification,
+      notifies,
       onFeedFrame,
       onPresenceChanged,
       onHostStreamOpened,

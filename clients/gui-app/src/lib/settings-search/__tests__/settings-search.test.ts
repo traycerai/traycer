@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
+beforeEach(() => {
+  soundtrackOfferedMock.value = true;
+});
 
 /** A desktop zoom bridge: only its shape is read by the availability gate. */
 const DESKTOP_ZOOM = {
@@ -483,9 +494,9 @@ describe("settings search", () => {
       ).toContain("Agent roles");
     });
 
-    it("finds delivery words under Alerts and chime words under Sounds", () => {
-      // Sounds used to hold the OS and push rows and carried their words; it
-      // now holds only the chimes, so neither page answers the other's words.
+    it("finds delivery and chime words under Alerts, never under Sounds", () => {
+      // Sounds holds only the soundtrack now: the chimes, the OS and the push
+      // rows are all on Alerts.
       const sectionsFor = (
         query: string,
         context: SettingsAvailabilityContext,
@@ -496,18 +507,22 @@ describe("settings search", () => {
         ["push", DESKTOP],
         ["banner", DESKTOP],
         ["badge", DESKTOP],
+        ["chime", DESKTOP],
+        ["chime", MOBILE],
+        ["toast", DESKTOP],
+        ["in-app notifications", DESKTOP],
       ] as const) {
         const sections = sectionsFor(query, context);
         expect(sections[0], query).toBe("alerts");
         expect(sections, query).not.toContain("app-notifications");
       }
-      for (const query of ["chime", "sound"]) {
-        for (const context of [DESKTOP, MOBILE]) {
-          const sections = sectionsFor(query, context);
-          expect(sections[0], query).toBe("app-notifications");
-          expect(sections, query).not.toContain("alerts");
-        }
-      }
+    });
+
+    it("finds the Needs action kind row by its anchor", () => {
+      const hit = searchSettings("Needs action", DESKTOP).find(
+        (result) => result.entry.anchor === "alerts-needs-action",
+      );
+      expect(hit?.entry.section).toBe("alerts");
     });
 
     it.each(["music", "soundtrack"])(
@@ -633,7 +648,7 @@ describe("settings search", () => {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
           expect(landingsFor(query, context), query).toContain("browser#<top>");
         }
-        for (const query of ["notification hooks", "webhook", "toast"]) {
+        for (const query of ["notification hooks", "webhook"]) {
           expect(landingsFor(query, context), query).toContain(
             "notifications#<top>",
           );

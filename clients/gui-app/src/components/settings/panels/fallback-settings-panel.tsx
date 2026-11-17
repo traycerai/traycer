@@ -1070,8 +1070,7 @@ function FallbackPolicyEditor(props: {
         group={FALLBACK.definitions.fallback}
         // The page is already titled Fallback. This strip is the master switch
         // for all three tabs, not a section beside them, so a heading repeating
-        // the page name is the second name `notification-chime-settings-section`
-        // refuses for the same reason.
+        // the page name would be a second name for the same controls.
         showTitle={false}
         tone="default"
         dataTestId="settings-fallback-group"

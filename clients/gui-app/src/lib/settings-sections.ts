@@ -35,6 +35,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"
@@ -168,12 +169,13 @@ export interface SettingsSection {
  *
  * Only the first ten entries can carry a digit
  * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-seven on
- * desktop (twenty-eight with a team's Members). Getting started and the nine
- * Application entries take 1 to 9 and 0, so Sessions, the first Account
- * entry, goes without, and so does everything after it - the rest of Account,
- * all of Environment and the host group. The groups follow the design's
- * order, so shortcut order stays sidebar reading order and command-palette
- * row order.
+ * desktop (twenty-eight with a team's Members). Getting started and the
+ * Application entries take 1 to 9 and 0. A build that offers Sounds has nine
+ * of them, so Sessions, the first Account entry, goes without; a build that
+ * does not has eight, so Sessions takes 0. Everything after goes without -
+ * the rest of Account, all of Environment and the host group. The groups
+ * follow the design's order, so shortcut order stays sidebar reading order
+ * and command-palette row order.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
@@ -223,19 +225,21 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   },
   // Different controls than Account → Notifications, so a different word and
   // icon (see the rail-table rule above). The id `app-notifications` now names
-  // a chimes-only page - the OS and push rows moved to Alerts below - and it
-  // stays, because ids are a compatibility surface (routes, remembered tab
-  // paths, analytics, the panel table).
+  // the soundtrack's page - the chimes moved to Alerts below, as the OS and
+  // push rows did before them - and it stays, because ids are a compatibility
+  // surface (routes, remembered tab paths, analytics, the panel table). Only a
+  // build with a soundtrack offers it (`visibleSettingsSections`).
   {
     id: "app-notifications",
     label: "Sounds",
     icon: Volume2,
     group: "app",
   },
-  // How this app's alerts reach you: the OS's notification settings on the
-  // desktop, the phone's push permission and severities in the mobile app.
-  // Not "Notifications" and not the bell, which are Account → Notifications',
-  // a page that controls different things.
+  // Which kinds of notification interrupt you on this device and how each
+  // sounds, then the OS's own notification settings on the desktop or the
+  // phone's push permission in the mobile app. Not "Notifications" and not the
+  // bell, which are Account → Notifications', a page that controls different
+  // things.
   {
     id: "alerts",
     label: "Alerts",
@@ -303,8 +307,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Coins,
     group: "account",
   },
-  // Event policy and automation. Different controls than Application → Sounds
-  // and Alerts, so it keeps the generic word and the bell.
+  // The host's notification automation (hooks). Different controls than
+  // Application → Sounds and Alerts, so it keeps the generic word and the bell.
   {
     id: "notifications",
     label: "Notifications",
@@ -521,11 +525,15 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
  *   so in one sentence. A bridge that later exists still draws its own group
  *   there; this set stays a shell decision, resolved once with the rest of
  *   the offered list, rather than a live bridge check.
+ * - **Sounds — nothing to set.** It holds only the soundtrack, which the phone
+ *   does not play yet (`isSoundtrackRowAvailable`). Its route and a remembered
+ *   section open Alerts, where its chimes went.
  */
 const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
   "keybindings",
   "link-phone",
   "app-diagnostics",
+  "app-notifications",
 ]);
 
 /**
@@ -572,28 +580,31 @@ const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
- * The page that now holds a retired section, where one does: a remembered
- * section or a link that names it opens that page, as its route redirects
- * there.
+ * The page that now holds what a section this build does not offer used to,
+ * where one does: a remembered section or a link that names it opens that
+ * page, as its route redirects there. Mostly retired sections; Sounds is not
+ * retired, but a build without the soundtrack does not offer it, and its
+ * chimes are on Alerts.
  */
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {
   "agent-definitions": "agents",
   "browser-agent-access": "permissions",
+  "app-notifications": "alerts",
 };
 
 /**
- * Both offered lists, resolved once at module load.
+ * The offered lists, resolved once at module load.
  *
  * Precomputed rather than filtered per call so each build's list keeps ONE
  * identity for the process's life - consumers memoize on it and compare it by
  * reference. (This used to be `SETTINGS_SECTIONS` itself on every non-mobile
  * build, which gave the same guarantee for free; now that both builds drop
- * something, both need a constant of their own.) The `isMobileApp()` read
- * stays inside the function below: the flag is written by the Capacitor entry
- * before the first render, which is not necessarily before this module is
- * evaluated.
+ * something, both need a constant of their own, and the desktop one a second
+ * without Sounds.) The `isMobileApp()` read stays inside the function below:
+ * the flag is written by the Capacitor entry before the first render, which is
+ * not necessarily before this module is evaluated.
  */
 const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
   (section) =>
@@ -605,6 +616,9 @@ const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
   OFFERED_SECTIONS.filter(
     (section) => !MOBILE_APP_ONLY_SECTION_IDS.has(section.id),
   );
+
+const DESKTOP_SECTIONS_WITHOUT_SOUNDS: ReadonlyArray<SettingsSection> =
+  DESKTOP_SECTIONS.filter((section) => section.id !== "app-notifications");
 
 const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
   OFFERED_SECTIONS.filter(
@@ -622,7 +636,13 @@ const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
  * positionally and so must walk the same list the sidebar badges do.
  */
 export function visibleSettingsSections(): ReadonlyArray<SettingsSection> {
-  return isMobileApp() ? MOBILE_APP_SECTIONS : DESKTOP_SECTIONS;
+  if (isMobileApp()) return MOBILE_APP_SECTIONS;
+  // Sounds holds only the soundtrack, so a build with nothing to play would
+  // offer an empty page. Read here for the same reason as `isMobileApp()`:
+  // the desktop bridge it reads is a window global, not a module constant.
+  return soundtrackOffered()
+    ? DESKTOP_SECTIONS
+    : DESKTOP_SECTIONS_WITHOUT_SOUNDS;
 }
 
 /**
