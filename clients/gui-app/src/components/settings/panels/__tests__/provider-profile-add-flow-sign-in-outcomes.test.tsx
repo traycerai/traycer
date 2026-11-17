@@ -29,6 +29,26 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import {
+  defaultScheduler,
+  notifyManager,
+  type QueryClient,
+} from "@tanstack/react-query";
+
+/**
+ * A refetched list that no longer offers sign-ins, delivered to the open
+ * dialog inside `act`: the query's observers are notified synchronously.
+ */
+function stopOfferingSignIns(queryClient: QueryClient): void {
+  notifyManager.setScheduler((notify) => notify());
+  try {
+    act(() => {
+      queryClient.setQueryData(LIST_KEY, listBody(false, [], false));
+    });
+  } finally {
+    notifyManager.setScheduler(defaultScheduler);
+  }
+}
 
 describe("Add a profile around one sign-in", () => {
   it("titles the dialog Add a profile and offers Sign in when the list offers sign-ins", async () => {
@@ -426,9 +446,7 @@ describe("Add a profile around one sign-in", () => {
       await screen.findByRole("heading", { name: "Add a profile" }),
     ).toBeTruthy();
 
-    act(() => {
-      harness.queryClient.setQueryData(LIST_KEY, listBody(false, [], false));
-    });
+    stopOfferingSignIns(harness.queryClient);
 
     expect(screen.getByRole("heading", { name: "Add a profile" })).toBeTruthy();
     expect(
@@ -453,9 +471,7 @@ describe("Add a profile around one sign-in", () => {
       await screen.findByRole("heading", { name: "Add a profile" }),
     ).toBeTruthy();
 
-    act(() => {
-      harness.queryClient.setQueryData(LIST_KEY, listBody(false, [], false));
-    });
+    stopOfferingSignIns(harness.queryClient);
 
     expect(screen.getByRole("heading", { name: "Add a profile" })).toBeTruthy();
     expect(

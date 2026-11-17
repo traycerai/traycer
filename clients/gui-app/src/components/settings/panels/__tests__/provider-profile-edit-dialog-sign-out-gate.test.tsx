@@ -74,14 +74,14 @@ vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.example.test",
     bearer: { kind: "cloud", getBearerToken: () => "synthetic-person-session" },
-    transport: async (request) => {
+    transport: (request) => {
       fixture.authnRequests.push({
         method: request.method,
         url: request.url,
         body: request.body,
       });
       fixture.order.push(`authn ${request.method}`);
-      return fixture.authnAnswer(request);
+      return Promise.resolve(fixture.authnAnswer(request));
     },
     onOriginSignIn: () => true,
   };
