@@ -46,7 +46,8 @@ import { SIGN_IN_AGAIN_DIALOG_TITLE } from "@/components/providers/profile-sync-
 import { useCachedProviderProfilesReader } from "@/hooks/providers/use-cached-providers-list";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
-import { useHostClient } from "@/lib/host";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { redactEmail } from "@/lib/providers/redact-email";
 import {
   ProviderProfileReauthPanel,
@@ -731,6 +732,25 @@ function useReauthSignInOutcomes(
   };
 }
 
+/**
+ * The environment a profile's actions name: the one its home names, or for a
+ * home that names none, the one this computer serves, which the list names
+ * only when that is Personal.
+ */
+function useProfileEnvironmentName(
+  profile: ProviderProfile,
+  providersList:
+    | ResponseOfMethod<HostRpcRegistry, "providers.list">
+    | undefined,
+): string | null {
+  const presence = profile.credentialHome?.environmentPresence;
+  const listedEnvironmentName = usePickedTeamLabel(
+    presence?.scope === "environment" ? presence.environmentId : "",
+  );
+  if (presence?.scope === "environment") return listedEnvironmentName;
+  return providersList?.scope === "personal" ? "Personal" : null;
+}
+
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -765,18 +785,10 @@ export function ProfileEditDialog(props: {
   }).data;
   const recordAccount =
     listOffersSignIns(providersList) && props.profile.aliases !== undefined;
-  const presence = props.profile.credentialHome?.environmentPresence;
-  const listedEnvironmentName = usePickedTeamLabel(
-    presence?.scope === "environment" ? presence.environmentId : "",
+  const environmentName = useProfileEnvironmentName(
+    props.profile,
+    providersList,
   );
-  // A home that names no environment belongs to the one this computer serves,
-  // which the list names only when that is Personal.
-  const servedEnvironmentName =
-    providersList?.scope === "personal" ? "Personal" : null;
-  const environmentName =
-    presence?.scope === "environment"
-      ? listedEnvironmentName
-      : servedEnvironmentName;
   const localRemoveProfile = useRemoveProviderProfile();
   const recordRemoveProfile = useProfileRecordPersonAction(
     "remove",
