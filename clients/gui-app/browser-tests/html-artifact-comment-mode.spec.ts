@@ -331,6 +331,19 @@ async function wheelUntilScrollAtMost(
   throw new Error(`scrollY stayed ${(await memory(page)).scrollY}`);
 }
 
+/** Wheel down until the element's top has passed the top of the frame. */
+async function wheelUntilTopAboveFrame(
+  page: Page,
+  selector: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const frameBox = await boxOf(frameElement(page));
+    if ((await elementBoxInPage(page, selector)).y < frameBox.y) return;
+    await wheelOnPage(page, 480);
+  }
+  throw new Error(`${selector} never scrolled past the top of the frame`);
+}
+
 /**
  * One Chrome touch gesture on one CDP session. Touch state is per session:
  * an end sent on a fresh session is rejected, because that session never saw
@@ -841,4 +854,34 @@ test("a chat card takes a comment in full once expanded, though its row clips wh
   // The draft box takes the click only where the raised card took it: not
   // clipped by the row, not left behind the inert page.
   await commentOn(page, "#broken");
+});
+
+test("a comment on an element taller than the window opens a box inside the window", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+  await wheelUntilTopAboveFrame(page, "#tall");
+
+  const target = await elementBoxInPage(page, "#tall");
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("no viewport");
+  expect(target.height).toBeGreaterThan(viewport.height);
+
+  const point = await pointInFrame(page);
+  await page.mouse.click(point.x, point.y);
+  const dialog = page.getByRole("dialog", { name: "New comment" });
+  await expect(dialog).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      const box = await boxOf(dialog);
+      return (
+        box.y >= 0 &&
+        box.y + box.height <= viewport.height &&
+        box.x >= 0 &&
+        box.x + box.width <= viewport.width
+      );
+    })
+    .toBe(true);
 });
