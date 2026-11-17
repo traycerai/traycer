@@ -1265,8 +1265,20 @@ function HomeWorkspaceRows(props: {
   } = recentWorkspaces;
   const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
-      baseItems.map((item) => {
+      baseItems.map((item, index) => {
         if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        // Recent is the selected host's list. A row this host has not
+        // confirmed (another machine's path, or metadata still loading) is
+        // removed without being recorded there. A local-only row is projected
+        // without asking the host, so its summary is its only confirmation.
+        if (
+          item.unresolved ||
+          item.metadataPending ||
+          (resolvedFolders[index].kind === "local-only" &&
+            item.summary === null)
+        ) {
+          return { ...item, removeSkipsRecent: true };
+        }
         const removeFromActive = item.onRemove;
         return {
           ...item,
@@ -1285,6 +1297,7 @@ function HomeWorkspaceRows(props: {
       moveWorkspaceToRecent,
       recentWorkspacesMovingPath,
       recentWorkspacesSupported,
+      resolvedFolders,
     ],
   );
   const recentWorkspacesSection = recentWorkspaces.supported ? (

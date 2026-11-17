@@ -385,20 +385,28 @@ export function useRecentWorkspaces(args: {
       updateState((current) => ({ ...current, movingWorkspace: moving }));
       let moved = false;
       try {
-        await recordRecentAsync({
+        const result = await recordRecentAsync({
           path: workspacePath,
           bumpRecency: false,
           failureFeedback: "move_warning",
         });
         if (activeHostIdRef.current === moving.hostId) {
+          // The host refuses a path it does not have. The folder still leaves
+          // the active list; it is a removal, not a move.
+          const recorded = result.validation?.ok !== false;
           updateState((current) => ({
             ...current,
             hiddenPaths: withoutPath(current.hiddenPaths, workspacePath),
-            announcement: "Folder moved to Recent.",
+            announcement: recorded
+              ? "Folder moved to Recent."
+              : "Folder removed.",
           }));
-          Analytics.getInstance().track(AnalyticsEvent.WorkspaceMovedToRecent, {
-            surface: analyticsSurface,
-          });
+          if (recorded) {
+            Analytics.getInstance().track(
+              AnalyticsEvent.WorkspaceMovedToRecent,
+              { surface: analyticsSurface },
+            );
+          }
           moved = true;
         }
       } catch {
