@@ -295,6 +295,12 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private lastCommitCredentialGeneration: number | null = null;
   /**
+   * Counts commits on the success path (`hosts` or `signed-out`). A conclusion
+   * held for a fleet refresh stands only while this still names its own
+   * commit; see {@link concludeAfterFleetRefresh}.
+   */
+  private commitSequence = 0;
+  /**
    * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
    * of the retention rule. The `failed` branch keeps the last-known list on
    * the grounds that a network blip should not blank a directory, but that
@@ -1007,6 +1013,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
+    this.commitSequence += 1;
     // Captured BEFORE the overwrite: this is the only place that holds both
     // sides of a membership transition.
     const previousRemoteIds = new Set(
@@ -1025,24 +1032,21 @@ export class HostDirectoryService implements IHostDirectoryService {
     // sit at `true` across a transition this commit is the conclusion of.
     const concludedBefore = this.hasConcludedDiscovery();
     this.hasObservedRemoteListing = outcome.kind === "hosts";
+    const fleetStep = this.fleetStepFor(
+      outcome,
+      previousRemoteIds,
+      concludedBefore,
+    );
     // Tracked with the listing flag and cleared by the same outcome: a
     // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
     // nothing was asked and nothing concluded. Only the `failed` arm below
     // makes the two disagree.
-    this.hasConcludedRemoteAttempt = outcome.kind === "hosts";
+    this.hasConcludedRemoteAttempt =
+      outcome.kind === "hosts" && fleetStep !== "hold-conclusion";
     this.concludedUnderIdentity = this.hasConcludedRemoteAttempt
       ? era.identity
       : null;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
-    // The conclusion flag crosses on its own schedule, and the snapshot compare
-    // cannot see it. Two empty listings either side of an account switch are
-    // byte-identical rows with an identical observed flag, while the SCOPED
-    // answer goes false -> true because the new identity's own attempt has now
-    // concluded - so the compared emit would swallow the one notification its
-    // subscribers exist to receive. Same rule and same reason as the failed
-    // arm's emit: a flag nobody is told about is a flag no subscriber can act
-    // on.
-    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
     // fleet (desktop main) stays stale. Activate on it then refuses
@@ -1061,17 +1065,20 @@ export class HostDirectoryService implements IHostDirectoryService {
     // noise - main's fleet can be exactly as stale at cold start as at any
     // other moment.
     //
-    // The `hosts` check IS load-bearing for removals: `signed-out` commits an
-    // empty set, which would otherwise read as every host removed (`failed`
-    // returns above this line).
-    if (outcome.kind === "hosts") {
-      const listedIds = new Set(outcome.entries.map((entry) => entry.hostId));
-      const added = outcome.entries.some(
-        (entry) => !previousRemoteIds.has(entry.hostId),
-      );
-      const removed = [...previousRemoteIds].some((id) => !listedIds.has(id));
-      if (added || removed) requestFleetRefresh(this.runnerHost);
+    if (fleetStep === "hold-conclusion") {
+      await this.concludeAfterFleetRefresh(era, this.commitSequence);
+    } else if (fleetStep === "request") {
+      requestFleetRefresh(this.runnerHost);
     }
+    // The conclusion flag crosses on its own schedule, and the snapshot compare
+    // cannot see it. Two empty listings either side of an account switch are
+    // byte-identical rows with an identical observed flag, while the SCOPED
+    // answer goes false -> true because the new identity's own attempt has now
+    // concluded - so the compared emit would swallow the one notification its
+    // subscribers exist to receive. Same rule and same reason as the failed
+    // arm's emit: a flag nobody is told about is a flag no subscriber can act
+    // on.
+    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     await this.reseedLocalHostIdIfUnknown();
     if (observedChanged || concludedChanged) {
       // Crossing between "unknown" and "zero" changes `getCardinality()`'s
@@ -1093,6 +1100,62 @@ export class HostDirectoryService implements IHostDirectoryService {
       totalCount: this.snapshot().length,
     });
     return this.snapshot();
+  }
+
+  /**
+   * What this commit asks of the selection authority's fleet.
+   *
+   * On a shell with no local host the window narrator reads the discovery
+   * conclusion against that fleet, and reads it on any render, not only on an
+   * emit. So a listing that would conclude discovery there concludes it only
+   * once a fleet refresh it triggered has settled; until then the narrator
+   * would read "concluded" over an empty fleet as "No host is available".
+   * That holds whether or not the listing moves membership: a newer era
+   * listing the same hosts is no evidence the authority has the fleet, and an
+   * older era's held refresh does not conclude for it (see
+   * {@link concludeAfterFleetRefresh}).
+   *
+   * Otherwise a listing that moves membership requests a refresh. The `hosts`
+   * check IS load-bearing for removals: `signed-out` commits an empty set,
+   * which would otherwise read as every host removed (`failed` returns before
+   * this).
+   */
+  private fleetStepFor(
+    outcome: RemoteHostFetchOutcome,
+    previousRemoteIds: ReadonlySet<string>,
+    concludedBefore: boolean,
+  ): "none" | "request" | "hold-conclusion" {
+    if (outcome.kind !== "hosts") return "none";
+    if (!concludedBefore && !this.hasLocalHost) return "hold-conclusion";
+    return listingMovesMembership(previousRemoteIds, outcome.entries)
+      ? "request"
+      : "none";
+  }
+
+  /**
+   * Waits for the fleet refresh a concluding listing triggered, then concludes
+   * discovery for `era`, unless something superseded that listing meanwhile:
+   * the identity changed, or any other commit landed. That covers a newer
+   * credential generation and a withdrawal in the SAME era alike - the
+   * session-verified path drops the in-flight slot and re-asks within the
+   * era, so a same-era read can commit while this one waits. A failed attempt
+   * landing meanwhile concludes on its own. A rejected fleet refresh still
+   * concludes: the fleet is then as stale as it was, and that is the verdict
+   * to narrate.
+   */
+  private async concludeAfterFleetRefresh(
+    era: AuthEra,
+    commit: number,
+  ): Promise<void> {
+    await this.runnerHost.refreshHostFleet().catch(() => undefined);
+    if (
+      this.authContextId() !== era.identity ||
+      this.commitSequence !== commit
+    ) {
+      return;
+    }
+    this.hasConcludedRemoteAttempt = true;
+    this.concludedUnderIdentity = era.identity;
   }
 
   /**
@@ -1539,4 +1602,15 @@ function toLocalEntry(
       ? "dialable"
       : "not-dialable",
   };
+}
+
+function listingMovesMembership(
+  previousIds: ReadonlySet<string>,
+  entries: readonly HostDirectoryEntry[],
+): boolean {
+  const listedIds = new Set(entries.map((entry) => entry.hostId));
+  return (
+    entries.some((entry) => !previousIds.has(entry.hostId)) ||
+    [...previousIds].some((id) => !listedIds.has(id))
+  );
 }
