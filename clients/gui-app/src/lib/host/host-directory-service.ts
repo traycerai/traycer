@@ -1070,7 +1070,7 @@ export class HostDirectoryService implements IHostDirectoryService {
         (entry) => !previousRemoteIds.has(entry.hostId),
       );
       const removed = [...previousRemoteIds].some((id) => !listedIds.has(id));
-      if (added || removed) requestFleetRefresh(this.runnerHost);
+      if (added || removed) await this.announceFleetChange(concludedChanged);
     }
     await this.reseedLocalHostIdIfUnknown();
     if (observedChanged || concludedChanged) {
@@ -1093,6 +1093,24 @@ export class HostDirectoryService implements IHostDirectoryService {
       totalCount: this.snapshot().length,
     });
     return this.snapshot();
+  }
+
+  /**
+   * Tells the shell its fleet is stale, and on a shell with no local host
+   * waits for the re-read when this commit is the one that concludes
+   * discovery. That shell's window narrator reads the conclusion against the
+   * authority's fleet, so a listing announced ahead of the publish is narrated
+   * over an empty fleet as "No host is available". A failed refresh still ends
+   * the wait: the fleet is then as stale as it was, and that is the verdict.
+   */
+  private async announceFleetChange(
+    concludesDiscovery: boolean,
+  ): Promise<void> {
+    if (concludesDiscovery && !this.hasLocalHost) {
+      await this.runnerHost.refreshHostFleet().catch(() => undefined);
+      return;
+    }
+    requestFleetRefresh(this.runnerHost);
   }
 
   /**

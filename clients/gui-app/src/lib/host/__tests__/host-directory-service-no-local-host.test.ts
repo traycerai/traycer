@@ -330,3 +330,89 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
     expect(settingsHostSelection()?.hostId ?? null).toBe("re-enrolled-host-id");
   });
 });
+
+/**
+ * The window narrator reads `hasConcludedDiscovery()` against the selection
+ * authority's fleet, so a shell with no local host must not announce a
+ * listing that names hosts until the fleet refresh has settled.
+ */
+describe("HostDirectoryService - announcing a concluded listing against the fleet refresh", () => {
+  const listedHost: HostDirectoryEntry = {
+    ...registryTwinOfPersistedId,
+    hostId: "listed-host-id",
+  };
+  const hostsFetcher: RemoteHostFetcher = () =>
+    Promise.resolve({ kind: "hosts", entries: [listedHost] });
+
+  async function startedDirectory(
+    host: MockRunnerHost,
+  ): Promise<HostDirectoryService> {
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: hostsFetcher,
+    });
+    await directory.startSeeded();
+    return directory;
+  }
+
+  function recordConcluded(directory: HostDirectoryService): boolean[] {
+    const observed: boolean[] = [];
+    directory.onChange(() => {
+      observed.push(directory.hasConcludedDiscovery());
+    });
+    return observed;
+  }
+
+  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
+    const host = makeHost(false, null);
+    let resolveFleet: () => void = () => undefined;
+    const fleetRefresh = vi.spyOn(host, "refreshHostFleet").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFleet = resolve;
+        }),
+    );
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    const refreshed = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleetRefresh).toHaveBeenCalled();
+    });
+
+    expect(observed).not.toContain(true);
+
+    resolveFleet();
+    await refreshed;
+
+    expect(observed).toContain(true);
+  });
+
+  it("a no-local-host shell still announces when the fleet refresh rejects", async () => {
+    const host = makeHost(false, null);
+    vi.spyOn(host, "refreshHostFleet").mockRejectedValue(new Error("boom"));
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    await directory.refresh();
+
+    expect(observed).toContain(true);
+  });
+
+  it("a shell with a local host announces without waiting on the fleet refresh", async () => {
+    const host = makeHost(true, null);
+    const fleetRefresh = vi
+      .spyOn(host, "refreshHostFleet")
+      .mockImplementation(() => new Promise<void>(() => undefined));
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    await directory.refresh();
+
+    expect(fleetRefresh).toHaveBeenCalled();
+    expect(observed).toContain(true);
+  });
+});
