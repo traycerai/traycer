@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import {
   act,
@@ -8,9 +16,16 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { isValidElement, type ReactNode } from "react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { PushMuteReadsBridge } from "@/components/layout/bridges/push-mute-reads-bridge";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { doubleFor } from "@/components/settings/panels/__tests__/push-permission-double";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import {
@@ -40,6 +55,15 @@ const toastCalls = vi.hoisted(
     readonly options: { readonly id: string };
   }> => [],
 );
+
+const playNotificationChimeSoundMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notifications/notification-chime", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/notifications/notification-chime")
+  >()),
+  playNotificationChimeSound: playNotificationChimeSoundMock,
+}));
 
 vi.mock("sonner", () => ({
   toast: (title: ReactNode, options: { readonly id: string }): string => {
@@ -177,19 +201,23 @@ function hostEntry(input: {
 
 function renderController(runnerHost: MockRunnerHost): void {
   render(
-    <RunnerHostProvider runnerHost={runnerHost}>
-      <NotificationEmissionController />
-    </RunnerHostProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <NotificationEmissionController />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
   );
 }
 
 function renderLifecycleController(runnerHost: MockRunnerHost): void {
   render(
-    <AppLocalNotificationsPersistLifecycleBridge>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <NotificationEmissionController />
-      </RunnerHostProvider>
-    </AppLocalNotificationsPersistLifecycleBridge>,
+    <QueryClientProvider client={new QueryClient()}>
+      <AppLocalNotificationsPersistLifecycleBridge>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <NotificationEmissionController />
+        </RunnerHostProvider>
+      </AppLocalNotificationsPersistLifecycleBridge>
+    </QueryClientProvider>,
   );
 }
 
@@ -279,6 +307,8 @@ describe("NotificationEmissionController", () => {
     activate.mockReset();
     markAsRead.mockReset();
     toastCalls.length = 0;
+    playNotificationChimeSoundMock.mockReset();
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
     window.localStorage.clear();
     resetAuthSignedIn("user-1", "user@example.com");
     __resetHostNotificationsStoreForTests();
@@ -373,6 +403,7 @@ describe("NotificationEmissionController", () => {
         foregroundAppLocal: {
           userId: version.userId,
           entry: backgroundEntry,
+          inboxOnly: false,
         },
       });
     });
@@ -436,6 +467,7 @@ describe("NotificationEmissionController", () => {
           foregroundAppLocal: {
             userId: version.userId,
             entry: foreignEntry,
+            inboxOnly: false,
           },
         });
       });
@@ -764,13 +796,7 @@ describe("NotificationEmissionController", () => {
     });
     resetAuthSignedIn("user-a", "a@example.com");
     const runnerHost = createRunnerHost();
-    render(
-      <AppLocalNotificationsPersistLifecycleBridge>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <NotificationEmissionController />
-        </RunnerHostProvider>
-      </AppLocalNotificationsPersistLifecycleBridge>,
-    );
+    renderLifecycleController(runnerHost);
     await act(async () => {
       await Promise.resolve();
     });
@@ -929,5 +955,381 @@ describe("NotificationEmissionController", () => {
       "app-local:stream.transport.error:chat-1:lost",
     );
     trackSpy.mockRestore();
+  });
+
+  describe("when a kind's Notify switch is off", () => {
+    function failureEntry(
+      id: string,
+      updatedAt: number,
+    ): AppLocalNotificationEntry {
+      return {
+        ...persistedAppLocalEntry(null),
+        id: `host.error:${id}`,
+        sourceRef: id,
+        updatedAt,
+        message: `Failure ${id}`,
+        detail: `Details ${id}`,
+      };
+    }
+
+    async function flush(): Promise<void> {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    it("still plays the toast, OS request and chime while Failure notifies", async () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const runnerHost = createRunnerHost();
+      renderController(runnerHost);
+      await flush();
+
+      act(() => {
+        useAppLocalNotificationsStore.getState().upsert(failureEntry("on", 60));
+      });
+      await flush();
+
+      expect(runnerHost.notificationsSent).toHaveLength(1);
+      expect(toastCalls).toHaveLength(1);
+      expect(playNotificationChimeSoundMock).toHaveBeenCalledOnce();
+    });
+
+    it("lists the row as unread, asks the shell for an inbox-only relay, and never replays it", async () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useSettingsStore
+        .getState()
+        .setNotificationNotifyForEvent("failure", false);
+      const runnerHost = createRunnerHost();
+      renderController(runnerHost);
+      await flush();
+      const muted = failureEntry("muted", 60);
+
+      act(() => {
+        useAppLocalNotificationsStore.getState().upsert(muted);
+      });
+      await flush();
+
+      // The shell is still asked, so a focused sibling window's bell lists the
+      // row; the request says nothing may interrupt.
+      expect(runnerHost.notificationsSent).toHaveLength(1);
+      expect(runnerHost.notificationsSent[0]?.foregroundAppLocal).toMatchObject(
+        { userId: "user-1", inboxOnly: true },
+      );
+      expect(toastCalls).toEqual([]);
+      expect(playNotificationChimeSoundMock).not.toHaveBeenCalled();
+      const state = useAppLocalNotificationsStore.getState();
+      expect(state.unreadCount).toBe(1);
+      expect(state.byId[muted.id].readAt).toBeNull();
+      expect(
+        hasAppLocalDisplayReceipt({
+          userId: "user-1",
+          notificationId: muted.id,
+          updatedAt: muted.updatedAt,
+        }),
+      ).toBe(true);
+
+      // Turning the kind on does not bring the earlier row back; the next
+      // arrival is the only one shown.
+      act(() => {
+        useSettingsStore
+          .getState()
+          .setNotificationNotifyForEvent("failure", true);
+        useAppLocalNotificationsStore.getState().upsert(muted);
+        useAppLocalNotificationsStore
+          .getState()
+          .upsert(failureEntry("later", 70));
+      });
+      await flush();
+
+      expect(runnerHost.notificationsSent).toHaveLength(2);
+      expect(runnerHost.notificationsSent[1]?.body).toBe("Details later");
+      expect(
+        runnerHost.notificationsSent[1]?.foregroundAppLocal?.inboxOnly,
+      ).toBe(false);
+      expect(toastCalls).toHaveLength(1);
+    });
+
+    it("keeps retrying a refused row inbox-only after a failed relay, even once its kind is turned on", async () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useSettingsStore
+        .getState()
+        .setNotificationNotifyForEvent("failure", false);
+      const failingRunnerHost = createRunnerHost();
+      const failingShow = vi
+        .spyOn(failingRunnerHost.notifications, "show")
+        .mockRejectedValue(new Error("relay failed"));
+      renderController(failingRunnerHost);
+      await flush();
+      const refused = failureEntry("refused-retry", 60);
+      const version = {
+        userId: "user-1",
+        notificationId: refused.id,
+        updatedAt: refused.updatedAt,
+      };
+
+      act(() => {
+        useAppLocalNotificationsStore.getState().upsert(refused);
+      });
+      await waitFor(() => {
+        expect(failingShow).toHaveBeenCalledOnce();
+      });
+      expect(failingShow.mock.calls[0][6]).toMatchObject({ inboxOnly: true });
+      expect(hasAppLocalDisplayReceipt(version)).toBe(false);
+
+      // The kind is turned on, then the pending row is drained again by a
+      // fresh controller: it must still go out inbox-only.
+      useSettingsStore
+        .getState()
+        .setNotificationNotifyForEvent("failure", true);
+      cleanup();
+      const retryRunnerHost = createRunnerHost();
+      renderController(retryRunnerHost);
+      await waitFor(() => {
+        expect(retryRunnerHost.notificationsSent).toHaveLength(1);
+      });
+
+      expect(
+        retryRunnerHost.notificationsSent[0]?.foregroundAppLocal,
+      ).toMatchObject({ userId: "user-1", inboxOnly: true });
+      expect(toastCalls).toEqual([]);
+      expect(playNotificationChimeSoundMock).not.toHaveBeenCalled();
+      expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+      await waitFor(() => {
+        expect(hasAppLocalDisplayReceipt(version)).toBe(true);
+      });
+
+      // The receipt is recorded, so a further drain sends nothing.
+      cleanup();
+      const laterRunnerHost = createRunnerHost();
+      renderController(laterRunnerHost);
+      await flush();
+      expect(laterRunnerHost.notificationsSent).toEqual([]);
+    });
+
+    describe("a relayed display from another window", () => {
+      function relay(inboxOnly: boolean, id: string) {
+        const entry = {
+          ...persistedAppLocalEntry(null),
+          id: `host.error:${id}`,
+          sourceRef: id,
+          updatedAt: 80,
+          message: `Failure ${id}`,
+          detail: `Details ${id}`,
+        };
+        const version = {
+          userId: "user-1",
+          notificationId: entry.id,
+          updatedAt: entry.updatedAt,
+        };
+        return {
+          entry,
+          version,
+          display: {
+            title: entry.message,
+            body: entry.detail,
+            payload: null,
+            replaceKey: `app-local:${entry.id}`,
+            feedSource: "app-local" as const,
+            deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
+            foregroundAppLocal: { userId: "user-1", entry, inboxOnly },
+          },
+        };
+      }
+
+      it("lists an inbox-only row as unread and recorded, with no toast or chime", async () => {
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        const runnerHost = createRunnerHost();
+        renderController(runnerHost);
+        await flush();
+        const { entry, version, display } = relay(true, "inbox");
+
+        act(() => {
+          runnerHost.emitForegroundNotificationDisplay(display);
+        });
+
+        const state = useAppLocalNotificationsStore.getState();
+        expect(state.orderedIds).toContain(entry.id);
+        expect(state.unreadCount).toBe(1);
+        expect(state.byId[entry.id].readAt).toBeNull();
+        expect(state.byId[entry.id].displayedUpdatedAt).toBe(entry.updatedAt);
+        expect(hasAppLocalDisplayReceipt(version)).toBe(true);
+        expect(toastCalls).toEqual([]);
+        expect(playNotificationChimeSoundMock).not.toHaveBeenCalled();
+        expect(runnerHost.notificationsSent).toEqual([]);
+      });
+
+      it("gates a payload-less app-local relay as a failure, not as Done", async () => {
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        useSettingsStore
+          .getState()
+          .setNotificationNotifyForEvent("failure", true);
+        useSettingsStore
+          .getState()
+          .setNotificationNotifyForEvent("done", false);
+        const runnerHost = createRunnerHost();
+        renderController(runnerHost);
+        await flush();
+        const { entry, display } = relay(false, "failure-kind");
+        expect(display.payload).toBeNull();
+
+        act(() => {
+          runnerHost.emitForegroundNotificationDisplay(display);
+        });
+
+        expect(toastCalls).toHaveLength(1);
+        expect(toastCalls[0]?.title).toBe(entry.message);
+        expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+        expect(playNotificationChimeSoundMock).toHaveBeenCalledExactlyOnceWith(
+          useSettingsStore.getState().notificationChimeSounds.failure,
+        );
+      });
+
+      it("shows nothing for that relay when Failure is off, whatever Done says", async () => {
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        useSettingsStore
+          .getState()
+          .setNotificationNotifyForEvent("failure", false);
+        useSettingsStore.getState().setNotificationNotifyForEvent("done", true);
+        const runnerHost = createRunnerHost();
+        renderController(runnerHost);
+        await flush();
+        const { display } = relay(false, "failure-off");
+
+        act(() => {
+          runnerHost.emitForegroundNotificationDisplay(display);
+        });
+
+        expect(toastCalls).toEqual([]);
+        expect(playNotificationChimeSoundMock).not.toHaveBeenCalled();
+        // Still the window's own bell: the row is listed and unread.
+        expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+      });
+
+      it("still toasts and chimes a relay that is not inbox-only", async () => {
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        const runnerHost = createRunnerHost();
+        renderController(runnerHost);
+        await flush();
+        const { entry, display } = relay(false, "loud");
+
+        act(() => {
+          runnerHost.emitForegroundNotificationDisplay(display);
+        });
+
+        expect(toastCalls).toHaveLength(1);
+        expect(toastCalls[0]?.title).toBe(entry.message);
+        expect(playNotificationChimeSoundMock).toHaveBeenCalledOnce();
+        expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+      });
+    });
+  });
+
+  describe("on a phone, where the Push switches decide", () => {
+    interface PhoneRig {
+      readonly show: Mock<IRunnerHost["notifications"]["show"]>;
+      readonly queryClient: QueryClient;
+    }
+
+    async function renderPhone(options: {
+      readonly permission: "granted" | "denied";
+      readonly muted: ReadonlyArray<"failure" | "info">;
+      readonly readsMounted: boolean;
+    }): Promise<PhoneRig> {
+      const push = doubleFor(options.permission);
+      push.setStoredMuted(options.muted);
+      const base = createFakeRunnerHost({});
+      const show = vi.fn<IRunnerHost["notifications"]["show"]>(() =>
+        Promise.resolve("presented"),
+      );
+      const runnerHost = createFakeRunnerHost({
+        pushPermission: push.host,
+        notifications: { ...base.notifications, show },
+      });
+      const queryClient = new QueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            {options.readsMounted ? <PushMuteReadsBridge /> : null}
+            <NotificationEmissionController />
+          </RunnerHostProvider>
+        </QueryClientProvider>,
+      );
+      if (options.readsMounted) {
+        await waitFor(() => {
+          expect(
+            queryClient.getQueryData(
+              runnerQueryKeys.pushMutedSeverities("user-1"),
+            ),
+          ).toEqual(options.muted);
+          expect(
+            queryClient.getQueryData(runnerQueryKeys.pushPermission()),
+          ).not.toBeUndefined();
+        });
+      }
+      return { show, queryClient };
+    }
+
+    function arrive(id: string): void {
+      act(() => {
+        useAppLocalNotificationsStore.getState().upsert({
+          ...persistedAppLocalEntry(null),
+          id: `host.error:${id}`,
+          sourceRef: id,
+          updatedAt: 60,
+        });
+      });
+    }
+
+    it("interrupts nothing for a muted kind but keeps its row unread, once push is granted", async () => {
+      const { show } = await renderPhone({
+        permission: "granted",
+        muted: ["failure"],
+        readsMounted: true,
+      });
+
+      arrive("muted");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(show).toHaveBeenCalledOnce();
+      expect(show.mock.calls[0][6]).toMatchObject({
+        inboxOnly: true,
+      });
+      expect(toastCalls).toEqual([]);
+      expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+    });
+
+    it("shows the kind when push is not granted, whatever the muted set says", async () => {
+      const { show } = await renderPhone({
+        permission: "denied",
+        muted: ["failure"],
+        readsMounted: true,
+      });
+
+      arrive("denied");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(show).toHaveBeenCalledOnce();
+      expect(toastCalls).toHaveLength(1);
+    });
+
+    it("shows the kind while the muted set has not been read yet", async () => {
+      const { show } = await renderPhone({
+        permission: "granted",
+        muted: ["failure"],
+        readsMounted: false,
+      });
+
+      arrive("unread-set");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(show).toHaveBeenCalledOnce();
+      expect(toastCalls).toHaveLength(1);
+    });
   });
 });

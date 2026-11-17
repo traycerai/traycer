@@ -5,7 +5,9 @@ import {
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import { useNotificationNotifies } from "@/hooks/notifications/use-notification-notifies";
 import {
+  APP_LOCAL_NOTIFICATION_SEVERITY,
   useMergedNotificationsActions,
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
@@ -23,14 +25,17 @@ import {
   appLocalDisplayDeliveryKey,
   captureAppLocalDisplayReceiptSession,
   hasAppLocalDisplayReceipt,
+  hasAppLocalDisplayRefusal,
   isAppLocalDisplayReceiptSessionCurrent,
   recordAppLocalDisplayReceipt,
+  recordAppLocalDisplayRefusal,
   type AppLocalDisplayReceiptVersion,
 } from "@/lib/notifications/app-local-display-receipts";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
 export function NotificationEmissionController(): null {
   const showNotification = useNotificationShow();
+  const notifies = useNotificationNotifies();
   const { activate } = useNotificationActivation();
   const actions = useMergedNotificationsActions();
   const inFlightVersionsRef = useRef(new Set<string>());
@@ -56,6 +61,9 @@ export function NotificationEmissionController(): null {
         };
         recordAppLocalDisplayReceipt(version);
         state.mergeForegroundDisplayed(entry);
+        // Relayed for this window's bell only: the sender's device does not
+        // let the kind interrupt, so there is nothing to show or sound.
+        if (foregroundAppLocal.inboxOnly) return;
       }
       displayForwardedForegroundNotification(display, {
         playChime: playNotificationChime,
@@ -63,9 +71,10 @@ export function NotificationEmissionController(): null {
           useNotificationEventsStore
             .getState()
             .recordInAppClick(payload, Date.now()),
+        notifies,
       });
     },
-    [],
+    [notifies],
   );
   useNotificationForegroundDisplay(onForegroundDisplay);
   const onToastClick = useCallback(
@@ -115,6 +124,12 @@ export function NotificationEmissionController(): null {
           return;
         }
         if (inFlightVersionsRef.current.has(deliveryKey)) return;
+        // Decided once per version and kept: a refused one whose relay fails
+        // is retried inbox-only, even if its kind has been turned on since.
+        const inboxOnly =
+          hasAppLocalDisplayRefusal(version) ||
+          !notifies(APP_LOCAL_NOTIFICATION_SEVERITY);
+        if (inboxOnly) recordAppLocalDisplayRefusal(version);
         const receiptSession = captureAppLocalDisplayReceiptSession(userId);
         inFlightVersionsRef.current.add(deliveryKey);
         void displayAppLocalNotification(
@@ -123,9 +138,9 @@ export function NotificationEmissionController(): null {
             showNotification,
             playChime: playNotificationChime,
             onToastClick,
+            notifies,
           },
-          deliveryKey,
-          userId,
+          { deliveryKey, userId, inboxOnly },
         )
           .then(() => {
             if (!isAppLocalDisplayReceiptSessionCurrent(receiptSession)) return;
@@ -142,7 +157,7 @@ export function NotificationEmissionController(): null {
             inFlightVersionsRef.current.delete(deliveryKey);
           });
       });
-  }, [showNotification, onToastClick]);
+  }, [showNotification, onToastClick, notifies]);
 
   const scheduleDrain = useCallback((): void => {
     if (drainScheduledRef.current) return;

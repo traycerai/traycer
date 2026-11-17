@@ -1,5 +1,6 @@
 import {
   alwaysAvailable,
+  isAlertsSystemGroupAvailable,
   isPushPermissionRowAvailable,
   isSystemNotificationsRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -9,13 +10,20 @@ export const ALERTS = defineSettingsSection("alerts", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Alerts",
-    description: "How this app alerts you.",
-    keywords: ["notifications", "alerts", "banner", "push"],
+    description:
+      "What interrupts you on this computer or phone. Every notification still appears in the bell.",
+    keywords: [
+      "notifications",
+      "alerts",
+      "banner",
+      "push",
+      "toast",
+      "in-app notifications",
+      "interrupt",
+    ],
   },
-  // Where the alerts themselves are configured: the OS (or, in the phone app,
-  // its push permission) and the selected host's own page. Each used to be a
-  // heading over one row. Notification events is drawn in every shell, so the
-  // group is never empty.
+  // One row per kind: whether it interrupts on this device - the Notify
+  // switch, or in the phone app the per-phone push switch - and its chime.
   notifications: {
     kind: "group",
     search: { anchor: "alerts-notifications" },
@@ -23,11 +31,69 @@ export const ALERTS = defineSettingsSection("alerts", {
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["alerts", "delivery"],
+    keywords: [
+      "kind",
+      "severity",
+      "notify",
+      "chime",
+      "sound",
+      "ding",
+      "beep",
+      "mute",
+      "buzz",
+    ],
+  },
+  needsAction: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "alerts-needs-action" },
+    label: "Needs action",
+    description: "Approvals and interviews.",
+    availableWhen: alwaysAvailable,
+    keywords: ["notify", "chime"],
+  },
+  failure: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "alerts-failure" },
+    label: "Failure",
+    description: "Errored turns, stalls, crashes, and rate limits.",
+    availableWhen: alwaysAvailable,
+    keywords: ["notify", "chime"],
+  },
+  done: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "alerts-done" },
+    label: "Done",
+    description: "Completed or intentionally stopped turns.",
+    availableWhen: alwaysAvailable,
+    keywords: ["notify", "chime"],
+  },
+  info: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "alerts-info" },
+    label: "Info",
+    description:
+      "Sharing, comments, access changes, and other informational notifications.",
+    availableWhen: alwaysAvailable,
+    keywords: ["notify", "chime"],
+  },
+  // Where the OS keeps its own part: banner settings on the desktop, the push
+  // permission in the phone app. A shell with neither draws no card.
+  system: {
+    kind: "group",
+    search: { anchor: "alerts-system" },
+    label: "System",
+    description: null,
+    breadcrumb: null,
+    availableWhen: isAlertsSystemGroupAvailable,
+    keywords: ["os", "permission"],
   },
   osNotifications: {
     kind: "row",
-    group: "notifications",
+    group: "system",
     search: { anchor: "alerts-os" },
     label: "OS notifications",
     description: "Banners and badges are set in your operating system.",
@@ -39,7 +105,7 @@ export const ALERTS = defineSettingsSection("alerts", {
   // app, so the bare label already names the thing in the person's hand.
   pushNotifications: {
     kind: "row",
-    group: "notifications",
+    group: "system",
     search: { anchor: "alerts-push" },
     label: "Push notifications",
     // The sentence reports the OS permission state, so it is the row's status.
@@ -54,63 +120,6 @@ export const ALERTS = defineSettingsSection("alerts", {
       "ios",
       "android",
       "device",
-    ],
-  },
-  // One switch per severity under the push row, gated with it. Labels and
-  // descriptions are the Sounds page's chime rows', so a word means one thing
-  // on both pages.
-  pushNeedsAction: {
-    kind: "row",
-    group: "notifications",
-    search: { anchor: "alerts-push-needs-action" },
-    label: "Needs action",
-    description: "Approvals and interviews.",
-    availableWhen: isPushPermissionRowAvailable,
-    keywords: ["push", "phone", "buzz", "needs action"],
-  },
-  pushFailure: {
-    kind: "row",
-    group: "notifications",
-    search: { anchor: "alerts-push-failure" },
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-    availableWhen: isPushPermissionRowAvailable,
-    keywords: ["push", "phone", "buzz", "failure"],
-  },
-  pushDone: {
-    kind: "row",
-    group: "notifications",
-    search: { anchor: "alerts-push-done" },
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-    availableWhen: isPushPermissionRowAvailable,
-    keywords: ["push", "phone", "buzz", "done"],
-  },
-  pushInfo: {
-    kind: "row",
-    group: "notifications",
-    search: { anchor: "alerts-push-info" },
-    label: "Info",
-    description:
-      "Sharing, comments, access changes, and other informational notifications.",
-    availableWhen: isPushPermissionRowAvailable,
-    keywords: ["push", "phone", "buzz", "info"],
-  },
-  notificationEvents: {
-    kind: "row",
-    group: "notifications",
-    search: { anchor: "alerts-notification-events" },
-    label: "Notification events",
-    description: "Which events create a notification. Set per host.",
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "events",
-      "turn done",
-      "alerts",
-      "filter",
-      "which",
-      "triggers",
-      "when",
     ],
   },
 });

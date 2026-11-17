@@ -2130,6 +2130,14 @@ function rowFromHostEntryForOrigin(
   };
 }
 
+/**
+ * Every app-local row is a failure: they are this renderer's own terminal,
+ * stream and host errors. Also read by the display path, which has only a
+ * relayed entry to go on.
+ */
+export const APP_LOCAL_NOTIFICATION_SEVERITY =
+  "failure" satisfies HostNotificationSeverity;
+
 export function rowFromAppLocalEntry(
   entry: AppLocalNotificationEntry,
 ): MergedNotificationRow {
@@ -2145,7 +2153,7 @@ export function rowFromAppLocalEntry(
     hostKind: null,
     appLocalKind: entry.kind,
     globalEntry: null,
-    severity: "failure",
+    severity: APP_LOCAL_NOTIFICATION_SEVERITY,
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
