@@ -239,12 +239,14 @@ describe("chat.subscribe@1.45 account wait", () => {
     });
   });
 
-  it("keeps the 1.44 server-frame schema fingerprints from base 9f996844f", () => {
+  // A member row's optional `repliesTo` is a 1.43 field, so 1.44's frame
+  // carries it.
+  it("keeps the 1.44 server-frame schema fingerprints", () => {
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "input")).toBe(
-      "7d53f0c4df986f8be88431976868668536e95678414ccac11c2c7274c6c8d03d",
+      "f559fba624d5086d6450c315c8095be55dfcfe493fbd9ac2c11ade9b57c001ee",
     );
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "output")).toBe(
-      "debfa0f22ae45fb0695de0d543d9bc7714973487dce2674f9fc1938b7611dccf",
+      "2cb061dacb86e6fdf2ae32d30cc9918c8c4f79d26648d28457fd164a3ef3382a",
     );
   });
 
