@@ -1,4 +1,7 @@
-import { BotReadPresenceContext } from "@/components/bots/bot-read-presence-context";
+import {
+  BotReadPresenceContext,
+  BotVisitPresenceContext,
+} from "@/components/bots/bot-read-presence-context";
 import {
   useCallback,
   useEffect,
@@ -839,7 +842,7 @@ export function BotChannelView(props: {
     thread: openThread,
     shown: threadOpen,
   });
-  const presentedChannelId = usePresentedChannel({
+  const { presentedChannelId, shown: channelShown } = useChannelPresence({
     channelId,
     threadOpen: railOpen,
     section: channelSection,
@@ -922,23 +925,25 @@ export function BotChannelView(props: {
                   shown={search.showing}
                   on="channel"
                 />
-                <BotReadPresenceContext value={presentedChannelId !== null}>
-                  <BotExchangeLinesContext value={exchangeLines.channel}>
-                    <BotChatTranscript
-                      botId={botId}
-                      chatId={channel.conversationId}
-                      hostId={hostId}
-                      title={botTitle}
-                      instanceId={`bot-channel:${botId}`}
-                      surface={surface}
-                      resolveMember={resolveMember}
-                      showConnecting
-                      header={null}
-                      landOn={landing}
-                      flow={null}
-                    />
-                  </BotExchangeLinesContext>
-                </BotReadPresenceContext>
+                <BotVisitPresenceContext value={channelShown}>
+                  <BotReadPresenceContext value={presentedChannelId !== null}>
+                    <BotExchangeLinesContext value={exchangeLines.channel}>
+                      <BotChatTranscript
+                        botId={botId}
+                        chatId={channel.conversationId}
+                        hostId={hostId}
+                        title={botTitle}
+                        instanceId={`bot-channel:${botId}`}
+                        surface={surface}
+                        resolveMember={resolveMember}
+                        showConnecting
+                        header={null}
+                        landOn={landing}
+                        flow={null}
+                      />
+                    </BotExchangeLinesContext>
+                  </BotReadPresenceContext>
+                </BotVisitPresenceContext>
               </div>
               <BotReplyingStrip
                 botTitle={botTitle}
@@ -1036,40 +1041,42 @@ export function BotChannelView(props: {
                 />
               }
               render={(postId) => (
-                <BotReadPresenceContext value={presentedThreadId !== null}>
-                  <BotExchangeLinesContext value={exchangeLines.thread}>
-                    <QuoteSinkContext value={quoteIntoThreadBox}>
-                      <BotThreadPanel
-                        key={postId}
-                        botId={botId}
-                        hostId={hostId}
-                        boundHostId={boundHostId}
-                        botTitle={botTitle}
-                        imageReach={imageReach}
-                        answerReach={answerReach}
-                        replyReach={replyReach}
-                        conversationId={channel.conversationId}
-                        originMessageId={postId}
-                        sent={open?.sent ?? null}
-                        thread={panelThread}
-                        tasks={tasks}
-                        anchorSenderLabel={anchorSenderLabel}
-                        resolveMember={resolveMember}
-                        landOn={
-                          threadLanding.landing ??
-                          search.threadLandingOn(postId)
-                        }
-                        onClose={() => {
-                          threadLanding.spend();
-                          onOpenThread(null);
-                        }}
-                        onEditPost={editPostFromThread}
-                        onOpenTurn={onOpenTurn}
-                        quote={quoteFor(postId)}
-                      />
-                    </QuoteSinkContext>
-                  </BotExchangeLinesContext>
-                </BotReadPresenceContext>
+                <BotVisitPresenceContext value={threadOpen}>
+                  <BotReadPresenceContext value={presentedThreadId !== null}>
+                    <BotExchangeLinesContext value={exchangeLines.thread}>
+                      <QuoteSinkContext value={quoteIntoThreadBox}>
+                        <BotThreadPanel
+                          key={postId}
+                          botId={botId}
+                          hostId={hostId}
+                          boundHostId={boundHostId}
+                          botTitle={botTitle}
+                          imageReach={imageReach}
+                          answerReach={answerReach}
+                          replyReach={replyReach}
+                          conversationId={channel.conversationId}
+                          originMessageId={postId}
+                          sent={open?.sent ?? null}
+                          thread={panelThread}
+                          tasks={tasks}
+                          anchorSenderLabel={anchorSenderLabel}
+                          resolveMember={resolveMember}
+                          landOn={
+                            threadLanding.landing ??
+                            search.threadLandingOn(postId)
+                          }
+                          onClose={() => {
+                            threadLanding.spend();
+                            onOpenThread(null);
+                          }}
+                          onEditPost={editPostFromThread}
+                          onOpenTurn={onOpenTurn}
+                          quote={quoteFor(postId)}
+                        />
+                      </QuoteSinkContext>
+                    </BotExchangeLinesContext>
+                  </BotReadPresenceContext>
+                </BotVisitPresenceContext>
               )}
             />
             <ChannelExchangePane
@@ -1614,16 +1621,17 @@ function useDisplayed(element: HTMLElement | null): boolean {
 /**
  * Reports channel presence. The transcript separately qualifies actual reading.
  */
-function usePresentedChannel(args: {
+function useChannelPresence(args: {
   readonly channelId: string | null;
   readonly threadOpen: boolean;
   /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
   readonly section: HTMLElement | null;
-}): string | null {
+}): { readonly presentedChannelId: string | null; readonly shown: boolean } {
   const { channelId, threadOpen, section } = args;
   const displayed = useDisplayed(section);
-  const presented = usePresented(!threadOpen || displayed);
-  return presented ? channelId : null;
+  const shown = !threadOpen || displayed;
+  const presented = usePresented(shown);
+  return { presentedChannelId: presented ? channelId : null, shown };
 }
 
 /**

@@ -1,6 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Threads shows each followed thread in full as a card (Tracy Bots T137). A
 // card grows to its thread and the page is the one scroller; a card mounts
@@ -305,5 +305,185 @@ test.describe("phone", () => {
   }, testInfo) => {
     await open(page, "hold=thread-policy&phone=true");
     await expectBannerClearAtRestAndScrolled(page, testInfo);
+  });
+});
+
+test.describe("a pending unread landing on a card whose thread has not loaded", () => {
+  const GATED = "thread-policy";
+  const DIVIDER = "[data-unread-divider]";
+
+  /** The page's scroll position once it has stopped moving: the same over several frames. */
+  async function settledScrollTop(page: Page): Promise<number> {
+    return page.locator(SCROLL).evaluate(async (scroller) => {
+      let last = scroller.scrollTop;
+      let still = 0;
+      while (still < 4) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (scroller.scrollTop === last) still += 1;
+        else {
+          last = scroller.scrollTop;
+          still = 0;
+        }
+      }
+      return last;
+    });
+  }
+
+  /**
+   * Records every `scrollIntoView` the page calls, still running the browser's
+   * own: a divider is named `divider:<thread>`, a card `card:<thread>`.
+   */
+  async function recordScrollIntoView(page: Page): Promise<string[]> {
+    const calls: string[] = [];
+    await page.exposeFunction("__recordScrollIntoView", (what: string) => {
+      calls.push(what);
+    });
+    await page.evaluate(() => {
+      const original: unknown = Reflect.get(
+        Element.prototype,
+        "scrollIntoView",
+      );
+      if (typeof original !== "function") throw new Error("no scrollIntoView");
+      const record: unknown = Reflect.get(window, "__recordScrollIntoView");
+      if (typeof record !== "function") throw new Error("no recorder");
+      const kindOf = (element: Element): string => {
+        if (element.hasAttribute("data-unread-divider")) return "divider";
+        if (element.hasAttribute("data-thread-card")) return "card";
+        return "other";
+      };
+      Element.prototype.scrollIntoView = function scrollIntoView(
+        this: Element,
+        arg: boolean | ScrollIntoViewOptions | undefined,
+      ) {
+        const thread =
+          this.closest("[data-thread-card]")?.getAttribute("data-thread-id");
+        void Reflect.apply(record, undefined, [
+          `${kindOf(this)}:${thread ?? this.getAttribute("data-thread-id") ?? ""}`,
+        ]);
+        Reflect.apply(original, this, [arg]);
+      };
+    });
+    return calls;
+  }
+
+  /**
+   * The page is at the iPad card (the first unread card, which the pill
+   * skips as it already starts at the page's top), the gated card is the next
+   * unread one below it, and its thread has not loaded; the pill is pressed.
+   * What the pill chose is read off the page: it scrolled that card, and no
+   * divider is drawn in it.
+   */
+  async function armPendingLanding(page: Page): Promise<string[]> {
+    await open(page, `gate=${GATED}&filler=40`);
+    const calls = await recordScrollIntoView(page);
+    await page.locator(SCROLL).evaluate((scroller) => {
+      const first = scroller.querySelector('[data-thread-id="thread-ipad"]');
+      if (first === null) throw new Error("no iPad card");
+      scroller.scrollTop +=
+        first.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top;
+    });
+    await settledScrollTop(page);
+    const relativeTops = await page
+      .locator(SCROLL)
+      .evaluate((scroller, gatedId) => {
+        const top = scroller.getBoundingClientRect().top;
+        const relative = (id: string): number => {
+          const found = scroller.querySelector(`[data-thread-id="${id}"]`);
+          if (found === null) throw new Error(`no card ${id}`);
+          return found.getBoundingClientRect().top - top;
+        };
+        return { first: relative("thread-ipad"), gated: relative(gatedId) };
+      }, GATED);
+    expect(relativeTops.first).toBeLessThanOrEqual(1);
+    expect(relativeTops.gated).toBeGreaterThan(1);
+    await expect(page.locator(card(GATED))).toHaveAttribute(
+      "data-full",
+      "true",
+    );
+
+    await page.locator(BANNER).getByRole("button").first().click();
+    await expect.poll(() => calls).toContain(`card:${GATED}`);
+    expect(calls).not.toContain("card:thread-ipad");
+    await expect(page.locator(`${card(GATED)} ${DIVIDER}`)).toHaveCount(0);
+    await settledScrollTop(page);
+    return calls;
+  }
+
+  /** The gated thread loads: its divider is drawn. */
+  async function releaseGatedThread(page: Page): Promise<void> {
+    await page.evaluate((chatId) => {
+      const release: unknown = Reflect.get(window, "__releaseChat");
+      if (typeof release !== "function") throw new Error("no gate to release");
+      Reflect.apply(release, window, [chatId]);
+    }, GATED);
+    await expect(page.locator(`${card(GATED)} ${DIVIDER}`)).toHaveCount(1);
+    await nextFrames(page, 4);
+  }
+
+  /** Puts the page at its top without any event of the person's, and says it stays there. */
+  async function putPageAtTop(page: Page): Promise<void> {
+    await page.locator(SCROLL).evaluate((scroller) => {
+      scroller.scrollTop = 0;
+    });
+    expect(await settledScrollTop(page)).toBe(0);
+  }
+
+  const dividerCalls = (calls: readonly string[]): string[] =>
+    calls.filter((call) => call === `divider:${GATED}`);
+
+  test("with no event of the person's, the thread loading lands the page on its divider once", async ({
+    page,
+  }) => {
+    const calls = await armPendingLanding(page);
+    expect(dividerCalls(calls)).toEqual([]);
+
+    await releaseGatedThread(page);
+
+    await expect.poll(() => dividerCalls(calls)).toHaveLength(1);
+  });
+
+  for (const key of ["PageDown", "ArrowDown"]) {
+    test(`${key} on an ordinary button scrolls the page natively and retires the landing, so the thread loading afterwards does not scroll to its divider`, async ({
+      page,
+    }) => {
+      const calls = await armPendingLanding(page);
+      await page
+        .locator(`${card(GATED)} button:not([aria-haspopup])`)
+        .first()
+        .focus();
+      await putPageAtTop(page);
+
+      await page.keyboard.press(key);
+      await expect
+        .poll(async () => (await settledScrollTop(page)) > 0)
+        .toBe(true);
+
+      await releaseGatedThread(page);
+      expect(dividerCalls(calls)).toEqual([]);
+    });
+  }
+
+  test("PageDown after a click on a card's text, which leaves the focus on the body, scrolls the page natively and retires the landing", async ({
+    page,
+  }) => {
+    const calls = await armPendingLanding(page);
+    await page
+      .locator(card(GATED))
+      .getByText(/Policy change/)
+      .first()
+      .click();
+    expect(
+      await page.evaluate(() => document.activeElement === document.body),
+    ).toBe(true);
+    await putPageAtTop(page);
+
+    await page.keyboard.press("PageDown");
+    await expect
+      .poll(async () => (await settledScrollTop(page)) > 0)
+      .toBe(true);
+
+    await releaseGatedThread(page);
+    expect(dividerCalls(calls)).toEqual([]);
   });
 });
